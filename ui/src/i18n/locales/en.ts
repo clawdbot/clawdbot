@@ -897,7 +897,8 @@ export const en: TranslationMap = {
     missingSession: "No dashboard session was specified.",
     notFound: "This session could not be found.",
     unavailable: "Session dashboards are unavailable for this connection.",
-    loadFailed: "Could not load this dashboard: {error}",
+    loadFailed:
+      "Could not load this dashboard: {error}. Check the Gateway connection and try again.",
   },
   sessionsView: {
     subagentPrefix: "Subagent:",

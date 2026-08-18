@@ -50,6 +50,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   private providerLease: BoardProviderLease | null = null;
   private binding: ProviderBinding | null = null;
   private unsubscribeSnapshot: (() => void) | null = null;
+  private unsubscribeLoadError: (() => void) | null = null;
   private unsubscribeEvents: (() => void) | null = null;
   private bindingGeneration = 0;
 
@@ -154,13 +155,12 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       this.provider = provider;
       this.providerLease = lease;
       this.binding = binding;
-      this.unsubscribeSnapshot = provider.snapshot$.subscribe(() => {
-        if (this.provider === provider && hasLoadedBoardSnapshot(provider)) {
-          this.snapshot = provider.snapshot$.value;
-          this.selectAvailableTab();
-          this.documentState = "ready";
-        }
-      });
+      this.unsubscribeSnapshot = provider.snapshot$.subscribe(() =>
+        this.reconcileProvider(provider),
+      );
+      this.unsubscribeLoadError = provider.loadError$.subscribe(() =>
+        this.reconcileProvider(provider),
+      );
       this.unsubscribeEvents = provider.events.subscribe((event) => {
         const command = event.command;
         if (command.kind !== "focus_tab") {
@@ -170,6 +170,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
           this.activeTabId = command.tabId;
         }
       });
+      this.reconcileProvider(provider);
     } catch (error) {
       if (generation === this.bindingGeneration) {
         this.errorText = formatUiError(error);
@@ -189,11 +190,33 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     this.activeTabId = snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
   }
 
+  private reconcileProvider(provider: BoardProvider): void {
+    if (this.provider !== provider) {
+      return;
+    }
+    if (hasLoadedBoardSnapshot(provider)) {
+      this.snapshot = provider.snapshot$.value;
+      this.selectAvailableTab();
+      this.documentState = "ready";
+      return;
+    }
+    const loadError = provider.loadError$.value;
+    if (loadError) {
+      this.errorText = loadError;
+      this.documentState = "error";
+    } else {
+      this.errorText = "";
+      this.documentState = "loading";
+    }
+  }
+
   private releaseProvider(): void {
     this.bindingGeneration += 1;
     this.unsubscribeSnapshot?.();
+    this.unsubscribeLoadError?.();
     this.unsubscribeEvents?.();
     this.unsubscribeSnapshot = null;
+    this.unsubscribeLoadError = null;
     this.unsubscribeEvents = null;
     this.providerLease?.release();
     this.provider = null;

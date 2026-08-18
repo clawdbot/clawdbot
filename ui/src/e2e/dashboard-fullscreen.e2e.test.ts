@@ -203,4 +203,30 @@ suite.define(() => {
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
     });
   });
+
+  it("shows an actionable error when the initial board load fails", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        featureMethods: ["board.get"],
+        methodResponses: {
+          "sessions.describe": {
+            session: { key: sessionKey, kind: "direct", updatedAt: 1 },
+          },
+          "board.get": {
+            __mockError: { code: "UNAVAILABLE", message: "dashboard storage is unavailable" },
+          },
+        },
+      });
+
+      await page.goto(
+        `${suite.server.baseUrl}?view=dashboard&session=${encodeURIComponent(sessionKey)}`,
+      );
+      await gateway.waitForRequest("board.get");
+      const alert = page.getByRole("alert");
+      await alert.waitFor();
+      await expect.poll(() => alert.textContent()).toContain("dashboard storage is unavailable");
+      await expect.poll(() => alert.textContent()).toContain("try again");
+    });
+  });
 });
