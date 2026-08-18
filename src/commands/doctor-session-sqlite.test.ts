@@ -1228,13 +1228,32 @@ describe("runDoctorSessionSqlite", () => {
     ]);
   });
 
-  it("checkpoints bulk unreferenced archive moves without per-file manifest rewrites", async () => {
+  it("checkpoints bulk archive moves without per-file manifest rewrites", async () => {
     const store = createLegacyStore();
+    const sessions = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
     for (let index = 0; index < 64; index += 1) {
+      const sessionId = `bulk-session-${index}`;
+      const sessionFile = `${sessionId}.jsonl`;
+      sessions[`agent:main:bulk:${index}`] = {
+        channel: "cli",
+        chatType: "direct",
+        sessionFile,
+        sessionId,
+        updatedAt: 2000 + index,
+      };
+      fs.writeFileSync(
+        path.join(store.sessionDir, sessionFile),
+        `${JSON.stringify({ type: "session", sessionId })}\n`,
+        { mode: 0o600 },
+      );
       fs.writeFileSync(path.join(store.sessionDir, `orphan-${index}.jsonl`), "{}\n", {
         mode: 0o600,
       });
     }
+    fs.writeFileSync(store.storePath, JSON.stringify(sessions, null, 2), { mode: 0o600 });
     fs.writeFileSync(path.join(store.sessionDir, "orphan collision.jsonl"), "{}\n", {
       mode: 0o600,
     });
@@ -1256,12 +1275,18 @@ describe("runDoctorSessionSqlite", () => {
       const plannedUnreferencedMoves =
         manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "unreferenced-jsonl") ??
         [];
+      const plannedTranscriptMoves =
+        manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "transcript") ?? [];
 
       expect(plannedUnreferencedMoves).toHaveLength(67);
       expect(new Set(plannedUnreferencedMoves.map((move) => move.archivePath)).size).toBe(67);
+      expect(plannedTranscriptMoves).toHaveLength(65);
       expect(
         manifest.targets[0]?.completedMoves.filter((move) => move.kind === "unreferenced-jsonl"),
       ).toHaveLength(67);
+      expect(
+        manifest.targets[0]?.completedMoves.filter((move) => move.kind === "transcript"),
+      ).toHaveLength(65);
       expect(manifestWrites).toBeLessThan(20);
       expect(replaceFileAtomicSync).toHaveBeenCalledWith(
         expect.objectContaining({

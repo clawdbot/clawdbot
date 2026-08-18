@@ -610,7 +610,7 @@ Set `requiresRuntime: false` only when those descriptors are sufficient for the 
 
 Because setup lookup can execute plugin-owned `setup-api` code, normalized `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across discovered plugins. Ambiguous ownership fails closed instead of picking a winner from discovery order.
 
-When setup runtime does execute, setup registry diagnostics report descriptor drift if `setup-api` registers a provider or CLI backend that the manifest descriptors do not declare, or if a descriptor has no matching runtime registration. These diagnostics are additive and do not reject legacy plugins.
+When setup runtime executes, setup registry diagnostics report providers or CLI backends that `setup-api` registers without matching manifest declarations. CLI backend descriptors also report a missing runtime registration because setup lookup needs the registered backend configuration. Provider descriptors may remain metadata-only even when the same setup module contributes migrations, CLI backends, probes, or selected provider runtimes.
 
 ### setup.providers reference
 
@@ -637,12 +637,12 @@ Supported evidence entries:
 
 ### setup fields
 
-| Field              | Required | Type       | What it means                                                                                       |
-| ------------------ | -------- | ---------- | --------------------------------------------------------------------------------------------------- |
-| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.                                     |
-| `cliBackends`      | No       | `string[]` | Setup-time backend ids used for descriptor-first setup lookup. Keep normalized ids globally unique. |
-| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.                                          |
-| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs `setup-api` execution after descriptor lookup.                            |
+| Field              | Required | Type       | What it means                                                                                                                                  |
+| ------------------ | -------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.                                                                                |
+| `cliBackends`      | No       | `string[]` | Setup-time backend ids used for descriptor-first setup lookup. Keep normalized ids globally unique.                                            |
+| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.                                                                                     |
+| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs `setup-api` execution after descriptor lookup. Explicit `false` disables it; omission preserves the legacy fallback. |
 
 ## uiHints reference
 

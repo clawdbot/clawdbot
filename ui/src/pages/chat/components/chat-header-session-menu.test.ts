@@ -246,10 +246,11 @@ describe("chat header session menu", () => {
   it("offers direct and submenu owner assignment", async () => {
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
     const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
+    const research = { type: "agent", id: "research:one", label: "Research" } as const;
     const menu = await mountMenu({
-      ownerOptions: [ada, { type: "agent", id: "research", label: "Research" }],
+      ownerOptions: [ada, research],
       selfOwner: ada,
-      currentOwnerId: "research",
+      currentOwnerId: research.id,
       onAction,
     });
 
@@ -258,12 +259,17 @@ describe("chat header session menu", () => {
     expect(
       Array.from(submenu.querySelectorAll("wa-dropdown-item[slot='submenu']")).map(itemLabel),
     ).toEqual(["Ada", "Research"]);
+    const selected = item(menu, "Research");
+    expect(selected.getAttribute("role")).toBe("menuitemradio");
+    expect(selected.getAttribute("aria-checked")).toBe("true");
+    expect(selected.disabled).toBe(true);
+    expect(selected.querySelector("[slot='details']")).not.toBeNull();
 
     select(menu, "assign-owner:self");
-    select(menu, "assign-owner:agent:research");
+    select(menu, "assign-owner:agent:research%3Aone");
     expect(onAction.mock.calls).toEqual([
       [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada", label: "Ada" } }],
-      [{ kind: "assign-owner", owner: { type: "agent", id: "research" } }],
+      [{ kind: "assign-owner", owner: { type: "agent", id: "research:one" } }],
     ]);
   });
 

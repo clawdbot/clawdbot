@@ -1,14 +1,18 @@
-import type {
-  TaskSuggestion,
-  TaskSuggestionEvent,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
+import {
+  GATEWAY_SERVER_CAPS,
+  type TaskSuggestion,
+  type TaskSuggestionEvent,
+  type TaskSuggestionsAcceptResult,
+  type TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   taskSuggestionAcceptParams,
@@ -47,9 +51,10 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       return;
     }
     const offset = direction === "next" ? 1 : -1;
-    const next = this.taskSuggestions[
-      (current + offset + this.taskSuggestions.length) % this.taskSuggestions.length
-    ];
+    const next =
+      this.taskSuggestions[
+        (current + offset + this.taskSuggestions.length) % this.taskSuggestions.length
+      ];
     if (!next) {
       return;
     }
@@ -196,6 +201,43 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       }
     }, 2000);
   };
+
+  protected suggestionChatProps(connected: boolean, archived: boolean, multiIdentity: boolean) {
+    const gatewaySnapshot = this.context.gateway.snapshot;
+    const auth = gatewaySnapshot.hello?.auth ?? null;
+    const canWrite = connected && hasOperatorWriteAccess(auth);
+    const canAdmin = connected && hasOperatorAdminAccess(auth);
+    return {
+      taskSuggestions: this.taskSuggestions,
+      activeTaskSuggestionId: this.activeTaskSuggestionId,
+      taskSuggestionSwapDirection: this.taskSuggestionSwapDirection,
+      taskSuggestionSwapGeneration: this.taskSuggestionSwapGeneration,
+      onNavigateTaskSuggestion: this.navigateTaskSuggestion,
+      taskSuggestionBusyIds: this.taskSuggestionBusyIds,
+      sessionSuggestions: multiIdentity ? this.sessionSuggestions : [],
+      sessionSuggestionRole: this.sessionSuggestionRole,
+      sessionSuggestionBusyIds: this.sessionSuggestionBusyIds,
+      sessionSuggestionsArchived: archived,
+      canResolveSessionSuggestions:
+        canWrite &&
+        isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.resolve") === true,
+      onResolveSessionSuggestion: this.resolveCurrentSessionSuggestion.bind(this),
+      canAcceptTaskSuggestions:
+        canAdmin && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.accept") === true,
+      canAcceptTaskSuggestionModes:
+        isGatewayCapabilityAdvertised(
+          gatewaySnapshot,
+          GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
+        ) === true,
+      canDismissTaskSuggestions:
+        canWrite && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.dismiss") === true,
+      taskSuggestionCloudProfiles: this.taskSuggestionCloudProfiles,
+      taskSuggestionCopiedIds: this.taskSuggestionCopiedIds,
+      onCopyTaskSuggestionPrompt: this.copyTaskSuggestionPrompt,
+      onAcceptTaskSuggestion: this.acceptTaskSuggestion,
+      onDismissTaskSuggestion: this.dismissTaskSuggestion,
+    };
+  }
 
   protected async resolveTaskSuggestion(
     suggestion: TaskSuggestion,

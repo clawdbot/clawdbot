@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCompactionCheckpoint, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   createContext,
   createGateway,
@@ -65,7 +66,7 @@ describe("sessions page managed roster", () => {
     };
 
     mutableGateway.emit({ phase: "reconnecting", client });
-    mutableGateway.emit({ phase: "connected", client });
+    mutableGateway.emit({ phase: "connected", client, hello: sessionMutationGatewayHello() });
     document.body.append(page);
     await page.updateComplete;
     await vi.waitFor(() => expect(refreshList).toHaveBeenCalledOnce());
