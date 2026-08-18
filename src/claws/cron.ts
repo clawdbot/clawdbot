@@ -66,7 +66,15 @@ function rowToRef(row: CronRefRow): PersistedClawCronRef {
     declarationKey: row.declaration_key,
     ...(row.scheduler_job_id ? { schedulerJobId: row.scheduler_job_id } : {}),
     status: row.status,
-    job: JSON.parse(row.job_json) as ClawCronJob,
+    job: (() => {
+      try {
+        return JSON.parse(row.job_json) as ClawCronJob;
+      } catch (error) {
+        throw new Error(
+          `Failed to parse cron job JSON for manifest ${row.manifest_id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    })(),
     ...(row.error ? { error: row.error } : {}),
     createdAtMs: Number(row.created_at_ms),
     updatedAtMs: Number(row.updated_at_ms),
