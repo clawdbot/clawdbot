@@ -203,6 +203,7 @@ describe("Codex app-server attempt context", () => {
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Canonical agent instructions");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Canonical agent soul");
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Canonical agent memory");
+    await fs.writeFile(path.join(executionDir, "AGENTS.md"), "Execution project instructions");
 
     try {
       const context = await buildCodexWorkspaceBootstrapContext({
@@ -224,8 +225,14 @@ describe("Codex app-server attempt context", () => {
       expect(context.turnScopedDeveloperInstructions).toContain(
         path.join(workspaceDir, "AGENTS.md"),
       );
+      expect(context.turnScopedDeveloperInstructions).not.toContain(
+        "Execution project instructions",
+      );
+      expect(context.turnScopedDeveloperInstructions).not.toContain(
+        path.join(executionDir, "AGENTS.md"),
+      );
       expect(context.memoryToolRouted).toBe(true);
-      expect(context.promptContext).not.toContain("Canonical agent memory");
+      expect(context.promptContext).toBeUndefined();
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(executionDir, { recursive: true, force: true });

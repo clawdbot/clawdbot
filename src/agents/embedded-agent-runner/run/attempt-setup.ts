@@ -508,7 +508,7 @@ export function prepareEmbeddedAttemptSkills(params: {
     workspaceOnly,
   } = resolveSandboxSkillRuntimeInputs({
     sandbox: params.sandbox,
-    effectiveWorkspace: params.effectiveWorkspace,
+    skillsAnchorWorkspace: params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace,
     skillsSnapshot: params.attempt.skillsSnapshot,
   });
   const { shouldLoadSkillEntries, skillEntries, loadSkillEntries } = resolveEmbeddedRunSkillEntries(

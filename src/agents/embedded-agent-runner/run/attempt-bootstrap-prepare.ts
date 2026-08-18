@@ -1,3 +1,4 @@
+import path from "node:path";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import {
@@ -13,6 +14,7 @@ import {
   resolveWorkspaceBootstrapRouting,
 } from "../../bootstrap-routing.js";
 import {
+  DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending,
   type WorkspaceBootstrapFile,
@@ -35,8 +37,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
 }) {
   const { attempt } = params;
   const bootstrapWorkspaceDir = params.bootstrapWorkspaceDir ?? params.resolvedWorkspace;
-  // The selected session workspace owns execution. Bootstrap files remain owned
-  // by the configured agent workspace and keep honest paths when those differ.
+  // The selected session workspace owns execution. Agent bootstrap identity stays
+  // in the configured workspace; execution project instructions layer after it.
   const bootstrapPromptWorkspaceDir =
     bootstrapWorkspaceDir === params.resolvedWorkspace
       ? params.effectiveWorkspace
@@ -49,6 +51,18 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     workspaceDir: bootstrapWorkspaceDir,
     warn: (message) => log.warn(message),
   });
+  const resolveWorkspaceBootstrapFiles = (workspaceDir: string) =>
+    resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: attempt.config,
+      sessionKey: attempt.sessionKey,
+      sessionId: attempt.sessionId,
+      chatType: attempt.chatType,
+      agentId: params.sessionAgentId,
+      warn: bootstrapWarn,
+      contextMode: attempt.bootstrapContextMode,
+      runKind: attempt.bootstrapContextRunKind,
+    });
   let completedBootstrapTurn: boolean | undefined;
   const hasCompletedBootstrapTurnForAttempt = async () => {
     completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
@@ -82,17 +96,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     contextInjectionMode !== "never" &&
     (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
   ) {
-    preloadedBootstrapFiles = await resolveBootstrapFilesForRun({
-      workspaceDir: bootstrapWorkspaceDir,
-      config: attempt.config,
-      sessionKey: attempt.sessionKey,
-      sessionId: attempt.sessionId,
-      chatType: attempt.chatType,
-      agentId: params.sessionAgentId,
-      warn: bootstrapWarn,
-      contextMode: attempt.bootstrapContextMode,
-      runKind: attempt.bootstrapContextRunKind,
-    });
+    preloadedBootstrapFiles = await resolveWorkspaceBootstrapFiles(bootstrapWorkspaceDir);
     bootstrapRouting = await resolveBootstrapRouting(preloadedBootstrapFiles);
   }
   bootstrapRouting ??= await resolveBootstrapRouting(preloadedBootstrapFiles);
@@ -111,21 +115,24 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
     resolveBootstrapContextForRun: async () => {
       const bootstrapFiles =
-        preloadedBootstrapFiles ??
-        (await resolveBootstrapFilesForRun({
-          workspaceDir: bootstrapWorkspaceDir,
-          config: attempt.config,
-          sessionKey: attempt.sessionKey,
-          sessionId: attempt.sessionId,
-          chatType: attempt.chatType,
-          agentId: params.sessionAgentId,
-          warn: bootstrapWarn,
-          contextMode: attempt.bootstrapContextMode,
-          runKind: attempt.bootstrapContextRunKind,
-        }));
+        preloadedBootstrapFiles ?? (await resolveWorkspaceBootstrapFiles(bootstrapWorkspaceDir));
+      const executionAgentsPath = path.join(
+        path.resolve(params.resolvedWorkspace),
+        DEFAULT_AGENTS_FILENAME,
+      );
+      const executionProjectFiles =
+        bootstrapWorkspaceDir === params.resolvedWorkspace
+          ? []
+          : (await resolveWorkspaceBootstrapFiles(params.resolvedWorkspace)).filter(
+              (file) =>
+                file.name === DEFAULT_AGENTS_FILENAME &&
+                !file.missing &&
+                path.resolve(file.path) === executionAgentsPath,
+            );
+      const layeredBootstrapFiles = [...bootstrapFiles, ...executionProjectFiles];
       return {
-        bootstrapFiles,
-        contextFiles: buildBootstrapContextForFiles(bootstrapFiles, {
+        bootstrapFiles: layeredBootstrapFiles,
+        contextFiles: buildBootstrapContextForFiles(layeredBootstrapFiles, {
           config: attempt.config,
           agentId: params.sessionAgentId,
           warn: bootstrapWarn,

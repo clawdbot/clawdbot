@@ -244,6 +244,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       params.params,
     )
       ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles, {
+          agentWorkspaceDir: params.resolvedWorkspace,
           includeAgentProjectDocs: inheritsAgentWorkspace,
         })
       : [];
@@ -721,9 +722,9 @@ function selectCodexWorkspacePromptContextFiles(
 
 function selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(
   contextFiles: EmbeddedContextFile[],
-  options: { includeAgentProjectDocs?: boolean } = {},
+  options: { agentWorkspaceDir: string; includeAgentProjectDocs?: boolean },
 ): EmbeddedContextFile[] {
-  return selectCodexWorkspaceDeveloperInstructionFiles(
+  const files = selectCodexWorkspaceDeveloperInstructionFiles(
     contextFiles,
     options.includeAgentProjectDocs
       ? new Set([
@@ -731,6 +732,14 @@ function selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(
           ...CODEX_NATIVE_PROJECT_DOC_BASENAMES,
         ])
       : CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
+  );
+  const agentProjectDocPath = path.join(path.resolve(options.agentWorkspaceDir), "AGENTS.md");
+  // Native Codex discovery owns execution-directory project docs. OpenClaw only
+  // inherits the configured agent workspace's AGENTS.md through this channel.
+  return files.filter(
+    (file) =>
+      !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(getCodexContextFileBasename(file.path)) ||
+      path.resolve(file.path) === agentProjectDocPath,
   );
 }
 

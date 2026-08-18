@@ -299,7 +299,7 @@ async function resolveCliSkillsPrompt(params: {
         ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
         : {}),
     },
-    effectiveWorkspace: sandboxWorkspace.workspaceDir,
+    skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
     skillsSnapshot: params.skillsSnapshot,
   });
   const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
