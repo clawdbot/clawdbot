@@ -6,16 +6,10 @@ import { createOutboundPayloadPlan } from "../infra/outbound/payloads.js";
 import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "./channel-outbound-fenced-media-warn.js";
 
 /** Latch fenced-MEDIA diagnostics to accepted visible direct-delivery text (#41966). */
-export function createDirectAcceptedFencedMediaWarnLatch(params: {
-  payload: object;
-  cfg?: unknown;
-  surface?: string;
-}) {
+export function createDirectAcceptedFencedMediaWarnLatch(params: { payload: object }) {
   // SAFETY: channel deliver path feeds already-normalized ReplyPayload-shaped objects into the plan builder
-  const planEntry = createOutboundPayloadPlan([params.payload as never], {
-    cfg: params.cfg as never, // SAFETY: OpenClawConfig structural match across plugin-sdk/core boundary
-    surface: params.surface,
-  })[0];
+  // Plan builder only consumes extractMarkdownImages from context; no cfg/surface contract.
+  const planEntry = createOutboundPayloadPlan([params.payload as never])[0];
   if (!planEntry?.mediaTokenSkippedInFence) {
     return {
       afterAcceptedVisibleText(_chunk: string) {},

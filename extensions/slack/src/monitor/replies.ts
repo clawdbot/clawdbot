@@ -208,8 +208,6 @@ export async function deliverReplies(params: {
     // #41966: fenced MEDIA has no media attachment — text-only path must latch too.
     const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
       payload,
-      cfg: params.cfg,
-      surface: "slack",
     });
 
     // Fire the `message_sent` hook(s) after delivery, mirroring Telegram's
@@ -266,8 +264,6 @@ export async function deliverReplies(params: {
         const mediaDelivery = await deliverTextOrMediaReply({
           payload,
           text: mediaCaption,
-          cfg: params.cfg,
-          surface: "slack",
           sendText: async (text) => {
             lastResult = await sendReply({ text, threadTs });
           },

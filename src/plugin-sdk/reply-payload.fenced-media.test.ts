@@ -29,8 +29,6 @@ describe("deliverTextOrMediaReply fenced MEDIA diagnostic (#41966)", () => {
         text: fenced,
         sendText,
         sendMedia,
-        surface: "imessage",
-        cfg: {},
       }),
     ).resolves.toBe("text");
 
@@ -54,8 +52,6 @@ describe("deliverTextOrMediaReply fenced MEDIA diagnostic (#41966)", () => {
         text: plain,
         sendText,
         sendMedia,
-        surface: "zalo",
-        cfg: {},
       }),
     ).resolves.toBe("text");
 
@@ -89,8 +85,6 @@ describe("deliverTextOrMediaReply fenced MEDIA diagnostic (#41966)", () => {
         onMediaError: async () => {
           // handled failure — continue to next media
         },
-        surface: "imessage",
-        cfg: {},
       }),
     ).resolves.toBe("media");
 
@@ -110,8 +104,6 @@ describe("deliverFormattedTextWithAttachments fenced MEDIA diagnostic (#41966)",
       deliverFormattedTextWithAttachments({
         payload: { text: fenced },
         send,
-        surface: "irc",
-        cfg: {},
       }),
     ).resolves.toBe(true);
 
@@ -134,8 +126,6 @@ describe("deliverFormattedTextWithAttachments fenced MEDIA diagnostic (#41966)",
       deliverFormattedTextWithAttachments({
         payload: { text: fenced },
         send,
-        surface: "nextcloud-talk",
-        cfg: {},
       }),
     ).rejects.toThrow("send failed");
 
@@ -152,8 +142,6 @@ describe("deliverFormattedTextWithAttachments fenced MEDIA diagnostic (#41966)",
       deliverFormattedTextWithAttachments({
         payload: { text: plain },
         send,
-        surface: "irc",
-        cfg: {},
       }),
     ).resolves.toBe(true);
 
@@ -169,11 +157,10 @@ describe("direct sendPayload fenced MEDIA diagnostic (#41966)", () => {
     warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
     const fenced = "```\nMEDIA:/tmp/demo.png\n```";
     await sendPayloadWithChunkedTextAndMedia({
-      ctx: { payload: { text: fenced }, cfg: {} },
+      ctx: { payload: { text: fenced } },
       sendText: async (ctx) => ({ channel: "zalo", messageId: ctx.text }),
       sendMedia: async () => ({ channel: "zalo", messageId: "media" }),
       emptyResult: { channel: "zalo", messageId: "" },
-      surface: "zalo",
     });
     expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
   });
@@ -182,13 +169,12 @@ describe("direct sendPayload fenced MEDIA diagnostic (#41966)", () => {
     warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
     const fenced = "preamble\n```\nMEDIA:/tmp/demo.png\n```";
     await sendPayloadWithChunkedTextAndMedia({
-      ctx: { payload: { text: fenced }, cfg: {} },
+      ctx: { payload: { text: fenced } },
       textChunkLimit: 8,
       chunker: () => ["preamble"],
       sendText: async (ctx) => ({ channel: "zalo", messageId: ctx.text }),
       sendMedia: async () => ({ channel: "zalo", messageId: "media" }),
       emptyResult: { channel: "zalo", messageId: "" },
-      surface: "zalo",
     });
     expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
   });
@@ -201,7 +187,6 @@ describe("direct sendPayload fenced MEDIA diagnostic (#41966)", () => {
     await sendTextMediaPayload({
       channel: "imessage",
       ctx: {
-        cfg: {},
         to: "chat_id",
         payload: { text: fenced },
       } as never,
@@ -221,8 +206,6 @@ describe("createDirectAcceptedFencedMediaWarnLatch hard-split (#41966)", () => {
     const payload = { text: ["```", directive, "```"].join("\n") };
     const latch = createDirectAcceptedFencedMediaWarnLatch({
       payload,
-      surface: "slack",
-      cfg: {},
     });
     const mid = Math.floor(directive.length / 2);
     latch.afterAcceptedVisibleText(["```", directive.slice(0, mid)].join("\n"));

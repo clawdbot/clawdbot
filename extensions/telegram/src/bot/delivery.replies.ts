@@ -847,8 +847,6 @@ export async function deliverReplies(params: {
     // flattening that retains literal MEDIA: still reports the diagnostic.
     const fencedMediaWarnPreHook = createDirectAcceptedFencedMediaWarnLatch({
       payload: reply,
-      cfg: params.cfg,
-      surface: "telegram",
     });
     const replyQuote = resolveReplyQuoteForSend({
       replyToId,

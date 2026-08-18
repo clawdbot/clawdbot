@@ -176,7 +176,7 @@ export function resolveTextChunksWithFallback(text: string, chunks: readonly str
 
 /** Send media-first payloads intact, or chunk text-only payloads through the caller's transport hooks. */
 export async function sendPayloadWithChunkedTextAndMedia<
-  TContext extends { payload: object; cfg?: unknown },
+  TContext extends { payload: object },
   TResult,
 >(params: {
   /** Caller context containing the loose outbound payload. */
@@ -193,8 +193,6 @@ export async function sendPayloadWithChunkedTextAndMedia<
   emptyResult: TResult;
   /** Host callback that persists each completed sub-send before the next one starts. */
   onResult?: (result: TResult) => Promise<void> | void;
-  /** Optional surface tag for outbound plan diagnostics (#41966). */
-  surface?: string;
 }): Promise<TResult> {
   // SAFETY: sendPayload helper only needs text/media fields from the channel payload bag
   const payload = params.ctx.payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string };
@@ -517,10 +515,6 @@ export async function deliverTextOrMediaReply(params: {
     index: number;
     isFirst: boolean;
   }) => Promise<void> | void;
-  /** Optional config used for outbound plan diagnostics (#41966). */
-  cfg?: unknown;
-  /** Optional surface tag for outbound plan diagnostics (#41966). */
-  surface?: string;
 }): Promise<"empty" | "text" | "media"> {
   const { mediaUrls } = resolveSendableOutboundReplyParts(params.payload, {
     text: params.text,
@@ -530,8 +524,6 @@ export async function deliverTextOrMediaReply(params: {
   const createDirectAcceptedFencedMediaWarnLatch = await loadDirectAcceptedFencedMediaWarnLatch();
   const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
     payload: params.payload,
-    cfg: params.cfg,
-    surface: params.surface,
   });
   // Only latch fenced-MEDIA warn after a successful *caption-bearing* media send.
   // sendMediaWithLeadingCaption may continue after a handled first-send failure and
@@ -574,10 +566,6 @@ export async function deliverTextOrMediaReply(params: {
 export async function deliverFormattedTextWithAttachments(params: {
   payload: OutboundReplyPayload;
   send: (params: { text: string; replyToId?: string }) => Promise<void>;
-  /** Optional config used for outbound plan diagnostics (#41966). */
-  cfg?: unknown;
-  /** Optional surface tag for outbound plan diagnostics (#41966). */
-  surface?: string;
 }): Promise<boolean> {
   const text = formatTextWithAttachmentLinks(
     params.payload.text,
@@ -591,8 +579,6 @@ export async function deliverFormattedTextWithAttachments(params: {
   const createDirectAcceptedFencedMediaWarnLatch = await loadDirectAcceptedFencedMediaWarnLatch();
   const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
     payload: params.payload,
-    cfg: params.cfg,
-    surface: params.surface,
   });
   await params.send({
     text,

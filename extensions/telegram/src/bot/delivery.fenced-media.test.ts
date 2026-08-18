@@ -14,15 +14,8 @@ vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async () =>
     warnFencedMediaSkipsForAcceptedOutboundDelivery: (
       ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
     ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
-    createDirectAcceptedFencedMediaWarnLatch: (params: {
-      payload: object;
-      cfg?: unknown;
-      surface?: string;
-    }) => {
-      const planEntry = createOutboundPayloadPlan([params.payload as never], {
-        cfg: params.cfg as never,
-        surface: params.surface,
-      })[0];
+    createDirectAcceptedFencedMediaWarnLatch: (params: { payload: object }) => {
+      const planEntry = createOutboundPayloadPlan([params.payload as never])[0];
       if (!planEntry?.mediaTokenSkippedInFence) {
         return { afterAcceptedVisibleText(_chunk: string) {} };
       }
