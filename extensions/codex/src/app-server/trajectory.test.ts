@@ -308,6 +308,30 @@ describe("Codex trajectory recorder", () => {
           })),
         } as never,
       });
+      recordCodexTrajectoryCompletion(trajectoryRecorder, {
+        attempt: attempt as never,
+        threadId: "thread-compact",
+        turnId: "turn-compact",
+        timedOut: true,
+        result: {
+          terminal: {
+            kind: "timeout",
+            phase: "prompt",
+            source: "runtime",
+            aborted: true,
+            failure: { source: "prompt", error: "compact prompt error" },
+          },
+          attemptUsage: usage,
+          assistantTexts: Array.from(
+            { length: 12 },
+            (_value, index) => `assistant-${index} ${"x".repeat(32_000)}`,
+          ),
+          messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
+            role: index % 2 === 0 ? "user" : "assistant",
+            content: `message-${index} ${"x".repeat(32_000)}`,
+          })),
+        } as never,
+      });
       await trajectoryRecorder.flush();
     } finally {
       host.close();
@@ -320,7 +344,12 @@ describe("Codex trajectory recorder", () => {
     });
     const context = events.find((event) => event.type === "context.compiled");
     const tool = events.find((event) => event.type === "tool.result");
-    const completion = events.find((event) => event.type === "model.completed");
+    const completion = events.find(
+      (event) => event.type === "model.completed" && event.data?.turnId === "turn-1",
+    );
+    const compactCompletion = events.find(
+      (event) => event.type === "model.completed" && event.data?.turnId === "turn-compact",
+    );
     expect(context?.data).toMatchObject({
       prompt: "inspect",
       systemPrompt: {
@@ -364,6 +393,20 @@ describe("Codex trajectory recorder", () => {
     });
     expect(completion?.data?.messagesSnapshot).toBeUndefined();
     expect(completion?.data?.droppedFields).toEqual(["messagesSnapshot"]);
+    expect(compactCompletion?.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      threadId: "thread-compact",
+      turnId: "turn-compact",
+      timedOut: true,
+      yieldDetected: false,
+      aborted: true,
+      promptError: "compact prompt error",
+      usage,
+    });
+    expect(compactCompletion?.data?.assistantTexts).toBeUndefined();
+    expect(compactCompletion?.data?.messagesSnapshot).toBeUndefined();
+    expect(compactCompletion?.data?.droppedFields).toEqual(["assistantTexts", "messagesSnapshot"]);
 
     const bundle = await exportTrajectoryBundleForTest({
       outputDir: path.join(tmpDir, "bundle"),
@@ -372,7 +415,13 @@ describe("Codex trajectory recorder", () => {
       sessionKey: sessionTarget.sessionKey,
       workspaceDir: tmpDir,
     });
-    const exportedCompletion = bundle.events.find((event) => event.type === "model.completed");
+    const exportedCompletion = bundle.events.find(
+      (event) => event.type === "model.completed" && event.data?.turnId === "turn-1",
+    );
+    const exportedCompactCompletion = bundle.events.find(
+      (event) => event.type === "model.completed" && event.data?.turnId === "turn-compact",
+    );
     expect(exportedCompletion?.data).toEqual(completion?.data);
+    expect(exportedCompactCompletion?.data).toEqual(compactCompletion?.data);
   });
 });
