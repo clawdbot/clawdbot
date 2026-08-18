@@ -483,6 +483,7 @@ export async function createVoiceCallRuntime(params: {
         const nextTunnelResult = await startTunnel({
           provider: config.tunnel.provider,
           port: config.serve.port,
+          tailscalePort: config.tailscale.port,
           path: config.serve.path,
           streamPaths: resolveVoiceCallStreamExposurePaths(config, {
             publicWebhookPath: config.serve.path,

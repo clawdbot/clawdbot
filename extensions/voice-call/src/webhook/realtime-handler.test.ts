@@ -453,12 +453,12 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("preserves a public path prefix ahead of serve.path", () => {
     const handler = makeHandler({ streamPath: "/custom/stream/realtime" });
-    handler.setPublicUrl("https://public.example/api/voice/webhook");
+    handler.setPublicUrl("https://public.example:8443/api/voice/webhook");
     const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook", "127.0.0.1:3334"));
 
     expect(handler.getStreamPathPattern()).toBe("/api/custom/stream/realtime");
     expect(payload.body).toMatch(
-      /wss:\/\/public\.example\/api\/custom\/stream\/realtime\/[0-9a-f-]{36}/,
+      /wss:\/\/public\.example:8443\/api\/custom\/stream\/realtime\/[0-9a-f-]{36}/,
     );
   });
 

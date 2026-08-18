@@ -196,7 +196,9 @@ JSON with `recordsScanned`, `turnLatency`, and `listenWait` summaries.
 
 Enable, disable, or change the Tailscale serve/funnel configuration for the
 voice webhook. When realtime or streaming audio is enabled, the command also
-exposes or clears that mode's WebSocket stream path.
+exposes or clears that mode's WebSocket stream path. The external HTTPS port
+comes from `tailscale.port` (default `443`); Funnel supports `443`, `8443`, or
+`10000`.
 
 | Flag                  | Default                                   | Description                                     |
 | --------------------- | ----------------------------------------- | ----------------------------------------------- |

@@ -156,7 +156,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           // Public exposure (pick one)
           // publicUrl: "https://example.ngrok.app/voice/webhook",
           // tunnel: { provider: "ngrok" },
-          // tailscale: { mode: "funnel", path: "/voice/webhook" },
+          // tailscale: { mode: "funnel", port: 8443, path: "/voice/webhook" },
 
           outbound: {
             defaultMode: "notify", // notify | conversation
@@ -209,6 +209,7 @@ that Region. See
     - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Local dev only.
     - Ngrok free-tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
     - Tailscale Serve and Funnel automatically expose the realtime or streaming WebSocket path when that audio mode is enabled.
+    - `tailscale.port` selects the external HTTPS port for both `tailscale.mode` and unified `tunnel.provider: "tailscale-serve" | "tailscale-funnel"`. It defaults to `443`; use `8443` when another HTTPS server owns port 443. Funnel accepts only `443`, `8443`, or `10000`, while Serve accepts any valid TCP port. Non-default ports appear in the webhook and realtime stream URLs.
 
   </Accordion>
   <Accordion title="Streaming connection caps">
@@ -892,7 +893,7 @@ Use one public exposure path:
           // or
           tunnel: { provider: "ngrok" },
           // or
-          tailscale: { mode: "funnel", path: "/voice/webhook" },
+          tailscale: { mode: "funnel", port: 8443, path: "/voice/webhook" },
         },
       },
     },
