@@ -551,7 +551,7 @@ describe("update-cli", () => {
   };
 
   const createTrackedTempDir = async (prefix: string) => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
     tempDirsToCleanup.add(dir);
     return dir;
   };
