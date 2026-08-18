@@ -6708,13 +6708,19 @@ describe("handleSendChat", () => {
     host.client = clientWithRequest(request);
     host.connected = true;
 
-    await retryReconnectableQueuedChatSends(host);
+    vi.useFakeTimers();
+    try {
+      await retryReconnectableQueuedChatSends(host);
 
-    expect(historyAttempts).toBe(1);
-    expect(sendAttempts).toBe(0);
-    await waitForFast(() => expect(sendAttempts).toBe(1));
-    expect(historyAttempts).toBeGreaterThanOrEqual(2);
-    await waitForFast(() => expect(listStoredChatOutboxes(host)).toStrictEqual([]));
+      expect(historyAttempts).toBe(1);
+      expect(sendAttempts).toBe(0);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sendAttempts).toBe(1);
+      expect(historyAttempts).toBeGreaterThanOrEqual(2);
+      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("persists queueable local commands entered while disconnected", async () => {
