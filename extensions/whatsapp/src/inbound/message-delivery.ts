@@ -405,7 +405,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
   const processDurableInboundMessage = async (
     admission: WhatsAppIngressAdmission,
     lifecycle: WhatsAppIngressLifecycle,
-  ): Promise<"completed" | "deferred"> => {
+  ): Promise<"completed" | "deferred" | { kind: "completed"; reason?: string }> => {
     const { message: msg, ...context } = admission;
     rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
     const remoteJid = msg.key?.remoteJid;
@@ -428,6 +428,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     const inbound = prepared ?? (await normalizeInboundMessage(msg));
     if (!inbound) {
       return "completed";
+    }
+    if ("blocked" in inbound) {
+      return inbound.reason ? { kind: "completed", reason: inbound.reason } : "completed";
     }
     if (
       await maybeResolveWhatsAppQuestionReaction({
@@ -570,7 +573,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       if (result.kind === "durable" && result.queueResult.kind === "completed") {
         finishPreparation(undefined);
         const inbound = await normalizeInboundMessage(msg);
-        if (inbound) {
+        if (inbound && !("blocked" in inbound)) {
           await maybeMarkNonSelfChatReadReceipt(inbound, buildReadReceiptTarget(inbound));
         }
       } else if (result.kind === "durable" && result.queueResult.kind === "accepted") {

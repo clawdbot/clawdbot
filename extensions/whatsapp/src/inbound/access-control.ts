@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements access control behavior.
+import { createHash } from "node:crypto";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
@@ -14,6 +15,7 @@ type BlockedInboundAccessControlResult = {
   isSelfChat: boolean;
   resolvedAccountId: string;
   admission?: never;
+  reason?: string;
 };
 
 export type AcceptedInboundAccessControlResult = {
@@ -39,12 +41,14 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
 
 function blockedInboundAccess(
   policy: ReturnType<typeof resolveWhatsAppInboundPolicy>,
+  reason?: string,
 ): BlockedInboundAccessControlResult {
   return {
     allowed: false,
     shouldMarkRead: false,
     isSelfChat: policy.isSelfChat,
     resolvedAccountId: policy.account.accountId,
+    reason,
   };
 }
 
@@ -66,6 +70,7 @@ export async function checkInboundAccessControl(params: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
   remoteJid: string;
+  messageId: string;
 }): Promise<InboundAccessControlResult> {
   const policy = resolveWhatsAppInboundPolicy({
     cfg: params.cfg,
@@ -193,12 +198,14 @@ export async function checkInboundAccessControl(params: {
     const wildcardCfg = policy.account.direct?.["*"];
     const rate = exactCfg?.replyRate ?? wildcardCfg?.replyRate ?? policy.account.replyRate;
     if (typeof rate === "number" && rate >= 0 && rate < 1) {
-      if (Math.random() >= rate) {
+      const messageHash = createHash("md5").update(params.messageId).digest("hex").substring(0, 8);
+      const randomValue = parseInt(messageHash, 16) / 0xffffffff;
+      if (randomValue >= rate) {
         logWhatsAppVerbose(
           params.verbose,
           `Ignored message from ${params.from} (${rate * 100}% probabilistic rule).`,
         );
-        return blockedInboundAccess(policy);
+        return blockedInboundAccess(policy, "reply_rate_suppressed");
       }
     }
   }
