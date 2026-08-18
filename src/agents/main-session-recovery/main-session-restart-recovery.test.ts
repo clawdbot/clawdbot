@@ -34,6 +34,7 @@ import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { moveDeliveryQueueEntryToFailed } from "../../infra/delivery-queue-sqlite.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { ackDelivery, enqueueDeliveryOnce } from "../../infra/outbound/delivery-queue-storage.js";
+import { redactSecrets } from "../../logging/redact.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -1621,7 +1622,11 @@ describe("main-session-restart-recovery", () => {
       transcript
         .map((event) => event.message?.idempotencyKey)
         .filter((key) => typeof key === "string"),
-    ).toEqual([`${sourceRunId}:user`, `${previousRecoveryRunId}:user`, `${dispatchedRunId}:user`]);
+    ).toEqual([
+      `${sourceRunId}:user`,
+      `${previousRecoveryRunId}:user`,
+      redactSecrets(`${dispatchedRunId}:user`),
+    ]);
   });
 
   it("does not manufacture recovery identity before collection is disabled", async () => {
