@@ -6,7 +6,7 @@ import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { registerStatusSummarySessionRowCases } from "./status.summary.session-row-cases.js";
+import { registerStatusSummarySessionRowCases } from "./status.summary.test-support.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
