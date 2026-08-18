@@ -216,7 +216,7 @@ export function prepareEmbeddedAttemptStream(input: {
           if (outcome.action !== "revise") {
             return;
           }
-          if (event.hadDeterministicSideEffect) {
+          if (event.hadDeterministicSideEffect && !outcome.forceRevision) {
             log.warn(
               `before_agent_finalize requested revision after potential side effects; finalizing ` +
                 `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
