@@ -761,10 +761,6 @@ function createAnthropicMessagesClient(params: {
           body: JSON.stringify(body),
           signal: options?.signal,
         });
-        if (!response.ok) {
-          const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(formatAnthropicMessagesHttpError(response, detail));
-        }
         return {
           response,
           stream: response.body ? parseAnthropicSseBody(response.body, options?.signal) : [],
@@ -1202,6 +1198,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
         );
         await notifyProviderHttpResponse({ options: transportOptions, response, model });
+        if (!response.ok) {
+          const detail = await readAnthropicMessagesErrorBodySnippet(response);
+          throw new Error(formatAnthropicMessagesHttpError(response, detail));
+        }
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
         const compactionCapture = createCompactionCapture(output, model, transportOptions);

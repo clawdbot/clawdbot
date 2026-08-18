@@ -1129,17 +1129,24 @@ describe("anthropic transport stream", () => {
       ),
     );
 
+    const onProviderAccepted = vi.fn();
+    const onResponse = vi.fn();
     const result = await runTransportStream(
       makeAnthropicTransportModel(),
       {
         messages: [{ role: "user", content: "hello" }],
       } as AnthropicStreamContext,
-      { apiKey: "test-api-key" } as AnthropicStreamOptions,
+      { apiKey: "test-api-key", onProviderAccepted, onResponse } as AnthropicStreamOptions,
     );
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe(
       'HTTP 429: {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens exceeded the per-minute rate limit."}}; Retry-After: 30 seconds',
+    );
+    expect(onProviderAccepted).not.toHaveBeenCalled();
+    expect(onResponse).toHaveBeenCalledWith(
+      { status: 429, headers: { "content-type": "text/plain;charset=UTF-8", "retry-after": "30" } },
+      expect.objectContaining({ provider: "anthropic" }),
     );
   });
 
