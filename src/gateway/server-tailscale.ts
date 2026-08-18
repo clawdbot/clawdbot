@@ -7,7 +7,10 @@ import {
   getTailnetHostnameAfterServe,
   hasTailscaleFunnelRouteForPort,
 } from "../infra/tailscale.js";
-import { TAILSCALE_DEFAULT_ROUTE_PORT } from "../shared/tailscale-ports.js";
+import {
+  formatTailscaleAuthority,
+  TAILSCALE_DEFAULT_ROUTE_PORT,
+} from "../shared/tailscale-ports.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
@@ -30,9 +33,7 @@ export async function startGatewayTailscaleExposure(params: {
   }
   const backendTarget = params.backend.port;
   const exposedPort = params.tailscalePort ?? TAILSCALE_DEFAULT_ROUTE_PORT;
-  // Non-default ports must stay in every published origin: clients dial the
-  // tailnet route directly, so dropping it would advertise an unreachable URL.
-  const hostSuffix = exposedPort === TAILSCALE_DEFAULT_ROUTE_PORT ? "" : `:${exposedPort}`;
+
   const effectiveMode = params.tailscaleMode;
   let clearPublishedOrigin: (() => void) | undefined;
   if (params.tailscaleMode === "serve" && params.preserveFunnel === true) {
@@ -72,7 +73,7 @@ export async function startGatewayTailscaleExposure(params: {
         tailnetHost: host,
       });
       if (publicHost) {
-        const publicAuthority = `${publicHost}${hostSuffix}`;
+        const publicAuthority = formatTailscaleAuthority(publicHost, exposedPort);
         clearPublishedOrigin = prepareMcpAppChannelOrigin({
           origin: `https://${publicAuthority}`,
           reachability: effectiveMode === "funnel" ? "internet" : "tailnet",
