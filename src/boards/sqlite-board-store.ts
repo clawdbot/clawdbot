@@ -33,6 +33,7 @@ import {
   type BoardWidgetHtmlDocument,
   type BoardWidgetHtmlViewMetadata,
   type BoardWidgetMcpAppDocument,
+  type BoardWidgetRegisteredDocument,
 } from "./board-store.js";
 import {
   BOARD_WIDGET_SNAPSHOT_COLUMNS,
@@ -196,8 +197,40 @@ function rowToHtmlDocument(
     revision: row.revision,
     sha256: row.sha256,
     viewGeneration: row.view_generation,
-    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
+    grantState: effectiveGrantState(row.grant_state, manifest),
     ...(declared ? { declared } : {}),
+  };
+}
+
+function rowToRegisteredDocument(
+  row: Pick<
+    SelectedBoardWidgetRow,
+    | "content_kind"
+    | "descriptor_json"
+    | "title"
+    | "revision"
+    | "sha256"
+    | "grant_state"
+    | "manifest"
+  >,
+): BoardWidgetRegisteredDocument | undefined {
+  if (row.content_kind !== "plugin" || row.descriptor_json === null) {
+    return undefined;
+  }
+  const content = parsePluginContent(row.descriptor_json);
+  const manifest = parseManifest(row.manifest);
+  if (!("source" in content) || !manifest.registeredInstanceId) {
+    return undefined;
+  }
+  return {
+    pluginKind: content.pluginKind,
+    source: content.source,
+    ...(row.title !== null ? { title: row.title } : {}),
+    revision: row.revision,
+    sha256: row.sha256,
+    viewGeneration: manifest.registeredInstanceId,
+    grantState: effectiveGrantState(row.grant_state, manifest),
+    ...(manifest.declared ? { declared: manifest.declared } : {}),
   };
 }
 
@@ -496,7 +529,8 @@ export class SqliteBoardStore implements BoardStore {
                 parseDescriptor(existing.descriptor_json).serverName ===
                   canonicalParams.content.descriptor.serverName
               : existing.descriptor_json !== null &&
-                canonicalParams.content.kind === "plugin" &&
+                (canonicalParams.content.kind === "plugin" ||
+                  canonicalParams.content.kind === "registered") &&
                 parsePluginContent(existing.descriptor_json).pluginKind ===
                   canonicalParams.content.pluginKind
           : true;
@@ -593,10 +627,13 @@ export class SqliteBoardStore implements BoardStore {
                 decision,
                 manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId
                   ? {
+                      kind: "mcp-app" as const,
                       interactive: manifest.mcpAppInteractive,
                       instanceId: manifest.mcpAppInstanceId,
                     }
-                  : undefined,
+                  : manifest.registeredInstanceId
+                    ? { kind: "registered" as const, instanceId: manifest.registeredInstanceId }
+                    : undefined,
                 {
                   presentation: manifest.presentation,
                   heightMode: manifest.heightMode,
@@ -683,10 +720,49 @@ export class SqliteBoardStore implements BoardStore {
           descriptor: parseDescriptor(row.descriptor_json),
           revision: row.revision,
           instanceId: manifest.mcpAppInstanceId,
-          grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
+          grantState: effectiveGrantState(row.grant_state, manifest),
           declaredTools: manifest.declared?.tools ?? [],
           interactive: manifest.mcpAppInteractive,
         };
+      },
+      {
+        agentId: resolved.agentId,
+        ...(resolved.path ? { path: resolved.path } : {}),
+        env: this.options.env,
+      },
+    );
+    return result.found ? result.value : undefined;
+  }
+
+  readWidgetRegistered(
+    sessionKey: string,
+    name: string,
+  ): BoardWidgetRegisteredDocument | undefined {
+    const resolved = this.resolve(sessionKey);
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) => {
+        if (!hasSession(database, resolved.sessionKey) || !boardTablesPresent(database)) {
+          return undefined;
+        }
+        const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+        const row = executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("board_widgets")
+            .select([
+              "content_kind",
+              "descriptor_json",
+              "title",
+              "revision",
+              "sha256",
+              "grant_state",
+              "manifest",
+            ])
+            .where("session_key", "=", resolved.sessionKey)
+            .where("name", "=", name)
+            .limit(1),
+        ).rows[0];
+        return row ? rowToRegisteredDocument(row) : undefined;
       },
       {
         agentId: resolved.agentId,

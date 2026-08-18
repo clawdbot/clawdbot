@@ -1,12 +1,19 @@
 /**
  * A2UI JSONL helpers for Canvas text rendering and validation.
  */
-const A2UI_ACTION_KEYS = [
+import { A2uiMessageSchema as A2uiV09MessageSchema } from "@a2ui/web_core/v0_9";
+
+const A2UI_V08_ACTION_KEYS = [
   "beginRendering",
   "surfaceUpdate",
   "dataModelUpdate",
   "deleteSurface",
+] as const;
+const A2UI_V09_ACTION_KEYS = [
   "createSurface",
+  "updateComponents",
+  "updateDataModel",
+  "deleteSurface",
 ] as const;
 
 /** A2UI message dialects recognized by the Canvas validator. */
@@ -47,6 +54,7 @@ function validateA2UIJsonl(jsonl: string) {
   let sawV08 = false;
   let sawV09 = false;
   let messageCount = 0;
+  const messages: unknown[] = [];
 
   lines.forEach((line, idx) => {
     const trimmed = line.trim();
@@ -76,20 +84,40 @@ function validateA2UIJsonl(jsonl: string) {
       errors.push(`line ${idx + 1}: unsupported A2UI version: ${JSON.stringify(explicitVersion)}`);
       return;
     }
-    const actionKeys = A2UI_ACTION_KEYS.filter((key) => key in record);
+    const actionKeys = (
+      explicitVersion === "v0.9" ? A2UI_V09_ACTION_KEYS : A2UI_V08_ACTION_KEYS
+    ).filter((key) => key in record);
     if (actionKeys.length !== 1) {
       errors.push(
-        `line ${idx + 1}: expected exactly one action key (${A2UI_ACTION_KEYS.join(", ")})`,
+        `line ${idx + 1}: expected exactly one ${explicitVersion === "v0.9" ? "v0.9" : "v0.8"} action key`,
       );
       return;
     }
-    // v0.9 requires an explicit version, but keep recognizing legacy
-    // createSurface payloads so older generators still fail closed.
-    if (explicitVersion === "v0.9" || actionKeys[0] === "createSurface") {
+    const allowedTopLevelKeys = new Set(
+      explicitVersion === "v0.9" ? ["version", actionKeys[0]] : [actionKeys[0]],
+    );
+    if (Object.keys(record).some((key) => !allowedTopLevelKeys.has(key))) {
+      errors.push(`line ${idx + 1}: unexpected top-level A2UI field`);
+      return;
+    }
+    const payload = record[actionKeys[0]!];
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      errors.push(`line ${idx + 1}: action payload must be an object`);
+      return;
+    }
+    if (explicitVersion === "v0.9") {
+      const result = A2uiV09MessageSchema.safeParse(record);
+      if (!result.success) {
+        errors.push(
+          `line ${idx + 1}: ${result.error.issues[0]?.message ?? "invalid v0.9 message"}`,
+        );
+        return;
+      }
       sawV09 = true;
     } else {
       sawV08 = true;
     }
+    messages.push(record);
   });
 
   if (messageCount === 0) {
@@ -103,14 +131,10 @@ function validateA2UIJsonl(jsonl: string) {
   }
 
   const version: A2UIVersion = sawV09 ? "v0.9" : "v0.8";
-  return { version, messageCount };
+  return { version, messageCount, messages };
 }
 
 /** Validates A2UI JSONL against the Canvas runtime's currently supported dialect. */
 export function validateSupportedA2UIJsonl(jsonl: string) {
-  const result = validateA2UIJsonl(jsonl);
-  if (result.version !== "v0.8") {
-    throw new Error("Detected unsupported A2UI v0.9 JSONL. OpenClaw currently supports v0.8 only.");
-  }
-  return result;
+  return validateA2UIJsonl(jsonl);
 }

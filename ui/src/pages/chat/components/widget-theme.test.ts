@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
+import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
 
 function stubComputedStyles(values: Record<string, string>) {
   vi.stubGlobal(

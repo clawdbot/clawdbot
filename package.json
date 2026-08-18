@@ -2067,7 +2067,8 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@a2ui/lit": "0.10.2",
+    "@a2ui/lit": "0.10.3",
+    "@a2ui/web_core": "0.10.6",
     "@copilotkit/aimock": "1.37.4",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",

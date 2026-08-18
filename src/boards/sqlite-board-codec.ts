@@ -58,12 +58,18 @@ type ParsedBoardManifest = {
   nameIdentityInvalid?: true;
   mcpAppInteractive?: boolean;
   mcpAppInstanceId?: string;
+  registeredInstanceId?: string;
 };
 
-type ParsedPluginContent = {
+type ParsedTrustedPluginContent = {
   pluginKind: string;
   props?: Record<string, unknown>;
 };
+type ParsedRegisteredPluginContent = {
+  pluginKind: string;
+  source: string;
+};
+export type ParsedPluginContent = ParsedTrustedPluginContent | ParsedRegisteredPluginContent;
 
 export function parseManifest(value: string): ParsedBoardManifest {
   const parsed = JSON.parse(value) as {
@@ -75,6 +81,7 @@ export function parseManifest(value: string): ParsedBoardManifest {
     nameIdentity?: unknown;
     mcpAppInteractive?: unknown;
     mcpAppInstanceId?: unknown;
+    registeredInstanceId?: unknown;
   };
   const netOrigins = Array.isArray(parsed.netOrigins)
     ? parsed.netOrigins.filter((entry): entry is string => typeof entry === "string")
@@ -87,6 +94,11 @@ export function parseManifest(value: string): ParsedBoardManifest {
   const mcpAppInstanceId =
     typeof parsed.mcpAppInstanceId === "string" && /^[a-f0-9]{32}$/u.test(parsed.mcpAppInstanceId)
       ? parsed.mcpAppInstanceId
+      : undefined;
+  const registeredInstanceId =
+    typeof parsed.registeredInstanceId === "string" &&
+    /^[a-f0-9]{32}$/u.test(parsed.registeredInstanceId)
+      ? parsed.registeredInstanceId
       : undefined;
   const presentation =
     parsed.presentation === "card" ||
@@ -139,6 +151,7 @@ export function parseManifest(value: string): ParsedBoardManifest {
       ...(!nameIdentity && nameIdentityPresent ? { nameIdentityInvalid: true as const } : {}),
       ...(mcpAppInteractive !== undefined ? { mcpAppInteractive } : {}),
       ...(mcpAppInstanceId ? { mcpAppInstanceId } : {}),
+      ...(registeredInstanceId ? { registeredInstanceId } : {}),
     };
   } catch (error) {
     if (error instanceof BoardValidationError) {
@@ -153,7 +166,9 @@ export function parseManifest(value: string): ParsedBoardManifest {
 export function serializeManifest(
   declared: BoardWidgetDeclared | undefined,
   grantState: BoardWidget["grantState"],
-  mcpAppAuthority?: { interactive: boolean; instanceId: string },
+  frameAuthority?:
+    | { kind: "mcp-app"; interactive: boolean; instanceId: string }
+    | { kind: "registered"; instanceId: string },
   widgetOptions?: Pick<BoardWidget, "presentation" | "heightMode">,
   nameIdentity?: BoardWidgetNameIdentityMarker,
 ): string {
@@ -163,11 +178,14 @@ export function serializeManifest(
     ...(widgetOptions?.heightMode ? { heightMode: widgetOptions.heightMode } : {}),
     ...(nameIdentity ? { nameIdentity } : {}),
     ...(grantState === "granted" ? { grantSemanticsVersion: BOARD_GRANT_SEMANTICS_VERSION } : {}),
-    ...(mcpAppAuthority
+    ...(frameAuthority?.kind === "mcp-app"
       ? {
-          mcpAppInteractive: mcpAppAuthority.interactive,
-          mcpAppInstanceId: mcpAppAuthority.instanceId,
+          mcpAppInteractive: frameAuthority.interactive,
+          mcpAppInstanceId: frameAuthority.instanceId,
         }
+      : {}),
+    ...(frameAuthority?.kind === "registered"
+      ? { registeredInstanceId: frameAuthority.instanceId }
       : {}),
   });
 }
@@ -186,8 +204,10 @@ export function createBoardWidgetContentFields(
     params.declared,
     grantState,
     params.content.kind === "mcp-app"
-      ? { interactive: params.content.interactive, instanceId: viewGeneration }
-      : undefined,
+      ? { kind: "mcp-app", interactive: params.content.interactive, instanceId: viewGeneration }
+      : params.content.kind === "registered"
+        ? { kind: "registered", instanceId: viewGeneration }
+        : undefined,
     frame,
     params.generatedIdentity
       ? {
@@ -227,6 +247,25 @@ export function createBoardWidgetContentFields(
       manifest,
       grant_state: "none",
       granted_sha: null,
+      updated_at: now,
+    };
+  }
+  if (params.content.kind === "registered") {
+    const descriptorJson = JSON.stringify({
+      pluginKind: params.content.pluginKind,
+      source: params.content.source,
+    });
+    const sha256 = createHash("sha256").update(params.content.source).digest("hex");
+    return {
+      content_kind: "plugin",
+      html: null,
+      descriptor_json: descriptorJson,
+      sha256,
+      view_generation: null,
+      revision,
+      manifest,
+      grant_state: grantState,
+      granted_sha: grantState === "granted" ? sha256 : null,
       updated_at: now,
     };
   }
@@ -273,9 +312,15 @@ export function updateManifestHeightMode(
 }
 
 export function effectiveGrantState(
-  grantState: BoardWidget["grantState"],
+  storedGrantState: string,
   manifest: ParsedBoardManifest,
 ): BoardWidget["grantState"] {
+  const grantState: BoardWidget["grantState"] =
+    storedGrantState === "pending" ||
+    storedGrantState === "granted" ||
+    storedGrantState === "rejected"
+      ? storedGrantState
+      : "none";
   if (manifest.declarationInvalid || (!manifest.declared && manifest.mcpAppInteractive !== true)) {
     // Losing an invalid legacy declaration removes authority, never an
     // operator's explicit rejection of the widget document itself.
@@ -297,7 +342,17 @@ export function parseDescriptor(value: string): BoardMcpAppDescriptor {
 }
 
 export function parsePluginContent(value: string): ParsedPluginContent {
-  return JSON.parse(value) as ParsedPluginContent;
+  const parsed = JSON.parse(value) as Partial<ParsedRegisteredPluginContent> &
+    Partial<ParsedTrustedPluginContent>;
+  if (typeof parsed.pluginKind !== "string") {
+    throw new BoardValidationError("invalid_operation", "board plugin widget kind is invalid");
+  }
+  return typeof parsed.source === "string"
+    ? { pluginKind: parsed.pluginKind, source: parsed.source }
+    : {
+        pluginKind: parsed.pluginKind,
+        ...(parsed.props !== undefined ? { props: parsed.props } : {}),
+      };
 }
 
 export function rowToTab(row: SelectedBoardTabRow): BoardTab {
@@ -320,7 +375,11 @@ export function rowToWidget(
       ? parsePluginContent(row.descriptor_json)
       : undefined;
   const instanceId =
-    row.content_kind === "mcp-app" ? manifest.mcpAppInstanceId : row.view_generation;
+    row.content_kind === "mcp-app"
+      ? manifest.mcpAppInstanceId
+      : pluginContent && "source" in pluginContent
+        ? manifest.registeredInstanceId
+        : row.view_generation;
   return {
     name: row.name,
     tabId: row.tab_id,
@@ -331,13 +390,15 @@ export function rowToWidget(
     ...(pluginContent
       ? {
           pluginKind: pluginContent.pluginKind,
-          ...(pluginContent.props !== undefined ? { props: pluginContent.props } : {}),
+          ...("props" in pluginContent && pluginContent.props !== undefined
+            ? { props: pluginContent.props }
+            : {}),
         }
       : {}),
     sizeW: row.size_w,
     sizeH: row.size_h,
     position: row.position,
-    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
+    grantState: effectiveGrantState(row.grant_state, manifest),
     revision: row.revision,
     ...(instanceId ? { instanceId } : {}),
     ...(declaredSummary ? { declaredSummary } : {}),
@@ -352,15 +413,17 @@ export function rowToHtmlViewMetadata(
   >,
   manifest: ReturnType<typeof parseManifest>,
 ): BoardWidgetHtmlViewMetadata | undefined {
-  if (row.content_kind !== "html" || row.view_generation === null) {
+  const viewGeneration =
+    row.content_kind === "html" ? row.view_generation : manifest.registeredInstanceId;
+  if (viewGeneration === null || viewGeneration === undefined) {
     return undefined;
   }
   const declared = manifest.declared;
   return {
     revision: row.revision,
     sha256: row.sha256,
-    viewGeneration: row.view_generation,
-    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
+    viewGeneration,
+    grantState: effectiveGrantState(row.grant_state, manifest),
     ...(declared ? { declared } : {}),
   };
 }

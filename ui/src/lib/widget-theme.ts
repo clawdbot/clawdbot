@@ -68,27 +68,34 @@ export function buildWidgetThemeMessage(): {
 }
 
 export function postWidgetTheme(frame: HTMLIFrameElement, targetOrigin = "*"): void {
-  // Canvas widgets have opaque origins and require "*". Authenticated
-  // cross-origin embeds instead supply their exact, validated origin.
   frame.contentWindow?.postMessage(buildWidgetThemeMessage(), targetOrigin);
 }
 
-let widgetThemeObserverInstalled = false;
+const widgetThemeObserverWindows = new WeakSet<Window>();
+const widgetFrameProviders = new WeakMap<Window, Set<() => Iterable<HTMLIFrameElement>>>();
 
 export function installWidgetThemeObserver(getFrames: () => Iterable<HTMLIFrameElement>): void {
   if (
-    widgetThemeObserverInstalled ||
+    typeof window === "undefined" ||
     typeof document === "undefined" ||
     typeof MutationObserver === "undefined"
   ) {
     return;
   }
-  widgetThemeObserverInstalled = true;
+  const providers = widgetFrameProviders.get(window) ?? new Set();
+  providers.add(getFrames);
+  widgetFrameProviders.set(window, providers);
+  if (widgetThemeObserverWindows.has(window)) {
+    return;
+  }
+  widgetThemeObserverWindows.add(window);
   const root = document.documentElement;
   new MutationObserver(() => {
-    for (const frame of getFrames()) {
-      if (frame.isConnected) {
-        postWidgetTheme(frame);
+    for (const provider of providers) {
+      for (const frame of provider()) {
+        if (frame.isConnected) {
+          postWidgetTheme(frame);
+        }
       }
     }
   }).observe(root, {

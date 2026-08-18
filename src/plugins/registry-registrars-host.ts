@@ -1,4 +1,6 @@
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
+import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
+import { registerPluginBoardWidgetContentKind } from "./board-widget-content-kinds.js";
 import {
   getPluginSessionSchedulerJobGeneration,
   registerPluginSessionSchedulerJob,
@@ -460,6 +462,13 @@ export function createHostRegistrars(state: PluginRegistryState) {
     });
   };
 
+  const registerBoardWidgetContentKind = (
+    record: PluginRecord,
+    definition: PluginBoardWidgetContentKind,
+  ) => {
+    registerPluginBoardWidgetContentKind({ record, registry, definition });
+  };
+
   const registerRuntimeLifecycle = (
     record: PluginRecord,
     lifecycle: PluginRuntimeLifecycleRegistration,
@@ -708,6 +717,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
     registerTrustedToolPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
+    registerBoardWidgetContentKind,
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
     registerSessionSchedulerJob,

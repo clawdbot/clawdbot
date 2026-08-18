@@ -4,7 +4,7 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
-import { createShowWidgetTool } from "../canvas/widget-tool.js";
+import { createShowWidgetTool, hasRegisteredShowWidgetKinds } from "../canvas/widget-tool.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
@@ -541,7 +541,8 @@ export function createOpenClawTools(
       : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     // Discord owns show_widget; registering the core tool would collide.
-    ...(options?.agentChannel === "discord" || !isCoreCanvasHostEnabled(resolvedConfig)
+    ...(options?.agentChannel === "discord" ||
+    (!isCoreCanvasHostEnabled(resolvedConfig) && !hasRegisteredShowWidgetKinds())
       ? []
       : [
           createShowWidgetTool({

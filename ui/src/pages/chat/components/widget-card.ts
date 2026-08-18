@@ -24,9 +24,9 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { exportWidget } from "./widget-export.ts";
-import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
 
 export { WIDGET_PROMPT_EVENT };
 export type { WidgetPromptEventDetail };

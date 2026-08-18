@@ -10,6 +10,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { validateSupportedA2UIJsonl } from "./src/a2ui-jsonl.js";
+import { canvasA2UIBoardWidgetKind } from "./src/board-widget.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui-shared.js";
 import { CanvasToolSchema } from "./src/tool-schema.js";
@@ -60,35 +61,36 @@ export default definePluginEntry({
     restartPrefixes: ["plugins.enabled", "plugins.allow", "plugins.deny", "plugins.entries.canvas"],
   },
   register(api) {
-    if (isCanvasHostEnabled(api.config)) {
-      const httpRouteHandlerLoader = createLazyRuntimeModule(() =>
-        import("./src/http-route.js").then(({ createCanvasHttpRouteHandler }) =>
-          createCanvasHttpRouteHandler({
-            config: api.config,
-            pluginConfig: api.pluginConfig,
-            runtime: {
-              log: (...args) => api.logger.info(args.map(String).join(" ")),
-              error: (...args) => api.logger.error(args.map(String).join(" ")),
-              exit: (code) => {
-                throw new Error(`canvas host requested process exit ${code}`);
-              },
+    const httpRouteHandlerLoader = createLazyRuntimeModule(() =>
+      import("./src/http-route.js").then(({ createCanvasHttpRouteHandler }) =>
+        createCanvasHttpRouteHandler({
+          config: api.config,
+          pluginConfig: api.pluginConfig,
+          runtime: {
+            log: (...args) => api.logger.info(args.map(String).join(" ")),
+            error: (...args) => api.logger.error(args.map(String).join(" ")),
+            exit: (code) => {
+              throw new Error(`canvas host requested process exit ${code}`);
             },
-          }),
-        ),
-      );
-      const loadHttpRouteHandler = httpRouteHandlerLoader;
-      const handleHttpRequest = async (req: IncomingMessage, res: ServerResponse) =>
-        await (await loadHttpRouteHandler()).handleHttpRequest(req, res);
+          },
+        }),
+      ),
+    );
+    const loadHttpRouteHandler = httpRouteHandlerLoader;
+    const handleHttpRequest = async (req: IncomingMessage, res: ServerResponse) =>
+      await (await loadHttpRouteHandler()).handleHttpRequest(req, res);
+    const nodeCapability = { surface: "canvas" };
+    api.registerHttpRoute({
+      path: A2UI_PATH,
+      auth: "plugin",
+      match: "prefix",
+      nodeCapability,
+      handler: handleHttpRequest,
+    });
+    api.registerBoardWidgetContentKind(canvasA2UIBoardWidgetKind);
+    if (isCanvasHostEnabled(api.config)) {
       const handleUpgrade = async (req: IncomingMessage, socket: Duplex, head: Buffer) =>
         await (await loadHttpRouteHandler()).handleUpgrade(req, socket, head);
-      const nodeCapability = { surface: "canvas" };
-      api.registerHttpRoute({
-        path: A2UI_PATH,
-        auth: "plugin",
-        match: "prefix",
-        nodeCapability,
-        handler: handleHttpRequest,
-      });
       api.registerHttpRoute({
         path: CANVAS_HOST_PATH,
         auth: "plugin",
@@ -104,15 +106,15 @@ export default definePluginEntry({
         handler: handleHttpRequest,
         handleUpgrade,
       });
-      api.registerService({
-        id: "canvas-host",
-        start: () => {},
-        stop: async () => {
-          const httpRouteHandler = await httpRouteHandlerLoader.peek();
-          await httpRouteHandler?.close();
-        },
-      });
     }
+    api.registerService({
+      id: "canvas-host",
+      start: () => {},
+      stop: async () => {
+        const httpRouteHandler = await httpRouteHandlerLoader.peek();
+        await httpRouteHandler?.close();
+      },
+    });
     api.registerNodeInvokePolicy({
       commands: CANVAS_NODE_COMMANDS,
       defaultPlatforms: ["ios", "android", "macos", "windows", "linux", "unknown"],

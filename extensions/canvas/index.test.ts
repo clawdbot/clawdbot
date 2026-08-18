@@ -61,7 +61,7 @@ vi.mock("./src/tool.js", () => ({
   createCanvasTool: mocks.createCanvasTool,
 }));
 
-function registerCanvas() {
+function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
   const routes: Array<Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]> = [];
   const services: Array<Parameters<OpenClawPluginApi["registerService"]>[0]> = [];
   const resolvers: Array<Parameters<OpenClawPluginApi["registerHostedMediaResolver"]>[0]> = [];
@@ -75,20 +75,32 @@ function registerCanvas() {
   }> = [];
   const nodeInvokePolicies: Array<Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0]> =
     [];
+  const boardWidgetContentKinds: Array<
+    Parameters<OpenClawPluginApi["registerBoardWidgetContentKind"]>[0]
+  > = [];
   canvasPlugin.register?.(
     createTestPluginApi({
       id: "canvas",
       name: "Canvas",
-      config: {},
+      config,
       registerHttpRoute: (route) => routes.push(route),
       registerService: (service) => services.push(service),
       registerHostedMediaResolver: (resolver) => resolvers.push(resolver),
       registerTool: (tool, opts) => tools.push({ tool, opts }),
       registerNodeCliFeature: (registrar, opts) => cliFeatures.push({ registrar, opts }),
       registerNodeInvokePolicy: (policy) => nodeInvokePolicies.push(policy),
+      registerBoardWidgetContentKind: (kind) => boardWidgetContentKinds.push(kind),
     }),
   );
-  return { routes, services, resolvers, tools, cliFeatures, nodeInvokePolicies };
+  return {
+    routes,
+    services,
+    resolvers,
+    tools,
+    cliFeatures,
+    nodeInvokePolicies,
+    boardWidgetContentKinds,
+  };
 }
 
 function createNodeInvokeContext(
@@ -120,6 +132,17 @@ describe("Canvas plugin entry", () => {
       "linux",
       "unknown",
     ]);
+  });
+
+  it("registers A2UI board content while the Canvas file host is disabled", () => {
+    const { boardWidgetContentKinds, routes } = registerCanvas({
+      plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
+    });
+
+    expect(boardWidgetContentKinds).toEqual([
+      expect.objectContaining({ kind: "a2ui", label: "A2UI" }),
+    ]);
+    expect(routes.map((route) => route.path)).toEqual(["/__openclaw__/a2ui"]);
   });
 
   it("defers Canvas host implementation until a registered route is used", async () => {
@@ -282,13 +305,6 @@ describe("Canvas plugin entry", () => {
 
   it.each([
     ["malformed pushJSONL", "canvas.a2ui.pushJSONL", { jsonl: "{not-json}" }],
-    [
-      "versioned A2UI v0.9 pushJSONL",
-      "canvas.a2ui.pushJSONL",
-      {
-        jsonl: JSON.stringify({ version: "v0.9", deleteSurface: { surfaceId: "main" } }),
-      },
-    ],
     ["malformed legacy push JSONL fallback", "canvas.a2ui.push", { jsonl: "{not-json}" }],
   ])("rejects %s at the final Canvas node policy", async (_label, command, params) => {
     const { nodeInvokePolicies } = registerCanvas();
@@ -302,6 +318,30 @@ describe("Canvas plugin entry", () => {
 
     expect(result).toMatchObject({ ok: false, code: "INVALID_A2UI_JSONL" });
     expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("dispatches A2UI v0.9 JSONL unchanged through the final Canvas node policy", async () => {
+    const { nodeInvokePolicies } = registerCanvas();
+    const policy = nodeInvokePolicies[0];
+    if (!policy) {
+      throw new Error("Canvas node invoke policy was not registered");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const }));
+    const jsonl = JSON.stringify({
+      version: "v0.9",
+      deleteSurface: { surfaceId: "main" },
+    });
+
+    const result = await policy.handle(
+      createNodeInvokeContext({
+        command: "canvas.a2ui.pushJSONL",
+        params: { jsonl },
+        invokeNode,
+      }),
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(invokeNode).toHaveBeenCalledOnce();
   });
 
   it("dispatches A2UI v0.8 JSONL unchanged through the final Canvas node policy", async () => {

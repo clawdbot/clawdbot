@@ -45,6 +45,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     gatewayMethodDescriptors: [],
     dashboardDataBindings: new Map(),
     dashboardActionVerbs: new Map(),
+    boardWidgetContentKinds: new Map(),
     coreGatewayMethodNames: [],
     httpRoutes: [],
     hostedMediaResolvers: [],
