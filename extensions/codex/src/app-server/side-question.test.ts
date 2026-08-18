@@ -12,7 +12,10 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  loadWebFetchToolFactoryForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   codexTestTurnIds,
@@ -1283,9 +1286,7 @@ describe("runCodexAppServerSideQuestion", () => {
       success: true,
     },
   ])("applies native search domains to side-question web_fetch and $name", async (testCase) => {
-    const { createWebFetchTool } = await vi.importActual<
-      typeof import("../../../../src/agents/tools/web-fetch.js")
-    >("../../../../src/agents/tools/web-fetch.js");
+    const createWebFetchTool = await loadWebFetchToolFactoryForTest();
     createOpenClawCodingToolsMock.mockImplementation((options) => {
       const toolOptions = options as NonNullable<
         Parameters<
