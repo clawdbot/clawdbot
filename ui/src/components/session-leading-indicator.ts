@@ -15,6 +15,12 @@ import {
 import { resolveSessionIconGlyph } from "./session-icon-glyph-registry.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
+import "./channel-avatar.ts";
+
+type SessionAvatarAuth = {
+  authTokens: readonly string[];
+  authReady: boolean;
+};
 
 function renderGlyphBadge(
   session: SidebarRecentSession,
@@ -111,6 +117,7 @@ export function renderSessionLeadingState(
   ownerViewing?: boolean,
   participants?: readonly SessionCreatedActor[],
   participantCount?: number,
+  avatarAuth?: SessionAvatarAuth,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
@@ -140,6 +147,22 @@ export function renderSessionLeadingState(
         leadingIndicator: renderSessionGlyph({
           content: renderPersistentSessionIcon(session.icon),
           running,
+          badge: renderGlyphBadge(session, pullRequestState),
+        }),
+        trailingIndicator,
+      };
+    }
+    if (session.channelAvatarUrl) {
+      return {
+        running,
+        leadingIndicator: renderSessionGlyph({
+          content: html`<openclaw-channel-avatar
+            .routeUrl=${session.channelAvatarUrl}
+            .authTokens=${avatarAuth?.authTokens ?? []}
+            .authReady=${avatarAuth?.authReady ?? false}
+          ></openclaw-channel-avatar>`,
+          running,
+          circular: true,
           badge: renderGlyphBadge(session, pullRequestState),
         }),
         trailingIndicator,
@@ -183,6 +206,21 @@ export function renderSessionLeadingState(
       leadingIndicator: renderSessionGlyph({
         content: renderPersistentSessionIcon(session.icon),
         running: false,
+      }),
+      trailingIndicator,
+    };
+  }
+  if (session.channelAvatarUrl) {
+    return {
+      running,
+      leadingIndicator: renderSessionGlyph({
+        content: html`<openclaw-channel-avatar
+          .routeUrl=${session.channelAvatarUrl}
+          .authTokens=${avatarAuth?.authTokens ?? []}
+          .authReady=${avatarAuth?.authReady ?? false}
+        ></openclaw-channel-avatar>`,
+        running: false,
+        circular: true,
       }),
       trailingIndicator,
     };

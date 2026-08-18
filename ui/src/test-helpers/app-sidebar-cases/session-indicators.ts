@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -11,6 +11,11 @@ function expectEmptyLead(row: Element | null) {
   expect(lead).not.toBeNull();
   expect(lead?.childElementCount).toBe(0);
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("AppSidebar session indicators", () => {
   it("renders named glyphs as strokes and keeps emoji as text", async () => {
@@ -40,6 +45,78 @@ describe("AppSidebar session indicators", () => {
     expect(glyphRow?.querySelector(".session-glyph__emoji")).toBeNull();
     expect(emojiRow?.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
     expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
+  });
+
+  it("prioritizes session icons, then channel avatars, then owner chips", async () => {
+    const iconKey = "agent:main:icon-wins";
+    const avatarKey = "agent:main:channel-avatar";
+    const ownerKey = "agent:main:owner-fallback";
+    const sessions = createSessionsHarness("main", [iconKey, avatarKey, ownerKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    for (const row of result.sessions) {
+      row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+      if (row.key !== ownerKey) {
+        row.channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(row.key)}`;
+      }
+    }
+    const iconRow = result.sessions.find((row) => row.key === iconKey);
+    if (!iconRow) {
+      throw new Error("expected icon row");
+    }
+    iconRow.icon = "🦞";
+    result.creators = [
+      { id: "profile-ada", label: "Ada" },
+      { id: "profile-bob", label: "Bob" },
+    ];
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(["avatar"], { type: "image/png" }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:channel-avatar");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    gatewayHarness.gateway.connection.token = "avatar-token";
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
+
+    await waitForFast(() => {
+      expect(
+        sidebar.querySelector(`[data-session-key="${avatarKey}"] .channel-avatar`),
+      ).not.toBeNull();
+    });
+
+    const icon = sidebar.querySelector(`[data-session-key="${iconKey}"]`);
+    expect(icon?.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
+    expect(icon?.querySelector("openclaw-channel-avatar")).toBeNull();
+    expect(icon?.querySelector(".session-owner-chip")).toBeNull();
+
+    const avatar = sidebar.querySelector(`[data-session-key="${avatarKey}"]`);
+    expect(avatar?.querySelector(".session-glyph--circular")).not.toBeNull();
+    expect(avatar?.querySelector(".channel-avatar")?.getAttribute("src")).toBe(
+      "blob:channel-avatar",
+    );
+    expect(avatar?.querySelector(".session-owner-chip")).toBeNull();
+
+    const owner = sidebar.querySelector(`[data-session-key="${ownerKey}"]`);
+    expect(owner?.querySelector("openclaw-channel-avatar")).toBeNull();
+    expect(owner?.querySelector(".session-owner-chip")).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}`,
+      {
+        headers: { Authorization: "Bearer avatar-token" },
+        signal: expect.any(AbortSignal),
+      },
+    );
   });
 
   it("keeps Home activity and its active composer draft in the trailing endcap", async () => {

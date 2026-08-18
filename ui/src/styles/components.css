@@ -135,6 +135,14 @@ openclaw-session-owner-chip {
   transition: transform var(--duration-fast) ease;
 }
 
+.channel-avatar {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
 .session-glyph__emoji {
   font-size: 15px;
   line-height: 1;
