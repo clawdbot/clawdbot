@@ -5,7 +5,6 @@
 
 import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
-import { redactToolPayloadText } from "../../logging/redact.js";
 import {
   postJsonRequest,
   readProviderJsonResponse,
@@ -14,6 +13,7 @@ import {
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { createProviderErrorTextRedactor } from "../provider-http-errors.js";
 import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
 import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
@@ -26,16 +26,6 @@ type PdfInput = {
 const NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS = 120_000;
 const NATIVE_PDF_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const NATIVE_PDF_ERROR_BODY_MAX_CHARS = 400;
-
-// Standalone Bearer tokens below the shared redactor's 18-character prose floor are
-// still credentials on this authenticated error surface, so mask them regardless of
-// length and scheme casing. The lookahead keeps already-hinted tokens
-// (`Bearer abc…wxyz`) untouched.
-const SHORT_BEARER_TOKEN_PATTERN = /\b(Bearer)\s+[-A-Za-z0-9._~+/=]{1,17}(?![-A-Za-z0-9._~+/=…])/gi;
-
-function redactNativePdfErrorText(text: string): string {
-  return redactToolPayloadText(text).replace(SHORT_BEARER_TOKEN_PATTERN, "$1 ***");
-}
 
 type NativePdfProviderRequestConfig = {
   headers?: Record<string, string>;
@@ -52,6 +42,8 @@ type NativePdfJsonRequest = {
   failureLabel: string;
   responseLabel: string;
   nonJsonMessage: string;
+  request?: ModelProviderRequestTransportOverrides;
+  defaultAuthHeader: string;
   signal?: AbortSignal;
 };
 
@@ -63,6 +55,11 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
       unwrapSecretSentinelsForProviderEgress(value, `${params.failureLabel} header handoff`),
     );
   }
+  const redactErrorText = createProviderErrorTextRedactor({
+    headers,
+    request: params.request,
+    defaultAuthHeader: params.defaultAuthHeader,
+  });
   const { response, release } = await postJsonRequest({
     url: params.url,
     headers,
@@ -80,13 +77,10 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
       const body = await readResponseBodySnippet(response, {
         maxBytes: NATIVE_PDF_ERROR_BODY_MAX_BYTES,
         maxChars: NATIVE_PDF_ERROR_BODY_MAX_CHARS,
+        redact: redactErrorText,
       });
-      // The error body and reason phrase are provider-controlled: an edge or proxy
-      // can reflect the request's API-key headers (x-api-key / x-goog-api-key) into
-      // either, so redact credential material before it reaches error messages,
-      // logs, and transcripts.
       throw new Error(
-        `${params.failureLabel} (${response.status} ${redactNativePdfErrorText(response.statusText)})${body ? `: ${redactNativePdfErrorText(body)}` : ""}`,
+        `${params.failureLabel} (${response.status} ${redactErrorText(response.statusText)})${body ? `: ${body}` : ""}`,
       );
     }
 
@@ -188,6 +182,8 @@ export async function anthropicAnalyzePdf(params: {
     failureLabel: "Anthropic PDF request failed",
     responseLabel: "Anthropic PDF response",
     nonJsonMessage: "Anthropic PDF response was not JSON.",
+    request: params.requestConfig?.request,
+    defaultAuthHeader: "x-api-key",
     signal: params.signal,
   });
 
@@ -286,6 +282,8 @@ export async function geminiAnalyzePdf(params: {
     failureLabel: "Gemini PDF request failed",
     responseLabel: "Gemini PDF response",
     nonJsonMessage: "Gemini PDF response was not JSON.",
+    request: params.requestConfig?.request,
+    defaultAuthHeader: "x-goog-api-key",
     signal: params.signal,
   });
 
