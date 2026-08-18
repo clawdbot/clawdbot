@@ -519,6 +519,9 @@ class CronPage extends OpenClawLightDomElement {
   }
 }
 
+export const header = true,
+  render = () => html`<openclaw-cron-page></openclaw-cron-page>`;
+
 // Module re-evaluation can retain the shared registry (for example, in Vitest).
 if (!customElements.get("openclaw-cron-page")) {
   customElements.define("openclaw-cron-page", CronPage);
