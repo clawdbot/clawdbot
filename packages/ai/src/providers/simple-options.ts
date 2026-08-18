@@ -31,7 +31,6 @@ export function buildBaseOptions(
     promptCacheKey: options?.promptCacheKey,
     headers: options?.headers,
     onPayload: options?.onPayload,
-    onProviderAccepted: options?.onProviderAccepted,
     onResponse: options?.onResponse,
     timeoutMs: options?.timeoutMs,
     firstEventTimeoutMs: firstEventOptions?.firstEventTimeoutMs,

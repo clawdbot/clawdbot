@@ -19,7 +19,6 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import { notifyProviderHttpResponse } from "openclaw/plugin-sdk/provider-lifecycle";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -74,6 +73,36 @@ function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error("Request was aborted");
   }
+}
+
+async function runOllamaResponseHook(params: {
+  hook: (() => void | Promise<void>) | undefined;
+  signal: AbortSignal | undefined;
+}): Promise<void> {
+  const { hook, signal } = params;
+  if (!hook) {
+    return;
+  }
+  throwIfOllamaStreamAborted(signal);
+  if (!signal) {
+    await hook();
+    return;
+  }
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(hook),
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(new Error("Request was aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+  throwIfOllamaStreamAborted(signal);
 }
 
 function createOllamaStreamCooperativeScheduler(
@@ -1026,7 +1055,26 @@ function createRawOllamaStreamFn(
         });
 
         try {
-          await notifyProviderHttpResponse({ options, response, model });
+          const responseHook = options?.onResponse;
+          try {
+            await runOllamaResponseHook({
+              hook: responseHook
+                ? () =>
+                    responseHook(
+                      {
+                        status: response.status,
+                        headers: Object.fromEntries(response.headers.entries()),
+                      },
+                      model,
+                    )
+                : undefined,
+              signal: options?.signal,
+            });
+          } catch (error) {
+            // A pending body cancel must not stall release or the terminal error.
+            void response.body?.cancel().catch(() => undefined);
+            throw error;
+          }
           if (!response.ok) {
             const errorText = await readResponseTextLimited(
               response,

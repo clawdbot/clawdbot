@@ -13,6 +13,28 @@ fixture setup and reporting. Let the human drive OpenClaw and judge quality.
 Use one editable Markdown worksheet as the entire run record. Do not create
 `run.json`, mission state, receipts, or other tracking files.
 
+## Start the run
+
+At the start of every **Validate release** run, give a concise introduction:
+this skill creates an isolated copy of a gateway, upgrades that copy to the
+selected beta, reports upgrade problems, then helps the tester manually check
+the release and submit one consolidated feedback comment. The source gateway is
+not modified.
+
+Use the agent's available native checklist or plan tool to show progress and
+check items off as they complete. Start with this visible checklist:
+
+1. Confirm the beta and shared campaign
+2. Choose a gateway to copy
+3. Copy, upgrade, and verify readiness
+4. Create the testing worksheet
+5. Test surfaces and record feedback
+6. Finish validation and publish feedback
+
+For **Initialize campaign**, instead explain that the run creates the shared
+issue and worksheet for a beta, then ends; use a corresponding three-item
+checklist: identify beta, create or reuse campaign, close older campaigns.
+
 ## Workflows
 
 Choose the workflow from the request:
@@ -31,8 +53,12 @@ progress or errors. The worksheet, priority surfaces, testing instructions, and
 
 ## 1. Candidate and shared issue
 
-Use an explicit beta when supplied; otherwise resolve the newest published tag
-matching `vYYYY.M.D-beta.N`. Record its version and commit.
+Use an explicit beta when supplied. Otherwise run
+`gh api 'repos/openclaw/openclaw/releases?per_page=100'` once, then select the
+newest published tag matching
+`vYYYY.M.D-beta.N` locally. Do not paginate release history. If that bounded
+response has no matching beta, ask for an explicit version rather than making a
+slow unbounded request. Record the selected version and commit.
 
 When the request supplies an issue URL or number, resolve it directly with
 `gh issue view`. Accept it only when it is open and its body contains the exact
@@ -105,11 +131,13 @@ exists. When it does not exist, generate it:
    Make every **Recommended testing** cell a bounded operator workflow: name the
    exact action, the observable pass condition, and a runnable OCM-scoped command
    or concrete URL when the surface has one. Use `<br>` inside a cell when a
-   command and pass condition need separation. For example, onboarding should
-   name `ocm @<test-env> -- onboard`, the TUI should name
-   `ocm @<test-env> -- tui`, and channel health should name
-   `ocm @<test-env> -- channels status --probe`. Avoid broad prompts that bundle
-   unrelated features or say only to "use," "exercise," or "verify" a surface.
+   command and pass condition need separation. Use the literal `{{TEST_ENV}}`
+   in generated OCM commands: for example, `ocm @{{TEST_ENV}} -- onboard`,
+   `ocm @{{TEST_ENV}} -- tui`, and `ocm @{{TEST_ENV}} -- channels status
+--probe`. The validator replaces this token with the actual disposable
+   environment name only in each tester's local worksheet. Avoid broad prompts
+   that bundle unrelated features or say only to "use," "exercise," or "verify"
+   a surface.
 
    For each **What changed**, synthesize the dominant themes across the
    surface's complete group instead of listing a few fixes. Do not include
@@ -129,7 +157,7 @@ exists. When it does not exist, generate it:
    say that its catalog and labels come from the live maturity taxonomy and that
    priority reflects release change volume, size, impact, upgrade risk, and
    maturity expectations. Remove the campaign-creator comment and ensure no
-   template placeholder remains.
+   template placeholder remains except `{{TEST_ENV}}` inside OCM commands.
 8. Create the issue with the stable marker, a short participation note, and the
    completed worksheet verbatim between the worksheet markers. Read it back and
    require the marker contents to equal the rendered worksheet before treating
@@ -176,11 +204,16 @@ current PATH, use `~/.local/bin/ocm` for this run and tell the tester to add it
 to their PATH for future shells. If installation or verification fails, report
 the exact error and remain paused. Do not replace OCM with a manual state copy.
 
-Discover once with `ocm env list --json`, then add plain `~/.openclaw` when it
-is not already represented. Keep this overview shallow: show each gateway's
-name, known version, and running state without inspecting every gateway's
-plugins or paths. Ask which one the tester wants to copy. Never silently select
-or modify the personal gateway.
+Discover once with `ocm env list --json`. In parallel, inspect the plain home
+with `ocm adopt inspect ~/.openclaw --json` and obtain its version and service
+state with `openclaw --version` and `openclaw gateway status --json --no-probe`.
+Read only the version and running/stopped state from the latter; do not expose
+its command, paths, configuration, or environment. If the plain home's resolved
+path is an OCM environment's `stateDir`, show it once as that environment's
+personal-state alias. Otherwise show `Personal ~/.openclaw` with its known
+version and running state. Keep the overview shallow: do not inspect plugins
+or other gateway internals. Ask which gateway the tester wants to copy. Never
+silently select or modify the personal gateway.
 
 After selection, inspect only that gateway and record its version and commit.
 Import its `.openclaw` state with OCM so sessions and other real user state are
@@ -193,8 +226,12 @@ ocm adopt import --name <test-env> <selected-state-dir> --json
 Use the `stateDir` returned by `ocm env list --json` for an OCM environment and
 `~/.openclaw` for the plain gateway. Let OCM create the stopped, disposable
 environment and assign a non-conflicting port; do not make an additional staged
-copy. Keep the source unchanged. Before activating copied channel credentials,
-stop the current credential owner and restore it when validation ends.
+copy. The returned environment name is the test environment; use that actual
+name in every tester-facing command rather than the `<test-env>` placeholder.
+Keep the source unchanged. Before activating copied channel credentials,
+stop the current credential owner and restore it when validation ends. For an
+OCM source, use `ocm service stop <source-env>`; for the plain source, use
+`openclaw gateway stop`. There is no `ocm stop` command.
 
 ## 3. Upgrade and report errors
 
@@ -238,20 +275,42 @@ Preserve every other heading, table, callout, surface order, maturity score,
 release theme, and recommended test exactly as copied. The only validation-run
 edits are the source fields, **Your changes in this release**, **Upgrade
 findings**, **Upgrade result**, non-empty **Testing notes** cells, and **Final
-feedback**. Never regenerate, reformat, or substitute the campaign template.
+feedback**, plus replacing every `{{TEST_ENV}}` token (and legacy
+`<test-env>` token) in local command guidance with the actual disposable
+environment name. Never regenerate, reformat, or substitute the campaign
+template, and never write this local substitution back to GitHub.
 
-Resolve and print the worksheet's absolute path, followed by one exact
-platform-appropriate command that opens it. Use this shape on macOS:
+Resolve the worksheet's absolute path and open it yourself with the appropriate
+platform command: `open '<absolute-path>'` on macOS, `xdg-open
+'<absolute-path>'` on Linux, or `start "" "<absolute-path>"` on Windows. If
+opening fails, report the error and continue. After opening it, print only:
 
 ```text
 Testing worksheet: /absolute/path/to/worksheet.md
-Open it: open '/absolute/path/to/worksheet.md'
 ```
 
-Use `xdg-open '<absolute-path>'` on Linux or `start "" "<absolute-path>"` on
-Windows. Shell-quote the actual path. Then briefly point out the five priority
-surfaces and tell the tester: **Edit the worksheet directly or tell me what to
-record. Reply exactly `finish validation` when you are done.**
+Then give this compact orientation, using the actual worksheet contents:
+
+- **What it is:** their private run record and the source for the final
+  release-feedback comment; it is not another task to complete.
+- **Priority and scorecard:** the five priority surfaces are the most important
+  release checks; their maturity score and label come from the live OpenClaw
+  maturity scorecard, where higher maturity carries a stronger regression
+  expectation. The remaining surfaces are optional coverage.
+- **How to use each surface:** **What changed** summarizes the release theme,
+  and **Recommended testing** gives a concrete manual exercise and pass
+  condition.
+- **How to leave feedback:** as they test, they should simply tell the agent
+  their notes and name the surface (for example, `Models: switching persisted
+after restart`). The agent adds those notes to that surface's **Testing
+  notes** cell. They do not need to edit the file themselves.
+
+Finish with the exit instruction: **You can stop after any amount of testing;
+you do not need to cover every surface. When you are ready to wrap up, reply
+exactly `finish validation`.** That tells the agent to collect any missing
+promotion feedback, stop the disposable fixture, restore any source gateway it
+stopped, and post one consolidated release-feedback comment. Then ask which
+surface they want to test first.
 
 This worksheet is the only checklist and note store. If readiness is verified,
 continue to human-driven testing. If readiness is blocked, state that testing

@@ -590,43 +590,6 @@ describe("consumeGoogleGenerateContentStream", () => {
 });
 
 describe("runGoogleGenerateContentLifecycle", () => {
-  it("reports SDK stream acceptance without fabricated HTTP metadata", async () => {
-    const onProviderAccepted = vi.fn();
-
-    const { result } = await runGoogleFixture(
-      [googleResponse({ parts: [{ text: "ok" }], finishReason: FinishReason.STOP })],
-      { options: { onProviderAccepted } },
-    );
-
-    expect(result.stopReason).toBe("stop");
-    expect(onProviderAccepted).toHaveBeenCalledWith({ kind: "provider_stream_opened" }, model);
-  });
-
-  it("closes an unread SDK stream without waiting when acceptance fails", async () => {
-    const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));
-    const googleStream = {
-      next: vi.fn(),
-      return: close,
-      throw: vi.fn(),
-      [Symbol.asyncIterator]() {
-        return this;
-      },
-    } as unknown as AsyncGenerator<GenerateContentResponse>;
-
-    const { result } = await runGoogleFixture([], {
-      options: {
-        onProviderAccepted: () => Promise.reject(new Error("acceptance callback failed")),
-      },
-      generateContentStream: async () => googleStream,
-    });
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "acceptance callback failed",
-    });
-    expect(close).toHaveBeenCalledOnce();
-  });
-
   it.each(["google-generative-ai", "google-vertex"] as const)(
     "rejects an unfinished %s stream instead of silently completing partial output",
     async (api) => {

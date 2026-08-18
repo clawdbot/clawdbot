@@ -40,7 +40,8 @@ export type DraftCloudProfile = {
 export type DraftMachineOption = {
   id: string;
   label: string;
-  description?: string;
+  cpu?: number;
+  memoryGb?: number;
   default?: boolean;
 };
 
@@ -71,6 +72,12 @@ export function isDraftNodeSessionEligible(node: DraftNode): boolean {
 function normalizeTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.trunc(value)
+    : undefined;
+}
+
+function normalizeMachineSize(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 65_536
+    ? value
     : undefined;
 }
 
@@ -177,11 +184,13 @@ function readDraftMachineOptions(value: unknown): DraftMachineOption[] {
     if (!id || id.length > 128 || !label || label.length > 128 || options.has(id)) {
       continue;
     }
-    const description = normalizeOptionalString(raw.description);
+    const cpu = normalizeMachineSize(raw.cpu);
+    const memoryGb = normalizeMachineSize(raw.memoryGb);
     options.set(id, {
       id,
       label,
-      ...(description && description.length <= 512 ? { description } : {}),
+      ...(cpu === undefined ? {} : { cpu }),
+      ...(memoryGb === undefined ? {} : { memoryGb }),
       ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
     });
   }

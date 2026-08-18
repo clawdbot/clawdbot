@@ -456,32 +456,6 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     },
   );
 
-  it("reports the real HTTP response before consuming native Ollama output", async () => {
-    await withSuccessfulOllamaFetch(async () => {
-      const onProviderAccepted = vi.fn();
-      const onResponse = vi.fn();
-      const stream = await createOllamaTestStream({
-        baseUrl: "http://ollama-host:11434",
-        options: { onProviderAccepted, onResponse },
-      });
-
-      await collectStreamEvents(stream);
-
-      expect(onProviderAccepted).toHaveBeenCalledWith(
-        {
-          kind: "http_response",
-          status: 200,
-          headers: { "content-type": "application/x-ndjson" },
-        },
-        expect.objectContaining({ provider: "custom-ollama" }),
-      );
-      expect(onResponse).toHaveBeenCalledWith(
-        { status: 200, headers: { "content-type": "application/x-ndjson" } },
-        expect.objectContaining({ provider: "custom-ollama" }),
-      );
-    });
-  });
-
   it("passes resolved provider request timeouts to native Ollama chat fetches", async () => {
     await withMockNdjsonFetch(
       [

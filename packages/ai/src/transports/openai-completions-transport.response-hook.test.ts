@@ -116,21 +116,12 @@ describe.each([
     const hookCompleted = new Promise<void>((resolve) => {
       continueHook = resolve;
     });
-    const onProviderAccepted = vi.fn<NonNullable<StreamOptions["onProviderAccepted"]>>(
-      (acceptance) => {
-        order.push(`accepted:${acceptance.kind}`);
-      },
-    );
     const onResponse = vi.fn<NonNullable<StreamOptions["onResponse"]>>(async () => {
       order.push("hook:start");
       await hookCompleted;
       order.push("hook:end");
     });
-    const stream = createStream(model, context, {
-      apiKey: "fixture-token",
-      onProviderAccepted,
-      onResponse,
-    });
+    const stream = createStream(model, context, { apiKey: "fixture-token", onResponse });
     const consume = (async () => {
       for await (const event of stream) {
         order.push(event.type);
@@ -138,19 +129,7 @@ describe.each([
     })();
 
     await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
-    expect(order).toEqual(["accepted:http_response", "hook:start"]);
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "http_response",
-        status: 202,
-        headers: {
-          "content-type": "text/event-stream",
-          "x-ratelimit-remaining-requests": "42",
-          "x-request-id": "req_observable",
-        },
-      },
-      model,
-    );
+    expect(order).toEqual(["hook:start"]);
     expect(onResponse).toHaveBeenCalledWith(
       {
         status: 202,
@@ -166,12 +145,7 @@ describe.each([
     continueHook();
     await consume;
     expect((await stream.result()).stopReason).toBe("stop");
-    expect(order.slice(0, 4)).toEqual([
-      "accepted:http_response",
-      "hook:start",
-      "hook:end",
-      "start",
-    ]);
+    expect(order.slice(0, 3)).toEqual(["hook:start", "hook:end", "start"]);
   });
 
   it.each(["throw", "reject"] as const)(
@@ -202,32 +176,6 @@ describe.each([
       lifecycle.assertListenersRemoved();
     },
   );
-
-  it("preserves an acceptance hook failure and closes the unread request", async () => {
-    const lifecycle = installResponse();
-    const hookError = new Error("provider acceptance hook failed");
-    const onProviderAccepted = vi.fn(() => Promise.reject(hookError));
-    const onResponse = vi.fn();
-    const stream = createStream(model, context, {
-      apiKey: "fixture-token",
-      onProviderAccepted,
-      onResponse,
-    });
-    const eventTypes: string[] = [];
-
-    for await (const event of stream) {
-      eventTypes.push(event.type);
-    }
-
-    expect(await stream.result()).toMatchObject({
-      stopReason: "error",
-      errorMessage: "provider acceptance hook failed",
-    });
-    expect(onProviderAccepted).toHaveBeenCalledOnce();
-    expect(onResponse).not.toHaveBeenCalled();
-    expect(eventTypes).toEqual(["error"]);
-    expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
-  });
 
   it("applies the first-event timeout while the hook is pending", async () => {
     const lifecycle = installResponse();

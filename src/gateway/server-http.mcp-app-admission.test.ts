@@ -7,7 +7,6 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
-  waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 
 const mocks = vi.hoisted(() => ({
@@ -113,10 +112,7 @@ describe("standalone MCP App HTTP admission", () => {
       try {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         markGatewayRestartDraining();
-        await expect(waitForActiveGatewayRootWork(0)).resolves.toEqual({
-          drained: false,
-          active: 1,
-        });
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
       } finally {
         finish.resolve();
       }
@@ -125,10 +121,6 @@ describe("standalone MCP App HTTP admission", () => {
       // The response mock resolves from res.end(), immediately before the
       // admission wrapper's finally block releases the request root.
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      await expect(waitForActiveGatewayRootWork(0)).resolves.toEqual({
-        drained: true,
-        active: 0,
-      });
     });
   });
 

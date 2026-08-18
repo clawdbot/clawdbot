@@ -18,7 +18,7 @@ import {
   convertProviderResponsesMessages,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
+import { createOpenAIResponseHook } from "../transports/openai-transport-shared.js";
 import {
   transportAbortError,
   withProviderResponseHook,
@@ -92,13 +92,7 @@ type ResponsesStreamClient = {
 
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
-  | "signal"
-  | "timeoutMs"
-  | "maxRetries"
-  | "onPayload"
-  | "onProviderAccepted"
-  | "onResponse"
-  | "sessionId"
+  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse" | "sessionId"
 > &
   Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected"> &
   FirstStreamEventInternalOptions;
@@ -302,7 +296,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       stream: openaiStream,
       signal: firstEventAbort.signal,
       abort: firstEventAbort.abort,
-      hook: createOpenAIProviderAcceptanceHook(options, response, model),
+      hook: createOpenAIResponseHook(options?.onResponse, response, model),
       onReady: () => stream.push({ type: "start", partial: output }),
     });
 

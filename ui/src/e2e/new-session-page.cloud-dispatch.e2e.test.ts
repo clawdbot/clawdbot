@@ -87,10 +87,11 @@ suite.define(() => {
                 {
                   id: "standard",
                   label: "Standard",
-                  description: "Balanced capacity",
+                  cpu: 32,
+                  memoryGb: 64,
                   default: true,
                 },
-                { id: "fast", label: "Fast", description: "More compute" },
+                { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
               ],
             },
           ],

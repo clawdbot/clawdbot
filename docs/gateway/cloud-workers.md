@@ -80,6 +80,8 @@ Keep the token out of repository config and shell arguments.
 
 ## Configuration
 
+Manage profiles in the Control UI under **Settings → Connections → Cloud workers**, or edit `cloudWorkers.profiles` directly in `openclaw.json` — both write the same config keys. The settings page lists each profile's backend, class, lifetime, and idle-stop in plain language, and shows whether it is advertised to `environments.list` or waiting on a Gateway restart. With no profiles configured it explains the feature, links back to this page, and starts the add flow.
+
 Add a profile under `cloudWorkers.profiles` in `openclaw.json`:
 
 ```json
@@ -179,7 +181,7 @@ openclaw gateway call sessions.dispatch \
 
 ### Choose a machine class per session
 
-A worker profile's `settings.class` remains its default. To choose a different size for one new placement, pass `machineClass` with `profileId`:
+A worker profile's `settings.class` remains its default. In the Control UI, selecting a **Cloud · profile** destination in the Place picker reveals a machine section listing the profile's advertised classes, each with a one-line description and the default marked; picking one updates the place chip (for example `hetzner · Fast`) and carries the choice into dispatch. To choose a different size for one new placement over RPC instead, pass `machineClass` with `profileId`:
 
 ```bash
 openclaw gateway call sessions.dispatch \
@@ -187,7 +189,7 @@ openclaw gateway call sessions.dispatch \
   --params '{"key":"agent:main:big-refactor","profileId":"aws","machineClass":"large"}'
 ```
 
-The bundled Crabbox provider advertises `standard` (small repos and smoke checks), `fast` (general testing), `large` (broad test shards or heavy builds), and `beast` (high-core runs) through `environments.list`. You can also pass a provider-native server or instance type such as `c7a.24xlarge`; Crabbox treats any other non-empty class as that exact type. The selected value is fixed for that placement and reused by safe provisioning retries. `machineClass` is valid only with `profileId`, not `deviceId`.
+The bundled Crabbox provider advertises `standard`, `fast`, `large`, and `beast` through `environments.list`. When the selected backend publishes machine shapes, the picker shows their vCPU and RAM; for AWS these classes are 32 vCPU · 64 GB, 64 vCPU · 128 GB, 96 vCPU · 192 GB, and 192 vCPU · 384 GB, respectively. You can also pass a provider-native server or instance type such as `c7a.24xlarge`; Crabbox treats any other non-empty class as that exact type. The selected value is fixed for that placement and reused by safe provisioning retries. `machineClass` is valid only with `profileId`, not `deviceId`.
 
 `sessions.dispatch` closes local turn admission, drains active work, validates the eligible Git workspace inventory, provisions the lease, runs setup, enrolls the node, pushes the Gateway bundle, syncs the workspace, and returns once the placement reaches `active` ownership. Inventory validation happens before provider allocation and reports an invalid request with an actionable size or entry limit when the workspace cannot be dispatched. Budget several minutes for the first dispatch; leases and content-addressed bundles are reused where safe. After that, talk to the session as usual. OpenClaw turns route to the worker process; supported SSH-backed providers may still carry Codex remote-exec.
 
