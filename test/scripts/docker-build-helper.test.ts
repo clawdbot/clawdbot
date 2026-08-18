@@ -3569,7 +3569,10 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner).not.toContain("cat /tmp/openclaw-codex-plugin-pack.log");
     expect(runner).not.toContain('CODEX_PLUGIN_SPEC="npm-pack:$container_path"');
     expect(runner).not.toContain("trap 'openclaw_e2e_stop_process \"${registry_pid:-}\"' EXIT");
-    expect(runner).not.toContain("final=false");
+    expectTextToIncludeAll(runner, [
+      "message(action=send) with final=false",
+      "message(action=send) with final=true",
+    ]);
     expect(runner).not.toContain("--timeout 420");
     expectTextToIncludeAll(assertions, [
       'Requested agent harness "codex" is not registered',
