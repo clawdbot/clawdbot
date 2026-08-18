@@ -1,3 +1,4 @@
+import { applyToolAvailabilityDescriptions } from "../../agents/agent-tools.deferred-followup.js";
 // Skill tool dispatch routes runtime skill tool calls through the active session context.
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
@@ -233,11 +234,12 @@ export function resolveSkillDispatchTools(
       toolDenylist: explicitDenylist,
     }),
   });
+  const finalized = applyToolAvailabilityDescriptions(policyFiltered, { agentId: resolvedAgentId });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, finalized);
   }
-  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, policyFiltered, (tool) =>
+  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, finalized, (tool) =>
     getPluginToolMeta(tool),
   );
-  return policyFiltered;
+  return finalized;
 }

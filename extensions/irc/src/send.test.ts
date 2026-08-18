@@ -358,6 +358,7 @@ describe("sendMessageIrc cfg threading", () => {
             text: "hello",
           });
           expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
+          expect(result?.target).toEqual({ kind: "conversation", id: "#room" });
           expect(client.join).toHaveBeenCalledWith("#room");
           expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
         },

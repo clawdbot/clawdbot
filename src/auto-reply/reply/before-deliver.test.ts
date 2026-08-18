@@ -51,6 +51,43 @@ async function makePendingFinalFixture() {
 }
 
 describe("beforeDeliver in reply dispatcher", () => {
+  it("settles explicitly non-visible delivery in the dispatcher receipt", async () => {
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => ({ visibleReplySent: false }),
+    });
+
+    dispatcher.sendFinalReply({ text: "suppressed" });
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+
+    expect(receipt).toEqual({
+      counts: {
+        tool: {
+          delivered: 0,
+          deliveredNotVisible: 0,
+          cancelled: 0,
+          failedBeforeSend: 0,
+          failedAfterSend: 0,
+        },
+        block: {
+          delivered: 0,
+          deliveredNotVisible: 0,
+          cancelled: 0,
+          failedBeforeSend: 0,
+          failedAfterSend: 0,
+        },
+        final: {
+          delivered: 0,
+          deliveredNotVisible: 1,
+          cancelled: 0,
+          failedBeforeSend: 0,
+          failedAfterSend: 0,
+        },
+      },
+      anyVisibleDelivered: false,
+    });
+  });
+
   it("delivers the attached fallback when the primary payload is cancelled", async () => {
     const delivered: string[] = [];
     const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
@@ -65,11 +102,11 @@ describe("beforeDeliver in reply dispatcher", () => {
 
     expect(dispatcher.sendFinalReply(primary)).toBe(true);
     dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
 
     expect(delivered).toEqual(["caption"]);
     await expect(outcome.promise).resolves.toBe("delivered");
-    expect(dispatcher.getCancelledCounts?.().final).toBe(0);
+    expect(receipt?.counts.final.cancelled).toBe(0);
   });
 
   it("does not resurrect fallback text after a channel transform veto", async () => {
@@ -111,10 +148,10 @@ describe("beforeDeliver in reply dispatcher", () => {
 
     dispatcher.sendFinalReply(primary);
     dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
 
     expect(delivered).toEqual(["caption"]);
-    expect(dispatcher.getFailedCounts().final).toBe(0);
+    expect(receipt?.counts.final.failedBeforeSend).toBe(0);
   });
 
   it("does not duplicate text after an ambiguous transport failure", async () => {
@@ -130,10 +167,10 @@ describe("beforeDeliver in reply dispatcher", () => {
 
     dispatcher.sendFinalReply(primary);
     dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
 
     expect(delivered).toEqual(["caption"]);
-    expect(dispatcher.getFailedCounts().final).toBe(1);
+    expect(receipt?.counts.final.failedAfterSend).toBe(1);
   });
 
   it("cancels delivery before queueing when transformReplyPayload returns null", async () => {
@@ -154,11 +191,11 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(dispatcher.sendFinalReply({ text: "blocked reply" })).toBe(false);
     expect(dispatcher.sendFinalReply({ text: "safe reply" })).toBe(true);
     dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
 
     expect(delivered).toEqual(["safe reply"]);
     expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
-    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+    expect(receipt?.counts.final.cancelled).toBe(0);
   });
 
   it("does not rerun dynamic prefix normalization after pre-side-effect preparation", async () => {
@@ -207,12 +244,12 @@ describe("beforeDeliver in reply dispatcher", () => {
     dispatcher.sendFinalReply({ text: "blocked reply" });
     dispatcher.sendFinalReply({ text: "safe reply" });
     dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
 
     expect(delivered).toEqual(["safe reply"]);
     expect(cancelled).toEqual(["blocked reply"]);
     expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 2 });
-    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect(receipt?.counts.final.cancelled).toBe(1);
   });
 
   it("notifies cancellation when beforeDeliver throws before delivery", async () => {
@@ -255,7 +292,7 @@ describe("beforeDeliver in reply dispatcher", () => {
       setReplyPayloadMetadata({ text: "blocked block" }, { assistantMessageIndex: 9 }),
     );
     dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
 
     expect(delivered).toEqual([]);
     expect(cancelled).toEqual([{ assistantMessageIndex: 9, kind: "block", text: "blocked block" }]);
@@ -263,8 +300,7 @@ describe("beforeDeliver in reply dispatcher", () => {
       { assistantMessageIndex: 9, kind: "block", message: "pre-delivery failed" },
     ]);
     expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 1, final: 0 });
-    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
-    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 1, final: 0 });
+    expect(receipt?.counts.block).toMatchObject({ cancelled: 0, failedBeforeSend: 1 });
   });
 
   it("allows modifying payload in beforeDeliver", async () => {
@@ -451,10 +487,10 @@ describe("beforeDeliver in reply dispatcher", () => {
       const second = createReplyDispatcher({ deliver });
       second.sendFinalReply(fixture.payload);
       second.markComplete();
-      await second.waitForIdle();
+      const receipt = await second.waitForIdle();
 
       expect(deliver).toHaveBeenCalledOnce();
-      expect(second.getCancelledCounts?.().final).toBe(1);
+      expect(receipt?.counts.final.cancelled).toBe(1);
     } finally {
       await fs.rm(fixture.tmpDir, { recursive: true, force: true });
     }
@@ -481,10 +517,10 @@ describe("beforeDeliver in reply dispatcher", () => {
       const dispatcher = createReplyDispatcher({ deliver });
       dispatcher.sendFinalReply(fixture.payload);
       dispatcher.markComplete();
-      await dispatcher.waitForIdle();
+      const receipt = await dispatcher.waitForIdle();
 
       expect(deliver).not.toHaveBeenCalled();
-      expect(dispatcher.getCancelledCounts?.().final).toBe(1);
+      expect(receipt?.counts.final.cancelled).toBe(1);
     } finally {
       await fs.rm(fixture.tmpDir, { recursive: true, force: true });
     }

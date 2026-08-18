@@ -3,6 +3,7 @@ import {
   bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -57,6 +58,11 @@ export async function runEmbeddedAttemptExecutionPhase(
   const { toolSearchTargetTranscriptProjections } = toolBase;
   const hookAgentId = input.setup.sessionAgentId;
   let repairedRejectedProviderReplay = false;
+  const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
+    sessionId: attempt.sessionId,
+    sessionKey: attempt.sessionKey,
+    runId: attempt.runId,
+  });
   const mergeTerminal = (incoming: AgentRunAttemptTerminal) => {
     state.terminal = mergeAgentRunAttemptTerminal(state.terminal, incoming);
   };
@@ -85,6 +91,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     },
     onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
     abortSignal: input.runAbortController.signal,
+    diagnosticOwner,
   });
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
@@ -193,6 +200,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     sandboxSessionKey: input.setup.sandboxSessionKey,
     subscriptionToolTrust,
     sideEffectToolOwners,
+    diagnosticOwner,
   });
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({

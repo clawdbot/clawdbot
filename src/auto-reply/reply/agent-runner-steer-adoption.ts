@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ACTIVE_EMBEDDED_RUNS } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -67,7 +68,7 @@ function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
 
 async function finalizeAcceptedSteer(params: {
   activeReplyOperation: ReplyOperation | undefined;
-  abortKey: string | undefined;
+  activeEmbeddedRunAbort: (() => void) | undefined;
   cleanupTyping: () => void;
   errorMessage: string | undefined;
   onAdopted: (() => void | Promise<void>) | undefined;
@@ -82,11 +83,8 @@ async function finalizeAcceptedSteer(params: {
     params.replyOperationRunState.admission = { status: "accepted", mode: "steer" };
   }
   params.activeReplyOperation?.recordActivity();
-  const abortActiveRun = () => {
-    if (params.abortKey) {
-      replyRunRegistry.abort(params.abortKey);
-    }
-  };
+  const abortActiveRun = () =>
+    params.activeReplyOperation?.abortByUser() ?? params.activeEmbeddedRunAbort?.();
   if (transcriptCommitUnconfirmed) {
     // The runtime accepted this message, but exact cancellation could not find it.
     // Preserve at-most-once delivery: abort the uncertain owner without replaying.
@@ -179,6 +177,7 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     }
     // Channel dispatch normally stamps the route-scoped source id. Internal
     // callers can derive the same per-message identity from the prepared turn.
+    const activeEmbeddedRun = ACTIVE_EMBEDDED_RUNS.get(steerSessionId);
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
       followupRun.prompt,
@@ -218,8 +217,8 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
       return "handled";
     }
     const adoptionDisposition = await finalizeAcceptedSteer({
+      activeEmbeddedRunAbort: activeEmbeddedRun ? () => activeEmbeddedRun.abort() : undefined,
       activeReplyOperation,
-      abortKey: sessionKey ?? queueKey,
       cleanupTyping: () => typing.cleanup(),
       errorMessage: steerOutcome.errorMessage,
       onAdopted: () => admitFollowupRunLifecycle(followupRun),

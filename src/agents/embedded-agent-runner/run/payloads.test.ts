@@ -683,6 +683,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     }
   });
 
+  it("keeps a quiet heartbeat response with a recovered mutation receipt", () => {
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolRecovery: { toolName: "write" },
+    });
+
+    expect(payloads.map((payload) => payload.text)).toStrictEqual([
+      "HEARTBEAT_OK",
+      "✅ ✍️ Write succeeded after retry.",
+    ]);
+    expect(resolveHeartbeatToolResponseFromReplyResult(payloads)).toEqual({
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
+  });
+
   it("marks plain-text heartbeat replies with unresolved mutating failures", () => {
     const payloads = buildPayloads({
       assistantTexts: ["The heartbeat check completed."],

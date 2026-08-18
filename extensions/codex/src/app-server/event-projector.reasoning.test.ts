@@ -78,6 +78,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     expect(completed.userAuthorization).toBe("high");
     expect(completed.rationale).toBe("Benign local probe.");
     expect(completed.actionType).toBe("execve");
+    expect(completed.command).toBe("printf hello");
     expect(
       projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
     ).toBe(false);

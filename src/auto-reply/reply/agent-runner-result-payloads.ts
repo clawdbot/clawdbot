@@ -13,6 +13,7 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
 import { stagedPostCompactionDelegateCount } from "../continuation/delegate-store-post-compaction.js";
@@ -20,6 +21,7 @@ import { pendingDelegateCount } from "../continuation/delegate-store.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -46,6 +48,7 @@ import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageTo } from "./origin-routing.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
+import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
 
@@ -139,14 +142,32 @@ export async function prepareReplyAgentPayloads(state: {
   const fallbackFailureKnown =
     fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback;
   const hasSpecificFallbackFailure = fallbackTransition.fallbackActive && fallbackFailureKnown;
+  const isInteractive =
+    followupRun.currentInboundEventKind !== "room_event" &&
+    (followupRun.run.inputProvenance?.kind === undefined ||
+      followupRun.run.inputProvenance.kind === "external_user");
+  const yieldAcknowledgmentPayload = terminalFailurePayload
+    ? undefined
+    : buildSessionsYieldAcknowledgmentPayload({
+        yielded: runResult.meta?.yielded === true,
+        yieldAcknowledgment: runResult.meta?.yieldAcknowledgment,
+        isInteractive,
+        isHeartbeat,
+        silentExpected: followupRun.run.silentExpected,
+        isSubagentSession: isSubagentSessionKey(sessionKey ?? followupRun.run.sessionKey),
+        hasExplicitSilentReply: deliberateSilentTerminalReply,
+        // Child spawns are side effects, not user-visible messages. They must not
+        // suppress the explicit waiting reply for the parent turn.
+        hasVisibleMessageDelivery:
+          successfulSourceReplyDelivery ||
+          committedMessagingToolSourceReplyDelivery ||
+          runResult.didSendDeterministicApprovalPrompt === true,
+      });
   const hasAcceptedSessionSpawn = (runResult.acceptedSessionSpawns?.length ?? 0) > 0;
   const emptyInteractiveReplyPayload = terminalFailurePayload
     ? undefined
     : buildEmptyInteractiveReplyPayload({
-        isInteractive:
-          followupRun.currentInboundEventKind !== "room_event" &&
-          (followupRun.run.inputProvenance?.kind === undefined ||
-            followupRun.run.inputProvenance.kind === "external_user"),
+        isInteractive,
         isHeartbeat,
         silentExpected: followupRun.run.silentExpected,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
@@ -373,6 +394,7 @@ export async function prepareReplyAgentPayloads(state: {
     !hasQueuedDelegateWork &&
     !effectiveContinuationSignal &&
     !shouldDeliverTerminalFailure &&
+    !yieldAcknowledgmentPayload &&
     opts?.reasoningPayloadsEnabled !== true &&
     opts?.commentaryPayloadsEnabled !== true &&
     (!emptyInteractiveReplyPayload || hasSpecificFallbackFailure)
@@ -399,15 +421,17 @@ export async function prepareReplyAgentPayloads(state: {
   didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
   const hasTerminalReplyPayload = replyPayloads.some(
     (payload) =>
-      !payload.isReasoning &&
-      !payload.isCommentary &&
-      !isReplyPayloadStatusNotice(payload) &&
+      isReplyPayloadTerminalContent(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   if (shouldDeliverTerminalFailure && !hasTerminalReplyPayload && terminalFailurePayload) {
     const terminalPayloadResult = await buildFinalPayloads([terminalFailurePayload]);
     replyPayloads = [...replyPayloads, ...terminalPayloadResult.replyPayloads];
     didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
+  } else if (yieldAcknowledgmentPayload && !hasTerminalReplyPayload) {
+    const acknowledgmentResult = await buildFinalPayloads([yieldAcknowledgmentPayload]);
+    replyPayloads = [...replyPayloads, ...acknowledgmentResult.replyPayloads];
+    didLogHeartbeatStrip = acknowledgmentResult.didLogHeartbeatStrip;
   } else if (hasSpecificFallbackFailure && !hasTerminalReplyPayload) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
     if (silentFallbackFailurePayload) {

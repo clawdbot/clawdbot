@@ -1,4 +1,5 @@
 // Implements agent deletion with gateway delegation and local cleanup fallback.
+import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   findOverlappingWorkspaceAgentIds,
   formatSharedAuthStoreOwnerDeleteError,
@@ -28,6 +29,8 @@ import {
   prepareWorkspaceStateDeletion,
 } from "../agents/workspace-state-store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import {
@@ -39,17 +42,16 @@ import {
   isGatewayCredentialsRequiredError,
   isGatewayTransportError,
 } from "../gateway/call.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime } from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
+import { moveToTrashResult } from "./cleanup-utils.js";
 import { requireValidConfigFileSnapshot } from "./config-validation.js";
-import { moveToTrash } from "./onboard-helpers.js";
 
 type AgentsDeleteOptions = {
   id: string;
@@ -57,13 +59,18 @@ type AgentsDeleteOptions = {
   json?: boolean;
 };
 
-type AgentsDeleteGatewayResult = {
-  ok: true;
-  agentId: string;
-  removedBindings: number;
-  removed?: Array<{ path: string; method: "trash" | "missing" }>;
-  failed?: Array<{ path: string; reason: string }>;
-};
+type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
+type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
+
+function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, message: string): void {
+  if (opts.json) {
+    writeRuntimeJson(runtime, formatCliJsonFailure(message));
+    runtime.exit(1, { resetStream: process.stderr });
+  } else {
+    runtime.error(message);
+    runtime.exit(1);
+  }
+}
 
 function logClearedOwnerRefs(runtime: RuntimeEnv, clearedOwnerRefs: readonly string[]): void {
   if (clearedOwnerRefs.length > 0) {
@@ -71,12 +78,20 @@ function logClearedOwnerRefs(runtime: RuntimeEnv, clearedOwnerRefs: readonly str
   }
 }
 
+function logSessionPurgeWarning(runtime: RuntimeEnv, agentId: string, purgeFailed: boolean): void {
+  if (purgeFailed) {
+    runtime.error(
+      `Warning: session-store purge failed for deleted agent "${agentId}"; stale shared-store rows may remain.`,
+    );
+  }
+}
+
 async function maybeDeleteAgentThroughGateway(params: {
   agentId: string;
   deleteFiles: boolean;
-}): Promise<AgentsDeleteGatewayResult | null> {
+}): Promise<AgentsDeleteResult | null> {
   try {
-    return await callGateway<AgentsDeleteGatewayResult>({
+    return await callGateway<AgentsDeleteResult>({
       method: "agents.delete",
       params: {
         agentId: params.agentId,
@@ -108,24 +123,35 @@ export async function agentsDeleteCommand(
 
   const input = opts.id?.trim();
   if (!input) {
-    runtime.error(
+    failAgentsDelete(
+      opts,
+      runtime,
       `Agent id is required. Run ${formatCliCommand("openclaw agents list")} to choose one.`,
     );
-    runtime.exit(1);
     return;
   }
 
-  const agentId = normalizeAgentId(input);
-  if (agentId !== input) {
+  const normalized = normalizeAgentIdStrict(input);
+  if (!normalized.ok) {
+    failAgentsDelete(
+      opts,
+      runtime,
+      `Agent "${input}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
+    );
+    return;
+  }
+  const agentId = normalized.value;
+  if (!opts.json && agentId !== input) {
     runtime.log(`Normalized agent id to "${agentId}".`);
   }
   const configured = findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
   let existingJournal = configured ? undefined : readAgentDeletionJournal(agentId);
   if (!configured && (!existingJournal || existingJournal.cleanupCompleted)) {
-    runtime.error(
+    failAgentsDelete(
+      opts,
+      runtime,
       `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
-    runtime.exit(1);
     return;
   }
   const configuredAgentDir = configured ? resolveAgentDir(cfg, agentId) : undefined;
@@ -141,14 +167,16 @@ export async function agentsDeleteCommand(
       sharedAuthDbPath: resolveSharedAuthStorePath(),
     })
   ) {
-    runtime.error(formatSharedAuthStoreOwnerDeleteError(agentId));
-    runtime.exit(1);
+    failAgentsDelete(opts, runtime, formatSharedAuthStoreOwnerDeleteError(agentId));
     return;
   }
 
   if (configured && agentId === tryResolveSoleAgentId(cfg)) {
-    runtime.error(`Agent "${agentId}" is the only configured agent and cannot be deleted.`);
-    runtime.exit(1);
+    failAgentsDelete(
+      opts,
+      runtime,
+      `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
+    );
     return;
   }
   const explicitInheritedAuthAgentId = cfg.agents?.defaults?.authInheritance?.agentId?.trim();
@@ -156,10 +184,11 @@ export async function agentsDeleteCommand(
     explicitInheritedAuthAgentId ||
     (sharedAuthOwnership.location === "legacy-main" ? resolveLegacyInheritedAuthAgentId(cfg) : "");
   if (inheritedAuthAgentId && agentId === normalizeAgentId(inheritedAuthAgentId)) {
-    runtime.error(
+    failAgentsDelete(
+      opts,
+      runtime,
       `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
     );
-    runtime.exit(1);
     return;
   }
 
@@ -178,9 +207,8 @@ export async function agentsDeleteCommand(
   }
 
   if (!opts.force) {
-    if (!process.stdin.isTTY) {
-      runtime.error("Non-interactive session. Re-run with --force.");
-      runtime.exit(1);
+    if (!isTerminalInteractive()) {
+      failAgentsDelete(opts, runtime, "Non-interactive session. Re-run with --force.");
       return;
     }
     const prompter = createClackPrompter();
@@ -205,9 +233,9 @@ export async function agentsDeleteCommand(
     deleteFiles: true,
   });
   if (gatewayResult) {
-    const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-    const workspaceRetained = workspaceSharedWith.length > 0;
     if (opts.json) {
+      const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
+      const workspaceRetained = workspaceSharedWith.length > 0;
       writeRuntimeJson(runtime, {
         agentId,
         workspace: workspaceDir,
@@ -221,11 +249,13 @@ export async function agentsDeleteCommand(
         clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
         removed: gatewayResult.removed,
         failed: gatewayResult.failed,
+        ...(gatewayResult.purgeFailed ? { purgeFailed: true } : {}),
         transport: "gateway",
       });
     } else {
       runtime.log(`Deleted agent: ${agentId}`);
       logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
+      logSessionPurgeWarning(runtime, agentId, gatewayResult.purgeFailed === true);
       for (const failure of gatewayResult.failed ?? []) {
         runtime.error(
           `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
@@ -234,6 +264,9 @@ export async function agentsDeleteCommand(
     }
     return;
   }
+
+  const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
+  const workspaceRetained = workspaceSharedWith.length > 0;
 
   const deleteFiles = existingJournal?.deleteFiles ?? true;
   const deletion = beginAgentDeletion(
@@ -262,14 +295,22 @@ export async function agentsDeleteCommand(
   }
 
   // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
-  await purgeAgentSessionStoreEntries(cfg, agentId);
+  const purgeFailed = await purgeAgentSessionStoreEntries(cfg, agentId);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).
-  const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-  const workspaceRetained = workspaceSharedWith.length > 0;
   let workspaceCleanupError: Error | undefined;
-  let workspaceRemoved = workspaceRetained || !deleteFiles;
+  const removed: AgentDeleteRemovedPath[] = [];
+  const failed: AgentDeleteFailedPath[] = [];
+  const removePath = async (pathname: string) => {
+    const outcome = await moveToTrashResult(pathname, quietRuntime);
+    if ("removed" in outcome) {
+      removed.push(outcome.removed);
+    } else {
+      failed.push(outcome.failed);
+    }
+    return outcome;
+  };
   if (deleteFiles && workspaceRetained) {
     quietRuntime.log(
       `Skipped workspace removal (shared with other agents: ${workspaceSharedWith.join(", ")}): ${workspaceDir}`,
@@ -277,8 +318,8 @@ export async function agentsDeleteCommand(
   } else if (deleteFiles) {
     const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
     const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
-    workspaceRemoved = await moveToTrash(workspaceDir, quietRuntime);
-    if (workspaceRemoved) {
+    const workspaceResult = await removePath(workspaceDir);
+    if ("removed" in workspaceResult) {
       try {
         const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
         for (const warning of legacyCleanup.warnings) {
@@ -290,12 +331,14 @@ export async function agentsDeleteCommand(
       }
     }
   }
-  const agentDirRemoved = !deleteFiles || (await moveToTrash(agentDir, quietRuntime));
-  const sessionsDirRemoved = !deleteFiles || (await moveToTrash(sessionsDir, quietRuntime));
+  if (deleteFiles) {
+    await removePath(agentDir);
+    await removePath(sessionsDir);
+  }
   if (workspaceCleanupError) {
     throw workspaceCleanupError;
   }
-  if (workspaceRemoved && agentDirRemoved && sessionsDirRemoved) {
+  if (failed.length === 0) {
     if (deleteFiles) {
       // Keep registry ownership until every cleanup target is terminal. A crash before journal
       // completion leaves this idempotent deregistration reachable on the next delete attempt.
@@ -316,9 +359,13 @@ export async function agentsDeleteCommand(
       removedBindings: result.removedBindings,
       removedAllow: result.removedAllow,
       clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
+      removed,
+      failed,
+      ...(purgeFailed ? { purgeFailed: true } : {}),
     });
   } else {
     runtime.log(`Deleted agent: ${agentId}`);
     logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
+    logSessionPurgeWarning(runtime, agentId, purgeFailed);
   }
 }

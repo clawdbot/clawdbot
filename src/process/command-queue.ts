@@ -14,16 +14,6 @@ import {
   waitForActiveCommandTasks,
   waitForCommandLaneIdleState,
 } from "./command-queue-waiters.js";
-import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
-import {
-  GatewayDrainingError,
-  isGatewaySubordinateWorkAdmissionClosed,
-  isGatewayWorkAdmissionClosed,
-  markGatewayRestartDraining,
-  resetGatewayWorkAdmission,
-  runWithGatewayRootWorkReadmission,
-} from "./gateway-work-admission.js";
-export { GatewayDrainingError } from "./gateway-work-admission.js";
 import {
   canAdmitInGroup,
   type CommandLaneBlockReason,
@@ -44,7 +34,17 @@ import {
   normalizeLane,
   type QueueEntry,
 } from "./command-queue.state.js";
+import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  runWithGatewayRootWorkReadmission,
+} from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
+export { GatewayDrainingError } from "./gateway-work-admission.js";
 export type { CommandLaneTaskMarker } from "./command-queue.state.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -409,94 +409,106 @@ async function runQueueEntryTask(
   }
 }
 
-function drainLane(lane: string) {
-  const state = getLaneState(lane);
+function drainLane(
+  lane: string,
+  maxStarts = Number.POSITIVE_INFINITY,
+  state = getLaneState(lane),
+): number {
   if (state.draining) {
     if (state.activeTaskIds.size === 0 && state.queue.length > 0) {
       diag.warn(
         `drainLane blocked: lane=${lane} draining=true active=0 queue=${state.queue.length}`,
       );
     }
-    return;
+    return 0;
   }
   state.draining = true;
-
-  const pump = () => {
-    try {
-      while (
-        state.activeTaskIds.size < state.maxConcurrent &&
-        state.queue.length > 0 &&
-        canAdmitInGroup(lane)
-      ) {
-        const entry = state.queue.shift() as QueueEntry;
-        const waitedMs = Date.now() - entry.enqueuedAt;
-        if (waitedMs >= entry.warnAfterMs) {
-          try {
-            entry.onWait?.(waitedMs, entry.queuedAheadAtEnqueue);
-          } catch (err) {
-            diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
-          }
-          diag.warn(
-            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
-              `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${state.activeTaskIds.size} queueBehind=${state.queue.length}`,
-          );
+  let started = 0;
+  try {
+    while (
+      started < maxStarts &&
+      state.activeTaskIds.size < state.maxConcurrent &&
+      state.queue.length > 0 &&
+      canAdmitInGroup(lane)
+    ) {
+      const entry = state.queue.shift() as QueueEntry;
+      const waitedMs = Date.now() - entry.enqueuedAt;
+      const activeBeforeStart = state.activeTaskIds.size;
+      const taskId = getQueueState().nextTaskId++;
+      const taskGeneration = state.generation;
+      // Commit the admission before invoking callbacks or logging. Both can
+      // synchronously re-enter the queue, and the shared budget must already
+      // account for this task when that nested admission is evaluated.
+      state.activeTaskIds.add(taskId);
+      started += 1;
+      if (waitedMs >= entry.warnAfterMs) {
+        try {
+          entry.onWait?.(waitedMs, entry.queuedAheadAtEnqueue);
+        } catch (err) {
+          diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
         }
-        logLaneDequeue(lane, waitedMs, state.queue.length);
-        const taskId = getQueueState().nextTaskId++;
-        const taskGeneration = state.generation;
-        state.activeTaskIds.add(taskId);
-        void (async () => {
-          const startTime = Date.now();
-          try {
-            const result = await runQueueEntryTask(lane, entry, {
-              lane,
-              taskId,
-              generation: taskGeneration,
-            });
-            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-            if (completedCurrentGeneration) {
-              notifyActiveTaskWaiters();
-              diag.debug(
-                `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
-              );
-              pump();
-              notifyCommandLaneIdleWaiters(lane);
-              // Freed capacity belongs to the group, not to this lane.
-              drainGroupSiblings(lane, drainLane);
-            }
-            entry.resolve(result);
-          } catch (err) {
-            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-            const isProbeLane = isQuietProbeLane(lane);
-            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
-              diag.error(
-                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${formatErrorMessage(err)}"`,
-                { errorName: readErrorName(err) || undefined },
-              );
-            } else if (!isProbeLane) {
-              diag.debug(
-                `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
-              );
-            }
-            if (completedCurrentGeneration) {
-              notifyActiveTaskWaiters();
-              pump();
-              notifyCommandLaneIdleWaiters(lane);
-              // A failed task releases group capacity exactly like a successful
-              // one; siblings must be woken on both paths.
-              drainGroupSiblings(lane, drainLane);
-            }
-            entry.reject(err);
-          }
-        })();
+        diag.warn(
+          `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
+            `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${activeBeforeStart} queueBehind=${state.queue.length}`,
+        );
       }
-    } finally {
-      state.draining = false;
-      retireIdleScopedCommandLane(state);
+      logLaneDequeue(lane, waitedMs, state.queue.length);
+      void (async () => {
+        const startTime = Date.now();
+        try {
+          const result = await runQueueEntryTask(lane, entry, {
+            lane,
+            taskId,
+            generation: taskGeneration,
+          });
+          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+          if (completedCurrentGeneration) {
+            notifyActiveTaskWaiters();
+            diag.debug(
+              `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+            );
+            drainReadyCommandLane(lane, state);
+            notifyCommandLaneIdleWaiters(lane);
+          }
+          entry.resolve(result);
+        } catch (err) {
+          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+          const isProbeLane = isQuietProbeLane(lane);
+          if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
+            diag.error(
+              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${formatErrorMessage(err)}"`,
+              { errorName: readErrorName(err) || undefined },
+            );
+          } else if (!isProbeLane) {
+            diag.debug(
+              `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
+            );
+          }
+          if (completedCurrentGeneration) {
+            notifyActiveTaskWaiters();
+            drainReadyCommandLane(lane, state);
+            notifyCommandLaneIdleWaiters(lane);
+          }
+          entry.reject(err);
+        }
+      })();
     }
-  };
+  } finally {
+    state.draining = false;
+    retireIdleScopedCommandLane(state);
+  }
+  return started;
+}
 
-  pump();
+function drainReadyCommandLane(lane: string, completedState?: LaneState): void {
+  if (getLaneGroup(lane)) {
+    drainGroupSiblings(lane, drainLane);
+    return;
+  }
+  // An idle scoped lane may have been retired and recreated while an older
+  // task was finishing. Preserve the completion's captured state so its drain
+  // cannot retire a newer registry entry that it never owned.
+  drainLane(lane, Number.POSITIVE_INFINITY, completedState);
 }
 
 /**
@@ -560,6 +572,17 @@ export function publishLaneConfiguration(config: {
     }
   }
   for (const next of validated) {
+    const { groups, groupByLane } = getGroupRegistry();
+    const previous = groups.get(next.group);
+    for (const member of previous?.members ?? []) {
+      touched.add(member);
+    }
+    for (const member of next.members) {
+      const previousOwner = groupByLane.get(member);
+      for (const previousSibling of groups.get(previousOwner ?? "")?.members ?? []) {
+        touched.add(previousSibling);
+      }
+    }
     installCommandLaneGroup(next);
     for (const member of next.members) {
       touched.add(member);
@@ -570,7 +593,7 @@ export function publishLaneConfiguration(config: {
   for (const lane of touched) {
     const state = getQueueState().lanes.get(lane);
     if (state && state.maxConcurrent > 0 && state.queue.length > 0 && !state.draining) {
-      drainLane(lane);
+      drainReadyCommandLane(lane);
     }
   }
 }
@@ -582,7 +605,7 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const minConcurrent = isProbeLane ? 1 : 0;
   state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
   if (state.maxConcurrent > 0) {
-    drainLane(cleaned);
+    drainReadyCommandLane(cleaned);
   }
   notifyCommandLaneIdleWaiters(cleaned);
 }
@@ -619,7 +642,7 @@ export function enqueueCommandInLane<T>(
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
-    drainLane(cleaned);
+    drainReadyCommandLane(cleaned);
   });
 }
 
@@ -662,6 +685,19 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
     return empty;
   }
   return createCommandLaneSnapshot(state);
+}
+
+/** Per-lane work totals for every live lane; diagnostics composition lives in command-lane-diagnostics.ts. */
+export function listCommandLaneTotals(): Array<{
+  lane: string;
+  activeCount: number;
+  queuedCount: number;
+}> {
+  return [...getQueueState().lanes.values()].map((state) => ({
+    lane: state.lane,
+    activeCount: state.activeTaskIds.size,
+    queuedCount: state.queue.length,
+  }));
 }
 
 /**
@@ -720,11 +756,9 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   state.generation += 1;
   state.activeTaskIds.clear();
   state.draining = false;
-  if (state.queue.length > 0) {
-    drainLane(cleaned);
-  }
-  // Clearing activeTaskIds released group capacity; siblings may now admit.
-  drainGroupSiblings(cleaned, drainLane);
+  // Clearing activeTaskIds may release multiple shared slots. Re-arbitrate the
+  // whole group so the reset lane cannot reclaim them ahead of older siblings.
+  drainReadyCommandLane(cleaned);
   notifyActiveTaskWaiters();
   notifyCommandLaneIdleWaiters(cleaned);
   return released;
@@ -758,7 +792,7 @@ export function resetAllLanes(): void {
   }
   // Drain after the full reset pass so all lanes are in a clean state first.
   for (const lane of lanesToDrain) {
-    drainLane(lane);
+    drainReadyCommandLane(lane);
   }
   notifyActiveTaskWaiters();
   notifyAllCommandLaneIdleWaiters();

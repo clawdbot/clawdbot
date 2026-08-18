@@ -1088,6 +1088,7 @@
                 "pages": [
                   "install/backups",
                   "install/updating",
+                  "install/update-troubleshooting",
                   {
                     "group": "Migrating",
                     "pages": [
@@ -1386,6 +1387,7 @@
                   "tools/code-mode",
                   "tools/diffs",
                   "tools/screen",
+                  "tools/progress-card",
                   "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
@@ -1701,7 +1703,8 @@
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
-                      "gateway/sandbox-vs-tool-policy-vs-elevated"
+                      "gateway/sandbox-vs-tool-policy-vs-elevated",
+                      "gateway/permission-modes"
                     ]
                   },
                   {

@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -7,8 +8,10 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
-import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../../../lib/chat/message-normalizer.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
@@ -18,6 +21,11 @@ export type MessageReplyTarget = {
   text: string;
   senderLabel?: string | null;
   sourceMessageId?: string | null;
+};
+
+type DuplicateSuffix = {
+  count: number;
+  label: string;
 };
 
 const MAX_JSON_AUTOPARSE_CHARS = 20_000;
@@ -190,29 +198,45 @@ export function renderReplyButton(
   `;
 }
 
-const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 12;
+const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 5;
 const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 700;
 
-function collapsedUserMessagePreview(markdown: string): string | null {
-  let end = Math.min(markdown.length, USER_MESSAGE_COLLAPSED_CHAR_LIMIT);
-  let lineCount = 1;
-  for (let index = 0; index < end; index += 1) {
-    if (markdown[index] !== "\n") {
-      continue;
+function shouldCollapseUserMessage(markdown: string): boolean {
+  return (
+    markdown.length > USER_MESSAGE_COLLAPSED_CHAR_LIMIT ||
+    markdown.split("\n", USER_MESSAGE_COLLAPSED_LINE_LIMIT + 1).length >
+      USER_MESSAGE_COLLAPSED_LINE_LIMIT
+  );
+}
+
+function userMessageOverflowRef(expanded: boolean) {
+  let resizeObserver: ResizeObserver | null = null;
+  return (element: Element | undefined) => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    if (!(element instanceof HTMLElement)) {
+      return;
     }
-    if (lineCount === USER_MESSAGE_COLLAPSED_LINE_LIMIT) {
-      end = index;
-      break;
+    const update = () => {
+      const disclosure = element.parentElement;
+      const toggle = disclosure?.querySelector<HTMLButtonElement>(
+        ":scope > .chat-message-disclosure__toggle",
+      );
+      if (!disclosure || !toggle) {
+        return;
+      }
+      const overflowing = expanded || element.scrollHeight > element.clientHeight + 1;
+      disclosure.classList.toggle("has-overflow", overflowing);
+      toggle.hidden = !overflowing;
+    };
+    // Lit resolves refs while siblings are still committing. Measure after the
+    // toggle exists so wrapped text can reveal its own disclosure control.
+    queueMicrotask(update);
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(update);
+      resizeObserver.observe(element);
     }
-    lineCount += 1;
-  }
-  if (end === markdown.length) {
-    return null;
-  }
-  const sliced = markdown.slice(0, end);
-  const lastCodeUnit = sliced.charCodeAt(sliced.length - 1);
-  const preview = lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff ? sliced.slice(0, -1) : sliced;
-  return `${preview.trimEnd()}…`;
+  };
 }
 
 export function renderUserMessageMarkdown(
@@ -224,28 +248,35 @@ export function renderUserMessageMarkdown(
     onToggleUserMessageExpanded?: (messageId: string) => void;
   },
   markdownRenderOptions: MarkdownRenderOptions,
+  duplicateSuffix?: DuplicateSuffix,
 ) {
-  const preview = collapsedUserMessagePreview(markdown);
-  if (!opts.onToggleUserMessageExpanded || preview === null) {
-    return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions);
+  if (!opts.onToggleUserMessageExpanded) {
+    return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix);
   }
 
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
+  const likelyOverflow = shouldCollapseUserMessage(markdown);
   return html`
-    <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
-      <div class="chat-message-disclosure__content">
-        ${expanded
-          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
-          : html`<div class="chat-message-disclosure__preview">${preview}</div>`}
+    <div
+      class="chat-message-disclosure ${expanded
+        ? "is-expanded has-overflow"
+        : likelyOverflow
+          ? "has-overflow"
+          : ""}"
+    >
+      <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
+        ${renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix)}
       </div>
       <button
         class="chat-message-disclosure__toggle"
         type="button"
+        ?hidden=${!expanded && !likelyOverflow}
+        aria-label=${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
         aria-expanded=${String(expanded)}
         @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}
       >
-        ${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
+        ${expanded ? icons.chevronUp : icons.chevronDown}
       </button>
     </div>
   `;
@@ -263,6 +294,7 @@ export function renderAssistantMessageMarkdown(
   isStreaming: boolean,
   disclosure: AssistantMessageDisclosure | undefined,
   markdownRenderOptions: MarkdownRenderOptions,
+  duplicateSuffix?: DuplicateSuffix,
 ) {
   const markdown = disclosure?.expanded
     ? (disclosure.markdown ?? previewMarkdown)
@@ -270,7 +302,7 @@ export function renderAssistantMessageMarkdown(
   const renderOptions = disclosure?.expanded
     ? { ...markdownRenderOptions, mode: "document" as const }
     : markdownRenderOptions;
-  const text = renderMarkdownText(markdown, isStreaming, renderOptions);
+  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix);
   if (!disclosure?.onRetryFullMessage) {
     return text;
   }
@@ -295,17 +327,43 @@ export function renderMarkdownText(
   markdown: string,
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,
+  duplicateSuffix?: DuplicateSuffix,
 ) {
-  if (isStreaming) {
-    return html`
-      <div class="chat-text" dir="${detectTextDirection(markdown)}">
-        ${unsafeHTML(toStreamingMarkdownHtml(markdown, markdownRenderOptions))}
-      </div>
-    `;
-  }
+  const rendered = isStreaming
+    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions)
+    : toSanitizedMarkdownHtml(markdown, markdownRenderOptions);
+  const content = duplicateSuffix ? appendDuplicateSuffix(rendered, duplicateSuffix) : rendered;
   return html`
-    <div class="chat-text" dir="${detectTextDirection(markdown)}">
-      ${unsafeHTML(toSanitizedMarkdownHtml(markdown, markdownRenderOptions))}
-    </div>
+    <div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(content)}</div>
   `;
+}
+
+function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
+  const template = document.createElement("template");
+  template.innerHTML = rendered;
+  const terminalBlock = template.content.lastElementChild;
+  const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
+
+  const badge = document.createElement("span");
+  badge.className = "chat-duplicate-count";
+  badge.setAttribute("aria-label", suffix.label);
+  badge.textContent = `×${suffix.count}`;
+  (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
+  return template.innerHTML;
+}
+
+function duplicateSuffixTextOwner(block: Element): Element | null {
+  if (/^(?:P|H[1-6])$/u.test(block.tagName)) {
+    return block;
+  }
+  if (!/^(?:BLOCKQUOTE|LI|OL|UL)$/u.test(block.tagName)) {
+    // Fences, details, raw blocks, and table shells own interactive or copied
+    // content. Keep the status marker after the whole terminal block.
+    return null;
+  }
+  const terminalChild = block.lastElementChild;
+  if (!terminalChild) {
+    return block.textContent?.trim() ? block : null;
+  }
+  return duplicateSuffixTextOwner(terminalChild);
 }

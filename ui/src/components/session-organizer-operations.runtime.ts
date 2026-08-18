@@ -27,6 +27,7 @@ import {
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 import { rememberSessionGroup } from "./session-organizer-catalog.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 export type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 // The controller loads this module as a single namespace, so the catalog
@@ -392,6 +393,26 @@ export async function renameSession(
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
   await patchSession(host, session, { label: normalizeOptionalString(label) ?? null }, scope);
+}
+
+export async function assignSessionOwner(
+  host: SessionOrganizerControllerHost,
+  session: SidebarRecentSession,
+  owner: Pick<SessionOwnerOption, "type" | "id">,
+  scope: SidebarSessionMutationScope,
+): Promise<void> {
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.assignOwner",
+      params: { key: session.key, owner },
+      requiredScope: "operator.write",
+    })
+  ) {
+    return;
+  }
+  await scope.sessions.assignOwner(session.key, owner, {
+    agentId: parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId,
+  });
 }
 
 export async function createSessionGroup(

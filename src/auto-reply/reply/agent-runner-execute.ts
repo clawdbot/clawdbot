@@ -52,7 +52,6 @@ type SessionResetOptions = {
 
 type ExecutePreparedReplyAgentRunInput = Pick<
   RunReplyAgentParams,
-  | "agentCfgContextTokens"
   | "blockReplyChunking"
   | "blockStreamingEnabled"
   | "commandBody"
@@ -118,7 +117,6 @@ export async function executePreparedReplyAgentRun(
   const {
     activeSessionStore,
     admitUserTurn: admitUserTurnWithRecovery,
-    agentCfgContextTokens,
     applyReplyToMode,
     beginBeforeAgentReply: beginBeforeAgentReplyWithRecovery,
     blockReplyChunking,
@@ -212,7 +210,6 @@ export async function executePreparedReplyAgentRun(
       sessionCtx,
       opts,
       defaultModel,
-      agentCfgContextTokens,
       resolvedVerboseLevel,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -243,7 +240,6 @@ export async function executePreparedReplyAgentRun(
         followupRun,
         promptForEstimate: followupRun.prompt,
         defaultModel,
-        agentCfgContextTokens,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey,
@@ -295,7 +291,6 @@ export async function executePreparedReplyAgentRun(
     sessionKey,
     storePath,
     defaultModel,
-    agentCfgContextTokens,
     toolProgressDetail,
   });
   setRunFollowupTurn(runFollowupTurn);
@@ -314,7 +309,6 @@ export async function executePreparedReplyAgentRun(
         cfg,
         provider: followupRun.run.provider,
         model: defaultModel,
-        contextTokensOverride: agentCfgContextTokens,
         fallbackContextTokens: activeSessionEntry.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS;
@@ -509,7 +503,6 @@ export async function executePreparedReplyAgentRun(
     activeIsNewSession,
     activeSessionEntry,
     activeSessionStore,
-    agentCfgContextTokens,
     blockReplyPipeline,
     blockStreamingEnabled,
     cfg,

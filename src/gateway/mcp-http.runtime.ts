@@ -56,7 +56,7 @@ type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> &
   grantToken?: string;
   senderIsOwner: boolean | undefined;
   yieldContextCacheKey?: string;
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
 };
 
 type LoopbackToolsAllowMode = "exact" | "policy";
@@ -206,12 +206,14 @@ export class McpLoopbackToolCache {
       params.cwd ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
+      params.modelHasVision === true ? "vision" : "text-only",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       clientCapsCacheKey,
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId ?? "",
+      params.replyToMode ?? "",
       params.currentInboundAudio === true ? "audio" : "no-audio",
       params.accountId ?? "",
       params.inboundEventKind ?? "",

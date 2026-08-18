@@ -11,16 +11,14 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { updateChatRunProvider } from "../chat-abort.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import { finalizeChatSendAgentOutcome } from "./chat-send-agent-outcome.js";
-import {
-  discardPreparedChatSendAttachments,
-  type prepareChatSendAttachments,
-} from "./chat-send-attachments.js";
+import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
   resolveWebchatPromptCacheKey,
   scheduleChatDashboardSessionTitle,
@@ -59,6 +57,7 @@ type StartChatDispatchParams = {
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
+  toolsAllow?: string[];
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
@@ -95,6 +94,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     attachments,
     client,
     context,
+    toolsAllow,
     cronCreatorAuthority,
     externalAuthorityAdmission,
     injection,
@@ -256,6 +256,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
+              toolsAllow,
               dispatcherOptions: replyDispatch.dispatcherOptions,
               onSessionMetadataChanges: (changes) =>
                 changes.forEach((change) => emitSessionsChanged(context, change)),
@@ -318,6 +319,13 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId) => {
+                  if (activeRunAbort.markExecutionStarted()) {
+                    emitSessionsChanged(context, {
+                      sessionKey,
+                      agentId,
+                      reason: "chat.run.started",
+                    });
+                  }
                   agentRunStarted = replyDispatch.captureAgentTranscriptStart();
                   emitServerTiming(
                     "agent-run-started",
@@ -504,19 +512,20 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         // markers — so the prepared inbound media stays unreferenced forever
         // (sweep is off by default). Same custody rule as the pre-ACK owner
         // in chat-send-admission.ts: unreferenced staged media is discarded.
-        void discardPreparedChatSendAttachments(attachments.offloadedRefs);
+        void discardPreparedInboundMedia(attachments.offloadedRefs);
       }
-      // Cosmetic title work starts only after the accepted turn finishes. Starting it
-      // before dispatch can make a cold utility runtime starve the user's real turn.
-      scheduleChatDashboardSessionTitle({
-        admittedSessionId,
-        agentId,
-        cfg,
-        context,
-        request,
-        sessionKey,
-        sessionLoadOptions: session.sessionLoadOptions,
-        storePath: session.storePath,
-      });
     });
+  // Title work starts at turn admission, concurrently with the launched run. It must never run
+  // serially before dispatch (a cold utility runtime can starve the turn) or wait for completion
+  // (long or interrupted first turns would silently remain untitled, and restart loses the chain).
+  scheduleChatDashboardSessionTitle({
+    admittedSessionId,
+    agentId,
+    cfg,
+    context,
+    request,
+    sessionKey,
+    sessionLoadOptions: session.sessionLoadOptions,
+    storePath: session.storePath,
+  });
 }

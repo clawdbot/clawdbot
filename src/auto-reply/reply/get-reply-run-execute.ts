@@ -387,7 +387,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: effectiveTurnAdoptionLifecycle,
-    onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
       : {}),
@@ -452,6 +451,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
+      permissionMode: preparedSessionState.sessionEntry?.permissionMode,
+      sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
       toolOverrides: preparedSessionState.sessionEntry?.toolOverrides,
       skillsSnapshot,
@@ -601,7 +602,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       runtimePolicySessionKey,
       storePath,
       defaultModel,
-      agentCfgContextTokens: agentCfg?.contextTokens,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       toolProgressDetail:
         normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??

@@ -8,6 +8,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
+import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
   approveNodePairing,
   requestNodePairing,
@@ -19,9 +20,12 @@ import {
   persistDevicePairingStoreState,
 } from "./device-pairing-store.js";
 import {
-  approveBootstrapDevicePairing,
-  approveDevicePairing,
   ensureDeviceToken,
+  revokeDeviceToken,
+  rotateDeviceToken,
+  verifyDeviceToken,
+} from "./device-pairing-tokens.js";
+import {
   getPairedDevice,
   hasEffectivePairedDeviceRole,
   listEffectivePairedDeviceRoles,
@@ -30,11 +34,8 @@ import {
   requestDevicePairing,
   rejectDevicePairing,
   resolveNodePairingGeneration,
-  revokeDeviceToken,
-  rotateDeviceToken,
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
-  verifyDeviceToken,
   withPairedDeviceRecords,
   type PairedDevice,
 } from "./device-pairing.js";

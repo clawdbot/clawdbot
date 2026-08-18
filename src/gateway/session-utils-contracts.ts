@@ -6,13 +6,13 @@ import type { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import type { SubagentRunReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { ThinkLevel, listThinkingLevelOptions } from "../auto-reply/thinking.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions.js";
+import type { ModelCostConfig } from "../utils/usage-format.js";
 
 export type GatewayModelThinkingProfile = {
   thinkingLevels: ReturnType<typeof listThinkingLevelOptions>;
   thinkingDefault: ThinkLevel;
 };
-import type { SessionAcpMeta, SessionEntry } from "../config/sessions.js";
-import type { ModelCostConfig } from "../utils/usage-format.js";
 
 // Store-target shapes live on a registry-free leaf (session-utils-store-target.ts)
 // so spawn/runtime can import them without pulling the session-utils barrel.

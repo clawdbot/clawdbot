@@ -16,11 +16,12 @@ import {
   OPENAI_GPT5_MINI_MODEL,
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
 
 function createTestSessionCapability(client: GatewayBrowserClient): SessionCapability {
   const sessions = createSessionCapability({
-    snapshot: { client, phase: "connected", hello: null },
+    snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
@@ -50,7 +51,7 @@ function executeSlashCommand(
   const {
     sessionAccessSnapshot = {
       client,
-      hello: null,
+      hello: sessionMutationGatewayHello(),
       phase: "connected",
     },
     ...rest
@@ -175,7 +176,7 @@ describe("executeSlashCommand directives", () => {
       sessions,
       sessionAccessSnapshot: {
         client,
-        hello: null,
+        hello: sessionMutationGatewayHello(),
         phase: "connected",
       },
       agentId: "work",
@@ -213,7 +214,7 @@ describe("executeSlashCommand directives", () => {
       sessions,
       sessionAccessSnapshot: {
         client,
-        hello: null,
+        hello: sessionMutationGatewayHello(),
         phase: "connected",
       },
       agentId: "work",

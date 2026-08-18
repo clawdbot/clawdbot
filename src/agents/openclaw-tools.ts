@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
+import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
@@ -28,7 +29,7 @@ import type { CreateOpenClawToolsOptions } from "./openclaw-tools.options.js";
 import {
   collectPresentOpenClawTools,
   shouldIncludeAskUserToolForOpenClawTools,
-  shouldIncludeUpdatePlanToolForOpenClawTools,
+  shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
@@ -65,6 +66,7 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createPortalTool } from "./tools/portal-tool.js";
+import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
@@ -79,7 +81,6 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
-import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -96,6 +97,7 @@ type CreateOpenClawToolsRuntimeOptions = CreateOpenClawToolsOptions & {
 
 export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions): AnyAgentTool[] {
   const resolvedConfig = options?.config;
+  const sessionLinkBase = resolveControlUiSessionLinkBase(resolvedConfig);
   const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
   const availabilityConfig = selectApplicableRuntimeConfig({
@@ -158,8 +160,6 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
     onYield: options?.onYield,
   });
   const taskKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
-  const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
-  const requesterTurnRunId = options?.runId;
   const imageTool =
     options?.agentDir &&
     resolveImageToolFactoryAvailable({
@@ -241,6 +241,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
     sandboxed: options?.sandboxed,
     runtimeWebFetch: runtimeWebTools?.fetch,
     lateBindRuntimeConfig: true,
+    hostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
@@ -317,10 +318,21 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
       denylist: explicitFactoryDenylist,
     });
   const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest;
-  const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
+  const sessionLookupToolOptions = {
+    agentSessionKey: options?.agentSessionKey,
+    sandboxed: options?.sandboxed,
+    config: resolvedConfig,
+    callGateway: effectiveCallGateway,
+    sessionLinkBase,
+  };
+  const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
     config: resolvedConfig,
     pluginToolDenylist: options?.pluginToolDenylist,
-  });
+  })
+    ? createProgressCardTool({
+        agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      })
+    : null;
   const includeAskUserTool = shouldIncludeAskUserToolForOpenClawTools({
     config: resolvedConfig,
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -385,6 +397,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
                 createTerminalTool({
                   agentId: sessionAgentId,
                   agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+                  sessionId: options?.sessionId,
                   runId: options?.runId,
                 }),
                 createPortalTool(),
@@ -458,7 +471,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
             run: options?.skillWorkshop,
           }),
         ]),
-    ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
+    ...collectPresentOpenClawTools([progressCardTool]),
     ...swarmToolGroups.structuredOutput,
     ...(includeAskUserTool
       ? [
@@ -470,26 +483,14 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
         ]
       : []),
     createSessionsListTool({
-      agentSessionKey: options?.agentSessionKey,
+      ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: effectiveCallGateway,
     }),
     createSessionsHistoryTool({
-      agentSessionKey: options?.agentSessionKey,
+      ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: effectiveCallGateway,
     }),
-    createSessionsSearchTool({
-      agentId: sessionAgentId,
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: effectiveCallGateway,
-    }),
+    createSessionsSearchTool({ ...sessionLookupToolOptions, agentId: sessionAgentId }),
     ...(embedded
       ? []
       : [
@@ -557,9 +558,9 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onBeforeYield: createRequesterYieldCallback({
-        requesterSessionKey,
+        requesterSessionKey: trimmedRunSessionKey || options?.agentSessionKey,
         requesterAgentId: sessionAgentId,
-        requesterTurnRunId,
+        requesterTurnRunId: options?.runId,
       }),
       onYield: options?.onYield,
     }),
@@ -604,10 +605,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
   let allTools = tools;
   if (!options?.disablePluginTools) {
-    const existingToolNames = new Set<string>();
-    for (const tool of tools) {
-      existingToolNames.add(tool.name);
-    }
+    const existingToolNames = new Set(tools.map((tool) => tool.name));
     allTools = [
       ...tools,
       ...resolveOpenClawPluginToolsForOptions({

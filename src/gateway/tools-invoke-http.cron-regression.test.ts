@@ -25,9 +25,13 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => cfg,
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  resolveMainSessionKey: () => "agent:main:main",
-}));
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveMainSessionKey: () => "agent:main:main",
+  };
+});
 
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: alwaysAuthorized,

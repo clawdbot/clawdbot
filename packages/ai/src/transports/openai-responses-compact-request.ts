@@ -6,6 +6,7 @@ import type {
 
 export type OpenAIResponsesCompactEndpointResult = {
   item: { type: "compaction"; id?: string; encrypted_content: string };
+  historyMode: "compacted-prefix" | "retained-users";
   usage: Record<string, unknown> & { input_tokens: number; output_tokens: number };
   model: Model;
   replayMetadata: OpenAIResponsesReasoningReplayMetadata;

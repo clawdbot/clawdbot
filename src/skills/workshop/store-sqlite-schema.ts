@@ -2,6 +2,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -15,6 +16,7 @@ export type SkillWorkshopDatabase = Pick<
   | "skill_workshop_proposal_origin_runs"
   | "skill_workshop_proposal_rollbacks"
   | "skill_workshop_proposals"
+  | "skill_workshop_collection_reviews"
 >;
 export type SkillProposalRow = Selectable<SkillWorkshopDatabase["skill_workshop_proposals"]>;
 export type SkillWorkshopStoreOptions = {
@@ -41,8 +43,22 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   rejected_at TEXT,
   quarantined_at TEXT,
   stale_at TEXT,
-  status_reason TEXT
+  status_reason TEXT,
+  claim_released_time INTEGER
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
+  review_id TEXT NOT NULL PRIMARY KEY,
+  workspace_dir TEXT NOT NULL,
+  backup_id TEXT NOT NULL,
+  create_time INTEGER NOT NULL,
+  kept_names_json TEXT NOT NULL,
+  written_names_json TEXT NOT NULL,
+  dropped_json TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_workspace_time
+  ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
 
 CREATE TABLE IF NOT EXISTS skill_workshop_proposal_origin_runs (
   proposal_id TEXT NOT NULL,
@@ -113,6 +129,7 @@ export function ensureSkillWorkshopSchema(options: SkillWorkshopStoreOptions = {
     ({ db }) => {
       // sqlite-allow-raw -- Feature-local additive schema DDL; proposal rows use Kysely.
       db.exec(SCHEMA_SQL);
+      ensureColumn(db, "skill_workshop_proposals", "claim_released_time INTEGER");
     },
     dbOptions,
     { operationLabel: "skill-workshop.schema.ensure" },

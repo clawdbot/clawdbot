@@ -3,10 +3,13 @@ import { validateWorkerAdmissionHandshake } from "../../packages/gateway-protoco
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
-export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v3";
+export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v4";
+export const NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE =
+  "node-worker-supervisor-v3";
 export const NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
 export const NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
 export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
+export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -24,6 +27,7 @@ export type NodeWorkerHostDeclaration =
       capacity: "available" | "full";
       bundlePrewarm?: typeof WORKER_BUNDLE_PREWARM_VERSION;
       bundleRetention?: typeof NODE_WORKER_BUNDLE_RETENTION_VERSION;
+      bundleStatus?: typeof NODE_WORKER_BUNDLE_STATUS_VERSION;
     };
 
 export type NodeRunnerInventoryDeclaration =
@@ -31,7 +35,8 @@ export type NodeRunnerInventoryDeclaration =
   | {
       protocolFeatures: readonly [
         | typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
-        | typeof NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
+        | typeof NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE
+        | typeof NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
       ];
     }
   | {
@@ -49,7 +54,7 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   }
   if (
     keys.length < 2 ||
-    keys.length > 4 ||
+    keys.length > 5 ||
     !keys.includes("enabled") ||
     !keys.includes("capacity") ||
     keys.some(
@@ -57,12 +62,16 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
         key !== "enabled" &&
         key !== "capacity" &&
         key !== "bundlePrewarm" &&
-        key !== "bundleRetention",
+        key !== "bundleRetention" &&
+        key !== "bundleStatus",
     ) ||
     (value.capacity !== "available" && value.capacity !== "full") ||
     (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
     (value.bundleRetention !== undefined &&
-      value.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION)
+      value.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION) ||
+    (value.bundleStatus !== undefined &&
+      value.bundleStatus !== NODE_WORKER_BUNDLE_STATUS_VERSION) ||
+    (value.bundleStatus !== undefined && value.bundleRetention === undefined)
   ) {
     return null;
   }
@@ -74,6 +83,9 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
       : {}),
     ...(value.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION
       ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
+      : {}),
+    ...(value.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION
+      ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
       : {}),
   };
 }
@@ -108,6 +120,11 @@ export function parseNodeRunnerInventoryDeclaration(
     // v1/v2 carried the node-local package build in inventory. Keep wire
     // validation only so shipped nodes receive the explicit update path.
     return { protocolFeatures: [feature] };
+  }
+  if (feature === NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE) {
+    return keys.length === 2 && parseWorkerHostDeclaration(value.workerHost)
+      ? { protocolFeatures: [feature] }
+      : null;
   }
   if (feature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE || keys.length !== 2) {
     return null;

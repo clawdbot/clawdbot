@@ -383,6 +383,17 @@ describe("splitMediaFromOutput", () => {
     );
   });
 
+  it("extracts only exact allowlisted Markdown image targets", () => {
+    expectParsedMediaOutputCase(
+      "Before ![selected](/tmp/selected.png) after ![remote](https://example.com/remote.png)",
+      {
+        text: "Before after ![remote](https://example.com/remote.png)",
+        mediaUrls: ["file:///tmp/selected.png"],
+      },
+      { markdownImageAllowlist: ["file:///tmp/selected.png"] },
+    );
+  });
+
   it("keeps inline caption text around markdown images when enabled", () => {
     expectParsedMediaOutputCase(
       "Look ![chart](https://example.com/chart.png) now",

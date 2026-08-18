@@ -33,11 +33,7 @@ export function isGatewayCapabilityAdvertised(
   return capabilities.includes(capability);
 }
 
-/**
- * Combines the active connection, advertised method catalog, and operator
- * scopes. Older Gateways may omit either metadata surface, so only explicit
- * method absence or an explicit insufficient scope blocks the action.
- */
+/** Combines the active connection, advertised method catalog, and operator scopes. */
 export function canCallGatewayMethod(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
   method: string,
@@ -49,17 +45,17 @@ export function canCallGatewayMethod(
   }
   if (
     options.requireAdvertisement !== false &&
-    isGatewayMethodAdvertised(snapshot, method) === false
+    isGatewayMethodAdvertised(snapshot, method) !== true
   ) {
     return false;
   }
-  const auth = snapshot.hello?.auth ?? null;
-  return (
-    !auth?.scopes ||
-    roleScopesAllow({
-      role: auth.role ?? "operator",
-      requestedScopes: [requiredScope],
-      allowedScopes: auth.scopes,
-    })
-  );
+  const auth = snapshot.hello?.auth;
+  if (!auth || !Array.isArray(auth.scopes)) {
+    return false;
+  }
+  return roleScopesAllow({
+    role: auth.role,
+    requestedScopes: [requiredScope],
+    allowedScopes: auth.scopes,
+  });
 }

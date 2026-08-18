@@ -6,7 +6,10 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import {
+  AgentSelectionRequiredError,
+  tryResolveSystemAgentTargetAgentId,
+} from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -636,6 +639,7 @@ function resolveDoctorMemoryAgent(
   context: GatewayRequestContext,
   params: unknown,
   respond: RespondFn,
+  omittedAgentId?: string,
 ): {
   cfg: OpenClawConfig;
   agentId: string;
@@ -651,7 +655,7 @@ function resolveDoctorMemoryAgent(
   }
   const requestedAgentId =
     typeof rawAgentId === "string" ? normalizeAgentId(rawAgentId) : undefined;
-  let agentId = requestedAgentId;
+  let agentId = requestedAgentId ?? omittedAgentId;
   if (!agentId) {
     try {
       agentId = resolveDefaultAgentId(cfg, {
@@ -707,7 +711,8 @@ export const createDoctorHandlers = (
   memoryCoreRuntime: DoctorMemoryCoreRuntime = defaultMemoryCoreRuntime,
 ): GatewayRequestHandlers => ({
   "doctor.memory.status": async ({ respond, context, params }) => {
-    const resolved = resolveDoctorMemoryAgent(context, params, respond);
+    const omittedAgentId = tryResolveSystemAgentTargetAgentId(context.getRuntimeConfig());
+    const resolved = resolveDoctorMemoryAgent(context, params, respond, omittedAgentId);
     if (!resolved) {
       return;
     }

@@ -10,9 +10,12 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
+  /* Four controls: the admin-gated Ask OpenClaw fallback joins the strip only
+     while the nav is collapsed, which is exactly when this width applies. */
   --shell-chrome-controls-collapsed-width: calc(
     var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap) +
+      var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
+      var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-gap) +
       var(--shell-chrome-controls-gap)
   );
   --shell-chrome-safe-area-left: calc(
@@ -997,13 +1000,15 @@ openclaw-settings-save-indicator {
   stroke-linejoin: round;
 }
 
-.sidebar-brand__new-thread {
+.sidebar-brand__new-thread,
+.sidebar-footer-bar__custodian {
   width: 32px;
   height: 32px;
   color: var(--text);
 }
 
-.sidebar-brand__new-thread svg {
+.sidebar-brand__new-thread svg,
+.sidebar-footer-bar__custodian svg {
   width: 18px;
   height: 18px;
 }
@@ -1149,7 +1154,6 @@ openclaw-settings-save-indicator {
 
 .sidebar-update-card__actions {
   display: flex;
-  align-items: stretch;
   gap: 5px;
 }
 
@@ -1246,8 +1250,7 @@ html.openclaw-native-macos
   cursor: wait;
 }
 
-/* The install outlives the request that started it, so the card keeps moving
-   for the whole wait instead of reading as a dead disabled button. */
+/* Keep the card moving while its install outlives the initiating request. */
 .sidebar-update-card__action--busy .sidebar-update-card__icon svg {
   animation: sidebar-update-card-spin 1s linear infinite;
 }
@@ -1264,20 +1267,39 @@ html.openclaw-native-macos
   }
 }
 
-/* The update outcome belongs beside the control that started it, not over the
-   top of the shell where it covers unrelated chrome. While the update dialog is
-   open it owns the report, so the ambient copy would only duplicate it. */
+/* Keep the outcome beside its control, except while the dialog owns the report. */
 body.update-dialog-open .sidebar-update-card__status {
   display: none;
 }
 
 .sidebar-update-card__status {
-  padding: 8px 10px;
+  padding: 8px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.sidebar-update-card__status + .sidebar-update-card__actions {
+  margin-top: 6px;
+}
+
+.sidebar-update-card__review {
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.sidebar-update-card__review:hover {
+  background: var(--bg-hover);
 }
 
 .sidebar-update-card__status--danger {
@@ -1421,7 +1443,7 @@ body.update-dialog-open .sidebar-update-card__status {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
-  margin: 0 -8px;
+  margin-inline: -8px 0;
   /* Sessions are app chrome, not hyperlinks: the whole region follows the
      base.css cursor policy so it tracks the window it is running in. */
   cursor: var(--cursor-action);
@@ -2177,7 +2199,6 @@ body.update-dialog-open .sidebar-update-card__status {
   display: inline-flex;
 }
 
-.viewer-facepile > openclaw-viewer-avatar:not(:first-child) .viewer-avatar,
 .viewer-facepile > .viewer-avatar:not(:first-child) {
   margin-left: -5px;
 }
@@ -2223,8 +2244,7 @@ body.update-dialog-open .sidebar-update-card__status {
   margin-left: 1px;
 }
 
-.viewer-avatar--footer,
-.viewer-facepile--footer .viewer-avatar--overflow {
+.viewer-avatar--footer {
   width: 20px;
   height: 20px;
   font-size: 8px;
@@ -2237,24 +2257,10 @@ body.update-dialog-open .sidebar-update-card__status {
   font-size: var(--control-ui-text-sm);
 }
 
-.viewer-facepile-trigger {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  margin: -2px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  cursor: var(--cursor-action);
-}
-
-.viewer-facepile-trigger:hover,
-.viewer-facepile-trigger:focus-visible {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-}
-
 .sidebar-recent-session__name {
-  flex: 1 1 auto;
+  display: block;
+  width: 100%;
+  flex: 0 0 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2322,15 +2328,21 @@ body.update-dialog-open .sidebar-update-card__status {
   padding-right: 2px;
 }
 
-/* The trailing aside overlays the row so action-only rows retain the full
-   resting link width. It must not intercept clicks on the link beneath it —
-   the buttons re-enable their own pointer-events on hover/focus. Child rows
-   keep the in-flow aside because their runtime trail is resting content. */
+/* Actions overlay only the second line, preserving the title's full width.
+   The buttons re-enable their own pointer-events on hover/focus. */
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
-  top: 50%;
+  bottom: 0;
   right: 2px;
-  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.sidebar-recent-session--child > .sidebar-recent-session__aside {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: 0 0 24px;
+  padding-right: 0;
   pointer-events: none;
 }
 
@@ -2342,42 +2354,22 @@ body.update-dialog-open .sidebar-update-card__status {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
-/* State-bearing rows reserve the larger state/action maximum throughout the
-   swap, while action-only rows reserve controls only when they appear. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):where(
-    :has(> .sidebar-recent-session__aside > .session-row-state)
-  )
-  > .sidebar-recent-session__link {
-  padding-right: 68px;
-}
-
-.sidebar-recent-session:not(.sidebar-recent-session--child):not(
-    :has(> .sidebar-recent-session__aside > .session-row-state)
-  ):is(:hover, :focus-within)
-  > .sidebar-recent-session__link {
+/* Hover actions replace the second-row endcap without shortening the title. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+  .sidebar-recent-session__details {
   padding-right: 52px;
 }
 
-/* While the actions are surfaced, the link content fades out beneath them.
-   A mask (not a background scrim) keeps the fade correct over rest, hover,
-   active, and selected row backgrounds alike. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):hover > .sidebar-recent-session__link,
-.sidebar-recent-session:not(.sidebar-recent-session--child):focus-within
-  > .sidebar-recent-session__link {
-  mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
+.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+  .sidebar-recent-session__details-endcap {
+  opacity: 0;
+  pointer-events: none;
 }
 
-/* Touch keeps the actions permanently visible, so the fade is permanent too. */
+/* Touch keeps the actions permanently visible beside the persistent endcap. */
 @media (hover: none), (pointer: coarse) {
-  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
-      > .sidebar-recent-session__aside > .session-row-state
-    )
-    > .sidebar-recent-session__link {
-    padding-right: 112px;
-  }
-
-  .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__link {
-    mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
+  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__details {
+    padding-right: 52px;
   }
 }
 
@@ -2429,6 +2421,92 @@ body.update-dialog-open .sidebar-update-card__status {
 .nav-section__items {
   display: grid;
   gap: 2px;
+}
+
+.sidebar-online {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 12px;
+  margin: 12px 0 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+}
+
+.sidebar-online__heading {
+  padding: 0 8px 3px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sidebar-online__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-online__person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    background var(--duration-fast) ease,
+    filter var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.sidebar-online__person:hover,
+.sidebar-online__person:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  text-decoration: none;
+}
+
+.sidebar-online__person--away {
+  filter: grayscale(0.8);
+  opacity: 0.45;
+}
+
+.sidebar-online__person .viewer-avatar {
+  flex: none;
+}
+
+.sidebar-online__person-name {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-online__person-action {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-online__person:hover .sidebar-online__person-action,
+.sidebar-online__person:focus-visible .sidebar-online__person-action {
+  opacity: 1;
+}
+
+.sidebar-online__person-action svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
 }
 
 .sidebar-zone-entry {
@@ -3364,12 +3442,14 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 6px 12px;
 }
 
 .sidebar-identity-card {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 8px;
   width: 100%;
   min-width: 0;
@@ -3418,6 +3498,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .sidebar-identity-card__name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
@@ -3502,74 +3585,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   font-size: var(--control-ui-text-sm);
   line-height: 1.35;
   text-align: left;
-}
-
-.sidebar-hover-card__region {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.sidebar-hover-card__heading {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.sidebar-hover-card__people {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  max-height: min(240px, 45vh);
-  overflow-y: auto;
-}
-
-.sidebar-hover-card__person {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.sidebar-hover-card__person .viewer-avatar {
-  width: 24px;
-  height: 24px;
-  flex: none;
-  border-color: var(--card);
-  font-size: 9px;
-}
-
-.sidebar-hover-card__person-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.sidebar-hover-card__person-name,
-.sidebar-hover-card__person-email {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-hover-card__person-name {
-  color: var(--text);
-  font-weight: 550;
-}
-
-.sidebar-hover-card__person-email {
-  color: var(--muted);
-  font-weight: 400;
-  font-size: var(--control-ui-text-xs);
-}
-
-.sidebar-hover-card__divider {
-  height: 1px;
-  margin: 10px 0;
-  background: color-mix(in srgb, var(--border-strong) 68%, transparent);
 }
 
 .sidebar-hover-card__server-details {
@@ -3865,6 +3880,15 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .content > openclaw-device-scope-upgrade-banner:has(.scope-upgrade-chip-row) + * {
   margin-top: 8px;
+}
+
+.connection-action-block {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .content--chat {
@@ -4186,12 +4210,41 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   min-width: 0;
 }
 
+.sidebar-recent-session__details {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  min-width: 0;
+  transition: padding-right var(--duration-fast) ease;
+}
+
 .sidebar-recent-session__subtitle {
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--control-ui-text-xs);
+  line-height: 18px;
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
+}
+
+.sidebar-recent-session__details-endcap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 18px;
+  min-width: 0;
+  overflow: hidden;
+  flex: 0 1 auto;
+  margin-left: auto;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-recent-session__details-endcap .session-row-state {
+  min-height: 18px;
 }
 
 .sidebar-session-attention__icon {

@@ -9,6 +9,7 @@ import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { discardPreparedInboundMedia, type OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
@@ -128,7 +129,6 @@ export function createAgentTurnService({
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const idem = runId;
     let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
     let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;
     let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
@@ -182,6 +182,7 @@ export function createAgentTurnService({
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
     let gatewayAdmissionTransferred = false;
+    let preparedOffloadedRefs: OffloadedRef[] = [];
     let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
     let releaseGatewayAdmission = () => {};
     const cronContinuation = createCronContinuationController({
@@ -213,6 +214,7 @@ export function createAgentTurnService({
       if (!content) {
         return;
       }
+      preparedOffloadedRefs = content.offloadedRefs;
       agentId = content.agentId;
       requestedSessionKey = content.requestedSessionKey;
       // Participation is authorized below against the canonical session the run
@@ -225,6 +227,7 @@ export function createAgentTurnService({
         images,
         imageOrder,
         media,
+        offloadedRefs,
         replyTo,
         recipientChannel,
         recipientAccountId,
@@ -513,6 +516,7 @@ export function createAgentTurnService({
         cfgForAgent,
         sessionEntry,
         resolvedSessionKey,
+        requestedSessionKeyRaw,
         requestedSessionKey,
         preAcceptedReservedSessionKey,
         activeSessionAgentId,
@@ -531,6 +535,16 @@ export function createAgentTurnService({
         inputProvenance,
         isOneShotModelRun,
         isRestartRecoveryResumeRun,
+        canUseInternalRuntimeHandoff,
+        execApprovalFollowupApprovalId,
+        message,
+        effectiveTranscriptInputText,
+        images,
+        offloadedRefs,
+        onUserTurnMediaPersisted: () => {
+          preparedOffloadedRefs = [];
+        },
+        requestedPromptPersistenceSuppression,
         runId,
         agentDedupeKeys,
         context,
@@ -551,6 +565,9 @@ export function createAgentTurnService({
         return;
       }
       resolvedSessionId = admittedSessionId;
+      // Sessionless and persistence-suppressed runs transfer prepared media to
+      // execution only after dispatch is fully admitted.
+      preparedOffloadedRefs = [];
       gatewayAdmissionTransferred = true;
       // This captures ambient root admission synchronously, then settles the final
       // frame on the existing detached chain after the router returns its acceptance.
@@ -564,7 +581,6 @@ export function createAgentTurnService({
         sessionContinuationTraceparent,
         resolvedSessionKey,
         requestedSessionKey,
-        requestedSessionKeyRaw,
         resolvedSessionId,
         agentId,
         activeSessionAgentId,
@@ -574,14 +590,11 @@ export function createAgentTurnService({
         isOneShotModelRun,
         isRestartRecoveryResumeRun,
         suppressVisibleSessionEffects,
-        message,
         images,
         imageOrder,
         media,
-        effectiveTranscriptInputText,
         inputProvenance,
         runId,
-        idempotencyKey: idem,
         agentDedupeKeys,
         spawnedBy: spawnedByValue,
         groupId: resolvedGroupId,
@@ -590,13 +603,11 @@ export function createAgentTurnService({
         bestEffortDeliver,
         lifecycleGeneration,
         effectiveBootstrapContextRunKind,
-        requestedPromptPersistenceSuppression,
         preserveUserFacingSessionModelState,
         sessionEffects,
         skipAgentInitialSessionTouch,
         restoredCronContinuation,
         canUseInternalRuntimeHandoff,
-        execApprovalFollowupApprovalId,
         client: principal,
         context,
         io,
@@ -623,6 +634,7 @@ export function createAgentTurnService({
           }
         }
       } finally {
+        await discardPreparedInboundMedia(preparedOffloadedRefs);
         clearUnacceptedAgentDedupe();
       }
     }

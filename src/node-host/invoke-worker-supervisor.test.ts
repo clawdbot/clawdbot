@@ -98,6 +98,7 @@ async function invokePrivate(params: {
   supervisor?: NodeWorkerSupervisorControl;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: { clientId: string; clientSecret: string };
   workspace?: NodeWorkerWorkspaceRuntime;
 }) {
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
@@ -118,6 +119,9 @@ async function invokePrivate(params: {
       gatewayUrl: params.gatewayUrl ?? "wss://gateway.example/tenant",
       ...(params.gatewayTlsFingerprint
         ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
+        : {}),
+      ...(params.gatewayCloudflareAccess
+        ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
         : {}),
     },
   );
@@ -221,13 +225,21 @@ describe("node-host worker supervisor commands", () => {
       paramsJSON: JSON.stringify(input),
       bundleInstaller: { ensure },
       gatewayUrl: "wss://gateway.example/tenant",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
+      gatewayCloudflareAccess: {
+        clientId: "cf-bundle-id",
+        clientSecret: "cf-bundle-secret",
+      },
     });
 
     expect(ensure).toHaveBeenCalledWith({
       input,
       gatewayUrl: "wss://gateway.example/tenant",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
+      gatewayCloudflareAccess: {
+        clientId: "cf-bundle-id",
+        clientSecret: "cf-bundle-secret",
+      },
       signal: undefined,
     });
     expect(pluginHandle).not.toHaveBeenCalled();
@@ -275,9 +287,14 @@ describe("node-host worker supervisor commands", () => {
   it("combines bounded bundle cleanup with the workspace retain snapshot", async () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));
-    const retainBundles = vi.fn(async () => ({ deleted: 2, hasMore: true, generation: 4 }));
+    const retainBundles = vi.fn(async () => ({ deleted: 2, hasMore: false, generation: 4 }));
+    const inspectBundle = vi.fn(async () => ({
+      bundleHash: "a".repeat(64),
+      status: "installed" as const,
+    }));
     const bundleInstaller = {
       ensure: vi.fn(),
+      inspect: inspectBundle,
       retain: retainBundles,
     } as unknown as NodeWorkerBundleInstallerControl;
     const retain = {
@@ -288,6 +305,7 @@ describe("node-host worker supervisor commands", () => {
       retain: [],
       bundleHashes: ["a".repeat(64)],
       acknowledgedBundleGeneration: 3,
+      bundleStatusHash: "a".repeat(64),
     } as const;
 
     const { result } = await invokePrivate({
@@ -302,6 +320,49 @@ describe("node-host worker supervisor commands", () => {
       bundleHashes: ["a".repeat(64)],
       acknowledgedGeneration: 3,
     });
+    expect(inspectBundle).toHaveBeenCalledWith({
+      gatewayNamespace: input.gatewayNamespace,
+      bundleHash: "a".repeat(64),
+    });
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: true,
+      deleted: 0,
+      hasMore: false,
+      bundleDeleted: 2,
+      bundleGeneration: 4,
+      bundleStatus: { bundleHash: "a".repeat(64), status: "installed" },
+    });
+  });
+
+  it("defers full bundle status validation until the cleanup snapshot is terminal", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    const inspectBundle = vi.fn(async () => ({
+      bundleHash: "a".repeat(64),
+      status: "installed" as const,
+    }));
+    const bundleInstaller = {
+      ensure: vi.fn(),
+      inspect: inspectBundle,
+      retain: vi.fn(async () => ({ deleted: 2, hasMore: true, generation: 4 })),
+    } as unknown as NodeWorkerBundleInstallerControl;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify({
+        version: 1,
+        gatewayNamespace: input.gatewayNamespace,
+        controllerId: "controller-1",
+        sequence: 1,
+        retain: [],
+        bundleHashes: ["a".repeat(64)],
+        bundleStatusHash: "a".repeat(64),
+      }),
+      supervisor,
+      bundleInstaller,
+    });
+
+    expect(inspectBundle).not.toHaveBeenCalled();
     expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
       applied: true,
       deleted: 0,
@@ -356,13 +417,21 @@ describe("node-host worker supervisor commands", () => {
       paramsJSON: JSON.stringify(input),
       supervisor,
       gatewayUrl: "wss://gateway.example/tenant/",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
+      gatewayCloudflareAccess: {
+        clientId: "cf-worker-id",
+        clientSecret: "cf-worker-secret",
+      },
     });
 
     expect(supervisorMocks(supervisor).launch.mock.calls[0]?.[1]).toEqual({
       kind: "websocket",
       url: "wss://gateway.example/tenant/__openclaw__/worker",
-      tlsFingerprint: "aa:bb:cc",
+      tlsFingerprint: "aa".repeat(32),
+      cloudflareAccess: {
+        clientId: "cf-worker-id",
+        clientSecret: "cf-worker-secret",
+      },
     });
   });
 

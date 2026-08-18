@@ -8,12 +8,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "../../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
@@ -209,7 +209,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
@@ -426,6 +426,38 @@ description: Broken skill
     expect(warningText).toContain(
       "invalid frontmatter: UNTERMINATED_FRONTMATTER: missing closing --- delimiter",
     );
+  });
+
+  it("warns for invalid configured-root skills while loading nested siblings", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const configuredRoot = path.join(workspaceDir, "configured-skills");
+    const invalidFile = path.join(configuredRoot, "group", "descriptionless", "SKILL.md");
+    const unreadableFile = path.join(configuredRoot, "group", "unreadable", "SKILL.md");
+    await fs.mkdir(path.dirname(invalidFile), { recursive: true });
+    await fs.writeFile(invalidFile, "---\nname: descriptionless\n---\n", "utf8");
+    if (process.platform !== "win32") {
+      await fs.mkdir(path.dirname(unreadableFile), { recursive: true });
+      await fs.symlink("SKILL.md", unreadableFile);
+    }
+    await writeSkill({
+      dir: path.join(configuredRoot, "skills", "valid"),
+      name: "valid",
+      description: "Valid nested sibling",
+    });
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkills(workspaceDir, {
+      config: { skills: { load: { extraDirs: [configuredRoot] } } },
+    });
+    const warningText = warn.mock.calls.flat().map(String).join("\n");
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("valid");
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("descriptionless");
+    expect(warningText).toContain(invalidFile);
+    expect(warningText).toContain("description is required");
+    if (process.platform !== "win32") {
+      expect(warningText).toContain(unreadableFile);
+    }
   });
 
   it("applies agent skill filters and replacement semantics", async () => {

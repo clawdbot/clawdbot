@@ -6,13 +6,13 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
+  SessionScope,
+  DmPolicy,
+  GroupPolicy,
 } from "openclaw/plugin-sdk/config-contracts";
-import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
-import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,

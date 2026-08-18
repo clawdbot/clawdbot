@@ -49,6 +49,7 @@ export type CreateOpenClawToolsOptions = {
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
@@ -138,7 +139,7 @@ export type CreateOpenClawToolsOptions = {
   /** Current runtime directory used as the default project for follow-up suggestions. */
   cwd?: string;
   /** Callback invoked when sessions_yield tool is called. */
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
 } & SpawnedToolContext &

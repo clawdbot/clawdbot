@@ -19,6 +19,8 @@ import {
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
 } from "./gateway-connection.test-mocks.js";
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+
 const gatewayConfigMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
   loadGatewayTlsRuntime: vi.fn(),
@@ -48,10 +50,18 @@ const deviceIdentityState = vi.hoisted(() => ({
   } satisfies DeviceIdentity,
   throwOnLoad: false,
 }));
+const loadOrCreateDeviceIdentityMock = vi.hoisted(() => vi.fn());
+const loadDeviceIdentityIfPresentMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
 );
+const loadDeviceAuthTokenReadOnlyMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
 const loadOriginDeviceTokenMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
+const loadOriginDeviceTokenReadOnlyMock = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
 );
 
@@ -117,7 +127,9 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
   return {
     ...actual,
     loadDeviceAuthToken: loadDeviceAuthTokenMock,
+    loadDeviceAuthTokenReadOnly: loadDeviceAuthTokenReadOnlyMock,
     loadOriginDeviceToken: loadOriginDeviceTokenMock,
+    loadOriginDeviceTokenReadOnly: loadOriginDeviceTokenReadOnlyMock,
   };
 });
 
@@ -126,6 +138,14 @@ vi.mock("../infra/device-identity.js", async (importOriginal) => {
   return {
     ...actual,
     loadOrCreateDeviceIdentity: () => {
+      loadOrCreateDeviceIdentityMock();
+      if (deviceIdentityState.throwOnLoad) {
+        throw new Error("read-only identity dir");
+      }
+      return deviceIdentityState.value;
+    },
+    loadDeviceIdentityIfPresent: () => {
+      loadDeviceIdentityIfPresentMock();
       if (deviceIdentityState.throwOnLoad) {
         throw new Error("read-only identity dir");
       }
@@ -323,6 +343,8 @@ function resetGatewayCallMocks() {
   gatewayClientStart = startStubGatewayClient;
   gatewayClientStopAndWait = async () => {};
   deviceIdentityState.throwOnLoad = false;
+  loadOrCreateDeviceIdentityMock.mockReset();
+  loadDeviceIdentityIfPresentMock.mockReset();
   loadDeviceAuthTokenMock.mockReset();
   loadDeviceAuthTokenMock.mockReturnValue({
     token: "paired-device-token",
@@ -330,8 +352,17 @@ function resetGatewayCallMocks() {
     scopes: ["operator.read"],
     updatedAtMs: 123,
   });
+  loadDeviceAuthTokenReadOnlyMock.mockReset();
+  loadDeviceAuthTokenReadOnlyMock.mockReturnValue({
+    token: "paired-device-token",
+    role: "operator",
+    scopes: ["operator.read"],
+    updatedAtMs: 123,
+  });
   loadOriginDeviceTokenMock.mockReset();
   loadOriginDeviceTokenMock.mockReturnValue(null);
+  loadOriginDeviceTokenReadOnlyMock.mockReset();
+  loadOriginDeviceTokenReadOnlyMock.mockReturnValue(null);
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -394,6 +425,7 @@ describe("callGateway url resolution", () => {
 
     setGatewayConfig({ mode: "remote", remote: { url: "wss://gateway.example/ws" } });
     await expect(isImplicitLocalGatewayTarget({})).resolves.toBe(false);
+    await expect(isImplicitLocalGatewayTarget({ localPortOverride: 19082 })).resolves.toBe(true);
 
     setLocalLoopbackGatewayConfig();
     await expect(isImplicitLocalGatewayTarget({ url: "ws://127.0.0.1:18789" })).resolves.toBe(
@@ -569,6 +601,31 @@ describe("callGateway url resolution", () => {
     });
   });
 
+  it.each(["token", "password"] as const)(
+    "keeps %s auth preflight reads off writable shared state in read-only mode",
+    async (authMode) => {
+      setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: authMode } });
+      setGatewayNetworkDefaults();
+      loadDeviceAuthTokenReadOnlyMock.mockReturnValue({
+        token: "paired-device-token",
+        role: "operator",
+        scopes: ["operator.read"],
+        updatedAtMs: 123,
+      });
+      loadDeviceAuthTokenMock.mockReturnValue(null);
+
+      await callGateway({ method: "sessions.list", sharedStateMode: "read-only" });
+
+      expect(loadDeviceAuthTokenReadOnlyMock).toHaveBeenCalledWith({
+        deviceId: "test-device-identity",
+        role: "operator",
+        env: process.env,
+      });
+      expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
+      expect(lastClientOptions?.sharedStateMode).toBe("read-only");
+    },
+  );
+
   it("fails before opening a websocket when default token auth has no shared or paired credential", async () => {
     setGatewayConfig({ mode: "local", bind: "loopback" });
     setGatewayNetworkDefaults();
@@ -738,6 +795,25 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("explicit-token");
   });
 
+  it("lets an explicit local port override bypass the configured remote URL", async () => {
+    setGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      remote: { url: "wss://gateway.example/ws", token: "remote-token" },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      localPortOverride: 19082,
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:19082");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
   it("uses env URL override credentials without resolving local password SecretRefs", async () => {
     setEnvSecretGatewayConfig({
       mode: "local",
@@ -765,7 +841,7 @@ describe("callGateway url resolution", () => {
       mode: "remote",
       remote: {
         url: "wss://remote.example:9443/ws",
-        tlsFingerprint: "remote-fingerprint",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
       },
     });
     setGatewayNetworkDefaults(18789);
@@ -777,7 +853,7 @@ describe("callGateway url resolution", () => {
       method: "health",
     });
 
-    expect(lastClientOptions?.tlsFingerprint).toBe("remote-fingerprint");
+    expect(lastClientOptions?.tlsFingerprint).toBe(TLS_FINGERPRINT);
   });
 
   it("does not apply remote tlsFingerprint for CLI url override", async () => {
@@ -785,7 +861,7 @@ describe("callGateway url resolution", () => {
       mode: "remote",
       remote: {
         url: "wss://remote.example:9443/ws",
-        tlsFingerprint: "remote-fingerprint",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT}`,
       },
     });
     setGatewayNetworkDefaults(18789);
@@ -881,6 +957,12 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
     expect(lastClientOptions?.scopes).toBeUndefined();
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastClientOptions?.preparedDeviceAuth).toEqual({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read", "operator.pairing"],
+      updatedAtMs: 123,
+    });
   });
 
   it("keeps explicit credentials and diagnostic scopes ahead of stored device auth", async () => {
@@ -970,6 +1052,35 @@ describe("callGateway url resolution", () => {
       role: "operator",
       env: process.env,
     });
+  });
+
+  it("keeps remote CLI identity and stored auth reads off writable shared state", async () => {
+    getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+    loadOriginDeviceTokenReadOnlyMock.mockReturnValue({
+      token: "remote-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await callGatewayCli({
+      method: "node.list",
+      useStoredDeviceAuth: true,
+      sharedStateMode: "read-only",
+    });
+
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastClientOptions?.sharedStateMode).toBe("read-only");
+    expect(loadDeviceIdentityIfPresentMock).toHaveBeenCalledOnce();
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+    expect(loadOriginDeviceTokenReadOnlyMock).toHaveBeenCalledWith({
+      gatewayScope: "wss://remote.example:18789",
+      deviceId: deviceIdentityState.value.deviceId,
+      role: "operator",
+      env: process.env,
+    });
+    expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
   });
 
   it("uses stored device auth for the exact normalized url override origin", async () => {
@@ -1298,14 +1409,14 @@ describe("buildGatewayConnectionDetails", () => {
     resolveGatewayPort.mockReturnValue(18800);
     gatewayConfigMocks.loadGatewayTlsRuntime.mockResolvedValue({
       enabled: true,
-      fingerprintSha256: "sha256:test-local-gateway-fingerprint",
+      fingerprintSha256: TLS_FINGERPRINT,
       required: true,
     });
 
     const details = await buildGatewayProbeConnectionDetails({ config });
 
     expect(details.url).toBe("wss://127.0.0.1:18800");
-    expect(details.tlsFingerprint).toBe("sha256:test-local-gateway-fingerprint");
+    expect(details.tlsFingerprint).toBe(TLS_FINGERPRINT);
     expect(details.preauthHandshakeTimeoutMs).toBeUndefined();
   });
 
@@ -1797,7 +1908,7 @@ describe("callGateway error details", () => {
     await expect(request).rejects.toBe(upgradeError);
   });
 
-  it.each(["ECONNREFUSED", "EHOSTUNREACH", "ETIMEDOUT"])(
+  it.each(["ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ETIMEDOUT"])(
     "renders %s connect failures as an actionable gateway-unreachable message",
     async (code) => {
       startMode = "silent";

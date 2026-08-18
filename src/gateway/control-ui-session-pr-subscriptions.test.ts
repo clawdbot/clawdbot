@@ -198,6 +198,21 @@ describe("control UI session PR subscriptions", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it("rejects replace-sets from inactive connections before loading", async () => {
+    const load = vi.fn(async () => READY);
+    const broadcastToConnIds = vi.fn();
+    active = createControlUiSessionPullRequestSubscriptions({
+      broadcastToConnIds,
+      load,
+      isConnectionActive: () => false,
+    });
+
+    await active.replace("conn-closed", ["orphan"]);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
   it("does not publish a superseded replace-set after its load completes", async () => {
     vi.useFakeTimers();
     let resolveFirst!: (value: ControlUiSessionPullRequests) => void;

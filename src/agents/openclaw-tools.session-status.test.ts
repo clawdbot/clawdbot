@@ -44,9 +44,6 @@ const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
 const getSessionStateVersionMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string) => 0),
 );
-const listAmbientGroupWatchTargetsMock = vi.hoisted(() =>
-  vi.fn((_watcherSessionKey: string) => new Set<string>()),
-);
 const listSessionStateEventsSinceMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string, _after: number, _limit: number) => ({
     events: [] as Array<Record<string, unknown>>,
@@ -379,8 +376,6 @@ vi.mock("../tasks/task-owner-access.js", () => ({
 vi.mock("../sessions/session-state-events.js", () => ({
   getSessionStateVersion: (sessionKey: string, agentId: string) =>
     getSessionStateVersionMock(sessionKey, agentId),
-  listAmbientGroupWatchTargets: (watcherSessionKey: string) =>
-    listAmbientGroupWatchTargetsMock(watcherSessionKey),
   listSessionStateEventsSince: (
     sessionKey: string,
     agentId: string,
@@ -428,8 +423,6 @@ function resetSessionStore(inputStore: Record<string, SessionEntry>) {
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   getSessionStateVersionMock.mockReset();
   getSessionStateVersionMock.mockReturnValue(0);
-  listAmbientGroupWatchTargetsMock.mockReset();
-  listAmbientGroupWatchTargetsMock.mockReturnValue(new Set());
   listSessionStateEventsSinceMock.mockReset();
   listSessionStateEventsSinceMock.mockReturnValue({
     events: [],
@@ -798,8 +791,8 @@ describe("session_status tool", () => {
     }
   });
 
-  it("returns watched group changesSince under tree visibility", async () => {
-    const groupSessionKey = "agent:main:telegram:group:watched";
+  it("returns same-agent group changesSince from main under tree visibility", async () => {
+    const groupSessionKey = "agent:main:telegram:group:unspawned";
     resetSessionStore({
       "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
       [groupSessionKey]: {
@@ -815,7 +808,6 @@ describe("session_status tool", () => {
         agentToAgent: { enabled: false },
       },
     };
-    listAmbientGroupWatchTargetsMock.mockReturnValue(new Set([groupSessionKey]));
     getSessionStateVersionMock.mockReturnValue(9);
     listSessionStateEventsSinceMock.mockReturnValue({
       events: [
@@ -831,7 +823,6 @@ describe("session_status tool", () => {
       changesSince: 4,
     });
 
-    expect(listAmbientGroupWatchTargetsMock).toHaveBeenCalledWith("agent:main:main");
     expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith(groupSessionKey, "main", 4, 200);
     expect(result.details).toMatchObject({
       ok: true,
@@ -2312,7 +2303,7 @@ describe("session_status tool", () => {
         model: "default",
       }),
     ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
+      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
     );
 
     expect(loadSessionStoreMock).not.toHaveBeenCalled();
@@ -2441,7 +2432,7 @@ describe("session_status tool", () => {
         model: "default",
       }),
     ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
+      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
     );
 
     expect(updateSessionStoreMock).not.toHaveBeenCalled();

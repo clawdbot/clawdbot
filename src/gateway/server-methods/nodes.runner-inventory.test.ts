@@ -5,10 +5,12 @@ import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import {
+  collectNodeWorkerBundleStatusByNodeId,
   createNodeRegistryRuntime,
   setNodeRunnerInventoryChangedListener,
 } from "../node-registry-private.js";
@@ -59,6 +61,17 @@ const fullHost = {
   workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
 } as const;
 
+const retainedHost = {
+  protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+  workerHost: {
+    enabled: true,
+    capacity: "available",
+    bundlePrewarm: 1,
+    bundleRetention: 1,
+    bundleStatus: 1,
+  },
+} as const;
+
 describe("nodeHandlers node.runnerInventory.update", () => {
   it("publishes explicit runner consent and launch capacity for the authenticated node", async () => {
     const inventoryChanged = vi.fn();
@@ -88,6 +101,102 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       }),
     ]);
     runtime.nodeRegistry.unregister("conn-1");
+  });
+
+  it("stores bundle status only for the exact current node proof", async () => {
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    const client = createWorkerSupervisorNodeClient();
+    runtime.nodeRegistry.register(client, {
+      pairingIdentity: "identity-1",
+      pairingGeneration: "generation-1",
+    });
+    await runnerInventoryHandler(
+      runnerInventoryOptions({
+        nodeRegistry: runtime.nodeRegistry,
+        client,
+        declaration: retainedHost,
+      }),
+    );
+    const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+    if (!proof) {
+      throw new Error("expected current node proof");
+    }
+
+    expect(
+      runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
+        bundleHash: "a".repeat(64),
+        status: { status: "installed", version: "2026.8.9" },
+      }),
+    ).toBe(true);
+    expect(runtime.nodeWorkerSupervisorTransport.getBundleStatus?.("node-1")).toEqual({
+      bundleHash: "a".repeat(64),
+      status: { status: "installed", version: "2026.8.9" },
+    });
+    expect(
+      collectNodeWorkerBundleStatusByNodeId(runtime.nodeRegistry, [
+        { nodeId: "node-1", connId: "conn-1" },
+      ]),
+    ).toEqual(new Map([["node-1", { status: "installed", version: "2026.8.9" }]]));
+
+    expect(
+      runtime.nodeRegistry.updateSurface(
+        "node-1",
+        { commands: ["system.run"] },
+        {
+          expectedConnId: "conn-1",
+          expectedPairingIdentity: "identity-1",
+          expectedPairingGeneration: "generation-1",
+          nextPairingGeneration: "generation-2",
+        },
+      ),
+    ).not.toBeNull();
+    expect(
+      runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
+        bundleHash: "b".repeat(64),
+        status: { status: "missing" },
+      }),
+    ).toBe(false);
+    expect(
+      collectNodeWorkerBundleStatusByNodeId(runtime.nodeRegistry, [
+        { nodeId: "node-1", connId: "conn-1" },
+      ]),
+    ).toEqual(new Map());
+
+    const [currentProof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+    if (!currentProof) {
+      throw new Error("expected promoted node proof");
+    }
+    expect(
+      runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(currentProof, {
+        bundleHash: "b".repeat(64),
+        status: { status: "missing" },
+      }),
+    ).toBe(true);
+    await runnerInventoryHandler(
+      runnerInventoryOptions({
+        nodeRegistry: runtime.nodeRegistry,
+        client,
+        declaration: availableHost,
+      }),
+    );
+    expect(
+      runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(currentProof, {
+        bundleHash: "c".repeat(64),
+        status: { status: "installed", version: "2026.8.9" },
+      }),
+    ).toBe(false);
+    expect(
+      collectNodeWorkerBundleStatusByNodeId(runtime.nodeRegistry, [
+        { nodeId: "node-1", connId: "conn-1" },
+      ]),
+    ).toEqual(new Map());
+
+    runtime.nodeRegistry.unregister("conn-1");
+    expect(
+      collectNodeWorkerBundleStatusByNodeId(runtime.nodeRegistry, [
+        { nodeId: "node-1", connId: "conn-1" },
+      ]),
+    ).toEqual(new Map());
   });
 
   it("retains the supervisor proof while full but rejects new launches", async () => {
@@ -182,7 +291,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-1");
   });
 
-  it("keeps exact v1 inventory diagnostic-only until disconnect and v3 reconnect", async () => {
+  it("keeps exact v1 inventory diagnostic-only until disconnect and v4 reconnect", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
@@ -262,7 +371,22 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-v2");
   });
 
-  it("routes the shipped v2 build-shaped inventory to update recovery", async () => {
+  it.each([
+    [
+      "v2 build-shaped",
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE],
+        workerRuns: { ...LEGACY_WORKER_RUNS, bundlePrewarm: 1 },
+      },
+    ],
+    [
+      "v3 execution-context",
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+      },
+    ],
+  ] as const)("routes the shipped %s inventory to update recovery", async (_name, declaration) => {
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     const client = createWorkerSupervisorNodeClient();
     runtime.nodeRegistry.register(client, {
@@ -272,10 +396,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     const opts = runnerInventoryOptions({
       nodeRegistry: runtime.nodeRegistry,
       client,
-      declaration: {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE],
-        workerRuns: { ...LEGACY_WORKER_RUNS, bundlePrewarm: 1 },
-      },
+      declaration,
     });
 
     await runnerInventoryHandler(opts);
@@ -343,6 +464,20 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: { enabled: true, capacity: "available", bundleRetention: 2 },
+      },
+    },
+    {
+      name: "unsupported bundle status version",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available", bundleStatus: 2 },
+      },
+    },
+    {
+      name: "bundle status without bundle retention",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available", bundleStatus: 1 },
       },
     },
   ])("rejects $name without changing private eligibility", async ({ params }) => {

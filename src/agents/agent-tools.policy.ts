@@ -54,6 +54,7 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
   "gateway",
   "agents_list",
+  "openclaw",
   // Status/scheduling - main agent coordinates
   "session_status",
   AUTOMATIONS_TOOL_NAME,

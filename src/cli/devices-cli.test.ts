@@ -47,7 +47,13 @@ vi.mock("./progress.js", () => ({
 
 vi.mock("../infra/device-pairing.js", () => ({
   listDevicePairing: mocks.listDevicePairing,
+}));
+
+vi.mock("../infra/device-pairing-approval.js", () => ({
   approveDevicePairing: mocks.approveDevicePairing,
+}));
+
+vi.mock("../infra/device-pairing-tokens.js", () => ({
   summarizeDeviceTokens: mocks.summarizeDeviceTokens,
 }));
 
@@ -516,32 +522,23 @@ describe("devices cli approve", () => {
             displayName: "Colin's S25",
             remoteIp: "192.168.0.202",
             roles: ["node"],
+            nodeSurface: {
+              displayName: "Colin's S25",
+              createdAtMs: 1,
+              approvedAtMs: 1,
+            },
+            pendingNodeSurface: {
+              requestId: "node-req-1",
+              revision: "revision-1",
+              displayName: "Colin's S25",
+              remoteIp: "192.168.0.202",
+              ts: 2,
+            },
           }),
         ],
       })
       .mockRejectedValueOnce(new Error("device pairing approval denied"))
-      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "android-node",
-            displayName: "Colin's S25",
-            approvalState: "pending-reapproval",
-            pendingRequestId: "node-req-1",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "android-node",
-            displayName: "Colin's S25",
-            remoteIp: "192.168.0.202",
-            roles: ["node"],
-          }),
-        ],
-      });
+      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" });
 
     await runDevicesApprove([
       "192.168.0.202",
@@ -551,8 +548,7 @@ describe("devices cli approve", () => {
       "secret-token",
     ]);
 
-    expectGatewayCall(3, { method: "node.list" });
-    expectGatewayCall(4, { method: "device.pair.list" });
+    expect(callGateway).toHaveBeenCalledTimes(3);
     const errorOutput = readRuntimeErrorOutput();
     expect(errorOutput).toContain("No pending device request matches");
     expect(errorOutput).toContain("Node reapproval pending for Colin's S25");
@@ -581,34 +577,11 @@ describe("devices cli approve", () => {
         ],
       })
       .mockRejectedValueOnce(new Error("device pairing approval denied"))
-      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "unrelated-node",
-            displayName: "Shared Phone",
-            remoteIp: "10.0.0.50",
-            approvalState: "pending-reapproval",
-            pendingRequestId: "node-req-unrelated",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "android-node",
-            displayName: "Shared Phone",
-            remoteIp: "192.168.0.202",
-            roles: ["node"],
-          }),
-        ],
-      });
+      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" });
 
     await runDevicesApprove(["192.168.0.202"]);
 
-    expectGatewayCall(3, { method: "node.list" });
-    expectGatewayCall(4, { method: "device.pair.list" });
+    expect(callGateway).toHaveBeenCalledTimes(3);
     const errorOutput = readRuntimeErrorOutput();
     expect(errorOutput).toContain("No pending device request matches");
     expect(errorOutput).not.toContain("node-req-unrelated");
@@ -624,35 +597,20 @@ describe("devices cli approve", () => {
             deviceId: "paired-node",
             displayName: "Shared Phone",
             roles: ["node"],
+            pendingNodeSurface: {
+              requestId: "node-req-display-name",
+              revision: "revision-1",
+              displayName: "Shared Phone",
+              ts: 2,
+            },
           }),
         ],
       })
-      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "paired-node",
-            displayName: "Shared Phone",
-            approvalState: "pending-approval",
-            pendingRequestId: "node-req-display-name",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "paired-node",
-            displayName: "Shared Phone",
-            roles: ["node"],
-          }),
-        ],
-      });
+      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" });
 
     await runDevicesApprove(["Shared Phone"]);
 
-    expectGatewayCall(2, { method: "node.list" });
-    expectGatewayCall(3, { method: "device.pair.list" });
+    expect(callGateway).toHaveBeenCalledTimes(2);
     const errorOutput = readRuntimeErrorOutput();
     expect(errorOutput).toContain("No pending device request matches");
     expect(errorOutput).not.toContain("node-req-display-name");
@@ -1074,30 +1032,30 @@ describe("devices cli list", () => {
   });
 
   it("shows pending node approval commands for paired node devices", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "android-node",
+    callGateway.mockResolvedValueOnce({
+      pending: [],
+      paired: [
+        pairedDevice({
+          deviceId: "android-node",
+          displayName: "Colin's S25",
+          remoteIp: "192.168.0.202",
+          role: "node",
+          roles: [],
+          nodeSurface: {
             displayName: "Colin's S25",
-            remoteIp: "192.168.0.202",
-            role: "node",
-            roles: [],
-          }),
-        ],
-      })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "android-node",
-            displayName: "Colin's S25",
-            remoteIp: "192.168.0.202",
-            approvalState: "pending-reapproval",
-            pendingRequestId: "node-req-1",
+            createdAtMs: 1,
+            approvedAtMs: 1,
           },
-        ],
-      });
+          pendingNodeSurface: {
+            requestId: "node-req-1",
+            revision: "revision-1",
+            displayName: "Colin's S25",
+            remoteIp: "192.168.0.202",
+            ts: 2,
+          },
+        }),
+      ],
+    });
 
     await runDevicesCommand([
       "list",
@@ -1107,7 +1065,7 @@ describe("devices cli list", () => {
       "secret-token",
     ]);
 
-    expectGatewayCall(1, { method: "node.list" });
+    expect(callGateway).toHaveBeenCalledOnce();
     const output = readRuntimeOutput();
     expect(output).toContain("Node reapproval pending for Colin's S25");
     expect(output).toContain("openclaw nodes approve node-req-1");
@@ -1119,34 +1077,22 @@ describe("devices cli list", () => {
   });
 
   it("does not show node approval commands for paired node devices when only display names match", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "android-node",
-            displayName: "Shared Phone",
-            remoteIp: "192.168.0.202",
-            role: "node",
-            roles: [],
-          }),
-        ],
-      })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "unrelated-node",
-            displayName: "Shared Phone",
-            remoteIp: "10.0.0.50",
-            approvalState: "pending-reapproval",
-            pendingRequestId: "node-req-unrelated",
-          },
-        ],
-      });
+    callGateway.mockResolvedValueOnce({
+      pending: [],
+      paired: [
+        pairedDevice({
+          deviceId: "android-node",
+          displayName: "Shared Phone",
+          remoteIp: "192.168.0.202",
+          role: "node",
+          roles: [],
+        }),
+      ],
+    });
 
     await runDevicesCommand(["list"]);
 
-    expectGatewayCall(1, { method: "node.list" });
+    expect(callGateway).toHaveBeenCalledOnce();
     const output = readRuntimeOutput();
     expect(output).not.toContain("node-req-unrelated");
     expect(output).not.toContain("openclaw nodes approve");

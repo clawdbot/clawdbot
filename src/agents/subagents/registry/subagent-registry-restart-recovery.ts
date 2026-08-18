@@ -8,11 +8,7 @@ import {
   patchSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import {
-  extractMessageRole,
-  extractSessionTranscriptText,
-  readSessionMessagesAsync,
-} from "../../../gateway/session-transcript-readers.js";
+import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
@@ -35,6 +31,7 @@ import {
   getRestartRecoveryReplayError,
   isRestartRecoveryLifecycleCurrent,
 } from "./subagent-registry-restart-recovery-helpers.js";
+import { readSubagentRecoveryTranscriptMessage } from "./subagent-registry-restart-recovery-message.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 const MAX_RECOVERY_ATTEMPTS = 2;
@@ -280,15 +277,17 @@ export async function recoverInterruptedSubagentRow(
     if (!isRecoverySourceCurrent()) {
       return { status: "handled" };
     }
-    const lastHumanMessage = extractSessionTranscriptText(
-      [...messages].toReversed().find((message) => extractMessageRole(message) === "user"),
-    );
-    const configChanged = messages.some(
+    const recoveryMessages = messages.flatMap((message) => {
+      const projected = readSubagentRecoveryTranscriptMessage(message);
+      return projected ? [projected] : [];
+    });
+    const lastHumanMessage = recoveryMessages
+      .toReversed()
+      .find((message) => message.role === "user")?.text;
+    const configChanged = recoveryMessages.some(
       (message) =>
-        extractMessageRole(message) === "assistant" &&
-        /openclaw\.json|openclaw gateway restart|config\.patch/i.test(
-          extractSessionTranscriptText(message) ?? "",
-        ),
+        message.role === "assistant" &&
+        /openclaw\.json|openclaw gateway restart|config\.patch/i.test(message.text ?? ""),
     );
     const sessionId = sessionEntry.sessionId;
     const updatedAt = sessionEntry.updatedAt;

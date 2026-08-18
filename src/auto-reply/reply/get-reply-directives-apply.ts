@@ -510,7 +510,6 @@ export async function applyInlineDirectiveOverrides(params: {
   );
   contextTokens = resolveContextTokens({
     cfg,
-    agentCfg,
     provider: resolveContextConfigProviderForRuntime({
       provider,
       runtimeId: resolveAgentHarnessPolicy({

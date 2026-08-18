@@ -467,6 +467,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     startupContextPrelude,
     softResetTail,
     workspaceDir,
+    skillsWorkspaceDir: configuredWorkspaceDir,
     baseBodyFinal,
     hasUserBody,
     shouldInjectGroupIntro,

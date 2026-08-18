@@ -2,6 +2,12 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
+import { writeCloudSessionRecovery } from "../../lib/sessions/cloud-recovery.ts";
+import { buildChatApiAttachments } from "../chat/attachment-api.ts";
+import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+} from "../chat/attachment-payload-store.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -22,6 +28,7 @@ class ControllerHost implements ReactiveControllerHost {
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   sessionStorage.clear();
   localStorage.clear();
 });
@@ -146,16 +153,33 @@ function createDraftFixture(options: FixtureOptions = {}) {
       onClearError: (error) => flow?.clearErrorIf(error),
     },
   );
+  const requestUpdate = vi.fn();
   const flow = new DraftSubmissionFlow(
     gateway,
     place,
     () => ({ context, data: undefined, isConnected: phase === "connected" }),
-    { requestUpdate: vi.fn(), closeTransientUi: vi.fn() },
+    { requestUpdate, closeTransientUi: vi.fn() },
   );
   gateway.synchronize(context.gateway);
   place.setAgentsHydrated(true);
   place.adoptAgentDefaults();
-  return { context, flow, gateway, place, request };
+  return { context, flow, gateway, place, request, requestUpdate };
+}
+
+function registerTextPayload(id: string) {
+  return registerChatAttachmentPayload({
+    attachment: { id, mimeType: "text/plain", fileName: `${id}.txt` },
+    dataUrl: `data:text/plain;base64,${btoa(id)}`,
+    file: new File([id], `${id}.txt`, { type: "text/plain" }),
+  });
+}
+
+function stubObjectUrls(...urls: string[]) {
+  const createObjectURL = vi.fn();
+  urls.forEach((url) => createObjectURL.mockReturnValueOnce(url));
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+  return revokeObjectURL;
 }
 
 describe("DraftSubmissionFlow submit gates", () => {
@@ -279,6 +303,82 @@ describe("DraftSubmissionFlow submit gates", () => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it("makes attachment restore release only displaced payload ids", () => {
+    const revokeObjectURL = stubObjectUrls("blob:shared", "blob:displaced", "blob:incoming");
+    const { flow, requestUpdate } = createDraftFixture();
+    const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
+    const shared = registerTextPayload("shared");
+    const displaced = registerTextPayload("displaced");
+    const incoming = registerTextPayload("incoming");
+    flow.attachmentDraft.replace([shared, displaced]);
+    noteUserMutation.mockClear();
+    requestUpdate.mockClear();
+    revokeObjectURL.mockClear();
+
+    flow.attachmentDraft.restore([shared, incoming]);
+
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:displaced");
+    expect(getChatAttachmentDataUrl(shared)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(incoming)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(displaced)).toBeNull();
+    expect(noteUserMutation).not.toHaveBeenCalled();
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    flow.attachmentDraft.reset({ release: true });
+  });
+
+  it("releases the displaced payload and renders cloud recovery once without a user mutation", () => {
+    const revokeObjectURL = stubObjectUrls("blob:current-draft");
+    const { flow, requestUpdate } = createDraftFixture();
+    const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
+    const current = registerTextPayload("current");
+    flow.attachmentDraft.replace([current]);
+    noteUserMutation.mockClear();
+    requestUpdate.mockClear();
+    revokeObjectURL.mockClear();
+    expect(
+      writeCloudSessionRecovery({
+        sessionKey: "agent:main:dashboard:recovery",
+        messageId: "message-recovery",
+        message: "recovered cloud prompt",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "text/plain",
+            fileName: "recovered.txt",
+            content: "cmVjb3ZlcmVk",
+          },
+        ],
+        profileId: "aws",
+        agentId: "main",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        phase: "creating",
+        createParams: {
+          key: "agent:main:dashboard:recovery",
+          agentId: "main",
+          message: "",
+          worktree: true,
+        },
+      }),
+    ).toBe(true);
+
+    flow.restorePendingCloudRecovery("ws://gateway.example", "principal-a");
+
+    expect(revokeObjectURL).toHaveBeenCalledOnce();
+    expect(noteUserMutation).not.toHaveBeenCalled();
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(flow.message).toBe("recovered cloud prompt");
+    expect(buildChatApiAttachments(flow.attachmentDraft.attachments)).toEqual([
+      {
+        type: "file",
+        mimeType: "text/plain",
+        fileName: "recovered.txt",
+        content: "cmVjb3ZlcmVk",
+      },
+    ]);
+    flow.attachmentDraft.reset({ release: true });
+  });
+
   it("deduplicates remote materialization and preserves the draft when cloning fails", async () => {
     let rejectClone!: (error: Error) => void;
     const cloneResult = new Promise<never>((_resolve, reject) => {

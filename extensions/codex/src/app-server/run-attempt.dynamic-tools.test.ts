@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
+  hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
@@ -27,11 +28,13 @@ import {
 } from "./dynamic-tools.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createCodexRuntimePlanFixture,
   createParams,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
@@ -72,8 +75,93 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("emits one eager audit lifecycle when runtime normalization clones a wrapped tool", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    let startPresentAtImplementation = false;
+    const tool = createRuntimeDynamicTool("echo");
+    const execute = vi.fn(async () => {
+      startPresentAtImplementation =
+        diagnosticEvents.some(
+          (event) =>
+            event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit",
+        ) ||
+        hasPendingInternalDiagnosticEvent(
+          (event) =>
+            event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit",
+        );
+      return {
+        content: [{ type: "text" as const, text: "echo done" }],
+        details: {},
+      };
+    });
+    tool.execute = execute;
+    dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
+    const harness = createStartedThreadHarness();
+    let closeHostCapabilities: (() => void) | undefined;
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
+      if ("toolCallId" in event && event.toolCallId === "call-echo-audit") {
+        diagnosticEvents.push(event);
+      }
+    });
+    try {
+      const params = createParams(
+        path.join(tempDir, "session.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      setCodexTestModelSupportsTools(params, true);
+      closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+      const runtimePlan = createCodexRuntimePlanFixture();
+      params.runtimePlan = {
+        ...runtimePlan,
+        tools: {
+          ...runtimePlan.tools,
+          normalize: (tools) => tools.map((entry) => ({ ...entry })),
+        },
+      };
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const toolResult = (await harness.handleServerRequest({
+        id: "request-echo-audit",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-echo-audit",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+        },
+      })) as { success?: boolean };
+      expect(toolResult.success).toBe(true);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+      await flushDiagnosticEvents();
+    } finally {
+      closeHostCapabilities?.();
+      unsubscribeDiagnostics();
+    }
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(startPresentAtImplementation).toBe(true);
+    expect(diagnosticEvents.map((event) => event.type)).toEqual([
+      "tool.execution.started",
+      "tool.execution.completed",
+    ]);
+  });
+
   it("reports a scheduled continuation as completed through the app-server request boundary", async () => {
     const continuationTool = createRuntimeDynamicTool("continue_delegate");
+    // Upstream validates dynamic tool arguments at the app-server request boundary, so the
+    // continuation fixture must declare the schema its scheduled-delegate call sends.
+    continuationTool.parameters = {
+      type: "object",
+      properties: {
+        task: { type: "string" },
+        mode: { type: "string" },
+      },
+      additionalProperties: false,
+    };
     continuationTool.execute = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "Delegate scheduled." }],
       details: { status: "scheduled", mode: "silent-wake" },

@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import {
   captureNodePairingGeneration,
   captureNodePairingState,
@@ -11,12 +12,10 @@ import {
   resolveCurrentPairedDeviceNodeBinding,
 } from "../../infra/device-pairing-node-state.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
+import { revokeDeviceToken, rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
 import {
-  approveDevicePairing,
   listDevicePairing,
   requestDevicePairing,
-  revokeDeviceToken,
-  rotateDeviceToken,
   withPairedDeviceRecords,
 } from "../../infra/device-pairing.js";
 import {
@@ -157,18 +156,20 @@ function createOptions(
 ): {
   context: ReturnType<typeof createContext>;
   opts: GatewayRequestHandlerOptions;
+  respond: ReturnType<typeof vi.fn>;
 } {
   const context = createContext();
+  const respond = vi.fn();
   const opts = {
     req: { type: "req", id: "req-1", method: "node.pair.remove", params },
     params,
     client: createClient(["operator.pairing", "operator.admin"]),
     isWebchatConnect: () => false,
-    respond: vi.fn(),
+    respond,
     context,
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
-  return { context, opts };
+  return { context, opts, respond };
 }
 
 describe("nodeHandlers node.skills.update", () => {
@@ -293,7 +294,12 @@ describe("nodeHandlers node.describe", () => {
     const publication = createOptions(
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundleRetention: 1,
+          bundleStatus: 1,
+        },
       },
       { client: nodeClient as never },
     );
@@ -302,7 +308,22 @@ describe("nodeHandlers node.describe", () => {
       nodeHandlers["node.runnerInventory.update"],
       'nodeHandlers["node.runnerInventory.update"] test invariant',
     )(publication.opts);
+    const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+    expect(proof).toBeDefined();
+    expect(
+      proof &&
+        runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
+          bundleHash: "a".repeat(64),
+          status: { status: "installed", version: "2026.8.9" },
+        }),
+    ).toBe(true);
 
+    const listCall = createOptions({});
+    Object.assign(listCall.context, { nodeRegistry: runtime.nodeRegistry });
+    await expectDefined(
+      nodeHandlers["node.list"],
+      'nodeHandlers["node.list"] test invariant',
+    )(listCall.opts);
     const describeCall = createOptions({ nodeId });
     Object.assign(describeCall.context, { nodeRegistry: runtime.nodeRegistry });
     await expectDefined(
@@ -310,11 +331,29 @@ describe("nodeHandlers node.describe", () => {
       'nodeHandlers["node.describe"] test invariant',
     )(describeCall.opts);
 
-    expect(describeCall.opts.respond).toHaveBeenCalledWith(
+    expect(listCall.respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ nodeId, sessionHost: true }),
+      expect.objectContaining({
+        nodes: expect.arrayContaining([
+          expect.objectContaining({
+            nodeId,
+            workerBundle: { status: "installed", version: "2026.8.9" },
+          }),
+        ]),
+      }),
       undefined,
     );
+    expect(describeCall.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        nodeId,
+        sessionHost: true,
+        workerBundle: { status: "installed", version: "2026.8.9" },
+      }),
+      undefined,
+    );
+    expect(JSON.stringify(listCall.respond.mock.calls)).not.toContain("bundleHash");
+    expect(JSON.stringify(describeCall.respond.mock.calls)).not.toContain("bundleHash");
     runtime.nodeRegistry.unregister(nodeClient.connId);
   });
 });

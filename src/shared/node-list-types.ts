@@ -2,6 +2,10 @@ import type { RuntimeTargetIssue } from "../../packages/gateway-protocol/src/sch
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 
+export type NodeWorkerBundleStatus =
+  | { status: "installed"; version: string }
+  | { status: "missing" };
+
 /** Node record returned by gateway node-list endpoints. */
 export type NodeListNode = {
   nodeId: string;
@@ -23,6 +27,7 @@ export type NodeListNode = {
   computerUse?: ComputerUseCapabilityDescriptor;
   /** Connected node currently advertises full worker session hosting. */
   sessionHost?: boolean;
+  workerBundle?: NodeWorkerBundleStatus;
   issues?: readonly RuntimeTargetIssue[];
   nodePluginTools?: NodePluginToolDescriptor[];
   permissions?: Record<string, boolean>;

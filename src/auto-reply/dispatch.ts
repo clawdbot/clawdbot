@@ -14,17 +14,13 @@ import {
   type ReplyPayloadSuppressedObserver,
 } from "../infra/outbound/deliver-hooks.js";
 import { logMessageReceived } from "../logging/diagnostic.js";
+import { createKeyedFifoLeaseRegistry, type KeyedFifoLease } from "../shared/keyed-fifo-lease.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
 import {
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
-import {
-  foregroundReplyFenceByKey,
-  type ForegroundReplyFenceState,
-  notifyForegroundReplyFenceWaiters,
-} from "./foreground-reply-fence-state.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -47,16 +43,14 @@ import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 
 type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
 
-type ForegroundReplyFenceSnapshot = {
-  key: string;
-  generation: number;
-};
-
 type ReplyPayloadRunState = {
   runId?: string;
 };
 
 const replyPayloadSendingDispatchers = new WeakSet<ReplyDispatcher>();
+const foregroundReplyLeases = createKeyedFifoLeaseRegistry(
+  Symbol.for("openclaw.foregroundReplyFences"),
+);
 
 function applyRuntimeToolsAllow(
   replyOptions: InternalDispatchReplyOptions | undefined,
@@ -71,7 +65,7 @@ function applyRuntimeToolsAllow(
   };
 }
 
-function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string | undefined {
+function resolveForegroundReplyOrderKey(finalized: FinalizedMsgContext): string | undefined {
   const sessionKey = normalizeOptionalString(finalized.SessionKey);
   const channel =
     normalizeOptionalString(finalized.OriginatingChannel) ??
@@ -98,81 +92,22 @@ function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string 
   ]);
 }
 
-function beginForegroundReplyFence(
-  finalized: FinalizedMsgContext,
-): ForegroundReplyFenceSnapshot | undefined {
-  const key = resolveForegroundReplyFenceKey(finalized);
-  if (!key) {
-    return undefined;
-  }
-  const state = foregroundReplyFenceByKey.get(key) ?? {
-    generation: 0,
-    activeGenerations: new Set<number>(),
-    waiters: new Set<() => void>(),
-  };
-  // Keep every admitted generation until it settles so successors cannot overtake it.
-  state.generation += 1;
-  state.activeGenerations.add(state.generation);
-  foregroundReplyFenceByKey.set(key, state);
-  return {
-    key,
-    generation: state.generation,
-  };
+function reserveForegroundReplyLease(finalized: FinalizedMsgContext): KeyedFifoLease | undefined {
+  const key = resolveForegroundReplyOrderKey(finalized);
+  return key ? foregroundReplyLeases.reserve([key]) : undefined;
 }
 
-function hasEarlierActiveForegroundReplyFenceGeneration(
-  state: ForegroundReplyFenceState,
-  generation: number,
-): boolean {
-  for (const activeGeneration of state.activeGenerations) {
-    if (activeGeneration < generation) {
-      return true;
-    }
-  }
-  return false;
-}
-
-async function waitForEarlierForegroundReplyFenceGenerations(
-  snapshot: ForegroundReplyFenceSnapshot | undefined,
-): Promise<void> {
-  if (!snapshot) {
-    return;
-  }
-  while (true) {
-    const state = foregroundReplyFenceByKey.get(snapshot.key);
-    if (!state || !hasEarlierActiveForegroundReplyFenceGeneration(state, snapshot.generation)) {
-      return;
-    }
-    // Delivery is FIFO; model work remains concurrent and only the visible boundary waits.
-    await new Promise<void>((resolve) => {
-      state.waiters.add(resolve);
-    });
-  }
-}
-
-async function runForegroundReplyFenceSettledDeliveries(
-  snapshot: ForegroundReplyFenceSnapshot | undefined,
+async function runOrderedForegroundReplySettledDeliveries(
+  lease: KeyedFifoLease | undefined,
   onSettled: (() => unknown) | undefined,
   onFreshSettledDelivery: (() => unknown) | undefined,
 ): Promise<void> {
   if (!onSettled && !onFreshSettledDelivery) {
     return;
   }
-  await waitForEarlierForegroundReplyFenceGenerations(snapshot);
+  await lease?.wait();
   await onSettled?.();
   await onFreshSettledDelivery?.();
-}
-
-function endForegroundReplyFence(snapshot: ForegroundReplyFenceSnapshot): void {
-  const state = foregroundReplyFenceByKey.get(snapshot.key);
-  if (!state) {
-    return;
-  }
-  state.activeGenerations.delete(snapshot.generation);
-  notifyForegroundReplyFenceWaiters(state);
-  if (state.activeGenerations.size === 0) {
-    foregroundReplyFenceByKey.delete(snapshot.key);
-  }
 }
 
 function resolveDispatcherSilentReplyContext(
@@ -207,9 +142,9 @@ function bindReplyPayloadRunState(
   const onAgentRunStart = replyOptions?.onAgentRunStart;
   return {
     ...replyOptions,
-    onAgentRunStart: (runId) => {
+    onAgentRunStart: (runId, executionIdentityToken) => {
       runState.runId = runId;
-      onAgentRunStart?.(runId);
+      onAgentRunStart?.(runId, executionIdentityToken);
     },
   };
 }
@@ -257,45 +192,6 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
 type DispatchInboundResult = DispatchFromConfigResult;
 export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
 
-function finalizeDispatchResult(
-  result: DispatchFromConfigResult,
-  dispatcher: ReplyDispatcher,
-): DispatchFromConfigResult {
-  const cancelledCounts = dispatcher.getCancelledCounts?.();
-  const failedCounts = dispatcher.getFailedCounts?.();
-  if (!cancelledCounts && !failedCounts) {
-    return result;
-  }
-
-  const resultCounts = {
-    tool: result.counts?.tool ?? 0,
-    block: result.counts?.block ?? 0,
-    final: result.counts?.final ?? 0,
-  };
-  // Dispatcher counts include cancelled/failed queued blocks; public result counts do not.
-  const counts = {
-    tool: Math.max(0, resultCounts.tool - (cancelledCounts?.tool ?? 0) - (failedCounts?.tool ?? 0)),
-    block: Math.max(
-      0,
-      resultCounts.block - (cancelledCounts?.block ?? 0) - (failedCounts?.block ?? 0),
-    ),
-    final: Math.max(
-      0,
-      resultCounts.final - (cancelledCounts?.final ?? 0) - (failedCounts?.final ?? 0),
-    ),
-  };
-  const hasFailedCounts =
-    (failedCounts?.tool ?? 0) > 0 ||
-    (failedCounts?.block ?? 0) > 0 ||
-    (failedCounts?.final ?? 0) > 0;
-  return {
-    ...result,
-    queuedFinal: result.queuedFinal && counts.final > 0,
-    counts,
-    ...(hasFailedCounts ? { failedCounts } : {}),
-  };
-}
-
 /** Dispatches one finalized inbound message through reply resolution and queued delivery. */
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
@@ -336,6 +232,7 @@ export async function dispatchInboundMessage(params: {
   if (params.outboundHooks !== "disabled") {
     installReplyPayloadSendingBeforeDeliver(params.dispatcher, finalized, replyPayloadRunState);
   }
+  let settledReceipt: DispatchFromConfigResult["settledReceipt"];
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     onSettled: params.onSettled,
@@ -358,8 +255,11 @@ export async function dispatchInboundMessage(params: {
           attributes: buildDispatchTimelineAttributes(finalized),
         },
       ),
+    onSettledReceipt: (receipt) => {
+      settledReceipt = receipt;
+    },
   });
-  return finalizeDispatchResult(result, params.dispatcher);
+  return settledReceipt ? { ...result, settledReceipt } : result;
 }
 
 type BufferedInboundDispatcherParams = {
@@ -381,11 +281,20 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   },
 ): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  const foregroundReplyFence = beginForegroundReplyFence(finalized);
+  const foregroundReplyLease = reserveForegroundReplyLease(finalized);
   const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
   const replyPayloadRunState = {
     runId: params.replyOptions?.runId,
   };
+  let settledDeliveries = Promise.resolve();
+  const settleDeliveries = () =>
+    (settledDeliveries = settledDeliveries.then(() =>
+      runOrderedForegroundReplySettledDeliveries(
+        foregroundReplyLease,
+        params.dispatcherOptions.onSettled,
+        params.dispatcherOptions.onFreshSettledDelivery,
+      ),
+    ));
   const replyPayloadBeforeDeliver =
     ownership.outboundHooks === "disabled"
       ? undefined
@@ -411,9 +320,9 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
       )
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
-    foregroundReplyFence || configuredBeforeDeliver
+    foregroundReplyLease || configuredBeforeDeliver
       ? markReplyDispatchBeforeDeliverDeadlineOwned(async (payload, info) => {
-          await waitForEarlierForegroundReplyFenceGenerations(foregroundReplyFence);
+          await foregroundReplyLease?.wait();
           return configuredBeforeDeliver ? await configuredBeforeDeliver(payload, info) : payload;
         })
       : undefined;
@@ -421,6 +330,8 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
       beforeDeliver,
+      onSettled: settleDeliveries,
+      onFreshSettledDelivery: undefined,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
   const onTypingController = params.replyOptions?.onTypingController
@@ -448,15 +359,9 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     });
   } finally {
     try {
-      await runForegroundReplyFenceSettledDeliveries(
-        foregroundReplyFence,
-        params.dispatcherOptions.onSettled,
-        params.dispatcherOptions.onFreshSettledDelivery,
-      );
+      await settledDeliveries;
     } finally {
-      if (foregroundReplyFence) {
-        endForegroundReplyFence(foregroundReplyFence);
-      }
+      foregroundReplyLease?.release();
       markRunComplete();
       markDispatchIdle();
     }

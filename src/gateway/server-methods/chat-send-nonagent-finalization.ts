@@ -1,10 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -298,9 +298,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
   const displayReply =
     extractAssistantDisplayTextFromContent(assistantContent) ??
     buildTranscriptReplyText(finalPayloads);
-  const transcriptDisplayReply = displayReply
-    ? stripInlineDirectiveTagsForDisplay(displayReply).text.trim()
-    : "";
+  const transcriptDisplayReply = displayReply?.trim() ?? "";
   const transcriptReply =
     mediaMessage?.transcriptText ||
     (managedMediaPrepareFailed
@@ -333,7 +331,10 @@ export async function finalizeChatSendNonAgentReplies(params: {
         });
       }
       message = broadcastAssistantContent?.length
-        ? { ...appended.message, content: broadcastAssistantContent }
+        ? applyAssistantDeliveryDirectives({
+            ...appended.message,
+            content: broadcastAssistantContent.map((block) => ({ ...block })),
+          })
         : appended.message;
     } else {
       context.logGateway.warn(

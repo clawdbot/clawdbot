@@ -163,7 +163,7 @@ test("sessions.changed deletes every null-tombstoned field, not a hand-kept list
   expect(row?.updatedAt).toBe(2);
 });
 
-test("sessions.changed invalidates the complete creator facet until canonical refresh", () => {
+test("sessions.changed invalidates the complete owner facet until canonical refresh", () => {
   const key = "agent:main:main";
   const result = buildResult([
     {
@@ -171,35 +171,68 @@ test("sessions.changed invalidates the complete creator facet until canonical re
       kind: "global",
       updatedAt: 1,
       createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+      owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
     },
   ]);
-  result.creators = [{ id: "profile-ada", label: "Ada" }];
+  result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
     reason: "reset",
     updatedAt: 2,
     createdActor: { type: "human", id: "profile-bob", label: "Bob" },
+    owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
   });
 
   expect(reconciled.result?.sessions[0]?.createdActor?.id).toBe("profile-bob");
-  expect(reconciled.result?.creators).toBeUndefined();
+  expect(reconciled.result?.owners).toBeUndefined();
 });
 
-test("sessions.changed preserves the creator facet when ownership is unchanged", () => {
+test("sessions.changed preserves the owner facet when ownership is unchanged", () => {
   const key = "agent:main:main";
   const createdActor = { type: "human" as const, id: "profile-ada", label: "Ada" };
-  const result = buildResult([{ key, kind: "global", updatedAt: 1, createdActor }]);
-  result.creators = [{ id: createdActor.id, label: createdActor.label }];
+  const result = buildResult([
+    { key, kind: "global", updatedAt: 1, createdActor, owner: { actor: createdActor } },
+  ]);
+  result.owners = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
     reason: "send",
     updatedAt: 2,
     createdActor,
+    owner: { actor: createdActor },
   });
 
-  expect(reconciled.result?.creators).toEqual([{ id: createdActor.id, label: createdActor.label }]);
+  expect(reconciled.result?.owners).toEqual([
+    { type: createdActor.type, id: createdActor.id, label: createdActor.label },
+  ]);
+});
+
+test("sessions.changed applies reassignment and invalidates the complete owner facet", () => {
+  const key = "agent:main:main";
+  const createdActor = { type: "human" as const, id: "profile-ada", label: "Ada" };
+  const result = buildResult([
+    { key, kind: "global", updatedAt: 1, createdActor, owner: { actor: createdActor } },
+  ]);
+  result.owners = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "owner",
+    updatedAt: 1,
+    owner: {
+      actor: { type: "agent", id: "research", label: "Research" },
+      assignedBy: createdActor,
+      assignedAt: 2,
+    },
+  });
+
+  expect(reconciled.result?.sessions[0]?.owner).toMatchObject({
+    actor: { id: "research" },
+    assignedAt: 2,
+  });
+  expect(reconciled.result?.owners).toBeUndefined();
 });
 
 describe("reconcileSessionChanged", () => {

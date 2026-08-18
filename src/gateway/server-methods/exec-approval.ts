@@ -133,7 +133,11 @@ export function createExecApprovalHandlers(
       );
     },
     "exec.approval.list": async ({ respond, client }) => {
-      respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
+      respond(
+        true,
+        listVisiblePendingApprovalRequests({ manager, client, approvalKind: "exec" }),
+        undefined,
+      );
     },
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (
@@ -423,7 +427,7 @@ export function createExecApprovalHandlers(
       if (!decisionPromise) {
         return;
       }
-      const requestEvent: ExecApprovalRequest = buildRequestedApprovalEvent(record);
+      const requestEvent: ExecApprovalRequest = buildRequestedApprovalEvent(record, "exec");
       const forwardRequest = opts?.forwarder?.handleRequested.bind(opts.forwarder);
       const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
       await handlePendingApprovalRequest({

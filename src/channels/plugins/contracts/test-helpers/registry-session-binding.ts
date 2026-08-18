@@ -28,7 +28,6 @@ import {
   type SessionBindingContractChannelId,
 } from "./manifest.js";
 import { importBundledChannelContractArtifact } from "./runtime-artifacts.js";
-import "../../registry.js";
 
 type SessionBindingContractEntry = {
   id: string;

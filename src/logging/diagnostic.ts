@@ -627,6 +627,10 @@ function isStalledModelCallRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  const effectiveAbortMs = Math.max(
+    params.stuckSessionAbortMs,
+    params.activity?.activeModelCallRequestTimeoutMs ?? 0,
+  );
   // Local providers are not blanket-exempt from recovery. Streaming model
   // chunks refresh run activity while emitted progress events are throttled, so
   // active streams stay fresh and silent/non-streaming calls can be recovered.
@@ -635,7 +639,7 @@ function isStalledModelCallRecoveryEligible(params: {
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
     typeof lastProgressAgeMs === "number" &&
-    lastProgressAgeMs >= params.stuckSessionAbortMs
+    lastProgressAgeMs >= effectiveAbortMs
   );
 }
 
@@ -644,11 +648,20 @@ function isActiveAbortRecoveryEligible(params: {
   activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
 }): boolean {
+  const effectiveModelAbortMs = Math.max(
+    params.stuckSessionAbortMs,
+    params.activity?.activeModelCallRequestTimeoutMs ?? 0,
+  );
+  const activeModelCallRequestTimeoutMs = params.activity?.activeModelCallRequestTimeoutMs;
+  const activeModelCallAllowanceExpired =
+    activeModelCallRequestTimeoutMs === undefined ||
+    (params.activity?.lastProgressAgeMs ?? 0) >= activeModelCallRequestTimeoutMs;
   return (
     (params.classification?.eventType === "session.stalled" &&
       params.classification.classification === "stalled_agent_run" &&
       params.activity?.hasActiveEmbeddedRun === true &&
-      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= params.stuckSessionAbortMs) ||
+      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= effectiveModelAbortMs &&
+      activeModelCallAllowanceExpired) ||
     isStalledEmbeddedRunRecoveryEligible(params) ||
     isBlockedToolCallRecoveryEligible(params) ||
     isStalledModelCallRecoveryEligible(params)

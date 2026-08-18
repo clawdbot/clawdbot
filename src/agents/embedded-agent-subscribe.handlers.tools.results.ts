@@ -6,7 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { type AgentPlanStep, normalizeAgentPlanSteps } from "../channels/streaming.js";
+import type { AgentPlanStep } from "../channels/streaming.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
@@ -14,6 +14,10 @@ import {
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
+import {
+  normalizeProgressCardInput,
+  ProgressCardInputError,
+} from "../session-cards/progress-card-input.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -55,16 +59,22 @@ export function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
   return created;
 }
 
-export function readUpdatePlanResult(
-  result: unknown,
-): { explanation?: string; steps: AgentPlanStep[] } | undefined {
-  const details = readToolResultDetails(result);
-  if (details?.status !== "updated" || !Array.isArray(details.plan)) {
+export function readProgressCardPlanInput(args: unknown): { steps: AgentPlanStep[] } | undefined {
+  const params = readRecordField(args);
+  if (!params) {
     return undefined;
   }
-  const steps = normalizeAgentPlanSteps(details.plan) ?? [];
-  const explanation = readStringValue(details.explanation);
-  return { ...(explanation ? { explanation } : {}), steps };
+  try {
+    return {
+      steps:
+        normalizeProgressCardInput({ markdown: params.markdown, plan: params.plan }).steps ?? [],
+    };
+  } catch (error) {
+    if (error instanceof ProgressCardInputError) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 export function isMiddlewareToolResultError(result: unknown): boolean {
@@ -598,15 +608,15 @@ export async function emitToolResultOutput(params: {
       return;
     }
     const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
-    ctx.state.lastToolError = (
-      ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx)
-    )({
+    const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
       toolName,
       meta: approvalMeta,
       executionStarted: false,
       outcome: "failure",
       failure: { error: `Approval prompt delivery failed: ${message}` },
-    }).lastToolError;
+    });
+    ctx.state.lastToolError = terminal.lastToolError;
+    ctx.state.lastToolRecovery = terminal.lastToolRecovery;
     ctx.state.deterministicApprovalPromptSent = false;
   };
   const hasStructuredMedia = Boolean(

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -51,17 +52,13 @@ const mocks = vi.hoisted(() => ({
       gateway: params.gateway,
     };
   }),
-  getRuntimeConfig: vi.fn(() => ({
-    gateway: {
-      handshakeTimeoutMs: 1_000,
-    },
-  })),
+  getRuntimeConfig: vi.fn<() => unknown>(() => ({ gateway: { handshakeTimeoutMs: 1_000 } })),
   startGatewayClientWhenEventLoopReady: vi.fn(async () => ({
     ready: false,
     aborted: false,
     elapsedMs: 0,
   })),
-  resolveGatewayCredentialsWithSecretInputs: vi.fn(async () => ({})),
+  resolveGatewayCredentialsWithSecretInputs: vi.fn(async (_params: { config: unknown }) => ({})),
   activeRuntime: {
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
@@ -435,10 +432,13 @@ describe("runNodeHost", () => {
     const config = {
       gateway: {
         mode: "local",
-        handshakeTimeoutMs: 1_000,
         remote: { token: "remote-token", password: "remote-password" },
       },
     };
+    setConfigResolutionFacts(
+      config,
+      new Set(["gateway.auth.token", "gateway.remote.token", "gateway.remote.password"]),
+    );
     mocks.getRuntimeConfig.mockReturnValue(config);
 
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
@@ -449,7 +449,6 @@ describe("runNodeHost", () => {
       config: {
         gateway: {
           mode: "local",
-          handshakeTimeoutMs: 1_000,
           remote: { token: undefined, password: undefined },
         },
       },
@@ -458,6 +457,9 @@ describe("runNodeHost", () => {
       remoteTokenPrecedence: "env-first",
       remotePasswordPrecedence: "env-first",
     });
+    const resolvedConfig =
+      mocks.resolveGatewayCredentialsWithSecretInputs.mock.calls[0]?.[0].config;
+    expect(getConfigResolutionFacts(resolvedConfig)).toEqual(new Set(["gateway.auth.token"]));
     expect(config.gateway.remote).toEqual({
       token: "remote-token",
       password: "remote-password",
@@ -741,6 +743,30 @@ describe("runNodeHost", () => {
       });
     });
 
+    options?.onHelloOk?.({
+      protocol: 4,
+      features: {
+        methods: [],
+        events: [],
+        capabilities: [
+          GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        ],
+      },
+    } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+    await vi.waitFor(() => {
+      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+          bundleStatus: 1,
+        },
+      });
+    });
+
     mocks.runnerAvailabilityChanged?.(false);
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
@@ -750,6 +776,7 @@ describe("runNodeHost", () => {
           capacity: "full",
           bundlePrewarm: 1,
           bundleRetention: 1,
+          bundleStatus: 1,
         },
       });
     });
@@ -763,6 +790,7 @@ describe("runNodeHost", () => {
           capacity: "available",
           bundlePrewarm: 1,
           bundleRetention: 1,
+          bundleStatus: 1,
         },
       });
     });
@@ -928,6 +956,7 @@ describe("runNodeHost", () => {
   it.each([
     ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
     ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+    ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",

@@ -24,7 +24,7 @@ describe("run-tsgo sparse guard", () => {
       {
         cwd,
         encoding: "utf8",
-        env: { ...process.env, OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+        env: process.env,
       },
     );
 

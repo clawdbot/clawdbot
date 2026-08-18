@@ -81,6 +81,7 @@ export type {
   AgentHarnessNativeCompaction,
   AgentHarnessNativeCompactionParams,
   AgentHarnessNativeCompactionRequest,
+  AgentHarnessModelCatalogParams,
   AgentHarnessRegistrationOptions,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
@@ -119,11 +120,14 @@ export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "authoredContextTokenCap"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "pluginHarnessToolPolicySafeDeniedTools"
   | "trajectoryRecorder"
 > & {
+  /** Per-model context cap authored by the operator and forwarded to harness runtimes. */
+  authoredContextTokenCap?: number;
   /** Audited exact denies that the plugin harness must enforce against native equivalents. */
   pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
 };

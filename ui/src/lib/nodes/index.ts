@@ -1,7 +1,7 @@
 // Presentation-free by contract: confirmations and secret reveals belong to the owning
 // page, because native window.confirm/window.prompt silently answer in webviews with no
 // dialog bridge and would end the action with no outcome and no recorded reason.
-import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
+import { getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -14,6 +14,19 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
 import { formatUiError } from "../format-error.ts";
+
+// @noble/ed25519 defaults its SHA-512 to crypto.subtle, which browsers gate to
+// secure contexts. On plain-HTTP origins the pure-JS digests load lazily so
+// device identity keeps working there — the signing key is the one credential
+// that never crosses the wire — while secure contexts pay no startup bytes.
+const loadPureSha2 = () => import("@noble/hashes/sha2.js");
+const subtleSha512Async = hashes.sha512Async;
+hashes.sha512Async = async (message: Uint8Array) => {
+  if (globalThis.crypto?.subtle && subtleSha512Async) {
+    return await subtleSha512Async(message);
+  }
+  return Uint8Array.from((await loadPureSha2()).sha512(message));
+};
 
 type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -73,12 +86,16 @@ export type DevicePairingList = {
   paired: PairedDevice[];
 };
 
+export type ExecSecurity = "deny" | "allowlist" | "full";
+export type ExecAsk = "off" | "on-miss" | "always";
 type ExecApprovalsDefaults = {
-  security?: string;
-  ask?: string;
-  askFallback?: string;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+  askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
 };
+
+export type ExecApprovalsResolvedDefaults = Required<ExecApprovalsDefaults>;
 
 export type ExecApprovalsAllowlistEntry = {
   id?: string;
@@ -107,6 +124,7 @@ type FileExecApprovalsSnapshot = {
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
+  resolvedDefaults?: ExecApprovalsResolvedDefaults;
 };
 
 type NativeExecApprovalRule = {
@@ -140,8 +158,11 @@ type NodesRequestState = {
   requestGeneration: number;
 };
 
+type QueuedRefresh = "none" | "quiet" | "visible";
+
 type NodesState = NodesRequestState & {
   nodesLoading: boolean;
+  nodesQueuedRefresh: QueuedRefresh;
   nodes: Array<Record<string, unknown>>;
   lastError: string | null;
   chatError?: string | null;
@@ -149,6 +170,7 @@ type NodesState = NodesRequestState & {
 
 type DevicesState = NodesRequestState & {
   devicesLoading: boolean;
+  devicesQueuedRefresh: QueuedRefresh;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
 };
@@ -192,9 +214,11 @@ export function createInitialDevicesState(
     connected: snapshot.connected ?? false,
     requestGeneration: 0,
     nodesLoading: false,
+    nodesQueuedRefresh: "none",
     nodes: [],
     lastError: null,
     devicesLoading: false,
+    devicesQueuedRefresh: "none",
     devicesError: null,
     devicesList: null,
     execApprovalsLoading: false,
@@ -214,9 +238,17 @@ function isCurrentNodesRequest(
   return state.connected && state.client === client && state.requestGeneration === generation;
 }
 
+function queueRefresh(current: QueuedRefresh, quiet: boolean | undefined): QueuedRefresh {
+  return current === "visible" || quiet !== true ? "visible" : "quiet";
+}
+
 export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   const client = state.client;
-  if (!client || !state.connected || state.nodesLoading) {
+  if (!client || !state.connected) {
+    return;
+  }
+  if (state.nodesLoading) {
+    state.nodesQueuedRefresh = queueRefresh(state.nodesQueuedRefresh, opts?.quiet);
     return;
   }
   state.nodesLoading = true;
@@ -237,13 +269,22 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.nodesLoading = false;
+      const queued = state.nodesQueuedRefresh;
+      state.nodesQueuedRefresh = "none";
+      if (queued !== "none") {
+        await loadNodes(state, { quiet: queued === "quiet" });
+      }
     }
   }
 }
 
 export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean }) {
   const client = state.client;
-  if (!client || !state.connected || state.devicesLoading) {
+  if (!client || !state.connected) {
+    return;
+  }
+  if (state.devicesLoading) {
+    state.devicesQueuedRefresh = queueRefresh(state.devicesQueuedRefresh, opts?.quiet);
     return;
   }
   state.devicesLoading = true;
@@ -269,6 +310,11 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesLoading = false;
+      const queued = state.devicesQueuedRefresh;
+      state.devicesQueuedRefresh = "none";
+      if (queued !== "none") {
+        await loadDevices(state, { quiet: queued === "quiet" });
+      }
     }
   }
 }
@@ -897,8 +943,14 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
-  const hash = await crypto.subtle.digest("SHA-256", publicKey.slice().buffer);
-  return bytesToHex(new Uint8Array(hash));
+  // Prefer the platform digest where the context provides it; the pure-JS
+  // fallback keeps identity working on plain-HTTP origins without subtle.
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle) {
+    const hash = await subtle.digest("SHA-256", publicKey.slice().buffer);
+    return bytesToHex(new Uint8Array(hash));
+  }
+  return bytesToHex((await loadPureSha2()).sha256(publicKey));
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
@@ -911,6 +963,11 @@ async function generateIdentity(): Promise<DeviceIdentity> {
     privateKey: base64UrlEncode(privateKey),
   };
 }
+
+// Storage-blocked pages (for example private browsing) must still present one
+// stable device per page lifetime; minting a fresh key on every reconnect
+// would raise a new unpaired request each time and never retain approval.
+let sessionDeviceIdentity: DeviceIdentity | null = null;
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
   const storage = getSafeLocalStorage();
@@ -948,6 +1005,9 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
     // Invalid local identity is replaced below.
   }
 
+  if (sessionDeviceIdentity) {
+    return sessionDeviceIdentity;
+  }
   const identity = await generateIdentity();
   const stored: StoredIdentity = {
     version: 1,
@@ -956,7 +1016,12 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
     privateKey: identity.privateKey,
     createdAtMs: Date.now(),
   };
-  storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(stored));
+  try {
+    storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // A write-rejecting store still gets the in-memory identity below.
+  }
+  sessionDeviceIdentity = identity;
   return identity;
 }
 

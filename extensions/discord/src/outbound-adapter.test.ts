@@ -232,7 +232,7 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-webhook-1",
-      channelId: "thread-1",
+      target: { kind: "channel", id: "thread-1" },
     });
   });
 
@@ -408,7 +408,7 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
-      channelId: "ch-1",
+      target: { kind: "channel", id: "ch-1" },
     });
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
       "voice-1",
@@ -495,7 +495,8 @@ describe("discordOutbound", () => {
       expectedText: "spoken answer",
     },
   ])("falls back to $name when audioAsVoice delivery fails", async ({ payload, expectedText }) => {
-    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
+    const voiceError = new Error("ffmpeg unavailable");
+    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(voiceError);
 
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
@@ -518,12 +519,17 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
-      channelId: "ch-1",
+      target: { kind: "channel", id: "ch-1" },
     });
+    expect(outboundWarnSpy).toHaveBeenCalledWith(
+      "discord voice send failed; continuing without voice",
+      { error: voiceError },
+    );
   });
 
   it("does not duplicate already-delivered TTS supplement text when audioAsVoice delivery fails", async () => {
-    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
+    const voiceError = new Error("ffmpeg unavailable");
+    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(voiceError);
 
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
@@ -547,12 +553,16 @@ describe("discordOutbound", () => {
     expect(result).toMatchObject({
       channel: "discord",
       messageId: "",
-      channelId: "channel:123456",
+      target: { kind: "channel", id: "channel:123456" },
       receipt: {
         platformMessageIds: [],
         parts: [],
       },
     });
+    expect(outboundWarnSpy).toHaveBeenCalledWith(
+      "discord voice send failed; continuing without voice",
+      { error: voiceError },
+    );
   });
 
   it("does not treat delivery progress failures as voice delivery failures", async () => {
@@ -739,7 +749,7 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "video-1",
-      channelId: "channel-1",
+      target: { kind: "channel", id: "channel-1" },
       receipt: mediaReceipt,
     });
   });
@@ -799,7 +809,7 @@ describe("discordOutbound", () => {
     expect(result).toMatchObject({
       channel: "discord",
       messageId: "starter-1",
-      channelId: "thread-1",
+      target: { kind: "channel", id: "thread-1" },
       receipt: {
         primaryPlatformMessageId: "starter-1",
         threadId: "thread-1",
@@ -980,7 +990,7 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-2",
-      channelId: "ch-1",
+      target: { kind: "channel", id: "ch-1" },
     });
   });
 

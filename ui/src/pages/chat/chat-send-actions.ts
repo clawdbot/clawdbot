@@ -36,7 +36,15 @@ import {
 } from "./chat-send-request.ts";
 import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
-import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import {
+  activeQueuedMessageEdit,
+  isQueuedMessageBeingEdited,
+  isQueuedMessageRetryBlocked,
+  isQueuedMessageReorderBlocked,
+  QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
+  QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
+} from "./queued-message-edit.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import {
   OFFLINE_QUEUE_STORAGE_ERROR,
   steerQueuedChatMessage as steerQueuedChatMessageLifecycle,
@@ -144,17 +152,58 @@ export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
  * storage failure mid-permutation leaves the prior order intact instead of a
  * partially reshuffled queue.
  */
-export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: number): void {
+type ChatQueueMoveResult = "moved" | "rejected" | "noop";
+
+export function moveQueuedChatMessage(
+  host: ChatHost,
+  id: string,
+  toIndex: number,
+): ChatQueueMoveResult {
   const item = readQueuedMessageById(host, id);
   if (!item || !isMovableChatQueueItem(item)) {
-    return;
+    return "noop";
+  }
+  if (isQueuedMessageReorderBlocked(host, id)) {
+    setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
+    return "rejected";
   }
   const sessionKey = item.sessionKey ?? host.sessionKey;
   const scope = readChatQueueForScope(host, sessionKey, item.agentId);
-  const segment = chatQueueMovableSegments(scope).find((rows) => rows.some((row) => row.id === id));
-  const moves = reorderChatQueueItems(segment ?? [], id, toIndex);
+  // This pane already excludes its own edited row from rendered move indices,
+  // but cannot see edits owned by peers. Rebuild that exact offered index space
+  // so a peer-edit barrier is distinguishable from an ordinary no-op.
+  const localEditId = activeQueuedMessageEdit(host)?.id;
+  const offeredSegment = chatQueueMovableSegments(
+    scope,
+    (row) => isMovableChatQueueItem(row) && row.id !== localEditId,
+  ).find((rows) => rows.some((row) => row.id === id));
+  const fromIndex = offeredSegment?.findIndex((row) => row.id === id) ?? -1;
+  const requestedIndex = offeredSegment
+    ? Math.min(Math.max(toIndex, 0), offeredSegment.length - 1)
+    : -1;
+  if (fromIndex < 0 || fromIndex === requestedIndex) {
+    return "noop";
+  }
+  const crossedPeerEdit = offeredSegment!.some(
+    (row, index) =>
+      index >= Math.min(fromIndex, requestedIndex) &&
+      index <= Math.max(fromIndex, requestedIndex) &&
+      row.id !== id &&
+      isQueuedMessageBeingEdited(host, row.id),
+  );
+  if (crossedPeerEdit) {
+    setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
+    return "rejected";
+  }
+  const segment = chatQueueMovableSegments(
+    scope,
+    (row) => isMovableChatQueueItem(row) && !isQueuedMessageBeingEdited(host, row.id),
+  ).find((rows) => rows.some((row) => row.id === id));
+  const targetId = offeredSegment![requestedIndex]?.id;
+  const segmentTargetIndex = segment?.findIndex((row) => row.id === targetId) ?? -1;
+  const moves = reorderChatQueueItems(segment ?? [], id, segmentTargetIndex);
   if (moves.length === 0) {
-    return;
+    return "noop";
   }
   const applied = updateQueuedMessagesForSession(
     host,
@@ -165,11 +214,17 @@ export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: numbe
   );
   if (!applied) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    return "rejected";
   }
+  return "moved";
 }
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
   let item = host.chatQueue.find((entry) => entry.id === id);
+  if (isQueuedMessageRetryBlocked(host, id)) {
+    setChatError(host, QUEUED_MESSAGE_RETRY_CONFLICT_ERROR);
+    return;
+  }
   if (
     !item ||
     item.pendingRunId ||
@@ -185,7 +240,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
       setChatError(host, t("chat.sendErrors.steerRunNoLongerActive"));
       return;
     }
-    if (hasAbortableSessionRun(host)) {
+    if (hasDirectSessionRun(host)) {
       const retry = updateQueuedMessage(host, id, (entry) => ({
         ...entry,
         sendAttempts: 0,

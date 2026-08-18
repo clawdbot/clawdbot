@@ -6,9 +6,25 @@ type TerminalOpenRequestInput = Parameters<TerminalSessionManager["open"]>[0];
 type AgentTerminalOwner = Extract<TerminalOpenRequestInput["owner"], { kind: "agent" }>;
 type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
 
-/** Builds the manager-private task binding while preserving the public owner shape. */
-export function taskAgentOwner(agentSessionKey: string, taskId: string): AgentTerminalOwner {
-  const owner = { kind: "agent" as const, agentSessionKey, taskId };
+export function agentTerminalOwner(
+  agentSessionKey: string,
+  agentSessionId = "agent-session-id",
+  agentId = "main",
+): AgentTerminalOwner {
+  return { kind: "agent", agentSessionKey, agentSessionId, agentId };
+}
+
+/** Builds the manager-private task binding while preserving the agent owner identity. */
+export function taskAgentOwner(
+  agentSessionKey: string,
+  taskId: string,
+  agentSessionId = "agent-session-id",
+  agentId = "main",
+): AgentTerminalOwner {
+  const owner = {
+    ...agentTerminalOwner(agentSessionKey, agentSessionId, agentId),
+    taskId,
+  };
   return owner;
 }
 

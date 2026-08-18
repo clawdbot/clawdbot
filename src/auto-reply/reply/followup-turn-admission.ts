@@ -50,7 +50,6 @@ export type FollowupRunnerParams = {
   sessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   toolProgressDetail?: "explain" | "raw";
 };
 
@@ -153,7 +152,6 @@ export async function admitFollowupTurn(params: {
     routeThreadId: params.queued.originatingThreadId,
     originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
-    onReplyAdmissionWaitChange: params.queued.onReplyAdmissionWaitChange,
   });
   if (admission.status === "skipped") {
     return admission.reason === "active-run"
@@ -405,7 +403,6 @@ export async function admitFollowupTurn(params: {
         followupRun: turn.queued,
         promptForEstimate: turn.queued.prompt,
         defaultModel: params.defaults.defaultModel,
-        agentCfgContextTokens: params.defaults.agentCfgContextTokens,
         sessionEntry: activeEntry,
         sessionStore,
         sessionKey: replySessionKey,

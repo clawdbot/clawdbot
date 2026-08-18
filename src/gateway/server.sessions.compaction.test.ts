@@ -20,7 +20,6 @@ import {
   getFollowupQueue,
 } from "../auto-reply/reply/queue/state.js";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
@@ -1935,7 +1934,7 @@ test("sessions.patch waits for terminal compaction before archiving the session"
   ws.close();
 });
 
-test("sessions.compact maxLines trims SQLite transcript rows and archives the full pre-compaction transcript", async () => {
+test("sessions.compact maxLines trims SQLite transcript rows without creating a transcript archive", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await seedSessionEntry({
     entry: sessionStoreEntry("sess-main", {
@@ -1955,20 +1954,12 @@ test("sessions.compact maxLines trims SQLite transcript rows and archives the fu
     storePath,
     totalLines: 500,
   });
-  const original = await loadTranscriptRows({
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    storePath,
-  });
-  expect(original).toHaveLength(500);
-
   const { ws } = await openClient();
   const compacted = await rpcReq<{
     ok: true;
     key: string;
     compacted: boolean;
     kept?: number;
-    archived?: string;
   }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
 
   expect(compacted.ok).toBe(true);
@@ -1989,15 +1980,8 @@ test("sessions.compact maxLines trims SQLite transcript rows and archives the fu
   expect(retained.at(-1)).toMatchObject({
     message: { content: "line-498" },
   });
-  const archived = compacted.payload?.archived ?? "";
-  expect(path.basename(archived)).toMatch(/^sess-main\.jsonl\.bak\.\d{4}-\d{2}-\d{2}T/);
-  expect(await fs.realpath(path.dirname(archived))).toBe(await fs.realpath(dir));
-  await expect(fs.stat(archived)).resolves.toMatchObject({ mode: expect.any(Number) });
-  const archivedEvents = readSessionArchiveContentSync(archived)
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-  expect(archivedEvents).toEqual(original);
+  expect(compacted.payload).not.toHaveProperty("archived");
+  expect((await fs.readdir(dir)).some((name) => name.includes(".jsonl.bak."))).toBe(false);
   await expect(fs.readdir(dir)).resolves.not.toContain("sess-main.jsonl");
   const trimmedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(trimmedEntry?.cliSessionIds).toBeUndefined();

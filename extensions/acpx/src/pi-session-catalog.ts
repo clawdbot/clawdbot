@@ -4,30 +4,24 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
-import {
-  boundSessionCatalogTranscriptPage,
-  boundedSessionCatalogLimit,
-  decodeSessionCatalogCursor,
-  encodeSessionCatalogCursor,
-  isExactSessionCatalogCursor,
-  optionalSessionCatalogCursor,
-} from "openclaw/plugin-sdk/session-catalog-runtime";
+import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
 import {
   isRecord,
   normalizeBoundedOptionalString as optionalPiString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  PI_LOCAL_SESSION_HOST_ID as LOCAL_HOST_ID,
+  PI_SESSION_ID_PATTERN as SESSION_ID_PATTERN,
+} from "./pi-session-catalog-shared.js";
 import { listPiSummaryPage, readPiSessionById } from "./pi-session-store.js";
 import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
-const LOCAL_HOST_ID = "gateway";
-const DEFAULT_PAGE_LIMIT = 20;
 const MAX_SEARCH_LENGTH = 500;
-const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
-export type PiSessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
+type PiSessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
 
-export const isExactPiSessionCursor = isExactSessionCatalogCursor;
+export const isExactPiSessionCursor = sessionCatalogPaging.isExactCursor;
 
 function textFromContent(content: unknown): string {
   if (typeof content === "string") {
@@ -53,54 +47,21 @@ function textFromContent(content: unknown): string {
     .join("\n");
 }
 
-function parseListParams(value: unknown): { searchTerm?: string; limit: number; cursor?: string } {
-  if (value === undefined || value === null) {
-    return { limit: DEFAULT_PAGE_LIMIT };
-  }
-  if (!isRecord(value)) {
-    throw new Error("Pi session list parameters must be an object");
-  }
-  const unknown = Object.keys(value).find(
-    (key) => !["searchTerm", "limit", "cursor"].includes(key),
-  );
-  if (unknown) {
-    throw new Error(`unknown Pi session list parameter: ${unknown}`);
-  }
-  const searchTerm = optionalPiString(value.searchTerm, MAX_SEARCH_LENGTH);
-  if (value.searchTerm !== undefined && !searchTerm) {
-    throw new Error("searchTerm is invalid");
-  }
-  const cursor = optionalSessionCatalogCursor(value.cursor);
-  return {
-    limit: boundedSessionCatalogLimit(value.limit),
-    ...(searchTerm ? { searchTerm } : {}),
-    ...(cursor ? { cursor } : {}),
-  };
-}
-
-function parseReadParams(value: unknown): { threadId: string; limit: number; cursor?: string } {
-  if (!isRecord(value)) {
-    throw new Error("Pi session read parameters must be an object");
-  }
-  const unknown = Object.keys(value).find((key) => !["threadId", "limit", "cursor"].includes(key));
-  if (unknown) {
-    throw new Error(`unknown Pi session read parameter: ${unknown}`);
-  }
-  const threadId = optionalPiString(value.threadId, 256);
-  if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
-    throw new Error("threadId is invalid");
-  }
-  const cursor = optionalSessionCatalogCursor(value.cursor);
-  return {
-    threadId,
-    limit: boundedSessionCatalogLimit(value.limit),
-    ...(cursor ? { cursor } : {}),
-  };
-}
+const PI_PARAMETER_MESSAGES = {
+  listNotObject: "Pi session list parameters must be an object",
+  unknownListParameter: (key: string) => `unknown Pi session list parameter: ${key}`,
+  invalidSearchTerm: "searchTerm is invalid",
+  readNotObject: "Pi session read parameters must be an object",
+  unknownReadParameter: (key: string) => `unknown Pi session read parameter: ${key}`,
+  invalidThreadId: "threadId is invalid",
+};
 
 export async function listLocalPiSessionPage(value?: unknown): Promise<PiSessionPage> {
-  const params = parseListParams(value);
-  const offset = decodeSessionCatalogCursor(params.cursor);
+  const params = sessionCatalogPaging.parseListParams(value, {
+    searchMaxLength: MAX_SEARCH_LENGTH,
+    messages: PI_PARAMETER_MESSAGES,
+  });
+  const offset = sessionCatalogPaging.decodeCursor(params.cursor);
   const { summaries, hasMore } = await listPiSummaryPage(process.env, {
     offset,
     limit: params.limit,
@@ -109,7 +70,7 @@ export async function listLocalPiSessionPage(value?: unknown): Promise<PiSession
   const page = summaries.map(({ file: _file, version: _version, ...session }) => session);
   return {
     sessions: page,
-    ...(hasMore ? { nextCursor: encodeSessionCatalogCursor(offset + page.length) } : {}),
+    ...(hasMore ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) } : {}),
   };
 }
 
@@ -264,10 +225,14 @@ function piTranscriptItems(entries: Record<string, unknown>[]): SessionCatalogTr
 export async function readLocalPiTranscriptPage(
   value: unknown,
 ): Promise<SessionsCatalogReadResult> {
-  const params = parseReadParams(value);
-  const offset = decodeSessionCatalogCursor(params.cursor);
+  const params = sessionCatalogPaging.parseReadParams(value, {
+    threadIdMaxLength: 256,
+    threadIdPattern: SESSION_ID_PATTERN,
+    messages: PI_PARAMETER_MESSAGES,
+  });
+  const offset = sessionCatalogPaging.decodeCursor(params.cursor);
   const items = piTranscriptItems(await readPiSessionById(params.threadId, process.env));
-  const page = boundSessionCatalogTranscriptPage(items, params.limit, offset);
+  const page = sessionCatalogPaging.boundTranscriptPage(items, params.limit, offset);
   return {
     hostId: LOCAL_HOST_ID,
     label: "Local Pi",

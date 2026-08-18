@@ -858,7 +858,7 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
       toolCallId: "heartbeat-1",
       result: {
         details: {
-          status: "recorded",
+          status: "accepted",
           outcome: "no_change",
           notify: false,
           summary: "Nothing needs attention.",

@@ -473,12 +473,12 @@
         "status"
       ]
     },
-    "update_plan": {
+    "progress_card": {
       "emoji": "🗺️",
-      "title": "Update Plan",
+      "title": "Progress Card",
       "detailKeys": [
-        "explanation",
-        "plan.0.step"
+        "plan.0.step",
+        "markdown"
       ]
     },
     "ask_user": {
@@ -1106,6 +1106,18 @@
         "model"
       ]
     },
+    "view_image": {
+      "emoji": "🖼️",
+      "title": "View Image",
+      "detailKeys": [
+        "path",
+        "paths",
+        "url",
+        "urls",
+        "prompt",
+        "model"
+      ]
+    },
     "image_generate": {
       "emoji": "🎨",
       "title": "Image Generation",
@@ -1192,10 +1204,7 @@
     },
     "sessions_yield": {
       "emoji": "⏸️",
-      "title": "Yield",
-      "detailKeys": [
-        "message"
-      ]
+      "title": "Yield"
     },
     "tts": {
       "emoji": "🔊",

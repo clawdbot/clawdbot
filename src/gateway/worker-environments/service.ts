@@ -13,6 +13,8 @@ import type { SecretRef } from "../../config/types.secrets.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type {
+  WorkerExecutionMode,
+  WorkerNodeEnrollment,
   WorkerProfile,
   WorkerProvider,
   WorkerSshEndpoint,
@@ -89,6 +91,8 @@ type WorkerEnvironmentServiceOptions = {
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
   ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
+  prepareNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<WorkerNodeEnrollment>;
+  retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
   stopNodeWorkerBundleTransfers?: () => void;
@@ -97,7 +101,6 @@ type WorkerEnvironmentServiceOptions = {
   bootstrapCallTimeoutMs?: number;
   workerCredentialTtlMs?: number;
   generateWorkerCredential?: (bytes: number) => string;
-  resolveWorkerGateway?: () => { host: "127.0.0.1" | "::1"; port: number } | undefined;
   now?: () => number;
   logger?: { warn: (message: string) => void };
   applyTranscriptCommit?: (params: {
@@ -152,7 +155,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const inference = createWorkerInferenceManager({
     execute: options.executeInference,
     getConfig: options.getConfig,
-    now,
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   const inferenceWithDrain = inference as typeof inference & {
@@ -161,6 +163,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
+  let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler((claim) =>
+    inference.cancelClaim(claim),
+  );
   let stopping = false;
 
   const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
@@ -280,6 +285,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
     ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
+    prepareNodeEnrollment: options.prepareNodeEnrollment,
+    retireNodeEnrollment: options.retireNodeEnrollment,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
     credentialBroker,
@@ -301,7 +308,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareCurrentBundle: async () => await options.prepareInstallation("bundle"),
     tunnelManager: options.tunnelManager,
     nodeTunnelManager: options.nodeTunnelManager,
-    resolveWorkerGateway: options.resolveWorkerGateway,
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
     inState,
@@ -386,6 +392,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     interval = undefined;
     unsubscribeSessionIdentityMutation?.();
     unsubscribeSessionIdentityMutation = undefined;
+    unsubscribeTurnClaimClosed?.();
+    unsubscribeTurnClaimClosed = undefined;
     await inference.stop();
     credentialBroker.clear();
     options.liveEvents?.clear();
@@ -403,23 +411,74 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     options.liveEvents?.clear();
   };
 
+  const providerSupportsExecutionMode = (providerId: string, mode: WorkerExecutionMode) =>
+    options.resolveProvider(providerId)?.supportedExecutionModes?.includes(mode) === true;
+  const requireProviderExecutionMode = (providerId: string, mode?: WorkerExecutionMode) => {
+    if (!mode) {
+      return;
+    }
+    const provider = options.resolveProvider(providerId);
+    if (!provider) {
+      throw serviceError("provider_not_found", `Unknown worker provider: ${providerId}`);
+    }
+    if (!provider.supportedExecutionModes?.includes(mode)) {
+      throw serviceError(
+        "invalid_profile",
+        `Worker provider ${providerId} does not support ${mode} placement`,
+      );
+    }
+  };
+  const configuredProfileProviderId = (profileId: string) => {
+    const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
+    if (!profile) {
+      throw serviceError("profile_not_found", `Unknown worker profile: ${profileId}`);
+    }
+    return profile.provider;
+  };
+
   const service = {
     list: environmentAccess.list,
+    supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
+      const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
+      return profile ? providerSupportsExecutionMode(profile.provider, mode) : false;
+    },
     get: environmentAccess.get,
-    create: async (profileId: string, idempotencyKey: string) =>
-      environmentAccess.project(
-        await providerLifecycle.createWithProfile(profileId, idempotencyKey),
-      ),
+    listMachineOptions: async (profileId: string) =>
+      providerLifecycle.listMachineOptions(profileId),
+    create: async (
+      profileId: string,
+      idempotencyKey: string,
+      machineClass?: string,
+      executionMode?: WorkerExecutionMode,
+    ) => {
+      if (executionMode) {
+        requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
+      }
+      return environmentAccess.project(
+        await providerLifecycle.createWithProfile(
+          profileId,
+          idempotencyKey,
+          machineClass === undefined ? {} : { machineClass },
+        ),
+      );
+    },
     createFromProfileSnapshot: async (
       profile: { profileId: string; providerId: string; profileSnapshot: WorkerProfile },
       idempotencyKey: string,
-    ) =>
-      environmentAccess.project(
+      machineClass?: string,
+      executionMode?: WorkerExecutionMode,
+    ) => {
+      requireProviderExecutionMode(profile.providerId, executionMode);
+      return environmentAccess.project(
         await providerLifecycle.createWithProfile(profile.profileId, idempotencyKey, {
-          providerId: profile.providerId,
-          profileSnapshot: profile.profileSnapshot,
+          inherited: {
+            providerId: profile.providerId,
+            profileSnapshot: profile.profileSnapshot,
+          },
+          ...(machineClass === undefined ? {} : { machineClass }),
         }),
-      ),
+      );
+    },
     destroy: async (environmentId: string) =>
       environmentAccess.project(await providerLifecycle.destroy(environmentId)),
     destroyUnattached: async (environmentId: string) =>

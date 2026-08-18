@@ -111,6 +111,7 @@ export function handleAgentEnd(
     didSendDeterministicApprovalPrompt: ctx.state.deterministicApprovalPromptSent,
     heartbeatToolResponse: ctx.state.heartbeatToolResponse,
     lastToolError: ctx.state.lastToolError,
+    lastToolRecovery: ctx.state.lastToolRecovery,
     toolMediaUrls: [...ctx.state.pendingToolMediaUrls, ...deferredMediaUrls],
     toolAudioAsVoice:
       ctx.state.pendingToolAudioAsVoice ||

@@ -2143,6 +2143,42 @@ describe("agentLoop tool termination", () => {
     expect(getSteeringMessages).toHaveBeenCalled();
   });
 
+  it("delivers steering admitted while the final follow-up drain is pending", async () => {
+    const followUpDrainStarted = createDeferred();
+    const releaseFollowUpDrain = createDeferred();
+    const steer = { role: "user" as const, content: "one more thing", timestamp: 2 };
+    const queued: AgentMessage[] = [];
+    const requestMessages: Message[][] = [];
+    const run = runAgentLoop(
+      [{ role: "user", content: "start", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      {
+        ...config,
+        getSteeringMessages: async () => queued.splice(0, 1),
+        getFollowUpMessages: async () => {
+          followUpDrainStarted.resolve();
+          await releaseFollowUpDrain.promise;
+          return [];
+        },
+      },
+      () => {},
+      undefined,
+      createTurnSequenceStream(
+        [[{ type: "text", text: "initial response" }], [{ type: "text", text: "steer response" }]],
+        requestMessages,
+      ),
+    );
+
+    await followUpDrainStarted.promise;
+    queued.push(steer);
+    releaseFollowUpDrain.resolve();
+    await run;
+
+    expect(requestMessages).toHaveLength(2);
+    expect(requestMessages[1]?.at(-1)).toBe(steer);
+    expect(queued).toEqual([]);
+  });
+
   it("suppresses sequential tools when steering arrives from awaited message_end", async () => {
     const execute = vi.fn(async () => ({ content: [], details: {} }));
     const requestMessages: Message[][] = [];

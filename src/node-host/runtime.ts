@@ -1,5 +1,6 @@
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 import fs from "node:fs";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
@@ -70,7 +71,11 @@ type ActiveNodeHostRuntime = {
   handleInput(invokeId: string, seq: number, payloadJSON: string): void;
   cancel(invokeId: string): void;
   cancelAll(): void;
-  updateGatewayConnection(connection?: { url: string; tlsFingerprint?: string }): void;
+  updateGatewayConnection(connection?: {
+    url: string;
+    tlsFingerprint?: string;
+    cloudflareAccess?: CloudflareAccessCredentials;
+  }): void;
   close(): Promise<void>;
 };
 
@@ -247,6 +252,8 @@ export async function prepareNodeHostRuntime(params?: {
   enableAgentRuns?: boolean;
   /** The embedded app worker never advertises full worker session hosting. */
   enableWorkerRuns?: boolean;
+  /** Process-scoped worker hosting for environment-managed disposable nodes. */
+  forceWorkerRuns?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
   installedAppsSharingEnabled?: boolean;
@@ -279,7 +286,8 @@ export async function prepareNodeHostRuntime(params?: {
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
   const workerRunsEnabled =
-    params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true;
+    params?.enableWorkerRuns === true &&
+    (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
@@ -342,7 +350,13 @@ export async function prepareNodeHostRuntime(params?: {
       };
       let currentPluginNodeHost = pluginNodeHost;
       let currentManifest = manifest;
-      let gatewayConnection: { url: string; tlsFingerprint?: string } | undefined;
+      let gatewayConnection:
+        | {
+            url: string;
+            tlsFingerprint?: string;
+            cloudflareAccess?: CloudflareAccessCredentials;
+          }
+        | undefined;
       let manager: NodeHostMcpManager | undefined;
       let closing = false;
       let closePromise: Promise<void> | undefined;
@@ -443,6 +457,9 @@ export async function prepareNodeHostRuntime(params?: {
               ...(gatewayConnection?.url ? { gatewayUrl: gatewayConnection.url } : {}),
               ...(gatewayConnection?.tlsFingerprint
                 ? { gatewayTlsFingerprint: gatewayConnection.tlsFingerprint }
+                : {}),
+              ...(gatewayConnection?.cloudflareAccess
+                ? { gatewayCloudflareAccess: gatewayConnection.cloudflareAccess }
                 : {}),
               ...(config.desktop?.host ? { desktopHostConfig: config.desktop.host } : {}),
               ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),

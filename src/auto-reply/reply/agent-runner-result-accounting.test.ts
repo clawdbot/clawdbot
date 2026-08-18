@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   emitContinuationCompactionReleasedSpan: vi.fn(),
   incrementRunCompactionCount: vi.fn(),
   recordNoOpRearmOutcome: vi.fn(),
+  persistRunSessionUsage: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
   scheduleContinuation: vi.fn(),
 }));
@@ -61,7 +62,7 @@ vi.mock("./agent-runner-core.js", () => ({
 
 vi.mock("./session-run-accounting.js", () => ({
   incrementRunCompactionCount: (...args: unknown[]) => state.incrementRunCompactionCount(...args),
-  persistRunSessionUsage: vi.fn(),
+  persistRunSessionUsage: (params: unknown) => state.persistRunSessionUsage(params),
 }));
 
 vi.mock("./no-op-rearm-guard.js", async (importOriginal) => {
@@ -271,6 +272,32 @@ describe("accountFollowupTurn", () => {
         }),
         effectiveContinueWorkRequests: [{ reason: "finish queued work", delaySeconds: 30 }],
         continuationWorkReason: "finish queued work",
+      }),
+    );
+  });
+
+  it("forwards typed runtime context provenance to session persistence", async () => {
+    const params = createFallbackParams();
+    const result = params.execution.execution.outcome;
+    if (result.kind !== "settled") {
+      throw new Error("expected settled test execution");
+    }
+    result.result.meta.agentMeta = {
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "codex",
+      contextTokens: 1_000_000,
+      contextTokensSource: "runtime",
+    };
+
+    await accountFollowupTurn(params);
+
+    expect(state.persistRunSessionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "codex",
+        contextTokensUsed: 1_000_000,
+        contextTokensSource: "runtime",
       }),
     );
   });

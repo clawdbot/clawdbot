@@ -205,8 +205,6 @@ export type AgentDefaultsConfig = {
   startupContext?: AgentStartupContextConfig;
   /** Focused context-budget overrides for high-volume injected/read surfaces. */
   contextLimits?: AgentContextLimitsConfig;
-  /** Optional context window cap (used for runtime estimates + status %). */
-  contextTokens?: number;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
@@ -320,7 +318,7 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
   };
-  /** Owner for ambient OpenClaw system-agent/Custodian inference. */
+  /** Owner for ambient system-agent/Custodian inference and unscoped operator-read fallbacks. */
   systemAgent?: {
     agentId?: string;
   };

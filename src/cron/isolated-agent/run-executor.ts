@@ -15,6 +15,7 @@ import {
 } from "../../agents/harness/context-engine-turn-attempt.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
@@ -65,12 +66,13 @@ import {
   runWithModelFallback,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
-import type {
-  CronLiveSelection,
-  MutableCronSession,
-  PersistCronSessionEntry,
+import {
+  type CronLiveSelection,
+  type MutableCronSession,
+  type PersistCronSessionEntry,
+  setCronSessionRuntimeModel,
+  syncCronSessionLiveSelection,
 } from "./run-session-state.js";
-import { syncCronSessionLiveSelection } from "./run-session-state.js";
 import { resolveEffectiveAgentRuntime, resolveThinkingDefault } from "./run.runtime.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
@@ -523,8 +525,11 @@ function createCronPromptExecutor(params: {
         });
         // The validated candidate that admits detached work owns its continuation
         // even if the provider throws before returning result metadata.
-        params.cronSession.sessionEntry.modelProvider = providerOverride;
-        params.cronSession.sessionEntry.model = modelOverride;
+        setCronSessionRuntimeModel({
+          entry: params.cronSession.sessionEntry,
+          provider: providerOverride,
+          model: modelOverride,
+        });
         await params.persistRunContinuationSession?.();
         await params.setRunContinuationCliExecutionProvider?.(
           cliExecution ? executionProvider : undefined,
@@ -569,6 +574,10 @@ function createCronPromptExecutor(params: {
                 prompt: promptText,
                 finalizePromptForResolvedTools,
                 modelProvider: providerOverride,
+                modelHasVision: modelSupportsInput(
+                  findModelInCatalog(thinkingCatalog ?? [], providerOverride, modelOverride),
+                  "image",
+                ),
                 provider: executionProvider,
                 model: modelOverride,
                 thinkLevel: candidateThinkLevel,
@@ -769,8 +778,11 @@ function createCronPromptExecutor(params: {
     fallbackModel = fallbackResult.model;
     params.liveSelection.provider = fallbackResult.provider;
     params.liveSelection.model = fallbackResult.model;
-    params.cronSession.sessionEntry.modelProvider = fallbackResult.provider;
-    params.cronSession.sessionEntry.model = fallbackResult.model;
+    setCronSessionRuntimeModel({
+      entry: params.cronSession.sessionEntry,
+      provider: fallbackResult.provider,
+      model: fallbackResult.model,
+    });
     await params.persistRunContinuationSession?.();
     runEndedAt = Date.now();
     pendingUserTurn = undefined;

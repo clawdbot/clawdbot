@@ -85,6 +85,39 @@ describe("runDaemonStatus", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])(
+    "does not exit after reporting a failed non-required RPC probe in json=%s mode",
+    async (json) => {
+      gatherDaemonStatus.mockResolvedValueOnce({
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        rpc: {
+          ok: false,
+          url: "ws://127.0.0.1:18789",
+          error: "connect ECONNREFUSED 127.0.0.1:18789",
+        },
+        extraServices: [],
+      });
+
+      await runDaemonStatus({
+        rpc: {},
+        probe: true,
+        requireRpc: false,
+        json,
+      });
+
+      expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
+        json,
+        deep: false,
+      });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
+
   it("forwards require-rpc to daemon status gathering", async () => {
     await runDaemonStatus({
       rpc: {},
@@ -131,8 +164,11 @@ describe("runDaemonStatus", () => {
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
-      error:
-        "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+      error: {
+        type: "cli_error",
+        message:
+          "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+      },
     });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
@@ -156,7 +192,10 @@ describe("runDaemonStatus", () => {
     expect(printDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
-      error: expect.stringContaining("Gateway status failed: service manager unavailable"),
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("Gateway status failed: service manager unavailable"),
+      },
     });
     expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(error.name);
     expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(secret);

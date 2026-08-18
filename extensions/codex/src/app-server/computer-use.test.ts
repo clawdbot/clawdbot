@@ -9,7 +9,7 @@ import {
 } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { resolveCodexNativeConfigFenceKey } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 const sharedClientMocks = vi.hoisted(() => ({
@@ -32,7 +32,6 @@ import {
   readCodexComputerUseStatus,
   type CodexComputerUseStatus,
 } from "./computer-use.js";
-import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 type CodexComputerUseRequest = NonNullable<
   NonNullable<Parameters<typeof ensureCodexComputerUse>[0]>["request"]

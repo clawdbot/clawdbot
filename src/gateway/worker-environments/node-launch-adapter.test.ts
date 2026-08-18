@@ -51,7 +51,7 @@ function launchInput(): NodeWorkerLaunchInput {
     expectedBundleHash: WORKER_RUNS.bundleHash,
     placementGeneration: 4,
     descriptor: {
-      version: 3,
+      version: 4,
       admission: {
         environmentId: "environment-1",
         credential: "worker-fixture-value",

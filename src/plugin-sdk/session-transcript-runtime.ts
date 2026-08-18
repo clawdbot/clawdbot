@@ -33,11 +33,6 @@ import type {
   SessionTranscriptDeliveryMirror,
   SessionTranscriptUpdateMode,
 } from "../config/sessions/transcript.js";
-
-export type {
-  TranscriptEntryAnchor,
-  TranscriptTurnAdmission,
-} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
@@ -54,6 +49,11 @@ import {
   type SessionTranscriptMemoryHitKeyParams,
   type SessionTranscriptReadParams,
 } from "./session-transcript-memory-hit.js";
+
+export type {
+  TranscriptEntryAnchor,
+  TranscriptTurnAdmission,
+} from "../config/sessions/session-accessor.js";
 
 export {
   formatSessionTranscriptMemoryHitKey,

@@ -18,16 +18,14 @@ import {
   markBeforeAgentRunBlockedPayloads,
   resolveReplyRunDeliveryContext,
   resolveSourceReplyPolicy,
+  normalizeAssistantFinalDeliveryText,
 } from "./agent-runner-core.js";
-import { normalizeAssistantFinalDeliveryText } from "./agent-runner-core.js";
 import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import {
   accumulateSessionUsageFromTranscript,
   buildInlineRawTracePayload,
   derivePromptSegments,
-} from "./agent-runner-trace.js";
-import {
   type TraceCompletionView,
   type TraceContextManagementView,
   type TraceExecutionView,
@@ -152,8 +150,10 @@ export async function completeReplyAgentRun(input: {
 
     // Inject post-compaction workspace context for the next agent turn,
     // and dispatch any staged continuation post-compaction delegates.
-    // The dispatch helper internally invokes readPostCompactionContext
-    // against followupRun.run.workspaceDir, so we don't call it again here.
+    // The dispatch helper internally awaits readPostCompactionContext
+    // against followupRun.run.workspaceDir and enqueues the resulting system
+    // event, so we don't call it again here. That await also carries upstream's
+    // sequencing fix (context injection is no longer fire-and-forget).
     if (sessionKey) {
       const releasedCount = activeSessionEntry?.pendingPostCompactionDelegates?.length ?? 0;
       await dispatchPostCompactionDelegates({

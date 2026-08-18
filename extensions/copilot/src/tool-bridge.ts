@@ -137,7 +137,7 @@ interface CopilotToolBridgeInput {
    * `src/agents/pi-embedded-runner/run/attempt.ts:1107-1113` and
    * `extensions/codex/src/app-server/run-attempt.ts:539-541`.
    */
-  onYieldDetected?: (message?: string) => void;
+  onYieldDetected?: (message?: string, acknowledgment?: string) => void;
   onToolCompleted?: (completion: CopilotToolCompletion) => void | Promise<void>;
   createOpenClawCodingTools?: CreateOpenClawCodingToolsForBridge;
   beforeExecute?: (ctx: {
@@ -480,7 +480,7 @@ function buildOpenClawCodingToolsOptions(
     // surface attempt-stage telemetry yet. Codex omits this too.
     onToolOutcome: a.onToolOutcome,
     isTurnTainted: a.isTurnTainted,
-    onYield: (message) => {
+    onYield: (message, acknowledgment) => {
       // Notify the caller first so the final attempt result can carry
       // yieldDetected even if the abort below races a concurrent
       // settle path. Errors thrown by the caller's handler must not
@@ -489,7 +489,7 @@ function buildOpenClawCodingToolsOptions(
       // calling abort) and codex (`onYieldDetected()` runs before the
       // run-abort controller fires).
       try {
-        input.onYieldDetected?.(message);
+        input.onYieldDetected?.(message, acknowledgment);
       } catch (error) {
         console.warn("[copilot-tool-bridge] onYieldDetected handler threw; continuing", error);
       }

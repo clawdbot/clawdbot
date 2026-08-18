@@ -6,8 +6,8 @@ import {
   countUnsafeAssertions,
   isGovernedAssertionSourcePath,
   main,
-  parseAssertionSafetyBaseline,
 } from "../../scripts/check-assertion-safety-ratchet.mts";
+import { parseRatchetCounts } from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -130,7 +130,9 @@ describe("check-assertion-safety-ratchet", () => {
     );
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
-    expect(parseAssertionSafetyBaseline(fs.readFileSync(baselinePath, "utf8"))).toEqual(new Map());
+    expect(
+      parseRatchetCounts(fs.readFileSync(baselinePath, "utf8"), path.relative(root, baselinePath)),
+    ).toEqual(new Map());
   });
 
   it("allows rebaselining assertion debt already present in the base tree", () => {
@@ -163,8 +165,39 @@ describe("check-assertion-safety-ratchet", () => {
 
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
-    expect(parseAssertionSafetyBaseline(fs.readFileSync(baselinePath, "utf8"))).toEqual(
-      new Map([["src/example.ts", 2]]),
+    expect(
+      parseRatchetCounts(fs.readFileSync(baselinePath, "utf8"), path.relative(root, baselinePath)),
+    ).toEqual(new Map([["src/example.ts", 2]]));
+  });
+
+  it("compares an explicit moving base at the branch fork", () => {
+    const root = tempDirs.make("openclaw-assertion-safety-diverged-");
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "config/assertion-safety-baseline.txt"),
+      "src/a.ts\t1\nsrc/b.ts\t1\n",
     );
+    fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = value as string;\n");
+    fs.writeFileSync(path.join(root, "src/b.ts"), "export const b = value as string;\n");
+    for (const args of [
+      ["init"],
+      ["config", "user.email", "test@example.com"],
+      ["config", "user.name", "Test"],
+      ["add", "."],
+      ["commit", "-m", "base"],
+      ["branch", "release"],
+    ]) {
+      git(root, args);
+    }
+
+    fs.writeFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "src/a.ts\t1\n");
+    fs.rmSync(path.join(root, "src/b.ts"));
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "shrink main debt"]);
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(root, ["checkout", "release"]);
+
+    expect(main(root, ["--base", "origin/main"])).toBe(0);
   });
 });

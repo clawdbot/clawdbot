@@ -968,6 +968,30 @@ returned unsubscribe function and call it during service cleanup. The payload is
 change notice; use `api.runtime.agent.session.getSessionEntry(...)` when the plugin needs the full
 current session entry.
 
+Service startup failures from a returned or awaited promise are recorded automatically. A service
+that intentionally starts required work in the background must report later failure and recovery
+through its generation-bound health reporter:
+
+```typescript
+api.registerService({
+  id: "index-worker",
+  start(ctx) {
+    void startIndexWorker().then(
+      () => ctx.serviceHealth?.clearFailure(),
+      (error) => ctx.serviceHealth?.reportFailure(error),
+    );
+  },
+  stop() {
+    stopIndexWorker();
+  },
+});
+```
+
+The reporter is revoked when the service stops or its plugin registry generation is replaced, so a
+late callback from an old generation cannot overwrite current health. Prefer returning the startup
+promise when the service is not usable until that promise settles; use the reporter only for
+deliberately nonblocking work that owns its own stop path.
+
 ## Storing runtime references
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:

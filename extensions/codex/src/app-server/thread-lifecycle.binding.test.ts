@@ -7,6 +7,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
@@ -114,6 +115,7 @@ function createParams(sessionFile: string, workspaceDir: string) {
 
 const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
   "features.goals": false,
+  "tools.update_plan.enabled": false,
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.apply_patch_streaming_events": true,
@@ -407,6 +409,83 @@ describe("Codex app-server thread lifecycle bindings", () => {
       action: "resume",
       binding: expect.objectContaining({ threadId: "thread-warm" }),
     });
+  });
+
+  it("cold-resumes a warm thread to clear stale enforcing PreToolUse hooks", async () => {
+    const sessionFile = path.join(tempDir, "warm-cleared-hooks-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-cleared-hooks-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const fake = createFakeCodexAppServerClient(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-warm-cleared-hooks");
+      }
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = fake.client;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const buildFinalConfigPatch = vi
+      .fn()
+      .mockReturnValueOnce({
+        configPatch: {
+          "features.hooks": true,
+          "hooks.PreToolUse": [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "openclaw hooks relay --event pre_tool_use",
+                },
+              ],
+            },
+          ],
+        },
+        nativeHookRelayGeneration: "generation-policy",
+      })
+      .mockReturnValueOnce({
+        configPatch: { "features.hooks": true, "hooks.PreToolUse": [] },
+        nativeHookRelayGeneration: "generation-no-policy",
+      });
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+      buildFinalConfigPatch,
+    };
+
+    const started = await startOrResumeThread(common);
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toBe(true);
+    const resumed = await startOrResumeThread(common);
+
+    expect(resumed).toMatchObject({
+      threadId: "thread-warm-cleared-hooks",
+      nativeHookRelayGeneration: "generation-no-policy",
+      lifecycle: { action: "resumed" },
+    });
+    expect(fake.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+      "thread/resume",
+    ]);
+    const resumeConfig = fake.request.mock.calls.find(
+      ([method]) => method === "thread/resume",
+    )?.[1];
+    expect(resumeConfig).toMatchObject({
+      config: { "features.hooks": true, "hooks.PreToolUse": [] },
+    });
+    expect(JSON.stringify(resumeConfig)).not.toContain("openclaw hooks relay");
   });
 
   it("cold-resumes a warm thread when final config adds an image-generation deny", async () => {

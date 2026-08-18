@@ -269,3 +269,7 @@ export function scrollActiveMenuOptionIntoView(activeId: string | null): void {
     }
   });
 }
+
+export function paneDomId(paneId: string, suffix: string): string {
+  return `chat-${encodeURIComponent(paneId)}-${suffix}`;
+}

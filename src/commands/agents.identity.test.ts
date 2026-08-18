@@ -261,20 +261,23 @@ describe("agents set-identity command", () => {
     });
   });
 
-  it("errors without changing config when --agent names an unknown agent", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
-    });
+  it.each(["ghostzzz", "агент✨", "   "])(
+    "errors without changing config when --agent names %j",
+    async (agent) => {
+      configMocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        config: { agents: { entries: { main: {} } } },
+      });
 
-    await agentsSetIdentityCommand({ agent: "ghostzzz", name: "Ghost" }, runtime);
+      await agentsSetIdentityCommand({ agent, name: "Ghost" }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Agent "ghostzzz" not found. Create it with `openclaw agents add`.',
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
-  });
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Agent "${agent}" not found. Create it with \`openclaw agents add\`.`,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["main", "openclaw", "crestodian"])(
     "does not create absent reserved agent %s",

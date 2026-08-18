@@ -119,10 +119,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 3,
   "plugin-entry": 1,
   routing: 1,
-  // +1 each: the shipped default-agent resolver remains available through
+  // +2: the shipped default-agent resolvers remain available through
   // compatibility barrels while callers migrate to explicit/sole selection.
   health: 1,
-  "agent-scope-runtime": 1,
+  "agent-scope-runtime": 2,
   // +1: shipped channel setup state-migration declaration during its migration window.
   "channel-entry-contract": 1,
   "approval-gateway-runtime": 1,
@@ -194,7 +194,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: registry-bound plugin command planning and exact selected execution.
       // +1: canonical Computer Use wire contract and node-host provider seam.
       // -1: retire the deprecated messaging-targets subpath.
-      144,
+      // +2: bounded provider streams and read-only SecretRef resolution.
+      146,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -259,6 +260,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: channel streaming config reader re-exports and session-agent scope resolver.
       // +3: session-catalog terminal-start provider request and Gateway params/result contracts.
       // +1: worker desktop endpoint contract for desktop-capable worker leases.
+      // +1: provider-authored machine option metadata for cloud-session sizing.
       // +1: channel-account-bound native approval request selection.
       // +6: required-capability V2 harness contracts through the focused and runtime barrels,
       // including the side-question compatibility split.
@@ -284,7 +286,16 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -17: retire the messaging-targets subpath, embedded Pi aliases, and shipped
       // channel setup compatibility helpers.
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
-      4334,
+      // +1: strict explicit agent-id normalization without default-agent fallback.
+      // +5: session-catalog paging capability, family/node-host composers, and option contracts.
+      // +3: two focused primitives and the closed read-only SecretRef result contract.
+      // -2: remove obsolete transcript display helper exports.
+      // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
+      // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
+      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
+      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
+      // +1: account-scoped model catalog discovery for native agent harnesses.
+      4349,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -363,7 +374,15 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: remove the orphan diagnostic traceparent propagation export.
       // -12: retire the callable messaging-targets, embedded Pi, and channel setup helpers.
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
-      2570,
+      // +1: strict explicit agent-id normalization without default-agent fallback.
+      // +2: session-catalog family and node-host binding composers.
+      // +2: bounded provider stream and read-only SecretRef resolver.
+      // -1: remove the obsolete transcript tool-call predicate.
+      // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
+      // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
+      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
+      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
+      2580,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -380,7 +399,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
       // +6: source-compatible harness contracts retained during the V2 migration window.
       // +4: continuation deprecated-compat surface retained through this back-merge.
-      // +4: shipped default-agent resolver projections retained during explicit-owner migration.
+      // +5: shipped default-agent resolver projections retained during explicit-owner migration.
       // +5: load-only bridges for published pre-split plugin artifacts
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).

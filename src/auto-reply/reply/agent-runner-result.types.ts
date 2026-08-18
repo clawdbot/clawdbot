@@ -15,7 +15,6 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 export type FinalizeReplyAgentRunInput = Pick<
   RunReplyAgentParams,
-  | "agentCfgContextTokens"
   | "blockStreamingEnabled"
   | "commandBody"
   | "defaultModel"

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -9,7 +10,6 @@ import {
   readConfigHealthStateFromStore,
   writeConfigHealthStateToStore,
 } from "../config/io.health-state.js";
-import { resolveGatewayLockDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
@@ -94,10 +94,19 @@ function snapshotSqliteFamily(databasePath: string) {
 
 function resolveExpectedOwnershipCoordinatorPath(databasePath: string): string {
   const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-  const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
+  const runtimeDirectory =
+    process.platform === "win32"
+      ? path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks")
+      : "/tmp";
+  const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync(runtimeDirectory);
+  const suffix =
+    typeof process.getuid === "function"
+      ? `openclaw-state-locks-${process.getuid()}`
+      : "openclaw-state-locks";
   return path.join(
-    resolveGatewayLockDir(stateDir),
-    `state-ownership.${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite`,
+    canonicalRuntimeDirectory,
+    suffix,
+    `state-lifecycle.${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite`,
   );
 }
 
@@ -499,7 +508,7 @@ describe("external shared-state ownership", () => {
     expect(fs.readdirSync(stateDir)).toEqual(["state"]);
   });
 
-  it("keeps one state-local coordinator across temporary-directory environments", () => {
+  it("uses one external coordinator path across temporary-directory environments", () => {
     const env = createEnv();
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
@@ -516,7 +525,6 @@ describe("external shared-state ownership", () => {
       );
       expect(fs.existsSync(coordinatorPath)).toBe(true);
     }
-    expect(fs.readdirSync(path.dirname(coordinatorPath))).toEqual([path.basename(coordinatorPath)]);
   });
 
   it("closes an unpublished fresh handle when coordinator release fails", () => {

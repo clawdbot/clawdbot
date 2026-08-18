@@ -147,7 +147,11 @@ describe("WorkboardStore", () => {
         subscriptions: stores.subscriptions,
         attachments: stores.attachments,
       });
-      const board = await store.upsertBoard({ id: "planning", name: "Planning" });
+      const board = await store.upsertBoard({
+        id: "planning",
+        name: "Planning",
+        automationJobId: "job-categorize-planning",
+      });
       const card = await store.create({
         title: "Persist it",
         boardId: board.id,
@@ -239,7 +243,11 @@ describe("WorkboardStore", () => {
       expect(await reopened.listBoards()).toMatchObject({
         boards: [
           expect.objectContaining({ id: "default" }),
-          expect.objectContaining({ id: board.id, name: "Planning" }),
+          expect.objectContaining({
+            id: board.id,
+            name: "Planning",
+            automationJobId: "job-categorize-planning",
+          }),
         ],
       });
       expect(await reopened.get(card.id)).toMatchObject({
@@ -363,7 +371,13 @@ describe("WorkboardStore", () => {
           updated_at INTEGER NOT NULL,
           archived_at INTEGER
         );
-        INSERT INTO workboard_boards SELECT * FROM workboard_boards_strict;
+        INSERT INTO workboard_boards (
+          id, name, description, icon, color, default_workspace_json, orchestration_json,
+          created_at, updated_at, archived_at
+        ) SELECT
+          id, name, description, icon, color, default_workspace_json, orchestration_json,
+          created_at, updated_at, archived_at
+        FROM workboard_boards_strict;
         DROP TABLE workboard_boards_strict;
         DELETE FROM workboard_schema_migrations WHERE id = 'schema-3';
         INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
@@ -421,6 +435,15 @@ describe("WorkboardStore", () => {
       statfs.mockRestore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    ["", "non-empty string"],
+    ["x".repeat(129), "128 characters or fewer"],
+  ])("rejects invalid automation job ids", async (automationJobId, message) => {
+    const store = new WorkboardStore(createMemoryStore());
+
+    await expect(store.upsertBoard({ id: "planning", automationJobId })).rejects.toThrow(message);
   });
 
   it("creates and lists cards by status order and position", async () => {

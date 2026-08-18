@@ -40,6 +40,7 @@ export function resolveCliStartupPolicy(params: {
     hideBanner: isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) || commandPolicy.hideBanner,
     skipConfigGuard:
       configGuard === "skip" || (configGuard === "when-suppressed" && suppressDoctorStdout),
+    ...(configGuard === "validate" ? { validateConfigOnly: true } : {}),
     loadPlugins: shouldLoadPlugins({
       argv: params.argv,
       commandPath: params.commandPath,

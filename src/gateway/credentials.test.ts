@@ -2,6 +2,7 @@
 // remote gateway auth values.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   resolveGatewayCredentialsFromConfig,
   resolveGatewayCredentialsFromValues,
@@ -507,6 +508,18 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         { remotePasswordFallback: "remote-only" }, // pragma: allowlist secret
       ),
     ).toThrow("gateway.remote.password");
+  });
+
+  it("distinguishes a missing substitution from byte-identical literal text", () => {
+    const config = cfg({ gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } } });
+    setConfigResolutionFacts(config, new Set(["gateway.auth.token"]));
+    expect(() => resolveGatewayCredentialsWithEmptyEnv(config)).toThrow("gateway.auth.token");
+
+    setConfigResolutionFacts(config, new Set());
+    expect(resolveGatewayCredentialsWithEmptyEnv(config)).toEqual({
+      token: "${GATEWAY_TOKEN}",
+      password: undefined,
+    });
   });
 });
 

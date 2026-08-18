@@ -24,16 +24,14 @@ import {
   handleToolExecutionStart,
   handleToolExecutionUpdate,
 } from "./embedded-agent-subscribe.handlers.tools.js";
-import type {
-  EmbeddedAgentSubscribeContext,
-  EmbeddedAgentSubscribeEvent,
-} from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
+import type { AgentSessionEvent } from "./sessions/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
   const scheduleEvent = (
-    evt: EmbeddedAgentSubscribeEvent,
+    evt: AgentSessionEvent,
     handler: () => void | Promise<void>,
     options?: { detach?: boolean },
   ): void | Promise<void> => {
@@ -85,7 +83,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
   };
 
   const scheduleAttemptEvent = (
-    evt: EmbeddedAgentSubscribeEvent,
+    evt: AgentSessionEvent,
     handler: () => void | Promise<void>,
     options?: { detach?: boolean },
   ): void | Promise<void> => {
@@ -97,7 +95,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         evt.type === "message_end") &&
       "message" in evt
     ) {
-      // SAFETY: message_start/update/end variants of AgentEvent always type message as AgentMessage; the checks above already rule out the generic '{ type: string }' fallback arm of EmbeddedAgentSubscribeEvent that forces this cast.
+      // SAFETY: message_start/update/end variants of AgentSessionEvent always type message as AgentMessage; the type checks above rule out every arm that lacks it.
       message = evt.message as AgentMessage | undefined;
     }
     const messageRole = message?.role;
@@ -121,7 +119,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     );
   };
 
-  return (evt: EmbeddedAgentSubscribeEvent) => {
+  return (evt: AgentSessionEvent) => {
     switch (evt.type) {
       case "message_start":
         // Delivery from the previous message may still be queued, but usage is
@@ -199,19 +197,16 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         // serialized compaction replacement from reaching its reset handler.
         // Keep each observed compaction's generation token distinct so queued
         // replacement attempts cannot collapse across consecutive compactions.
-        const invalidatedDeliveryGeneration = evt.willRetry
-          ? ctx.invalidateBlockReplyDeliveriesForCompactionRetry()
-          : undefined;
+        const invalidatedDeliveryGeneration =
+          evt.outcome.status === "completed" && evt.outcome.willRetry
+            ? ctx.invalidateBlockReplyDeliveriesForCompactionRetry()
+            : undefined;
         if (invalidatedDeliveryGeneration !== undefined) {
           ctx.noteCompactionRetry(invalidatedDeliveryGeneration);
         }
         void scheduleEvent(evt, () => {
           handleCompactionEnd(ctx, {
-            type: "compaction_end",
-            reason: evt.reason,
-            willRetry: evt.willRetry,
-            result: evt.result,
-            aborted: evt.aborted,
+            ...evt,
             invalidatedDeliveryGeneration,
             retryAlreadyNoted: invalidatedDeliveryGeneration !== undefined,
           });

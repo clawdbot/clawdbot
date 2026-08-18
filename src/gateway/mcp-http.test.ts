@@ -1612,10 +1612,18 @@ describe("mcp loopback server", () => {
               if (!call.onYield) {
                 throw new Error("Yield not supported in this context");
               }
-              const message = (args as { message?: string }).message ?? "Turn yielded.";
-              await call.onYield(message);
+              const { message = "Turn yielded.", acknowledgment } = args as {
+                message?: string;
+                acknowledgment?: string;
+              };
+              await call.onYield(message, acknowledgment);
               return {
-                content: [{ type: "text", text: JSON.stringify({ status: "yielded", message }) }],
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({ status: "yielded", message, acknowledgment }),
+                  },
+                ],
               };
             },
           }),
@@ -1628,7 +1636,8 @@ describe("mcp loopback server", () => {
     const sendYield = async (
       captureKey: string,
       message: string,
-      onYield: (message: string) => void,
+      acknowledgment: string,
+      onYield: (message: string, acknowledgment?: string) => void,
     ) => {
       beginMcpLoopbackToolCallCapture({
         captureKey,
@@ -1638,7 +1647,7 @@ describe("mcp loopback server", () => {
       return await sendLoopbackToolCall({
         token: runtime.ownerToken,
         name: "sessions_yield",
-        args: { message },
+        args: { message, acknowledgment },
         headers: {
           "x-session-key": "agent:main:main",
           "x-openclaw-session-id": "session-reused",
@@ -1648,11 +1657,13 @@ describe("mcp loopback server", () => {
     };
 
     const captureKey = "capture-reused";
-    expect((await sendYield(captureKey, "first yield", firstYield)).status).toBe(200);
-    expect((await sendYield(captureKey, "second yield", secondYield)).status).toBe(200);
+    expect((await sendYield(captureKey, "first yield", "First wait", firstYield)).status).toBe(200);
+    expect((await sendYield(captureKey, "second yield", "Second wait", secondYield)).status).toBe(
+      200,
+    );
 
-    expect(firstYield).toHaveBeenCalledWith("first yield");
-    expect(secondYield).toHaveBeenCalledWith("second yield");
+    expect(firstYield).toHaveBeenCalledWith("first yield", "First wait");
+    expect(secondYield).toHaveBeenCalledWith("second yield", "Second wait");
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
   });
 

@@ -113,16 +113,17 @@ async function resolveCommandSkillsPrompt(params: {
               ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
               : {}),
           },
-          effectiveWorkspace: sandboxWorkspace.workspaceDir,
+          skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
         });
-        const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-          workspaceDir: skillsWorkspaceDir,
-          config: params.config,
-          agentId: params.agentId,
-          eligibility: skillsEligibility,
-          skillsSnapshot: skillsSnapshotForRun,
-          workspaceOnly,
-        });
+        const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
+          resolveEmbeddedRunSkillEntries({
+            workspaceDir: skillsWorkspaceDir,
+            config: params.config,
+            agentId: params.agentId,
+            eligibility: skillsEligibility,
+            skillsSnapshot: skillsSnapshotForRun,
+            workspaceOnly,
+          });
         const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
           entries: shouldLoadSkillEntries ? skillEntries : undefined,
           skillsWorkspaceDir,
@@ -135,6 +136,7 @@ async function resolveCommandSkillsPrompt(params: {
           workspaceDir: skillsPromptWorkspaceDir,
           agentId: params.agentId,
           eligibility: skillsEligibility,
+          preserveEntryOrder,
         });
       }
       // Existing third-party backends may not expose the optional workdir

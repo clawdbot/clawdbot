@@ -26,9 +26,9 @@ advances a milestone.
 | 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                                                                                                          |
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901 |
 | 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037, #124356, #124590                                                                                                                                        |
-| 8   | Stop-and-continue moves                                    | not started | —                                                                                                                                                                         |
-| 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                                                                                                                                                                         |
-| 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                                                                                                                                                                         |
+| 8   | Stop-and-continue moves                                    | landed      | #125036                                                                                                                                                                   |
+| 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | in progress | #125503, #125524, #125587                                                                                                                                                 |
+| 10  | Cloud convergence (provisioners run `openclaw connect`)    | landed      | #125288, #125384, #125465                                                                                                                                                 |
 
 Revision history: revision 1 (2026-08-08) established the session/runner
 vocabulary, the naming rulings, and the milestone skeleton after a
@@ -132,12 +132,7 @@ channel.
 
 ### Worker ingress on the public endpoint (milestone 5)
 
-Today the worker ingress is a dedicated loopback-only listener reached via
-`ssh -R`; the main ingress rejects worker frames. For node runners the same
-admission is exposed on a path-tagged upgrade route on the public TLS
-endpoint (`connectionKind = "worker"` forced by route instead of listener).
-The loopback listener stays for SSH-provisioned cloud workers until
-milestone 10.
+Worker admission is exposed only on a path-tagged upgrade route on the public TLS endpoint (`connectionKind = "worker"` is forced by the route). Node-hosted worker children dial that endpoint directly. The former loopback listener and SSH reverse-forward carrier were removed after Crabbox converged onto node-backed worker turns; SSH remains only for `remote-exec` workspace transport and separately owned desktop tunnels.
 
 Hardening that ships with the exposure, not after it:
 
@@ -233,9 +228,10 @@ bounded terminal receipts, and the Gateway launch replay/poll/cancel adapter.
 A node publishes one atomic, reconnect-scoped private runner inventory with the
 supervisor dialect, explicit local consent, and current capacity. Milestone 7
 removes the temporary local-package scanner and connect-time build claim; the
-durable Gateway bundle receipt is the sole execution authority. Public node and environment projections expose
-only `sessionHost`; a read-scoped topology invalidation makes clients refetch
-without exposing build identity. Status and cancellation reacquire the current
+durable Gateway bundle receipt is the sole execution authority. Public node and
+environment projections expose `sessionHost` plus a redacted installed/missing
+bundle status; a read-scoped topology invalidation makes clients refetch without
+exposing hashes, paths, or receipt details. Status and cancellation reacquire the current
 supervisor proof and use the durable launch identity so an upgrade cannot strand
 an existing worker. Node-local opt-in advertises capacity; default nodes remain
 non-hosts. The supervisor owns two atomic durable capacity slots, bounded
@@ -327,7 +323,9 @@ local-package execution. The cleanup that follows separates inventory consent an
 capacity from installed bundle state and deletes the obsolete local build scan.
 The retention slice (#124590) reuses the authoritative maintenance snapshot to
 prune superseded node bundles in bounded generation-acknowledged passes. The
-remaining functional slice exposes the validated installed version on Devices.
+installed-status slice validates one retained hash on the node, keeps that fact
+reconnect-scoped and proof-bound in the Gateway, and shows the Gateway-owned
+version quietly on Devices or a remediation warning when the bundle is missing.
 
 ### Projects read model (milestone 4 foundation)
 
@@ -379,14 +377,16 @@ speak. Additions:
 
 ### Cloud convergence (milestone 10)
 
-A cloud provider's job collapses to: boot box, run
-`openclaw connect <one-shot code> --ephemeral` in setup. Ephemeral enrollment
-(industry: GitHub `--ephemeral`/JIT, Buildkite `--acquire-job`, Tailscale
-ephemeral keys) auto-deregisters after the run and auto-purges the node
-record when it goes offline. `destroy` = release lease. After soak, the SSH
-reverse-tunnel stack, `PreparedWorkerSsh`, and the rsync transport are
-deleted; cloud leases and paired machines become the same runner with
-different lifecycles.
+The bundled Crabbox provider now boots the box and runs
+`openclaw connect <setup code> --ephemeral` in an isolated per-lease state
+directory. The Gateway persists one replay-safe setup identity, atomically
+binds the authenticated device identity to the worker environment, pushes the
+current bundle through the node channel, and removes the node role after
+provider teardown. `destroy` = release lease plus pairing cleanup. Codex
+remote-exec fails before allocation because it still requires an SSH-backed
+provider. The remaining milestone work is soak proof and deletion of the
+replaced reverse-tunnel/rsync cloud carrier; distinct SSH sandbox contracts
+stay until their own replacements are proved.
 
 ## What the adversarial reviews killed or reshaped
 

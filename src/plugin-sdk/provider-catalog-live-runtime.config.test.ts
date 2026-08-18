@@ -219,7 +219,7 @@ describe("provider-catalog-live-runtime provider configs", () => {
     expect((headers as Headers).get("authorization")).toBe("Bearer provider-key");
   });
 
-  it("keeps trusted static metadata for live ids already in the provider seed", async () => {
+  it("keeps authored static metadata for live ids already in the provider seed", async () => {
     const { fetchGuard } = buildLiveCatalogFetchGuard({
       data: [{ id: "chat-v1", object: "model", context_window: 1 }],
     });

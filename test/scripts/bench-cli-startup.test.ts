@@ -326,8 +326,8 @@ describe("bench-cli-startup", () => {
         entry: "dist/entry.js",
         cases: [
           {
-            id: "gatewayHealthJsonConnected",
-            name: "gateway health --json (connected)",
+            id: "gatewayHealthJsonWarmState",
+            name: "gateway health --json (warm state)",
             args: ["gateway", "health", "--json"],
             contract: null,
             warmupSamples: [{ ...passingSample, exitCode: 1 }],
@@ -342,7 +342,7 @@ describe("bench-cli-startup", () => {
           },
         ],
       }),
-    ).toEqual(["dist/entry.js gatewayHealthJsonConnected warmup 1: exited with code 1"]);
+    ).toEqual(["dist/entry.js gatewayHealthJsonWarmState warmup 1: exited with code 1"]);
   });
 
   it("fails reports with samples that did not report RSS", () => {
@@ -476,7 +476,7 @@ describe("bench-cli-startup", () => {
   });
 
   it("writes a config fixture for config get benchmarks", () => {
-    const expectedFixture = {
+    const unauthenticatedFixture = {
       gateway: {
         auth: { mode: "none" },
         bind: "loopback",
@@ -497,18 +497,6 @@ describe("bench-cli-startup", () => {
         args: ["gateway", "health", "--json"],
         presets: ["real"],
       },
-      {
-        id: "gatewayHealthJsonConnected",
-        name: "gateway health --json (connected)",
-        args: ["gateway", "health", "--json"],
-        presets: [],
-      },
-      {
-        id: "gatewayHealthJsonFirstDevice",
-        name: "gateway health --json (first device)",
-        args: ["gateway", "health", "--json"],
-        presets: [],
-      },
       { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
       {
         id: "healthJson",
@@ -521,7 +509,35 @@ describe("bench-cli-startup", () => {
         withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
           testing.buildConfigFixture(commandCase),
         ),
-      ).toEqual(expectedFixture);
+      ).toEqual(unauthenticatedFixture);
+    }
+
+    for (const commandCase of [
+      {
+        id: "gatewayHealthJsonWarmState",
+        name: "gateway health --json (warm state)",
+        args: ["gateway", "health", "--json"],
+        presets: [],
+      },
+      {
+        id: "gatewayHealthJsonFreshState",
+        name: "gateway health --json (fresh state)",
+        args: ["gateway", "health", "--json"],
+        presets: [],
+      },
+    ]) {
+      expect(
+        withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
+          testing.buildConfigFixture(commandCase),
+        ),
+      ).toEqual({
+        gateway: {
+          auth: { mode: "token" },
+          bind: "loopback",
+          mode: "local",
+          port: 32123,
+        },
+      });
     }
   });
 
@@ -534,8 +550,8 @@ describe("bench-cli-startup", () => {
 
     for (const id of [
       "gatewayHealthJson",
-      "gatewayHealthJsonConnected",
-      "gatewayHealthJsonFirstDevice",
+      "gatewayHealthJsonWarmState",
+      "gatewayHealthJsonFreshState",
     ]) {
       expect(
         withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () =>

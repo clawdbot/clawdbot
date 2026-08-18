@@ -5,7 +5,10 @@ import {
   uniqueStrings,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { createAllowlistProviderRestrictSendersWarningCollector } from "../channels/plugins/group-policy-warnings.js";
+import {
+  createAllowlistProviderRestrictSendersWarningCollector,
+  createConditionalWarningCollector,
+} from "../channels/plugins/group-policy-warnings.js";
 import type { ChannelSecurityAdapter } from "../channels/plugins/types.adapters.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import type { GroupPolicy } from "../config/types.base.js";
@@ -374,6 +377,8 @@ export function createRestrictSendersChannelSecurity<
   groupAllowFromPath: string;
   /** Whether group replies require mentions, reducing open-policy warning severity. */
   mentionGated?: boolean;
+  /** Existing channel label used by the audit and Doctor finding renderer. */
+  findingTitle?: string;
   /** Override for channels whose provider presence is not the channel config key itself. */
   providerConfigPresent?: (cfg: OpenClawConfig) => boolean;
   /** Fallback account id used when scoped config inherits from another account. */
@@ -394,6 +399,21 @@ export function createRestrictSendersChannelSecurity<
   inheritSharedDefaultsFromDefaultAccount?: boolean;
   dmRouting?: ChannelSecurityAdapter<ResolvedAccount>["dmRouting"];
 }): ChannelSecurityAdapter<ResolvedAccount> {
+  const collectOpenGroupFindings = createConditionalWarningCollector.findings({
+    collectWarnings: createAllowlistProviderRestrictSendersWarningCollector<ResolvedAccount>({
+      providerConfigPresent:
+        params.providerConfigPresent ?? ((cfg) => cfg.channels?.[params.channelKey] !== undefined),
+      resolveGroupPolicy: params.resolveGroupPolicy,
+      surface: params.surface,
+      openScope: params.openScope,
+      groupPolicyPath: params.groupPolicyPath,
+      groupAllowFromPath: params.groupAllowFromPath,
+      mentionGated: params.mentionGated,
+    }),
+    checkId: `channels.${params.channelKey}.groups.open`,
+    severity: "critical",
+    title: params.findingTitle ?? `${params.surface} security warning`,
+  });
   return {
     resolveDmPolicy: createScopedDmSecurityResolver<ResolvedAccount>({
       channelKey: params.channelKey,
@@ -409,15 +429,6 @@ export function createRestrictSendersChannelSecurity<
       inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     }),
     ...(params.dmRouting ? { dmRouting: params.dmRouting } : {}),
-    collectWarnings: createAllowlistProviderRestrictSendersWarningCollector<ResolvedAccount>({
-      providerConfigPresent:
-        params.providerConfigPresent ?? ((cfg) => cfg.channels?.[params.channelKey] !== undefined),
-      resolveGroupPolicy: params.resolveGroupPolicy,
-      surface: params.surface,
-      openScope: params.openScope,
-      groupPolicyPath: params.groupPolicyPath,
-      groupAllowFromPath: params.groupAllowFromPath,
-      mentionGated: params.mentionGated,
-    }),
+    collectWarnings: collectOpenGroupFindings,
   };
 }

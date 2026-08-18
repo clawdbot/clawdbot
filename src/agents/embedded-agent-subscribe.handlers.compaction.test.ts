@@ -25,6 +25,7 @@ function createCompactionContext(params: {
   initialCount: number;
   onAgentEvent?: EmbeddedAgentSubscribeContext["params"]["onAgentEvent"];
   info?: (message: string, meta?: Record<string, unknown>) => void;
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
   messages?: AgentMessage[];
 }): EmbeddedAgentSubscribeContext {
   // Minimal context preserves only the compaction counters and callbacks the
@@ -47,7 +48,7 @@ function createCompactionContext(params: {
     log: {
       debug: vi.fn(),
       info: params.info ?? vi.fn(),
-      warn: vi.fn(),
+      warn: params.warn ?? vi.fn(),
     },
     ensureCompactionPromise: vi.fn(),
     noteCompactionRetry: vi.fn(),
@@ -103,14 +104,15 @@ function makeCompactionSummaryMessage(timestamp?: number): AgentMessage {
   } as AgentMessage;
 }
 
-function finishCompaction(ctx: EmbeddedAgentSubscribeContext): void {
-  handleCompactionEnd(ctx, {
+const completedCompactionEnd = () =>
+  ({
     type: "compaction_end",
     reason: "threshold",
-    result: { kept: 12 },
-    willRetry: false,
-    aborted: false,
-  });
+    outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: false },
+  }) as const;
+
+function finishCompaction(ctx: EmbeddedAgentSubscribeContext): void {
+  handleCompactionEnd(ctx, completedCompactionEnd());
 }
 
 function loggedInfoMetaAt(info: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
@@ -200,13 +202,7 @@ describe("compaction lifecycle logging", () => {
       type: "compaction_start",
       reason: "threshold",
     });
-    handleCompactionEnd(ctx, {
-      type: "compaction_end",
-      reason: "threshold",
-      result: { kept: 12 },
-      willRetry: false,
-      aborted: false,
-    });
+    handleCompactionEnd(ctx, completedCompactionEnd());
 
     expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
@@ -229,7 +225,7 @@ describe("compaction lifecycle logging", () => {
     );
   });
 
-  it("logs manual compaction as incomplete when no result is produced", async () => {
+  it("logs a benign manual skip at info", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-incomplete-log-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
@@ -253,9 +249,7 @@ describe("compaction lifecycle logging", () => {
     handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "manual",
-      result: undefined,
-      willRetry: false,
-      aborted: false,
+      outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
     });
 
     expect(loggedInfoMessageAt(info, 0)).toBe("embedded run manual compaction start");
@@ -267,19 +261,49 @@ describe("compaction lifecycle logging", () => {
       "embedded run manual compaction start: runId=run-test reason=manual",
     );
 
-    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run manual compaction incomplete");
+    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run manual compaction skipped");
     const endMeta = loggedInfoMetaAt(info, 1);
     expect(endMeta.event).toBe("embedded_run_compaction_end");
     expect(endMeta.reason).toBe("manual");
+    expect(endMeta.outcome).toBe("skipped");
     expect(endMeta.runId).toBe("run-test");
     expect(endMeta.completed).toBe(false);
-    expect(endMeta.aborted).toBe(false);
+    expect(endMeta.reasonClass).toBe("no_compactable_entries");
     expect(endMeta.consoleMessage).toBe(
-      "embedded run manual compaction incomplete: runId=run-test reason=manual aborted=false willRetry=false",
+      "embedded run manual compaction skipped: runId=run-test reason=no_compactable_entries",
     );
   });
 
-  it("defaults legacy synthetic compaction events to threshold logs", async () => {
+  it("warns with classified, bounded metadata for failed compaction", () => {
+    const warn = vi.fn();
+    const ctx = createCompactionContext({
+      storePath: path.join(os.tmpdir(), "openclaw-compaction-failed-log", "sessions.json"),
+      sessionKey: "main",
+      initialCount: 0,
+      warn,
+    });
+    const reason = `Provider unavailable: ${"provider detail ".repeat(100)}`;
+
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "overflow",
+      outcome: { status: "failed", reason },
+    });
+
+    expect(warn).toHaveBeenCalledOnce();
+    const metadata = loggedInfoMetaAt(warn, 0);
+    expect(metadata).toMatchObject({
+      event: "embedded_run_compaction_end",
+      reason: "overflow",
+      outcome: "failed",
+      reasonClass: "unknown",
+      outcomeReason: reason,
+    });
+    expect(String(metadata.reasonDetail)).toHaveLength(100);
+    expect(String(metadata.consoleMessage)).not.toContain("provider detail provider detail");
+  });
+
+  it("defaults an unknown synthetic compaction start to threshold logs", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-legacy-log-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
@@ -299,12 +323,7 @@ describe("compaction lifecycle logging", () => {
     handleCompactionStart(ctx, {
       type: "compaction_start",
     });
-    handleCompactionEnd(ctx, {
-      type: "compaction_end",
-      result: { kept: 12 },
-      willRetry: false,
-      aborted: false,
-    });
+    handleCompactionEnd(ctx, completedCompactionEnd());
 
     expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
@@ -345,13 +364,7 @@ describe("handleCompactionEnd", () => {
       initialCount: 1,
     });
 
-    handleCompactionEnd(ctx, {
-      type: "compaction_end",
-      reason: "threshold",
-      result: { kept: 12 },
-      willRetry: false,
-      aborted: false,
-    });
+    handleCompactionEnd(ctx, completedCompactionEnd());
 
     await waitForCompactionCount({
       storePath,
@@ -360,7 +373,7 @@ describe("handleCompactionEnd", () => {
     });
 
     expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
-    expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(undefined);
+    expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(50);
     expect(ctx.log.debug).toHaveBeenCalledWith(
       expect.stringContaining(
         "[compaction-attribution] end runId=run-test sessionKey=main trigger=budget outcome=compacted willRetry=false compactionCount.before=1 compactionCount.after=2 compactionCount.delta=1",
@@ -389,10 +402,8 @@ describe("handleCompactionEnd", () => {
     handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "overflow",
-      result: { kept: 12 },
-      willRetry: true,
-      aborted: false,
-    } as never);
+      outcome: { status: "completed", tokensBefore: 120, tokensAfter: 12, willRetry: true },
+    });
 
     await waitForCompactionCount({
       storePath,
@@ -404,8 +415,9 @@ describe("handleCompactionEnd", () => {
       stream: "compaction",
       data: {
         phase: "end",
-        willRetry: true,
         completed: true,
+        willRetry: true,
+        outcome: "completed",
         trigger: "overflow",
         sessionKey: "main",
         compactionCountBefore: 4,
@@ -454,8 +466,8 @@ describe("handleCompactionEnd", () => {
     // A failed/aborted end never rewrote history; zeroing usage here would
     // disable the persistent-error compaction trigger for degraded sessions.
     const failureEnds = [
-      { name: "failed", result: undefined, aborted: false },
-      { name: "aborted", result: { kept: 12 }, aborted: true },
+      { name: "failed", outcome: { status: "failed", reason: "summary failed" } },
+      { name: "aborted", outcome: { status: "aborted" } },
     ] as const;
     for (const failure of failureEnds) {
       const liveUsage = makeUsageSnapshot(123_000);
@@ -478,9 +490,7 @@ describe("handleCompactionEnd", () => {
       handleCompactionEnd(ctx, {
         type: "compaction_end",
         reason: "threshold",
-        result: failure.result,
-        willRetry: false,
-        aborted: failure.aborted,
+        outcome: failure.outcome,
       });
 
       const liveAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;

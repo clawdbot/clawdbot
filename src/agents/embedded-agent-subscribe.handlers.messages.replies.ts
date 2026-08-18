@@ -266,8 +266,7 @@ export function hasReplyTargetOnlyTerminalEvidence(parsed: ReplyDirectiveParseRe
     hasReplyTarget &&
     parsed.text.trim().length === 0 &&
     !resolveSendableOutboundReplyParts(parsed).hasMedia &&
-    !parsed.audioAsVoice &&
-    !parsed.reaction
+    !parsed.audioAsVoice
   );
 }
 

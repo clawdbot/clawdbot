@@ -3,7 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -1004,6 +1013,53 @@ describe("runReplyAgent active steering", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledOnce();
     active.complete();
+  });
+
+  it("unconfirmed steer commit aborts only the captured operation, never a same-key successor", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session-a",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const activeAbortByUser = vi.spyOn(active, "abortByUser");
+    let successor: ReplyOperation | undefined;
+    let successorAbortByUser: MockInstance<ReplyOperation["abortByUser"]> | undefined;
+    state.queueEmbeddedAgentMessageMock.mockImplementationOnce(() => {
+      active.complete();
+      successor = createReplyOperation({
+        sessionKey: "main",
+        sessionId: "session-b",
+        resetTriggered: false,
+      });
+      successor.setPhase("running");
+      successorAbortByUser = vi.spyOn(successor, "abortByUser");
+      return {
+        queued: true,
+        sessionId: "session-a",
+        target: "embedded_run",
+        gatewayHealth: "live",
+        transcriptCommit: "unconfirmed",
+        errorMessage: "receipt unavailable",
+      };
+    });
+    const { run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    if (!successor || !successorAbortByUser) {
+      throw new Error("expected same-key successor operation");
+    }
+    try {
+      expect(successorAbortByUser).not.toHaveBeenCalled();
+      expect(activeAbortByUser).toHaveBeenCalledOnce();
+    } finally {
+      successor.complete();
+    }
   });
 
   it("admits an ordinary rejected steering turn with durable recovery state", async () => {
@@ -3872,6 +3928,76 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
   });
 
+  it("delivers an explicit yield acknowledgment after accepting a child spawn", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const onPendingContinuation = vi.fn();
+    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research started; results will follow.",
+      replyToId: "msg",
+    });
+    expect(onPendingContinuation).toHaveBeenCalledOnce();
+  });
+
+  it("delivers an explicit yield acknowledgment in message-tool-only mode", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    const result = await run();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload).toMatchObject({ text: "Research started; results will follow." });
+    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("preserves a visible final reply instead of adding a yield acknowledgment", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Research already finished." }],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research already finished.",
+      replyToId: "msg",
+    });
+  });
+
+  it("delivers a yield acknowledgment when the only payload is filtered", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "internal reasoning", isReasoning: true }],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research started; results will follow.",
+      replyToId: "msg",
+    });
+  });
+
   it.each([
     {
       label: "room event",
@@ -4307,6 +4433,52 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
       expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
       expect(payload?.text).toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("delivers an explicit yield acknowledgment from a fallback model", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(makeCompletedFallbackRunner());
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+      const result = await run();
+      const payloads = Array.isArray(result) ? result : result ? [result] : [];
+
+      expect(payloads).toContainEqual(
+        expect.objectContaining({
+          text: "Research started; results will follow.",
+          replyToId: "1503645939964055592",
+        }),
+      );
+      expect(payloads).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            isError: true,
+            text: expect.stringContaining("no visible reply"),
+          }),
+        ]),
+      );
     } finally {
       fallbackSpy.mockRestore();
     }

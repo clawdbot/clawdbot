@@ -54,7 +54,7 @@ function expectQueuedRunAck(result: unknown) {
 }
 
 describe("cron service run admission", () => {
-  it("rechecks a queued manual run after the job is disabled", async () => {
+  it("rechecks a queued if-enabled run after the job is disabled", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
     setCommandLaneConcurrency(CommandLane.Cron, 1);
@@ -77,6 +77,7 @@ describe("cron service run admission", () => {
     await blockerStarted.promise;
 
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const onEvent = vi.fn();
     const state = createAdmissionTestState({
       cronEnabled: true,
       storePath: store.storePath,
@@ -85,15 +86,24 @@ describe("cron service run admission", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
+      onEvent,
     });
 
-    expectQueuedRunAck(await enqueueRun(state, job.id, "due"));
+    expectQueuedRunAck(await enqueueRun(state, job.id, "if-enabled"));
     await update(state, job.id, { enabled: false });
     releaseBlocker.resolve();
     await blocker;
     await waitForActiveTasks(5_000);
 
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: job.id,
+        action: "finished",
+        status: "skipped",
+        error: "queued manual run skipped before execution: disabled",
+      }),
+    );
     clearCommandLane(CommandLane.Cron);
   });
 
@@ -700,6 +710,78 @@ describe("cron service run admission", () => {
 
     await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "disabled", autoDisabled: false },
+    { label: "auto-disabled", autoDisabled: true },
+  ])("skips $label jobs in if-enabled mode", async ({ autoDisabled }) => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:06.550Z");
+    const job = createDueIsolatedJob({
+      id: `if-enabled-${autoDisabled ? "auto-disabled" : "disabled"}`,
+      nowMs: now,
+      nextRunAtMs: now + 3_600_000,
+    });
+    if (autoDisabled) {
+      job.enabled = true;
+      job.state.autoDisabled = {
+        reason: "consecutive-failures",
+        atMs: now - 1,
+        consecutiveErrors: 10,
+      };
+    } else {
+      job.enabled = false;
+    }
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const onEvent = vi.fn();
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+      onEvent,
+    });
+
+    await expect(run(state, job.id, "if-enabled")).resolves.toEqual({
+      ok: true,
+      ran: false,
+      reason: "disabled",
+    });
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({ action: "finished" }));
+  });
+
+  it("runs an enabled future job immediately in if-enabled mode without changing its schedule", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:06.575Z");
+    const nextRunAtMs = now + 3_600_000;
+    const job = createDueIsolatedJob({
+      id: "if-enabled-future",
+      nowMs: now,
+      nextRunAtMs,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await expect(run(state, job.id, "if-enabled")).resolves.toEqual({ ok: true, ran: true });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
   });
 
   it("keeps queued force runs for jobs disabled before reservation through maintenance", async () => {

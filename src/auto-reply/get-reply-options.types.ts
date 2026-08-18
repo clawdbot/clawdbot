@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
@@ -129,7 +130,10 @@ export type GetReplyOptions = {
   /** Ordered media facts whose model-facing text projection is already present in the prompt. */
   media?: MediaFact[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
-  onAgentRunStart?: (runId: string) => void;
+  onAgentRunStart?: (
+    runId: string,
+    executionIdentityToken?: ExecutionIdentityAdmissionToken,
+  ) => void;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */

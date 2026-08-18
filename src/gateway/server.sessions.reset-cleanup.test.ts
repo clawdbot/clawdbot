@@ -9,7 +9,7 @@ import {
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import {
   enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEvents,
@@ -80,9 +80,10 @@ function expectResetAcpState(acp: ResetAcpState | undefined) {
 }
 
 async function seedWaitingActiveMainSession() {
-  await seedActiveMainSession();
+  const seeded = await seedActiveMainSession();
   embeddedRunMock.activeIds.add("sess-main");
   embeddedRunMock.waitResults.set("sess-main", true);
+  return seeded;
 }
 
 async function resetMainSession() {
@@ -150,7 +151,7 @@ async function expectResetWithConfigSkipsBrowserCleanup(config: ConfigFilePatch)
 }
 
 test("sessions.reset aborts active runs and clears queues", async () => {
-  await seedWaitingActiveMainSession();
+  const { storePath } = await seedWaitingActiveMainSession();
   enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
   enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
   enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
@@ -164,6 +165,19 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(reset.payload?.key).toBe("agent:main:main");
   expect(reset.payload?.entry.sessionId).toBe("sess-main");
   expect(reset.payload?.entry.lifecycleRevision).toEqual(expect.any(String));
+  expect(reset.payload?.entry).not.toHaveProperty("sessionDiffBaselineCapture");
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }) as
+      | InternalSessionEntry
+      | undefined,
+  ).toMatchObject({
+    sessionId: "sess-main",
+    sessionDiffBaselineCapture: {
+      version: 1,
+      captureId: expect.any(String),
+      status: "pending",
+    },
+  });
   expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
   expect(peekSystemEvents("main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);

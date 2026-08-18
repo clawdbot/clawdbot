@@ -1,6 +1,10 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
 import { VirtualizerController } from "@tanstack/lit-virtual";
-import { defaultRangeExtractor, observeElementRect } from "@tanstack/virtual-core";
+import {
+  defaultRangeExtractor,
+  measureElement as measureVirtualElement,
+  observeElementRect,
+} from "@tanstack/virtual-core";
 import {
   html,
   nothing,
@@ -84,6 +88,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private observedWidth: number | null = null;
   private observedHeight: number | null = null;
   private contentReady = false;
+  private implicitEndAnchorPending: boolean;
   private pendingScrollOffset: {
     offset: number;
     stableFrames: number;
@@ -140,10 +145,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const instance = this.virtualizerController.getVirtualizer();
     for (const row of this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-virtual-row") ??
       []) {
-      instance.resizeItem(
-        instance.indexFromElement(row),
-        row[instance.options.horizontal ? "offsetWidth" : "offsetHeight"],
-      );
+      const index = instance.indexFromElement(row);
+      const size = row[instance.options.horizontal ? "offsetWidth" : "offsetHeight"];
+      instance.resizeItem(index, size);
     }
   }
   private queueConnectedRowMeasure(): void {
@@ -211,6 +215,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
   ) {
+    this.implicitEndAnchorPending = initialOffset === null;
     this.virtualizerController = new VirtualizerController(this, {
       count: 0,
       getScrollElement: () => this.scrollElement,
@@ -257,6 +262,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
             this.queueConnectedRowMeasure();
           }
         }),
+      measureElement: measureVirtualElement,
       rangeExtractor: (range) => {
         const indexes = defaultRangeExtractor(range);
         const focused =
@@ -321,6 +327,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
+    this.reconcileImplicitEndAnchor();
     this.applyPendingScrollOffset();
   }
 
@@ -485,6 +492,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     offset: number,
     onSettled?: (position: ChatSessionScrollPosition) => void,
   ): void {
+    this.implicitEndAnchorPending = false;
     this.pendingScrollOffset = { offset, stableFrames: 0, zeroMaxFrames: 0, onSettled };
     if (this.connected) {
       this.host.requestUpdate();
@@ -536,6 +544,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     ) {
       return;
     }
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const typingAdded =
+      !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
+    const followTyping = typingAdded && virtualizer.isAtEnd();
     this.rowKeys = Object.freeze(nextKeys);
     this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
     for (const key of this.measureRowRefs.keys()) {
@@ -544,12 +556,17 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       }
     }
     const keys = this.rowKeys;
-    const virtualizer = this.virtualizerController.getVirtualizer();
     virtualizer.setOptions({
       ...virtualizer.options,
       count: keys.length,
       getItemKey: (index) => keys[index] ?? `missing:${index}`,
+      followOnAppend: false,
     });
+    if (followTyping) {
+      virtualizer.scrollToIndex(this.rowIndexesByKey.get("presence:typing") ?? keys.length - 1, {
+        align: "end",
+      });
+    }
   }
 
   private syncScrollMargin(scrollElement: HTMLDivElement | null): void {
@@ -562,6 +579,31 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       ...virtualizer.options,
       scrollMargin,
     });
+  }
+
+  private reconcileImplicitEndAnchor(): void {
+    if (!this.implicitEndAnchorPending || !this.connected || !this.contentReady) {
+      return;
+    }
+    const maxOffset = this.getMaxScrollOffset();
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const scrollOffset = virtualizer.scrollOffset;
+    if (maxOffset === null || scrollOffset === null) {
+      return;
+    }
+    if (scrollOffset >= 0 && scrollOffset <= maxOffset) {
+      this.implicitEndAnchorPending = false;
+      return;
+    }
+    if (maxOffset !== 0) {
+      return;
+    }
+    this.implicitEndAnchorPending = false;
+    // The DOM clamps an underfilled end anchor to zero without a scroll event,
+    // so TanStack cannot reconcile its maximum-integer initial offset itself.
+    virtualizer.scrollOffset = 0;
+    virtualizer.scrollToOffset(0);
+    this.host.requestUpdate();
   }
 
   private applyPendingScrollOffset(): void {

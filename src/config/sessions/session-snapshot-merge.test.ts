@@ -168,6 +168,7 @@ describe("session snapshot merge", () => {
         reason: "rate_limit",
       },
       contextTokens: 100_000,
+      contextTokensSource: "resolved",
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -196,6 +197,7 @@ describe("session snapshot merge", () => {
       model: undefined,
       fallbackNotice: undefined,
       contextTokens: undefined,
+      contextTokensSource: undefined,
       contextBudgetStatus: undefined,
     };
     const current: SessionEntry = {
@@ -209,6 +211,7 @@ describe("session snapshot merge", () => {
         activeModel: "openai/gpt-5.4-nano",
       },
       contextTokens: 80_000,
+      contextTokensSource: "runtime",
     };
 
     const merged = mergeSessionSnapshotChanges({ initial: initialOverride, next, current });
@@ -222,6 +225,7 @@ describe("session snapshot merge", () => {
     expect(merged.model).toBeUndefined();
     expect(merged.fallbackNotice).toBeUndefined();
     expect(merged.contextTokens).toBeUndefined();
+    expect(merged.contextTokensSource).toBeUndefined();
     expect(merged.contextBudgetStatus).toBeUndefined();
   });
 

@@ -15,7 +15,6 @@ import type {
   SystemAgentConfiguredRoute,
   SystemAgentConfiguredRouteDeps,
 } from "./inference-route.js";
-import { createSystemAgentModelSelectionUpdater } from "./setup-apply.js";
 import {
   SetupInferenceActivationIndeterminateError,
   SetupInferenceActivationUnavailableError,
@@ -40,6 +39,7 @@ import {
   resolveSetupAgentRuntimeId,
   type SetupInferenceTestPlan,
 } from "./setup-inference-plan-helpers.js";
+import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import type { SystemAgentOwnerPluginArtifactSnapshot } from "./verified-inference.js";
 
 type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectInferenceRoute>>;

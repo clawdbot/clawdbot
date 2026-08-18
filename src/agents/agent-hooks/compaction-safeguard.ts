@@ -2,8 +2,15 @@
 
 import fs from "node:fs";
 import path from "node:path";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  capCompactionSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
+} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
   computeFileLists,
   formatFileOperations,
@@ -76,8 +83,6 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
-const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
-const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const CONTEXT_TRUNCATED_MARKER = "\n\n[Earlier compaction context truncated to fit budget]\n\n";
 // Split-turn context supplements the generated summary and must not claim its
 // guaranteed half of the final artifact before common finalization runs.
@@ -565,19 +570,6 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
     lines.push(`- ...and ${failures.length - MAX_TOOL_FAILURES} more`);
   }
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
-}
-
-function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
-  if (maxChars <= 0 || summary.length <= maxChars) {
-    return summary;
-  }
-  const marker = SUMMARY_TRUNCATED_MARKER;
-  if (maxChars < marker.length) {
-    // Marker cannot fit; keep body prefix instead of a partial marker fragment.
-    return truncateUtf16Safe(summary, maxChars);
-  }
-  const budget = maxChars - marker.length;
-  return `${truncateUtf16Safe(summary, budget)}${marker}`;
 }
 
 function normalizeCompactionSuffix(suffix: string | CompactionSuffix): CompactionSuffix {
@@ -1483,5 +1475,3 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.compactionSafeguardTestApi")] =
     testing;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

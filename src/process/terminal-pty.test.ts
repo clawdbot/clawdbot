@@ -1,14 +1,20 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
 
 const mocks = vi.hoisted(() => ({
+  signalPtySessionTree: vi.fn(),
   signalProcessTree: vi.fn(),
   spawn: vi.fn(),
 }));
 
-vi.mock("./kill-tree.js", () => ({ signalProcessTree: mocks.signalProcessTree }));
+vi.mock("./kill-tree.js", () => ({
+  signalProcessTree: mocks.signalProcessTree,
+  signalPtySessionTree: mocks.signalPtySessionTree,
+}));
 vi.mock("@lydell/node-pty", () => ({ spawn: mocks.spawn }));
 
 const { spawnTerminalPty } = await import("./terminal-pty.js");
@@ -61,6 +67,7 @@ async function spawnFakePty(pid = 4321) {
 
 describe("terminal PTY teardown", () => {
   beforeEach(() => {
+    mocks.signalPtySessionTree.mockReset();
     mocks.signalProcessTree.mockReset();
     mocks.spawn.mockReset();
   });
@@ -75,16 +82,15 @@ describe("terminal PTY teardown", () => {
   it.each([undefined, "SIGTERM"] as const)("signals the process tree for %s", async (signal) => {
     const { handle, pty } = await spawnFakePty();
     handle.kill(signal);
-    expect(mocks.signalProcessTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL", {
-      detached: true,
-    });
+    expect(mocks.signalPtySessionTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL");
+    expect(mocks.signalProcessTree).not.toHaveBeenCalled();
     expect(pty.kill).not.toHaveBeenCalled();
   });
 
   it("uses the PTY handle for non-terminating signals", async () => {
     const { handle, pty } = await spawnFakePty();
     handle.kill("SIGHUP");
-    expect(mocks.signalProcessTree).not.toHaveBeenCalled();
+    expect(mocks.signalPtySessionTree).not.toHaveBeenCalled();
     if (process.platform === "win32") {
       expect(pty.kill).toHaveBeenCalledWith();
     } else {
@@ -362,5 +368,82 @@ describe("terminal PTY invocation", () => {
       [],
       expect.objectContaining({ cols: 80, rows: 24 }),
     );
+  });
+});
+
+describe.runIf(process.platform !== "win32")("terminal PTY process-session teardown", () => {
+  it("kills a background job in a distinct process group within the PTY session", async () => {
+    vi.resetModules();
+    vi.doUnmock("@lydell/node-pty");
+    vi.doUnmock("./kill-tree.js");
+    const { spawnTerminalPty: spawnRealTerminalPty } = await import("./terminal-pty.js");
+    const handle = await spawnRealTerminalPty({
+      file: "/bin/bash",
+      args: ["-l"],
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: os.tmpdir() },
+      cols: 80,
+      rows: 24,
+    });
+    let output = "";
+    let shellPid: number | undefined;
+    let childPid: number | undefined;
+    handle.onData((chunk) => {
+      output += chunk;
+    });
+
+    try {
+      handle.write(
+        'sleep 300 & child=$(jobs -p); printf \'__OPENCLAW_PIDS__ %s %s\\n\' "$$" "$child"\r',
+      );
+      await vi.waitFor(
+        () => {
+          const match = output.match(/__OPENCLAW_PIDS__\s+(\d+)\s+(\d+)/u);
+          expect(match, output).toBeTruthy();
+          shellPid = Number(match?.[1]);
+          childPid = Number(match?.[2]);
+        },
+        { timeout: 3_000 },
+      );
+      if (!shellPid || !childPid) {
+        throw new Error("missing PTY process ids");
+      }
+      const ps = spawnSync(
+        "ps",
+        [
+          "-o",
+          process.platform === "darwin" ? "pid=,pgid=,tty=" : "pid=,pgid=,sid=",
+          "-p",
+          `${shellPid},${childPid}`,
+        ],
+        { encoding: "utf8" },
+      );
+      const rows = ps.stdout
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const [pid, pgid, session] = line.trim().split(/\s+/u);
+          return { pid: Number(pid), pgid: Number(pgid), session };
+        });
+      const shell = rows.find((row) => row.pid === shellPid);
+      const child = rows.find((row) => row.pid === childPid);
+      expect(shell).toMatchObject({ pid: shellPid, pgid: shellPid });
+      expect(child?.pgid).not.toBe(shellPid);
+      expect(child?.session).toBe(shell?.session);
+      if (process.platform !== "darwin") {
+        expect(Number(shell?.session)).toBe(shellPid);
+      }
+
+      handle.kill();
+      expect(await waitForPidToExit(shellPid, 2_000)).toBe(true);
+      expect(await waitForPidToExit(childPid, 2_000)).toBe(true);
+    } finally {
+      try {
+        handle.kill();
+      } catch {
+        // Already gone.
+      }
+      killPidIfAlive(childPid);
+      killPidIfAlive(shellPid);
+    }
   });
 });

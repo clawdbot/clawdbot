@@ -43,6 +43,7 @@ describe("pending cloud recovery state", () => {
     const createParams = pending.stageCreate({
       agentId: "cloud",
       profileId: "aws",
+      machineClass: "fast",
       message: "run remotely",
       gatewayUrl: "ws://gateway.example",
       recoveryScope: "principal-a",
@@ -59,10 +60,31 @@ describe("pending cloud recovery state", () => {
       readCloudSessionRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
     ).toMatchObject({
       phase: "creating",
+      machineClass: "fast",
       sessionKey: createParams?.key,
       createParams,
     });
   });
+
+  it.each(["", "x".repeat(129)])(
+    "rejects an invalid persisted machine class %#",
+    (machineClass) => {
+      expect(
+        writeCloudSessionRecovery({
+          sessionKey: "agent:cloud:invalid-machine",
+          messageId: "message-invalid-machine",
+          message: "run remotely",
+          profileId: "aws",
+          machineClass,
+          agentId: "cloud",
+          gatewayUrl: "ws://gateway.example",
+          recoveryScope: "principal-a",
+          phase: "dispatching",
+        }),
+      ).toBe(false);
+      expect(sessionStorage.length).toBe(0);
+    },
+  );
 
   it("promotes the acknowledged server key before dispatch", () => {
     const pending = new PendingCloudRecoveryState();

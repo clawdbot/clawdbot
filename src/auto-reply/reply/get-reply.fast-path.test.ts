@@ -28,10 +28,13 @@ import {
   createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
   expectResolvedTelegramTimezone,
+  registerGetReplyBaselineBypass,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
+
+registerGetReplyBaselineBypass();
 
 type LoadModelCatalogFn =
   typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog;

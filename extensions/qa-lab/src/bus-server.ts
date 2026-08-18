@@ -211,6 +211,18 @@ export function writeError(res: ServerResponse, statusCode: number, error: unkno
   });
 }
 
+export function dispatchQaHttpRequest(res: ServerResponse, task: () => Promise<void>): void {
+  // Node does not observe promises returned by request listeners. Own rejection here so
+  // every admitted request receives an HTTP failure or an explicit connection close.
+  void task().catch((error: unknown) => {
+    if (res.headersSent) {
+      res.destroy(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+      return;
+    }
+    writeError(res, 500, error);
+  });
+}
+
 export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown): boolean {
   if (!isRequestBodyLimitError(error)) {
     return false;
@@ -448,12 +460,12 @@ export async function handleQaBusRequest(params: {
 
 export function createQaBusServer(state: QaBusState): Server {
   return createServer((req, res) => {
-    void (async () => {
+    dispatchQaHttpRequest(res, async () => {
       const handled = await handleQaBusRequest({ req, res, state });
       if (!handled) {
         writeError(res, 404, "not found");
       }
-    })();
+    });
   });
 }
 

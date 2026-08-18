@@ -92,6 +92,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       suppressedFactIndexes: [],
     };
     state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+      expect(params.modelHasVision).toBe(true);
       const internalParams = params as RunCliAgentParams & {
         mediaImageLayout?: typeof mediaImageLayout;
       };
@@ -128,6 +129,13 @@ describe("executeAgentTurn: CLI session routing", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-5";
+    followupRun.run.thinkingCatalog = [
+      {
+        provider: "claude-cli",
+        id: "claude-opus-5",
+        input: ["text", "image"],
+      },
+    ];
     const preparedFollowupRun = followupRun as typeof followupRun & {
       currentTurnImagesPrepared?: true;
       mediaImageLayout?: typeof mediaImageLayout;

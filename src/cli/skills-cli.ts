@@ -21,7 +21,6 @@ import {
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
   CLAWHUB_SKILLS_SH_TRUST_STATE,
   fetchClawHubSkillCard,
-  fetchClawHubSkillVerification,
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -34,6 +33,7 @@ import {
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
+  verifySkillWithClawHub,
 } from "../skills/lifecycle/clawhub.js";
 import {
   installSkillFromSource,
@@ -69,6 +69,7 @@ import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -875,7 +876,7 @@ export function registerSkillsCli(program: Command) {
         let exitCode: number | undefined;
         const reportError =
           hasJsonOutput(opts) || opts.card !== true
-            ? (message: string) => defaultRuntime.writeJson({ error: message })
+            ? (message: string) => defaultRuntime.writeJson(formatCliJsonFailure(message))
             : defaultRuntime.error;
         try {
           const workspace = resolveClawHubTargetWorkspace(command, opts, reportError);
@@ -892,7 +893,7 @@ export function registerSkillsCli(program: Command) {
             reportError(target.error);
             exitCode = 1;
           } else {
-            const verification = await fetchClawHubSkillVerification({
+            const result = await verifySkillWithClawHub({
               slug: target.slug,
               ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
               ...(target.requestedReference
@@ -902,7 +903,11 @@ export function registerSkillsCli(program: Command) {
               tag: target.tag,
               baseUrl: target.baseUrl,
             });
-            if (opts.card && !hasJsonOutput(opts)) {
+            if (!result.ok) {
+              reportError(result.error);
+              exitCode = 1;
+            } else if (opts.card && !hasJsonOutput(opts)) {
+              const verification = result.value;
               const cardUrl = readVerifiedSkillCardUrl(verification);
               if (!cardUrl.ok) {
                 reportError(cardUrl.error);
@@ -916,6 +921,7 @@ export function registerSkillsCli(program: Command) {
                 exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
               }
             } else {
+              const verification = result.value;
               defaultRuntime.writeJson(buildSkillVerificationOutput(verification, target));
               exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
             }
@@ -945,6 +951,7 @@ export function registerSkillsCli(program: Command) {
       }
       defaultRuntime.writeStdout(formatSkillCuratorStatus(status));
     } catch (err) {
+      rethrowExpectedCliError(err);
       defaultRuntime.error(formatErrorMessage(err));
       defaultRuntime.exit(1);
     }
@@ -971,6 +978,7 @@ export function registerSkillsCli(program: Command) {
             `${action[0]?.toUpperCase()}${action.slice(1)} ${result.skillKey}\n`,
           );
         } catch (err) {
+          rethrowExpectedCliError(err);
           defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
@@ -1004,6 +1012,7 @@ export function registerSkillsCli(program: Command) {
       }
       defaultRuntime.writeStdout(format(result));
     } catch (err) {
+      rethrowExpectedCliError(err);
       defaultRuntime.error(formatErrorMessage(err));
       defaultRuntime.exit(1);
     }

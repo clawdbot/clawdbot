@@ -28,7 +28,7 @@ export {
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
 
 type SkillProposalStatus = SkillWorkshopProposalStatus;
-type SkillProposalKind = "create" | "update";
+type SkillProposalKind = SkillWorkshopProposal["kind"];
 type SkillProposalScanState = "pending" | "clean" | "failed" | "quarantined";
 
 type SkillProposalManifestEntry = {
@@ -219,6 +219,7 @@ function proposalFromManifest(
   const previousIsCurrent = previous?.updatedAt === updatedAt;
   return {
     key: entry.id,
+    kind: entry.kind,
     slug: entry.skillKey,
     name: entry.title || entry.skillName,
     oneLine: entry.description,
@@ -253,6 +254,7 @@ function proposalFromInspect(
         : undefined;
   return {
     key: record.id,
+    kind: record.kind,
     slug: record.target.skillKey,
     name: record.title || record.target.skillName,
     oneLine: record.description,
@@ -280,6 +282,7 @@ function proposalFromEvaluation(
   const createdAt = parseDateMs(record.createdAt);
   return {
     key: record.id,
+    kind: record.kind,
     slug: record.target.skillKey,
     name: record.title || record.target.skillName,
     oneLine: record.description,
@@ -348,14 +351,23 @@ function showActionNotice(
 export function countSkillWorkshopProposals(
   proposals: SkillWorkshopProposal[],
 ): Record<"all" | SkillProposalStatus, number> {
-  return proposals.reduce(
-    (counts, proposal) => {
-      counts.all += 1;
-      counts[proposal.status] += 1;
-      return counts;
+  // Applied renders one row per skill, so its tab count is grouped skills;
+  // every other status stays a per-proposal count.
+  const appliedSkills = new Set<string>();
+  const counts = proposals.reduce(
+    (accumulated, proposal) => {
+      accumulated.all += 1;
+      if (proposal.status === "applied") {
+        appliedSkills.add(proposal.slug);
+      } else {
+        accumulated[proposal.status] += 1;
+      }
+      return accumulated;
     },
     { all: 0, pending: 0, applied: 0, rejected: 0, quarantined: 0, stale: 0 },
   );
+  counts.applied = appliedSkills.size;
+  return counts;
 }
 
 export async function loadSkillWorkshopProposals(

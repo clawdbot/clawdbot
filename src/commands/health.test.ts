@@ -436,6 +436,7 @@ describe("healthCommand", () => {
     expect(gatewayRequest.token).toBe("setup-token");
     expect(gatewayRequest.password).toBe("setup-password");
     expect(gatewayRequest.ignoreEnvUrlOverride).toBe(true);
+    expect(gatewayRequest.sharedStateMode).toBe("read-only");
   });
 
   it("outputs JSON for gateway transport failures in JSON mode", async () => {

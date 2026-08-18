@@ -271,7 +271,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             relay: state.nativeHookRelay,
             events: nativeHookRelayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
-            loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           })
         : options.nativeHookRelay?.enabled === false
           ? buildCodexNativeHookRelayDisabledConfig()

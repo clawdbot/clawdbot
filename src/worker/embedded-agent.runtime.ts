@@ -14,6 +14,7 @@ import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
+import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
@@ -76,6 +77,7 @@ type RunWorkerEmbeddedTurnParams = {
   operationalRunInstance: OperationalRunInstanceRef;
   agentRuntimeIdentityToken: string;
   cwd: string;
+  workerContainmentRoot: string;
   stateDir: string;
   sessionId: string;
   sessionKey: string;
@@ -91,6 +93,7 @@ type RunWorkerEmbeddedTurnParams = {
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerToolName[];
+  permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
   signal?: AbortSignal;
@@ -146,24 +149,46 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   });
 
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-  const activeToolNames = WORKER_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
   const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
+  const permissionToolPolicy = params.permissionMode
+    ? resolveSessionPermissionCoreToolPolicy({ mode: params.permissionMode })
+    : undefined;
+  const omittedToolNames = permissionToolPolicy?.readOnly
+    ? new Set<WorkerToolName>(["write", "edit", "apply_patch"])
+    : undefined;
+  const activeToolNames = WORKER_TOOL_NAMES.filter(
+    (name) => allowedToolNameSet.has(name) && !omittedToolNames?.has(name),
+  );
+  const headlessApprovalText = params.permissionMode
+    ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
+    : undefined;
   const coreTools = createCoreCodingTools({
     codingRoot: params.cwd,
+    containmentRoot: params.workerContainmentRoot,
     includeBaseCodingTools: true,
     includeShellTools: true,
-    workspaceOnly: false,
+    workspaceOnly: permissionToolPolicy?.workspaceOnly ?? false,
+    readOnly: permissionToolPolicy?.readOnly ?? false,
     modelContextWindowTokens: model.contextWindow,
     imageSanitization: {},
-    applyPatchEnabled: isApplyPatchAllowedForModel({
-      modelProvider: params.modelRef.provider,
-      modelId: params.modelRef.model,
-    }),
-    applyPatchWorkspaceOnly: true,
+    applyPatchEnabled:
+      permissionToolPolicy?.readOnly !== true &&
+      isApplyPatchAllowedForModel({
+        modelProvider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+      }),
+    applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
     execDefaults: {
       host: "gateway",
+      mode: permissionToolPolicy?.execMode ?? "full",
       security: "full",
       ask: "off",
+      // Safe clamp v1 keeps allowlist hits local but denies misses before review.
+      // Worker LLM review and interactive approval RPC remain a named follow-up.
+      nonInteractiveApproval: Boolean(
+        permissionToolPolicy && permissionToolPolicy.execMode !== "full",
+      ),
+      approvalFollowupText: headlessApprovalText,
       config: WORKER_TOOL_CONFIG,
       commandHighlighting: false,
       agentId: params.agentId,
@@ -218,6 +243,9 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       );
       const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
       for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
+        if (omittedToolNames?.has(toolName)) {
+          continue;
+        }
         if (!discoveredToolNames.has(toolName)) {
           throw new Error(`Worker coding tool unavailable: ${toolName}`);
         }

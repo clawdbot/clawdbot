@@ -134,6 +134,55 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
+  it("supports a guest timer between an action and its observation", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const input = pluginTool("fake_terminal_input", "Send terminal input");
+    const read = pluginTool("fake_terminal_read", "Read terminal output");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, input, read],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-timer-observation",
+        {
+          code: `
+            const cancelled = setTimeout(() => { throw new Error("cancelled timer fired"); }, 30_000);
+            await tools.callValue("fake_terminal_input", { data: "status\\n" });
+            clearTimeout(cancelled);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            return await tools.callValue("fake_terminal_read", {});
+          `,
+        },
+      ),
+    );
+
+    expect(details, JSON.stringify(details)).toMatchObject({
+      status: "completed",
+      value: { name: "fake_terminal_read" },
+    });
+    expect(input.execute).toHaveBeenCalledOnce();
+    expect(read.execute).toHaveBeenCalledOnce();
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it("keeps the actual winner when the later-started nested tool settles first", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     let firstAborted = false;

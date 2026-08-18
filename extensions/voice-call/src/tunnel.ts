@@ -7,7 +7,11 @@ import {
   emptyBoundedChildOutput,
   formatBoundedChildOutput,
 } from "./bounded-child-output.js";
-import { getTailscaleDnsName } from "./webhook/tailscale.js";
+import type { VoiceCallStreamExposurePath } from "./config.js";
+import {
+  cleanupTailscaleExposureRoute,
+  setupTailscaleExposureRoutes,
+} from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
 const NGROK_ERROR_MARKER = "ERR_NGROK";
@@ -75,8 +79,12 @@ interface TunnelConfig {
   provider: "ngrok" | "tailscale-serve" | "tailscale-funnel" | "none";
   /** Local port to tunnel */
   port: number;
+  /** External HTTPS port used by Tailscale providers */
+  tailscalePort?: number;
   /** Path prefix for the tunnel (e.g., /voice/webhook) */
   path: string;
+  /** Additional public-to-local WebSocket paths exposed by Tailscale */
+  streamPaths?: VoiceCallStreamExposurePath[];
   /** ngrok auth token (optional, enables longer sessions) */
   ngrokAuthToken?: string;
   /** ngrok custom domain (paid feature) */
@@ -276,57 +284,45 @@ async function runNgrokCommand(args: string[]): Promise<string> {
 async function startTailscaleTunnel(config: {
   mode: "serve" | "funnel";
   port: number;
+  tailscalePort: number;
   path: string;
+  streamPaths?: VoiceCallStreamExposurePath[];
 }): Promise<TunnelResult> {
-  // Get Tailscale DNS name
-  const dnsName = await getTailscaleDnsName();
-  if (!dnsName) {
-    throw new Error("Could not get Tailscale DNS name. Is Tailscale running?");
-  }
-
   const path = config.path.startsWith("/") ? config.path : `/${config.path}`;
-  const localUrl = `http://127.0.0.1:${config.port}${path}`;
-
-  const result = await runCommandWithTimeout(
-    ["tailscale", config.mode, "--bg", "--yes", "--set-path", path, localUrl],
-    {
-      killProcessTree: true,
-      maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
-      outputCapture: "tail",
-      timeoutMs: 10_000,
-    },
-  );
-  if (result.termination === "timeout") {
-    throw new Error(`Tailscale ${config.mode} timed out`);
+  const exposurePaths: VoiceCallStreamExposurePath[] = [
+    { publicPath: path, localPath: path },
+    ...(config.streamPaths ?? []),
+  ];
+  const routes = exposurePaths.map(({ publicPath, localPath }) => {
+    const normalizedPublicPath = publicPath.startsWith("/") ? publicPath : `/${publicPath}`;
+    const normalizedLocalPath = localPath.startsWith("/") ? localPath : `/${localPath}`;
+    return {
+      path: normalizedPublicPath,
+      localUrl: `http://127.0.0.1:${config.port}${normalizedLocalPath}`,
+    };
+  });
+  const publicUrl = await setupTailscaleExposureRoutes({
+    mode: config.mode,
+    port: config.tailscalePort,
+    routes,
+  });
+  if (!publicUrl) {
+    throw new Error(`Tailscale ${config.mode} failed`);
   }
-  if (result.code !== 0) {
-    const output = result.stderr
-      ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
-      : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
-    const detail = output.text ? `: ${formatBoundedChildOutput(output)}` : "";
-    throw new Error(`Tailscale ${config.mode} failed with code ${result.code}${detail}`);
-  }
-  const publicUrl = `https://${dnsName}${path}`;
-  console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
 
   return {
     publicUrl,
     provider: `tailscale-${config.mode}`,
     stop: async () => {
-      await stopTailscaleTunnel(config.mode, path);
+      for (const route of routes) {
+        await cleanupTailscaleExposureRoute({
+          mode: config.mode,
+          port: config.tailscalePort,
+          path: route.path,
+        });
+      }
     },
   };
-}
-
-/**
- * Stop a Tailscale serve/funnel tunnel.
- */
-async function stopTailscaleTunnel(mode: "serve" | "funnel", path: string): Promise<void> {
-  await runCommandWithTimeout(["tailscale", mode, "off", path], {
-    killProcessTree: true,
-    maxOutputBytes: 1,
-    timeoutMs: 5_000,
-  }).catch(() => {});
 }
 
 /**
@@ -346,14 +342,18 @@ export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | 
       return startTailscaleTunnel({
         mode: "serve",
         port: config.port,
+        tailscalePort: config.tailscalePort ?? 443,
         path: config.path,
+        streamPaths: config.streamPaths,
       });
 
     case "tailscale-funnel":
       return startTailscaleTunnel({
         mode: "funnel",
         port: config.port,
+        tailscalePort: config.tailscalePort ?? 443,
         path: config.path,
+        streamPaths: config.streamPaths,
       });
 
     default:

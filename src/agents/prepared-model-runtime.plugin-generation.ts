@@ -1,5 +1,6 @@
 import { projectPluginMetadataSnapshotWorkspace } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -47,6 +48,25 @@ export function createPreparedPluginGeneration(params: {
   });
 }
 
+export function projectPreparedPluginGeneration(params: {
+  input: PreparedModelRuntimeInput;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+}): PreparedModelRuntimePluginGeneration {
+  const { input, pluginGeneration } = params;
+  if (!input.workspaceDir) {
+    return pluginGeneration;
+  }
+  const pluginMetadataSnapshot = projectPluginMetadataSnapshotWorkspace({
+    snapshot: pluginGeneration.pluginMetadataSnapshot,
+    config: input.config,
+    env: input.env ?? process.env,
+    workspaceDir: input.workspaceDir,
+  });
+  return pluginMetadataSnapshot === pluginGeneration.pluginMetadataSnapshot
+    ? pluginGeneration
+    : Object.freeze({ ...pluginGeneration, pluginMetadataSnapshot });
+}
+
 export async function buildPreparedPluginModelCatalog(params: {
   agentFacts: {
     credentials: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["authCredentials"];
@@ -59,18 +79,26 @@ export async function buildPreparedPluginModelCatalog(params: {
   const { credentials, input } = params.agentFacts;
   return await withPreparedPluginGenerationScope(
     { input, pluginGeneration: params.pluginGeneration },
-    () =>
-      buildPreparedModelCatalogSnapshot({
+    async (metadataSnapshot) => {
+      const snapshot = await buildPreparedModelCatalogSnapshot({
         agentDir: input.agentDir,
         authCredentials: credentials,
         config: input.config,
         modelRegistry: params.modelRegistry,
-        metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+        metadataSnapshot,
         includeProviderPluginAugmentation: params.catalogMode === "live",
         ...(input.env ? { env: input.env } : {}),
         ...(input.readOnly ? { readOnly: true } : {}),
         ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      }),
+      });
+      return params.catalogMode === "live"
+        ? await augmentPreparedModelCatalogWithAgentHarness({
+            input,
+            snapshot,
+            pluginRegistry: params.pluginGeneration.pluginRegistry,
+          })
+        : snapshot;
+    },
   );
 }
 
@@ -82,15 +110,9 @@ export function withPreparedPluginGenerationScope<T>(
   },
   run: (metadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"]) => T,
 ): T {
-  const { input, pluginGeneration } = params;
-  const metadataSnapshot = input.workspaceDir
-    ? projectPluginMetadataSnapshotWorkspace({
-        snapshot: pluginGeneration.pluginMetadataSnapshot,
-        config: input.config,
-        env: input.env ?? process.env,
-        workspaceDir: input.workspaceDir,
-      })
-    : pluginGeneration.pluginMetadataSnapshot;
+  const { input } = params;
+  const pluginGeneration = projectPreparedPluginGeneration(params);
+  const metadataSnapshot = pluginGeneration.pluginMetadataSnapshot;
   return withPluginRuntimeGenerationScope(
     {
       config: input.config,

@@ -7,18 +7,52 @@ import {
   isEmbeddedAgentRunActive,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  createReplyOperation,
+  markReplyOperationExecutionStarted,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import {
   buildProjectedAgentRunIndex,
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import {
   collectTrackedActiveSessionRuns,
   hasRegisteredChatRunForSessionKey,
   hasTrackedActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
+
+it("projects admitted work as queued until execution starts", () => {
+  const sessionKey = "agent:main:queued";
+  const sessionId = "queued-session";
+  const runId = "queued-run";
+  const chatAbortControllers = new Map();
+  const registration = registerChatAbortController({
+    chatAbortControllers,
+    runId,
+    sessionId,
+    sessionKey,
+    agentId: "main",
+    timeoutMs: 60_000,
+    kind: "agent",
+  });
+  const state = () =>
+    resolveVisibleActiveSessionRunState({
+      context: { chatAbortControllers } as never,
+      requestedKey: sessionKey,
+      canonicalKey: sessionKey,
+      sessionId,
+      agentId: "main",
+    });
+
+  expect(state()).toEqual({ active: true, runIds: [runId], status: "queued" });
+  expect(registration.markExecutionStarted()).toBe(true);
+  expect(state()).toEqual({ active: true, runIds: [runId] });
+  expect(registration.markExecutionStarted()).toBe(false);
+  registration.cleanup({ force: true });
+});
 
 it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
   const context = {
@@ -171,7 +205,7 @@ it("projects a lifecycle-owned worker run without widening event visibility", ()
   }
 });
 
-it("does not project a terminal reply operation retained for settlement as active", () => {
+it("projects reply lifecycle state without hiding independent embedded work", () => {
   const sessionKey = "agent:main:reply-settling";
   const sessionId = "reply-settling-session";
   const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
@@ -190,9 +224,49 @@ it("does not project a terminal reply operation retained for settlement as activ
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true, runIds: [], status: "queued" });
+
+    operation.markWaitingForGlobalLane();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: true, runIds: [], status: "queued" });
+    operation.markGlobalLaneWaitEnded();
 
     operation.setPhase("running");
+    operation.markWaitingForGlobalLane();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: true, runIds: [], status: "queued" });
+    operation.markGlobalLaneWaitEnded();
+    markReplyOperationExecutionStarted(operation);
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: true, runIds: [] });
+    operation.markWaitingForGlobalLane();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: true, runIds: [] });
+    operation.markGlobalLaneWaitEnded();
     expect(operation.abortByUser()).toBe(true);
     expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
     expect(
@@ -229,7 +303,6 @@ it("preserves an independent lifecycle-owned worker while a reply operation sett
     sessionKey,
   });
   try {
-    expect(operation.abortByUser()).toBe(true);
     expect(
       resolveVisibleActiveSessionRunState({
         context: {},

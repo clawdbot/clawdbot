@@ -600,7 +600,7 @@ describe("cron service ops regressions", () => {
       { agentId?: unknown }?,
     ];
     expect(text).toBe("stale-running");
-    expect(options?.agentId).toBeUndefined();
+    expect(options?.agentId).toBe("main");
   });
 
   it("clears an orphaned queued reservation and executes the due job", async () => {

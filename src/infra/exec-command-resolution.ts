@@ -12,6 +12,7 @@ import {
 } from "./executable-path.js";
 
 export type ExecutableResolution = {
+  kind: "executable";
   rawExecutable: string;
   resolvedPath?: string;
   resolvedRealPath?: string;
@@ -19,6 +20,7 @@ export type ExecutableResolution = {
 };
 
 export type CommandResolution = {
+  kind: "command";
   execution: ExecutableResolution;
   policy: ExecutableResolution;
   effectiveArgv?: string[];
@@ -26,12 +28,6 @@ export type CommandResolution = {
   policyBlocked?: boolean;
   blockedWrapper?: string;
 };
-
-function isCommandResolution(
-  resolution: CommandResolution | ExecutableResolution | null,
-): resolution is CommandResolution {
-  return Boolean(resolution && "execution" in resolution && "policy" in resolution);
-}
 
 function parseFirstToken(command: string): string | null {
   const trimmed = command.trim();
@@ -68,6 +64,7 @@ function buildExecutableResolution(
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
+    kind: "executable",
     rawExecutable,
     resolvedPath,
     resolvedRealPath,
@@ -90,6 +87,7 @@ function buildCommandResolution(params: {
     ? buildExecutableResolution(params.policyRawExecutable, params)
     : execution;
   const resolution: CommandResolution = {
+    kind: "command",
     execution,
     policy,
     effectiveArgv: params.effectiveArgv,
@@ -97,24 +95,7 @@ function buildCommandResolution(params: {
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
   };
-  // Compatibility getters for JS/tests while TS callers migrate to explicit targets.
-  return Object.defineProperties(resolution, {
-    rawExecutable: {
-      get: () => execution.rawExecutable,
-    },
-    resolvedPath: {
-      get: () => execution.resolvedPath,
-    },
-    resolvedRealPath: {
-      get: () => execution.resolvedRealPath,
-    },
-    executableName: {
-      get: () => execution.executableName,
-    },
-    policyResolution: {
-      get: () => (policy === execution ? undefined : policy),
-    },
-  });
+  return resolution;
 }
 
 export function resolveCommandResolution(
@@ -198,7 +179,7 @@ export function resolveExecutionTargetResolution(
   if (!resolution) {
     return null;
   }
-  return isCommandResolution(resolution) ? resolution.execution : resolution;
+  return resolution.kind === "command" ? resolution.execution : resolution;
 }
 
 export function resolvePolicyTargetResolution(
@@ -207,7 +188,7 @@ export function resolvePolicyTargetResolution(
   if (!resolution) {
     return null;
   }
-  return isCommandResolution(resolution) ? resolution.policy : resolution;
+  return resolution.kind === "command" ? resolution.policy : resolution;
 }
 
 export function resolveExecutionTargetCandidatePath(
@@ -215,7 +196,7 @@ export function resolveExecutionTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    isCommandResolution(resolution) ? resolution.execution : resolution,
+    resolution?.kind === "command" ? resolution.execution : resolution,
     cwd,
   );
 }
@@ -225,7 +206,7 @@ export function resolveExecutionTargetTrustPath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableTrustPath(
-    isCommandResolution(resolution) ? resolution.execution : resolution,
+    resolution?.kind === "command" ? resolution.execution : resolution,
     cwd,
   );
 }
@@ -235,7 +216,7 @@ export function resolvePolicyTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    isCommandResolution(resolution) ? resolution.policy : resolution,
+    resolution?.kind === "command" ? resolution.policy : resolution,
     cwd,
   );
 }
@@ -245,7 +226,7 @@ export function resolvePolicyTargetTrustPath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableTrustPath(
-    isCommandResolution(resolution) ? resolution.policy : resolution,
+    resolution?.kind === "command" ? resolution.policy : resolution,
     cwd,
   );
 }

@@ -1,7 +1,7 @@
 // Control UI tests cover markdown link rendering: autolinking, file links, and link marks.
 import { describe, expect, it, vi } from "vitest";
 import { shortestFileLabels } from "./file-kind.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
@@ -174,7 +174,7 @@ describe("toSanitizedMarkdownHtml links", () => {
     it("links http:// URLs", () => {
       const html = toSanitizedMarkdownHtml("Visit http://github.com/openclaw");
       expect(html).toBe(
-        '<p>Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" rel="noreferrer noopener" target="_blank">http://github.com/openclaw</a></p>\n',
+        '<p>Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" title="http://github.com/openclaw" rel="noreferrer noopener" target="_blank">github.com/openclaw</a></p>\n',
       );
     });
 
@@ -514,6 +514,66 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
   });
 
+  describe("session links", () => {
+    const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+
+    it("links structural keys only when enabled", () => {
+      const disabled = htmlFragment(toSanitizedMarkdownHtml(`Open ${sessionKey}`));
+      expect(disabled.querySelector("a[data-session-key]")).toBeNull();
+
+      const enabled = htmlFragment(
+        toSanitizedMarkdownHtml(`Open ${sessionKey}`, { sessionLinks: true }),
+      );
+      const link = enabled.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      expect(link?.dataset.sessionKey).toBe(sessionKey);
+      expect(link?.textContent).toBe(sessionKey);
+      expect(link?.getAttribute("role")).toBe("link");
+      expect(link?.getAttribute("tabindex")).toBe("0");
+      expect(link?.hasAttribute("href")).toBe(false);
+    });
+
+    it.each([
+      ["plain text", `Open ${sessionKey}`],
+      ["inline code", `Open \`${sessionKey}\``],
+    ])("linkifies keys in %s", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      expect(link?.dataset.sessionKey).toBe(sessionKey);
+      expect(link?.textContent).toBe(sessionKey);
+    });
+
+    it.each([
+      ["an empty prefix", "agent:"],
+      ["a missing rest segment", "agent:x"],
+      ["an empty middle segment", "agent:x::y"],
+      ["a URL query value", `https://example.test/?session=${sessionKey}`],
+      ["a fenced code block", `\`\`\`text\n${sessionKey}\n\`\`\``],
+    ])("does not link %s", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      expect(fragment.querySelector("a[data-session-key]")).toBeNull();
+    });
+
+    it("keeps punctuation outside the link and rejects embedded word matches", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(`(${sessionKey}), x${sessionKey}`, { sessionLinks: true }),
+      );
+      const links = fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link");
+      expect(links).toHaveLength(1);
+      expect(links[0]?.textContent).toBe(sessionKey);
+      expect(fragment.textContent).toBe(`(${sessionKey}), x${sessionKey}\n`);
+    });
+
+    it("stays deterministic across streaming tail renders", () => {
+      const options = { sessionLinks: true } as const;
+      const first = htmlFragment(toStreamingMarkdownHtml(`Open ${sessionKey}`, options));
+      const extended = htmlFragment(
+        toStreamingMarkdownHtml(`Open ${sessionKey} and continue`, options),
+      );
+      expect(first.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
+      expect(extended.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
+    });
+  });
+
   describe("bare url links", () => {
     it("marks autolinked URL text but not authored labels", () => {
       const fragment = htmlFragment(
@@ -536,11 +596,14 @@ describe("toSanitizedMarkdownHtml links", () => {
 
   describe("github link marks", () => {
     it.each([
-      ["bare autolink", "https://github.com/openclaw/openclaw/pull/3434", "openclaw/openclaw#3434"],
+      ["bare pull request", "https://github.com/openclaw/openclaw/pull/3434", "#3434"],
+      ["bare issue", "https://github.com/openclaw/openclaw/issues/3435", "#3435"],
+      ["repository", "https://github.com/openclaw/openclaw", "openclaw/openclaw"],
+      ["repository file", "https://github.com/blader/humanizer/blob/main/SKILL.md", "SKILL.md"],
       [
-        "bare issue autolink",
-        "https://github.com/openclaw/openclaw/issues/3435",
-        "openclaw/openclaw#3435",
+        "other path",
+        "https://github.com/openclaw/openclaw/actions/runs/123",
+        "github.com/actions/runs/123",
       ],
       ["issue shorthand", "[#3434](https://github.com/openclaw/openclaw/pull/3434)", "#3434"],
       ["labelled link", "[the fix](https://github.com/openclaw/openclaw/pull/3434)", "the fix"],
@@ -561,10 +624,18 @@ describe("toSanitizedMarkdownHtml links", () => {
         ),
       );
       const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.textContent).toBe(
-        "a-very-long-organization-name/a-very-long-repository-name#3434",
-      );
+      expect(link?.textContent).toBe("#3434");
       expect(link?.classList.contains("markdown-bare-url")).toBe(true);
+    });
+
+    it("keeps the specific destination addressable after shortening its label", () => {
+      const input = "https://github.com/blader/humanizer/blob/main/SKILL.md";
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.classList.contains("markdown-github-link")).toBe(true);
+      expect(link?.textContent).toBe("SKILL.md");
+      expect(link?.getAttribute("href")).toBe(input);
+      expect(link?.getAttribute("title")).toBe(input);
     });
 
     it.each([

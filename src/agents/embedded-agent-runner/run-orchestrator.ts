@@ -425,6 +425,7 @@ async function runEmbeddedAgentInternal(
             agentDir,
             workspaceResolution,
             workspaceDir: resolvedWorkspace,
+            bootstrapWorkspaceDir: canonicalWorkspace,
             isCanonicalWorkspace,
             globalLane,
             hookRunner,

@@ -10,6 +10,8 @@ import {
   type HeartbeatToolResponse,
 } from "../../../auto-reply/heartbeat-tool-response.js";
 import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
@@ -22,6 +24,7 @@ import {
   isSilentReplyPayloadText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
+import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -53,7 +56,7 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
-import type { ToolErrorSummary } from "../../tool-error-summary.js";
+import type { ToolErrorSummary, ToolRecoverySummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
 import { hasExplicitMutatingToolFailureAcknowledgement } from "./tool-failure-acknowledgement.js";
@@ -155,6 +158,7 @@ export function buildEmbeddedRunPayloads(params: {
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
+  lastToolRecovery?: ToolRecoverySummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   isHeartbeatTrigger?: boolean;
@@ -186,7 +190,7 @@ export function buildEmbeddedRunPayloads(params: {
     params.lastToolError.mutatingAction === true
       ? { toolName: params.lastToolError.toolName }
       : undefined;
-  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure) {
+  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure && !params.lastToolRecovery) {
     return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
   // Internal source replies always need transcript/UI mirrors. Only a
@@ -226,6 +230,9 @@ export function buildEmbeddedRunPayloads(params: {
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =
     currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : params.lastAssistant);
+  // Pre-upgrade recovered messages have no stored facts, and recovery intentionally does not
+  // reparse text; one in-flight reply can lose delivery or speech intent across this boundary.
+  const storedDelivery = assistantForPayload?.openclawDelivery;
   const lastAssistantStopReason = assistantForPayload?.stopReason;
   const lastAssistantErrored = lastAssistantStopReason === "error";
   const lastAssistantAborted = lastAssistantStopReason === "aborted";
@@ -411,22 +418,42 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+    const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
+    const delivery = shouldUseCanonicalFinalAnswer
+      ? {
+          audioAsVoice: storedDelivery?.audioAsVoice,
+          replyToCurrent: storedDelivery?.replyToCurrent,
+          replyToId: storedDelivery?.replyToId,
+          replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
+        }
+      : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
+    if (
+      !cleanedText &&
+      (!mediaUrls || mediaUrls.length === 0) &&
+      !delivery.audioAsVoice &&
+      !ttsFacts
+    ) {
       continue;
     }
-    replyItems.push({
+    const replyPayload = {
       text: cleanedText,
       media: mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
+      ...delivery,
       preserveTextWhitespace: preserveCanonicalItemWhitespace,
-    });
+    };
+    replyItems.push(
+      ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
+    );
     hasUserFacingAssistantReply = true;
     if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
       hasUserFacingFailureAcknowledgement = true;
     }
+  }
+  if (params.lastToolRecovery) {
+    const toolLabel = formatToolAggregate(params.lastToolRecovery.toolName, undefined, {
+      markdown: useMarkdown,
+    });
+    replyItems.push({ text: `✅ ${toolLabel} succeeded after retry.` });
   }
   if (params.lastToolError) {
     // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
@@ -468,13 +495,13 @@ export function buildEmbeddedRunPayloads(params: {
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => {
-      const payload: ReplyPayload = {
+      const payload: ReplyPayload = copyReplyPayloadMetadata(item, {
         text: item.preserveTextWhitespace
           ? item.text.trim().length > 0
             ? item.text
             : undefined
           : normalizeOptionalString(item.text),
-      };
+      });
       const mediaUrl = item.mediaUrl ?? item.media?.[0];
       if (mediaUrl) {
         payload.mediaUrl = mediaUrl;
@@ -581,7 +608,7 @@ export function buildEmbeddedRunPayloads(params: {
       return payload;
     })
     .filter((p) => {
-      if (!hasReplyPayloadContent(p)) {
+      if (!hasReplyPayloadContent(p) && !getReplyPayloadMetadata(p)?.tts) {
         return false;
       }
       if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {

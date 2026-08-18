@@ -2,6 +2,7 @@ import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-
 // Lmstudio plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
+  type OpenClawConfig,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthMethod,
@@ -9,7 +10,6 @@ import {
   type ProviderAuthResult,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   normalizeOptionalSecretInput,

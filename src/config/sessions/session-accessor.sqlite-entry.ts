@@ -81,7 +81,7 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
-import type { GroupKeyResolution, SessionEntry } from "./types.js";
+import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
 

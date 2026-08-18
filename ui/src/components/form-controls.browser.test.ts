@@ -31,6 +31,7 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
+    "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/config.css",
     "ui/src/styles/usage.css",

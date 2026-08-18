@@ -30,7 +30,9 @@ export type PersistedUserTurnMediaInput = Pick<
   workspaceDir?: string | null;
 };
 
-export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
+export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> & {
+  __openclaw?: Record<string, unknown>;
+};
 
 export type UserTurnInput = {
   text?: string | null;
@@ -158,6 +160,8 @@ export type UserTurnTranscriptRecorder = {
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
+  /** Confirms exact-run steering provenance after transcript commitment is proven. */
+  confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   replaceSessionDeliveryAckIds?: (deliveryIds: readonly string[]) => boolean;

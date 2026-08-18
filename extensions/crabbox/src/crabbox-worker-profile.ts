@@ -41,7 +41,16 @@ type CrabboxProfile = {
   setup?: string;
 };
 
+const CRABBOX_MACHINE_OPTIONS = [
+  { id: "standard", label: "Standard", description: "Cheap smoke checks and small repos" },
+  { id: "fast", label: "Fast", description: "General maintainer testing" },
+  { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
+  { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+] as const;
+
 type IsExecutable = (candidate: string) => boolean;
+
+export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 
 function requirePositiveDuration(value: unknown, key: string): string {
   const duration = nonEmptyString(value);
@@ -139,6 +148,32 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   };
 }
 
+export function listCrabboxMachineOptions(profile: WorkerProfile) {
+  const configuredClass = parseCrabboxProfile(profile).class;
+  const options = CRABBOX_MACHINE_OPTIONS.map((option) =>
+    option.id === configuredClass
+      ? {
+          id: option.id,
+          label: option.label,
+          description: option.description,
+          default: true,
+        }
+      : option,
+  );
+  if (options.some((option) => option.id === configuredClass)) {
+    return options;
+  }
+  return [
+    ...options,
+    {
+      id: configuredClass,
+      label: configuredClass,
+      description: "Configured instance type",
+      default: true,
+    },
+  ];
+}
+
 export function buildCrabboxWarmupArgs(
   profile: CrabboxProfile,
   leaseId: string,
@@ -197,9 +232,22 @@ export function resolveCrabboxBinary(params: {
   if (params.explicit) {
     return params.explicit;
   }
+  return findCrabboxBinary(params) ?? "crabbox";
+}
+
+export function findCrabboxBinary(params: {
+  explicit?: string;
+  isExecutable?: IsExecutable;
+  openclawRoot: string;
+  pathEnv?: string;
+  platform?: NodeJS.Platform;
+}): string | undefined {
   const platform = params.platform ?? process.platform;
   const isExecutable =
     params.isExecutable ?? ((candidate) => defaultIsExecutable(candidate, platform));
+  if (params.explicit) {
+    return isExecutable(params.explicit) ? params.explicit : undefined;
+  }
   const siblingBase = path.resolve(params.openclawRoot, "../crabbox/bin/crabbox");
   for (const candidate of binaryCandidates(siblingBase, platform)) {
     if (isExecutable(candidate)) {
@@ -219,7 +267,7 @@ export function resolveCrabboxBinary(params: {
       }
     }
   }
-  return "crabbox";
+  return undefined;
 }
 
 export function resolveOpenClawRoot(pluginRoot: string | undefined): string {
@@ -247,8 +295,4 @@ export function operationLeaseId(operationId: string): string {
     .update(operationId)
     .digest("hex")
     .slice(0, 12)}`;
-}
-
-export function identityRefId(leaseId: string): string {
-  return `/leases/${leaseId}/identity`;
 }

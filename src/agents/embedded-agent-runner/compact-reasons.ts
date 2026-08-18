@@ -32,6 +32,7 @@ export type CompactionReasonCode =
   | "guard_blocked"
   | "summary_failed"
   | "timeout"
+  | "auth_failed"
   | "provider_error_4xx"
   | "provider_error_5xx";
 
@@ -85,6 +86,12 @@ export function classifyCompactionReason(reason?: string): CompactionReasonCode 
   const text = normalizeLowercaseStringOrEmpty(reason);
   if (!text) {
     return "unknown";
+  }
+  if (
+    text.startsWith("no api key found") ||
+    (text.startsWith("authentication failed for ") && text.includes("credentials may have expired"))
+  ) {
+    return "auth_failed";
   }
   if (text.includes("nothing to compact")) {
     return "no_compactable_entries";

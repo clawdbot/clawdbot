@@ -980,39 +980,6 @@ describe("handleMessageEnd", () => {
     );
   });
 
-  it("does not retain reaction-only text as reply-target terminal evidence", () => {
-    const emitBlockReply = vi.fn();
-    const ctx = createMessageEndContext({
-      emitBlockReply,
-      consumeReplyDirectives: vi.fn(() => null),
-      state: {
-        assistantTexts: ["[[react_to_current:✅]]"],
-        assistantTextBaseline: 0,
-        blockReplyBreak: "text_end",
-        blockBuffer: "",
-        deltaBuffer: "",
-      },
-    });
-
-    void endMessage(ctx, {
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "[[react_to_current:✅]]" }],
-        usage: { input: 10, output: 5, total: 15 },
-      },
-    });
-
-    expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
-    expect(emitBlockReply).not.toHaveBeenCalled();
-    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "",
-        addedDuringMessage: true,
-        reconcileCurrentMessage: true,
-      }),
-    );
-  });
-
   it("emits a replacement final assistant event when final_answer appears only at message_end", () => {
     const onAgentEvent = vi.fn();
     const ctx = createMessageEndContext({

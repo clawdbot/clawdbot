@@ -24,6 +24,7 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
   return {
     configPath: context.configPath,
     env: context.deps.env,
+    logger: context.deps.logger,
     loadConfig: (loadOptions?: { skipSuspiciousRecovery?: boolean }) =>
       loadConfigFromContext(context, loadOptions),
     readBestEffortConfig: async () =>

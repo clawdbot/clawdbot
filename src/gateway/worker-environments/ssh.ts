@@ -258,23 +258,6 @@ export async function runWorkerSshCandidates<T extends WorkerSshCommandResult>(
   return lastResult!;
 }
 
-/** Moves a reconnect to the next candidate without overwriting a newer concurrent selection. */
-export function advanceWorkerSshAfterTransportExit(
-  prepared: PreparedWorkerSsh,
-  failedPort: number,
-  exit: { code: number | null; signal: NodeJS.Signals | null },
-): boolean {
-  if (exit.code !== 255 || exit.signal !== null || prepared.port !== failedPort) {
-    return false;
-  }
-  const nextPort = workerSshCandidatePorts(prepared)[1];
-  if (nextPort === undefined) {
-    return false;
-  }
-  prepared.selectPort(nextPort);
-  return true;
-}
-
 /** Pinned SSH options shared by bootstrap, tunnel control, and workspace transfer. */
 export function workerSshOptions(
   prepared: PreparedWorkerSsh,

@@ -53,6 +53,7 @@ const RetainInputSchema = z
     retain: z.array(RetainEntrySchema).max(RETAIN_MAX_ENTRIES),
     bundleHashes: BundleHashesSchema.optional(),
     acknowledgedBundleGeneration: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    bundleStatusHash: z.string().regex(BUNDLE_HASH_PATTERN).optional(),
   })
   .strict()
   .superRefine((input, context) => {
@@ -62,7 +63,23 @@ const RetainInputSchema = z
         message: "acknowledgedBundleGeneration requires bundleHashes",
       });
     }
+    if (
+      input.bundleStatusHash !== undefined &&
+      !input.bundleHashes?.includes(input.bundleStatusHash)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "bundleStatusHash must be retained by bundleHashes",
+      });
+    }
   });
+
+const BundleStatusSchema = z
+  .object({
+    bundleHash: z.string().regex(BUNDLE_HASH_PATTERN),
+    status: z.enum(["installed", "missing"]),
+  })
+  .strict();
 
 const RetainResultSchema = z
   .object({
@@ -71,6 +88,7 @@ const RetainResultSchema = z
     hasMore: z.boolean(),
     bundleDeleted: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
     bundleGeneration: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    bundleStatus: BundleStatusSchema.optional(),
   })
   .strict();
 

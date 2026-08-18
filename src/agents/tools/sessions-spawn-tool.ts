@@ -28,6 +28,7 @@ import {
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { getSubagentDeliveryBacklogPressure } from "../subagents/registry/subagent-registry.js";
+import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
@@ -53,6 +54,7 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   resolveEffectiveSessionToolsVisibility,
@@ -320,6 +322,7 @@ export function createSessionsSpawnTool(
   const { restrictToSpawned } = resolveSandboxedSessionToolContext({
     cfg: visibilityCfg,
     agentSessionKey: opts?.agentSessionKey,
+    requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
   return {
@@ -492,6 +495,7 @@ export function createSessionsSpawnTool(
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as InlineAttachment[])
         : undefined;
+      const parentExecutionIdentityToken = getGatewayToolCallerIdentity()?.executionIdentityToken;
 
       if (runtime === "acp") {
         const { spawnAcpDirect } = await loadAcpSpawnModule();
@@ -525,25 +529,28 @@ export function createSessionsSpawnTool(
             streamTo,
             attachments: acpAttachments?.attachments,
           },
-          {
-            agentSessionKey: opts?.agentSessionKey,
-            requesterTurnRunId: opts?.requesterTurnRunId,
-            completionOwnerKey: opts?.completionOwnerKey,
-            requesterAgentIdOverride: opts?.requesterAgentIdOverride,
-            agentChannel: opts?.agentChannel,
-            agentAccountId: opts?.agentAccountId,
-            agentTo: opts?.agentTo,
-            agentThreadId: opts?.agentThreadId,
-            currentMessagingTarget: opts?.currentMessagingTarget,
-            currentChannelId: opts?.currentChannelId,
-            currentMessageId: opts?.currentMessageId,
-            agentGroupId: opts?.agentGroupId ?? undefined,
-            agentGroupSpace: opts?.agentGroupSpace,
-            agentMemberRoleIds: opts?.agentMemberRoleIds,
-            sandboxed: opts?.sandboxed,
-            inheritedToolAllowlist: opts?.inheritedToolAllowlist,
-            inheritedToolDenylist: opts?.inheritedToolDenylist,
-          },
+          withParentExecutionIdentity(
+            {
+              agentSessionKey: opts?.agentSessionKey,
+              requesterTurnRunId: opts?.requesterTurnRunId,
+              completionOwnerKey: opts?.completionOwnerKey,
+              requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+              agentChannel: opts?.agentChannel,
+              agentAccountId: opts?.agentAccountId,
+              agentTo: opts?.agentTo,
+              agentThreadId: opts?.agentThreadId,
+              currentMessagingTarget: opts?.currentMessagingTarget,
+              currentChannelId: opts?.currentChannelId,
+              currentMessageId: opts?.currentMessageId,
+              agentGroupId: opts?.agentGroupId ?? undefined,
+              agentGroupSpace: opts?.agentGroupSpace,
+              agentMemberRoleIds: opts?.agentMemberRoleIds,
+              sandboxed: opts?.sandboxed,
+              inheritedToolAllowlist: opts?.inheritedToolAllowlist,
+              inheritedToolDenylist: opts?.inheritedToolDenylist,
+            },
+            parentExecutionIdentityToken,
+          ),
         );
         return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }
@@ -589,27 +596,30 @@ export function createSessionsSpawnTool(
               ? readToolStringParam(params.attachAs as Record<string, unknown>, "mountPath")
               : undefined,
         },
-        {
-          agentSessionKey: opts?.agentSessionKey,
-          requesterTurnRunId: opts?.requesterTurnRunId,
-          completionOwnerKey: opts?.completionOwnerKey,
-          agentChannel: opts?.agentChannel,
-          agentAccountId: opts?.agentAccountId,
-          agentTo: opts?.agentTo,
-          agentThreadId: opts?.agentThreadId,
-          currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
-          currentChannelId: opts?.currentChannelId,
-          currentMessageId: opts?.currentMessageId,
-          agentGroupId: opts?.agentGroupId,
-          agentGroupChannel: opts?.agentGroupChannel,
-          agentGroupSpace: opts?.agentGroupSpace,
-          agentMemberRoleIds: opts?.agentMemberRoleIds,
-          requesterAgentIdOverride: opts?.requesterAgentIdOverride,
-          workspaceDir: opts?.workspaceDir,
-          inheritedToolAllowlist: opts?.inheritedToolAllowlist,
-          inheritedToolDenylist: opts?.inheritedToolDenylist,
-          requesterRunId: opts?.requesterRunId,
-        },
+        withParentExecutionIdentity(
+          {
+            agentSessionKey: opts?.agentSessionKey,
+            requesterTurnRunId: opts?.requesterTurnRunId,
+            completionOwnerKey: opts?.completionOwnerKey,
+            agentChannel: opts?.agentChannel,
+            agentAccountId: opts?.agentAccountId,
+            agentTo: opts?.agentTo,
+            agentThreadId: opts?.agentThreadId,
+            currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
+            currentChannelId: opts?.currentChannelId,
+            currentMessageId: opts?.currentMessageId,
+            agentGroupId: opts?.agentGroupId,
+            agentGroupChannel: opts?.agentGroupChannel,
+            agentGroupSpace: opts?.agentGroupSpace,
+            agentMemberRoleIds: opts?.agentMemberRoleIds,
+            requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+            workspaceDir: opts?.workspaceDir,
+            inheritedToolAllowlist: opts?.inheritedToolAllowlist,
+            inheritedToolDenylist: opts?.inheritedToolDenylist,
+            requesterRunId: opts?.requesterRunId,
+          },
+          parentExecutionIdentityToken,
+        ),
       );
 
       return jsonResult(addRoleToFailureResult(result, requestedAgentId));

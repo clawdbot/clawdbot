@@ -1,6 +1,5 @@
 // Covers default device identity SQLite path under the state dir.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayLockDir } from "../config/paths.js";
@@ -44,11 +43,8 @@ describe("device identity state dir defaults", () => {
     await withTestDir("openclaw-identity-env-state-", async (rootDir) => {
       const stateDir = path.join(rootDir, "selected-state");
       const fakeHome = path.join(rootDir, "home");
-      const legacyTmpDir = path.join(rootDir, "legacy-process-tmp");
       fs.mkdirSync(stateDir, { recursive: true });
       fs.mkdirSync(fakeHome, { recursive: true });
-      fs.mkdirSync(legacyTmpDir, { recursive: true });
-      vi.spyOn(os, "tmpdir").mockReturnValue(legacyTmpDir);
       const env = {
         ...process.env,
         HOME: fakeHome,
@@ -58,25 +54,18 @@ describe("device identity state dir defaults", () => {
 
       loadOrCreateDeviceIdentity({ env });
 
-      const coordinatorPaths = resolveDeviceIdentityCoordinatorPaths({
+      const coordinatorPath = resolveDeviceIdentityCoordinatorPaths({
         databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
         stateDir,
-        temporaryDirectory: legacyTmpDir,
         uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-      });
-      const processTempPath = coordinatorPaths[0];
-      const stateLocalPath = coordinatorPaths[1];
-      if (!processTempPath || !stateLocalPath) {
-        throw new Error("coordinator bridge paths are unavailable");
+      })[0];
+      if (!coordinatorPath) {
+        throw new Error("state-local coordinator path is unavailable");
       }
       const stateCoordinators = fs
-        .readdirSync(path.dirname(stateLocalPath))
-        .filter((entry) => entry.startsWith("device-identity."));
-      const processTempCoordinators = fs
-        .readdirSync(path.dirname(processTempPath))
+        .readdirSync(path.dirname(coordinatorPath))
         .filter((entry) => entry.startsWith("device-identity."));
       expect(stateCoordinators).toHaveLength(1);
-      expect(processTempCoordinators).toEqual(stateCoordinators);
       expect(fs.existsSync(path.join(fakeHome, ".openclaw"))).toBe(false);
     });
   });

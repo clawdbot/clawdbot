@@ -57,6 +57,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     nodeUnsubscribeAll,
     hasTalkNodeConnected,
     clients,
+    isConnectionActive,
     watchNodeHttpRuntime,
     sharedGatewaySessionGenerationState,
     resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
@@ -148,6 +149,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       nodeUnsubscribeAll,
       hasConnectedTalkNode: hasTalkNodeConnected,
       clients,
+      isConnectionActive,
       invalidateDeviceTransports: watchNodeHttpRuntime.invalidateSessionsForDevice,
       disconnectDeviceTransports: watchNodeHttpRuntime.disconnectSessionsForDevice,
       enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => {
@@ -214,6 +216,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     chatMetadataLifecycle,
     gatewayRequestContext,
     flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
+    minimalTestGateway,
+    logWarning: (message) => log.warn(message),
     sidecars: runtimeState.gatewayLifetimeSidecars,
   });
   pluginGatewayContext.current = gatewayRequestContext;
