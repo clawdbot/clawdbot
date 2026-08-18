@@ -5,9 +5,12 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { createConcurrencyWorkerScript } from "./session-accessor.reply-init-concurrency.worker-script.js";
+import { createConcurrencyWorkerScript } from "./session-accessor.reply-init-concurrency.worker-script.test-support.js";
 
-export { AGENT_ID, SESSION_KEY } from "./session-accessor.reply-init-concurrency.worker-script.js";
+export {
+  AGENT_ID,
+  SESSION_KEY,
+} from "./session-accessor.reply-init-concurrency.worker-script.test-support.js";
 
 type ChildResult =
   | {
