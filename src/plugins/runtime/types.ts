@@ -180,6 +180,7 @@ export type PluginRuntime = PluginRuntimeCore & {
 };
 
 export type CreatePluginRuntimeOptions = {
+  gateway?: PluginRuntime["gateway"];
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;

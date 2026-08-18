@@ -104,6 +104,7 @@ export async function prepareGatewayKernelState(params: {
     startupTailscaleOverride,
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
+    pluginGatewayContext,
   } = bootstrap;
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
@@ -412,9 +413,6 @@ export async function prepareGatewayKernelState(params: {
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
-  const pluginGatewayContext: { current: GatewayRequestContext | undefined } = {
-    current: undefined,
-  };
   const watchNodeRequestHandler: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};

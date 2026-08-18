@@ -15,6 +15,7 @@ import {
 import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worker-provider-manifest.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import type { GatewayContextResolver } from "./server-plugin-in-process-dispatch.js";
 import { loadGatewayPlugins, setPluginSubagentOverridePolicies } from "./server-plugins.js";
 
 // Gateway plugin bootstrap applies activation/auto-enable config, loads plugins,
@@ -46,6 +47,7 @@ type GatewayPluginBootstrapParams = {
   logDiagnostics?: boolean;
   startupTrace?: GatewayStartupTrace;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
@@ -137,6 +139,9 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
   });
   primeConfiguredBindingRegistry({ cfg: resolvedConfig });
   if ((params.logDiagnostics ?? true) && loaded.pluginRegistry.diagnostics.length > 0) {
