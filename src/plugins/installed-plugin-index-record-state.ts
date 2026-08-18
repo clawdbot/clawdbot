@@ -3,6 +3,7 @@ import {
   inspectPluginInstallRecordMap,
   type PluginInstallRecordMapState,
 } from "../config/plugin-install-record-map.js";
+import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   resolveInstalledPluginIndexStateDatabaseOptions,
@@ -48,7 +49,10 @@ export function inspectPersistedInstalledPluginIndexInstallRecordsSync(
         return parsed === undefined ? { status: "invalid" } : inspectPluginInstallRecordMap(parsed);
       }, resolveInstalledPluginIndexStateDatabaseOptions(options)) ?? { status: "missing" }
     );
-  } catch {
+  } catch (error) {
+    if (isSqliteSchemaVersionError(error)) {
+      throw error;
+    }
     return { status: "invalid" };
   }
 }
