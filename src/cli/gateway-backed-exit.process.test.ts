@@ -24,6 +24,7 @@ import {
   storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
@@ -875,39 +876,73 @@ describe("gateway-backed CLI process exit", () => {
     });
   }, 30_000);
 
-  it("renders missing device-list credentials as expected guidance, not a crash", async () => {
-    const root = tempDirs.make("openclaw-devices-credentials-human-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const port = await getFreePort();
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify({ gateway: { mode: "local", port } })}\n`,
-      "utf8",
-    );
-
-    const result = await runIsolatedGatewayCli({
+  it.each([
+    {
+      label: "device list",
       args: ["devices", "list"],
-      root,
-      stateDir,
-      configPath,
-    });
+      gatewayOwnsLock: false,
+      method: "device.pair.list",
+    },
+    {
+      label: "skills workshop apply",
+      args: ["skills", "workshop", "apply", "proposal-missing-credentials"],
+      gatewayOwnsLock: true,
+      method: "health",
+    },
+  ])(
+    "renders missing $label credentials as expected guidance, not a crash",
+    async ({ label, args, gatewayOwnsLock, method }) => {
+      const root = tempDirs.make(`openclaw-${label.replaceAll(" ", "-")}-credentials-human-`);
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const port = await getFreePort();
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port } })}\n`,
+        "utf8",
+      );
 
-    expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
-    expect(result.stderr).toContain(
-      "gateway device.pair.list requires credentials before opening a websocket",
-    );
-    expect(result.stderr).toContain(
-      "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
-    );
-    expect(result.stderr).toContain(`Config: ${configPath}`);
-    expect(result.stderr).not.toContain("The CLI command failed");
-    expect(result.stderr).not.toContain("Could not start the CLI");
-    expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
-    expect(result.stderr).not.toContain("Stack:");
-    expect(result.stderr).not.toContain("openclaw doctor");
-  }, 30_000);
+      const lock = gatewayOwnsLock
+        ? await acquireGatewayLock({
+            allowInTests: true,
+            env: {
+              ...process.env,
+              HOME: root,
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_HOME: root,
+              OPENCLAW_STATE_DIR: stateDir,
+            },
+            port,
+            role: "gateway",
+            timeoutMs: 1_000,
+          })
+        : null;
+      if (gatewayOwnsLock) {
+        expect(lock).not.toBeNull();
+      }
+      try {
+        const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
+
+        expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
+        expect(result.stderr).toContain(
+          `gateway ${method} requires credentials before opening a websocket`,
+        );
+        expect(result.stderr).toContain(
+          "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+        );
+        expect(result.stderr).toContain(`Config: ${configPath}`);
+        expect(result.stderr).not.toContain("The CLI command failed");
+        expect(result.stderr).not.toContain("Could not start the CLI");
+        expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+        expect(result.stderr).not.toContain("Stack:");
+        expect(result.stderr).not.toContain("openclaw doctor");
+      } finally {
+        await lock?.release();
+      }
+    },
+    30_000,
+  );
 
   it.each([
     { label: "channels config-only status", args: ["channels", "status"] },
