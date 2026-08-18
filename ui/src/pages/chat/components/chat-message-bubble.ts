@@ -27,6 +27,7 @@ import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
+  isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
@@ -62,6 +63,7 @@ import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolCard,
+  renderToolOutcome,
   renderToolPreview,
   isRunningToolCard,
   resolveCollapsedToolDetail,
@@ -331,6 +333,10 @@ export function renderGroupedMessage(
     (opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false);
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  // One expanded card already closes with its own outcome line; every other
+  // shape renders inline rows only, so the message body records the failure.
+  const expandsSingleToolCard = Boolean(singleToolCard) && !markdown && !hasImages;
+  const failedToolCard = expandsSingleToolCard ? undefined : toolCards.find(isToolCardError);
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
         name: singleToolCard.name,
@@ -527,7 +533,7 @@ export function renderGroupedMessage(
                           ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                           : nothing}
                       ${hasToolCards
-                        ? singleToolCard && !markdown && !hasImages
+                        ? expandsSingleToolCard && singleToolCard
                           ? renderExpandedToolCardContent(
                               singleToolCard,
                               opts.sessionKey,
@@ -551,6 +557,9 @@ export function renderGroupedMessage(
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
                             })
+                        : nothing}
+                      ${failedToolCard
+                        ? renderToolOutcome("failed", failedToolCard.exitCode)
                         : nothing}
                     </div>
                   `

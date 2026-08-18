@@ -275,11 +275,6 @@
   color: inherit;
 }
 
-.chat-tool-row__cmd--secondary {
-  flex: 0 1 auto;
-  color: color-mix(in srgb, var(--muted) 85%, var(--text) 15%);
-}
-
 .chat-tool-row__verb {
   flex-shrink: 0;
   font: inherit;
@@ -314,7 +309,10 @@
    correct in both themes. Scoped to no-preference so reduced-motion users
    keep plain static text and syntax colors. */
 @media (prefers-reduced-motion: no-preference) {
-  .chat-tool-row--running .chat-tool-row__verb {
+  /* Whichever element names the work in progress: the action verb on file rows,
+     the command itself on terminal rows. Syntax tokens inherit `color`, so the
+     clipped gradient paints their glyphs too. */
+  .chat-tool-row--running :is(.chat-tool-row__verb, .chat-tool-row__cmd) {
     background-image: linear-gradient(
       90deg,
       var(--text) 0%,
@@ -638,41 +636,6 @@
   border-bottom: 1px solid var(--border);
 }
 
-.chat-tool-card__tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.chat-tool-card__tab {
-  padding: 6px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font: 12px/1 var(--font-body);
-  cursor: var(--cursor-action);
-}
-
-.chat-tool-card__tab[aria-selected="true"] {
-  background: color-mix(in srgb, var(--text) 9%, transparent);
-  color: var(--text);
-}
-
-.chat-tool-card__tab-panel[hidden] {
-  display: none;
-}
-
-.chat-tool-card__tab-panel {
-  min-width: 0;
-}
-
-.chat-tool-card__empty {
-  padding: 12px 14px 16px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
 /* Cards whose body is a single block (terminal, diff) skip the header row and
    float the side-panel action over the block instead. */
 .chat-tool-card--flush {
@@ -693,9 +656,10 @@
   transition: opacity 120ms ease-out;
 }
 
-.chat-tool-card__header .chat-tool-card__action-btn {
-  width: 28px;
-  height: 28px;
+/* Header actions sit in a bordered row, so they run one size smaller than the
+   free-floating ones; the command reservation below tracks whichever applies. */
+.chat-tool-card__header {
+  --chat-tool-action-size: 28px;
 }
 
 .chat-tool-card__header:hover > .chat-tool-card__actions,
@@ -703,8 +667,10 @@
   opacity: 1;
 }
 
+/* Reserve the floating action box (button + its 6px inset) plus the block's own
+   12px padding so command text never runs underneath it. */
 .chat-tool-card--flush:has(> .chat-tool-card__actions) .chat-tool-term__cmd {
-  padding-right: 42px;
+  padding-right: calc(var(--chat-tool-action-size, 40px) + 18px);
 }
 
 .chat-tool-card--flush:hover > .chat-tool-card__actions,
@@ -731,8 +697,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: var(--chat-tool-action-size, 40px);
+  height: var(--chat-tool-action-size, 40px);
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -845,21 +811,6 @@
   word-break: break-word;
   overflow: auto;
   max-height: min(520px, 60vh);
-}
-
-.chat-tool-card__plain-output {
-  margin: 0;
-  padding: 12px 14px 14px;
-  overflow: auto;
-  color: var(--muted);
-  font: 12px/1.5 var(--mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.chat-tool-card__plain-output code {
-  color: inherit;
-  font: inherit;
 }
 
 .chat-tool-card__block-content code {
@@ -1110,7 +1061,7 @@
 /* Keep the activity summary, call bubbles, and flat result rows on one width.
    Include the role classes so this wins over the generic tool-group rule. */
 .chat-group.tool.chat-group--activity .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(980px, 100%));
+  max-width: var(--chat-message-max-width, min(760px, 100%));
 }
 
 .chat-activity-group {
@@ -1161,25 +1112,6 @@
   padding-left: 0;
   border-left: 0;
   overflow-y: auto;
-  mask-image: none;
-}
-
-.chat-activity-group__body.has-scroll-bottom:not(.has-scroll-top) {
-  mask-image: linear-gradient(to bottom, var(--text) calc(100% - 44px), transparent 100%);
-}
-
-.chat-activity-group__body.has-scroll-top:not(.has-scroll-bottom) {
-  mask-image: linear-gradient(to bottom, transparent 0, var(--text) 44px);
-}
-
-.chat-activity-group__body.has-scroll-top.has-scroll-bottom {
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    var(--text) 44px,
-    var(--text) calc(100% - 44px),
-    transparent 100%
-  );
 }
 
 /* Completed-turn work rollup: slim "Worked for X" disclosure standing in for

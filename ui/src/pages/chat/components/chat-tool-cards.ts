@@ -201,20 +201,19 @@ export function renderRawOutputToggle(text: string) {
         <span>${t("chat.toolCards.rawDetails")}</span>
         <span class="chat-inline-disclosure__chevron" aria-hidden="true">${icons.chevronDown}</span>
       </button>
-      <div class="chat-tool-card__raw-body" hidden>
-        ${renderToolDataBlock({ label: t("chat.toolCards.toolOutput"), text })}
-      </div>
+      <div class="chat-tool-card__raw-body" hidden>${renderToolDataBlock({ text })}</div>
     </div>
   `;
 }
 
-function renderToolDataBlock(params: { label: string; text: string }) {
+// Plain tool output is the block's default content, so it carries no header;
+// only input/error blocks need a label to stay distinguishable.
+function renderToolDataBlock(params: { label?: string; text: string }) {
   const { label, text } = params;
   const codeClass = isMarkdownBlockArtText(text) ? "markdown-block-art" : "";
-  const showLabel = label !== t("chat.toolCards.toolOutput");
   return html`
     <div class="chat-tool-card__block">
-      ${showLabel
+      ${label
         ? html`<div class="chat-tool-card__block-header">
             <span class="chat-tool-card__block-icon">${icons.zap}</span>
             <span class="chat-tool-card__block-label">${label}</span>
@@ -418,19 +417,12 @@ function renderProgressCardReceipt(card: ToolCard, outcome: ToolCardOutcome) {
           : markdown
             ? t("sessionProgressCard.receipt.noteUpdated")
             : t("sessionProgressCard.receipt.cleared");
+  // The label already names the running/failed state, so the row stays neutral
+  // like every other transcript activity row instead of adding its own chrome.
   return html`<div class="chat-tool-msg-collapse chat-progress-card-receipt">
     <div class="chat-tool-msg-summary chat-tool-row" role="status">
       <span class="chat-tool-msg-summary__icon">${renderToolIcon("listChecks")}</span>
       <span class="chat-tool-msg-summary__label">${label}</span>
-      ${outcome === "failed"
-        ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
-        : nothing}
-      ${outcome === "running"
-        ? html`<span
-            class="chat-tool-row__spinner"
-            aria-label=${t("chat.toolCards.running")}
-          ></span>`
-        : nothing}
     </div>
   </div>`;
 }
@@ -621,6 +613,12 @@ function extraArgsBeyondRowTarget(
 }
 
 function resolveToolWorkspaceFilePath(card: ToolCard, view: ToolCallView): string | null {
+  const singleOperation = view.fileOperations?.length === 1 ? view.fileOperations[0] : undefined;
+  // A delete removes its own target, so the workspace loader would always
+  // report "Failed to load"; the row keeps its disclosure but no file action.
+  if (singleOperation?.operation === "delete") {
+    return null;
+  }
   const args = asNullableRecord(card.args);
   if (args) {
     for (const key of ["path", "file_path", "filePath", "notebook_path"]) {
@@ -632,9 +630,10 @@ function resolveToolWorkspaceFilePath(card: ToolCard, view: ToolCallView): strin
   }
   const fallback = `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`;
   const fallbackPath = fallback.trim();
+  // Aggregate patch labels ("2 files", "a.ts → b.ts") name no single file, so
+  // only a recorded operation matching the rendered path stays navigable.
   if (view.fileOperations) {
-    const operation = view.fileOperations.length === 1 ? view.fileOperations[0] : undefined;
-    return operation?.path === fallbackPath ? operation.path : null;
+    return singleOperation?.path === fallbackPath ? singleOperation.path : null;
   }
   return fallbackPath || null;
 }
@@ -658,7 +657,8 @@ function renderToolWorkspaceFilePath(
     : html`<div class="chat-tool-card__detail">${label}</div>`;
 }
 
-function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
+/** Neutral end-state line every expanded tool surface closes with. */
+export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
   const label =
     outcome === "failed"
       ? exitCode === undefined
@@ -985,7 +985,7 @@ export function renderExpandedToolCardContent(
                   ? renderToolWorkspaceFilePath(detail, workspaceFilePath, onOpenWorkspaceFile)
                   : html`<div class="chat-tool-card__detail">${detail}</div>`
                 : nothing}
-              ${sidebarAction}
+              <div class="chat-tool-card__actions">${sidebarAction}</div>
             </div>
           `
         : nothing}
@@ -1001,7 +1001,7 @@ export function renderExpandedToolCardContent(
         ? card.preview
           ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
           : renderToolDataBlock({
-              label: t(isError ? "chat.toolCards.toolError" : "chat.toolCards.toolOutput"),
+              ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
               text: card.outputText!,
             })
         : isError
