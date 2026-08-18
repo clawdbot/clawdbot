@@ -52,11 +52,14 @@ export type StepAuditRollbackResult =
       ok: false;
       reason:
         | "bad-args"
+        | "disposed"
         | "rollback-limit"
         | "no-checkpoint"
         | "no-messages"
         | "nothing-to-remove"
         | "already-rolled-back"
+        | "persistence-blocked"
+        | "persistence-failed"
         | string;
     };
 
@@ -65,12 +68,17 @@ export interface StepAuditApi {
   rollback(feedbackText: string, stepSeq?: number): StepAuditRollbackResult;
 }
 
+/** Internal handle that can be revoked when the attempt tears down. */
+interface StepAuditApiInternal extends StepAuditApi {
+  dispose(): void;
+}
+
 /**
  * Process-wide bridge between plugin hook callbacks and attempt-scoped
  * checkpoints. Review plugins look their runId up here; see module docs.
  */
 const globalRegistry = globalThis as unknown as {
-  __openclawStepAuditRegistry?: Map<string, StepAuditApi>;
+  __openclawStepAuditRegistry?: Map<string, StepAuditApiInternal>;
 };
 
 /** Typed accessor for review plugins that prefer an import over the global. */
@@ -89,10 +97,11 @@ export function installStepAuditApi(input: {
   const { runId, activeSession, sessionManager, feedbackMarker } = input;
   const registry =
     globalRegistry.__openclawStepAuditRegistry ??
-    (globalRegistry.__openclawStepAuditRegistry = new Map<string, StepAuditApi>());
+    (globalRegistry.__openclawStepAuditRegistry = new Map<string, StepAuditApiInternal>());
 
   const cuts = new Map<number, StepAuditCut>();
   let rollbackCount = 0;
+  let disposed = false;
 
   const readMessages = (): AgentMessage[] | undefined => activeSession.agent.state.messages;
 
@@ -145,9 +154,12 @@ export function installStepAuditApi(input: {
     timestamp: Date.now(),
   });
 
-  const api: StepAuditApi = {
+  const api: StepAuditApiInternal = {
     capture(stepSeq: number): StepAuditCaptureResult {
       try {
+        if (disposed) {
+          return { ok: false, reason: "disposed" };
+        }
         const messages = readMessages();
         if (!Array.isArray(messages)) {
           return { ok: false, reason: "no-messages" };
@@ -165,6 +177,9 @@ export function installStepAuditApi(input: {
     },
     rollback(feedbackText: string, stepSeq?: number): StepAuditRollbackResult {
       try {
+        if (disposed) {
+          return { ok: false, reason: "disposed" };
+        }
         if (typeof feedbackText !== "string" || !feedbackText.trim()) {
           return { ok: false, reason: "bad-args" };
         }
@@ -208,14 +223,15 @@ export function installStepAuditApi(input: {
         rollbackCount += 1;
         const removed = messages.length - cut;
         const feedbackMessage = buildFeedbackMessage(feedbackText);
-        const truncated = [...messages.slice(0, cut), feedbackMessage];
-        activeSession.agent.state.messages = truncated;
 
-        // Keep the persisted transcript consistent with the active state so
-        // the redone step replaces the rejected suffix instead of duplicating.
+        // Persistence first: the session manager owns the durable transcript,
+        // so rewrite it before touching the in-memory state. On any failure the
+        // active state is left untouched and the rollback reports failure
+        // instead of silently diverging memory from the persisted transcript.
+        let removedFromPersistence = 0;
         try {
           let budget = removed;
-          sessionManager.removeTrailingEntries(
+          removedFromPersistence = sessionManager.removeTrailingEntries(
             (entry: SessionEntry) => {
               if (budget <= 0) {
                 return false;
@@ -232,14 +248,34 @@ export function installStepAuditApi(input: {
           );
           sessionManager.appendMessage(feedbackMessage);
         } catch (error) {
+          rollbackCount -= 1;
           log.warn(
             `step-audit rollback persistence sync failed: runId=${runId} ${String(error)}`,
           );
+          return { ok: false, reason: "persistence-failed" };
         }
+        if (removedFromPersistence < removed) {
+          // A non-removable entry (e.g. a queued steering/custom entry) stopped
+          // the contiguous removal early. The durable transcript would diverge
+          // from the active state, so refuse the rollback instead of reporting
+          // success.
+          rollbackCount -= 1;
+          log.warn(
+            `step-audit rollback persistence incomplete: runId=${runId} removed=${removedFromPersistence}/${removed}`,
+          );
+          return { ok: false, reason: "persistence-blocked" };
+        }
+
+        // Durable rewrite succeeded: now mirror it in the active state.
+        const truncated = [...messages.slice(0, cut), feedbackMessage];
+        activeSession.agent.state.messages = truncated;
         return { ok: true, removed, cut };
       } catch (error) {
         return { ok: false, reason: String(error) };
       }
+    },
+    dispose(): void {
+      disposed = true;
     },
   };
 
@@ -248,5 +284,12 @@ export function installStepAuditApi(input: {
 
 /** Removes the step-audit checkpoint API when an attempt tears down. */
 export function uninstallStepAuditApi(runId: string): void {
-  globalRegistry.__openclawStepAuditRegistry?.delete(runId);
+  const registry = globalRegistry.__openclawStepAuditRegistry;
+  if (!registry) {
+    return;
+  }
+  // Revoke handles plugins may have retained: after teardown, capture/rollback
+  // calls report `disposed` instead of mutating a closing attempt.
+  registry.get(runId)?.dispose();
+  registry.delete(runId);
 }
