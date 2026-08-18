@@ -1,4 +1,4 @@
-// E2E: hook dispatch uses every free slot inside the shared cron budget.
+// E2E: hook dispatch uses the shared cron budget without starving older cron work.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -11,6 +11,9 @@ import { createDeferred } from "./helpers/promise.js";
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "hook-concurrency/hook-concurrency";
 const SHARED_BUDGET = 8;
+const FAIRNESS_CRON_MARKER = "capacity group fairness cron marker";
+const FAIRNESS_HOOK_OFFSET = 100;
+const FAIRNESS_LATE_HOOK_INDEX = FAIRNESS_HOOK_OFFSET + SHARED_BUDGET;
 
 type Deferred = {
   promise: Promise<void>;
@@ -27,7 +30,9 @@ type HeldModelServer = {
   close: () => Promise<void>;
   hold: () => void;
   peak: () => number;
+  release: (index: number) => void;
   releaseAll: () => void;
+  requestBody: (index: number) => string | undefined;
   requestCount: () => number;
   url: string;
 };
@@ -42,7 +47,7 @@ afterEach(async () => {
 
 describe("Gateway hook concurrency", () => {
   it(
-    "admits eight hooks, times out the queued ninth, then admits after release",
+    "bounds hooks and admits an older cron turn before a later hook",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const modelServer = await startHeldModelServer();
@@ -50,7 +55,7 @@ describe("Gateway hook concurrency", () => {
       const instance = await createOpenClawTestInstance({
         name: "gateway-hook-concurrency",
         config: createTestConfig(modelServer.url),
-        env: { OPENCLAW_SKIP_PROVIDERS: undefined },
+        env: { OPENCLAW_SKIP_CRON: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
       });
       instances.push(instance);
       await instance.startGateway();
@@ -111,6 +116,100 @@ describe("Gateway hook concurrency", () => {
         interval: 20,
         timeout: 30_000,
       });
+
+      // Saturate the real hook-dispatch lane again, then queue cron inner work
+      // before one later hook. Releasing one held provider request is the exact
+      // production completion edge that previously let the hook lane reclaim
+      // its own slot before the older cron sibling could compete for it.
+      modelServer.hold();
+      const fairnessRequestStart = modelServer.requestCount();
+      const fairnessHooks = Array.from({ length: SHARED_BUDGET }, (_, offset) =>
+        postHook(instance, FAIRNESS_HOOK_OFFSET + offset),
+      );
+      await vi.waitFor(
+        () => expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET),
+        { interval: 20, timeout: 30_000 },
+      );
+      expect(modelServer.active(), instance.logs()).toBe(SHARED_BUDGET);
+
+      const addResult = await instance.cli([
+        "cron",
+        "add",
+        "--name",
+        "capacity group fairness proof",
+        "--every",
+        "1h",
+        "--session",
+        "isolated",
+        "--message",
+        FAIRNESS_CRON_MARKER,
+        "--no-deliver",
+        "--json",
+      ]);
+      expect(addResult.code, addResult.stderr).toBe(0);
+      const cronJob = JSON.parse(addResult.stdout) as { id?: string };
+      expect(cronJob.id).toEqual(expect.any(String));
+
+      const runResult = await instance.cli(["cron", "run", cronJob.id ?? ""]);
+      expect(runResult.code, runResult.stderr).toBe(0);
+      const cronRun = JSON.parse(runResult.stdout) as {
+        enqueued?: boolean;
+        ok?: boolean;
+        runId?: string;
+      };
+      expect(cronRun).toMatchObject({
+        enqueued: true,
+        ok: true,
+        runId: expect.any(String),
+      });
+
+      // cron.run acknowledges after queuing the outer cron task. Give the real
+      // isolated runner time to cross preparation and enqueue cron-nested, then
+      // submit the competing hook. Both remain provider-blocked at this point.
+      await delay(1_000);
+      const lateHook = postHook(instance, FAIRNESS_LATE_HOOK_INDEX);
+      await delay(1_000);
+      expect(modelServer.requestCount()).toBe(fairnessRequestStart + SHARED_BUDGET);
+      expect(modelServer.active()).toBe(SHARED_BUDGET);
+
+      modelServer.release(fairnessRequestStart);
+      const cronProviderRequest = fairnessRequestStart + SHARED_BUDGET;
+      await vi.waitFor(() => expect(modelServer.requestCount()).toBe(cronProviderRequest + 1), {
+        interval: 20,
+        timeout: 30_000,
+      });
+      expect(modelServer.requestBody(cronProviderRequest)).toContain(FAIRNESS_CRON_MARKER);
+      expect(modelServer.requestBody(cronProviderRequest)).not.toContain(
+        `hook concurrency request ${FAIRNESS_LATE_HOOK_INDEX}`,
+      );
+
+      modelServer.release(cronProviderRequest);
+      const lateHookProviderRequest = cronProviderRequest + 1;
+      await vi.waitFor(() => expect(modelServer.requestCount()).toBe(lateHookProviderRequest + 1), {
+        interval: 20,
+        timeout: 30_000,
+      });
+      expect(modelServer.requestBody(lateHookProviderRequest)).toContain(
+        `hook concurrency request ${FAIRNESS_LATE_HOOK_INDEX}`,
+      );
+      expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
+
+      console.info(
+        `[capacity-group-fairness-trace] ${JSON.stringify({
+          afterOneHookRelease: "older-cron",
+          afterCronRelease: "later-hook",
+          peakProviderConcurrency: modelServer.peak(),
+          queuedOrder: ["cron", "later-hook"],
+          saturatedProviderRequests: SHARED_BUDGET,
+        })}`,
+      );
+
+      modelServer.releaseAll();
+      await expect(Promise.all(fairnessHooks)).resolves.toSatisfy((values: HookResponse[]) =>
+        values.every((value) => value.status === 200),
+      );
+      await expect(lateHook).resolves.toMatchObject({ status: 200 });
+      await waitForCronRun(instance, cronJob.id ?? "", cronRun.runId ?? "");
     },
   );
 });
@@ -210,6 +309,7 @@ async function postHook(instance: OpenClawTestInstance, index: number): Promise<
 
 async function startHeldModelServer(): Promise<HeldModelServer> {
   const releases: Deferred[] = [];
+  const requestBodies: string[] = [];
   let holdRequests = false;
   let active = 0;
   let peak = 0;
@@ -239,9 +339,10 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
       return;
     }
 
-    await drainRequest(request);
+    const requestBody = await drainRequest(request);
     const index = requestCount;
     requestCount += 1;
+    requestBodies[index] = requestBody;
     const release = createDeferred();
     releases[index] = release;
     if (!holdRequests) {
@@ -280,7 +381,11 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
       holdRequests = true;
     },
     peak: () => peak,
+    release: (index) => {
+      releases[index]?.resolve();
+    },
     releaseAll,
+    requestBody: (index) => requestBodies[index],
     requestCount: () => requestCount,
     url: `http://127.0.0.1:${address.port}`,
     close: async () => {
@@ -293,10 +398,44 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
   };
 }
 
-async function drainRequest(request: IncomingMessage): Promise<void> {
+async function drainRequest(request: IncomingMessage): Promise<string> {
+  let body = "";
   for await (const chunk of request) {
-    void chunk;
+    body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
   }
+  return body;
+}
+
+async function waitForCronRun(
+  instance: OpenClawTestInstance,
+  jobId: string,
+  runId: string,
+): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const result = await instance.cli([
+        "cron",
+        "runs",
+        "--id",
+        jobId,
+        "--run-id",
+        runId,
+        "--json",
+      ]);
+      expect(result.code, result.stderr).toBe(0);
+      const history = JSON.parse(result.stdout) as {
+        entries?: Array<{ runId?: string; status?: string }>;
+      };
+      expect(history.entries).toContainEqual(expect.objectContaining({ runId, status: "ok" }));
+    },
+    { interval: 200, timeout: 30_000 },
+  );
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function writeModelResponse(response: ServerResponse, sequence: number): void {

@@ -1,7 +1,6 @@
 import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
-import type { PropertyValues } from "lit";
-import { html, nothing, type TemplateResult } from "lit";
+import { type PropertyValues, html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";

@@ -34,7 +34,6 @@ describe("gateway worker environment startup", () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
         getPluginRegistry: () => ({ workerProviders: new Map() }),
-        resolveWorkerGateway: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
         log: { child: () => ({ warn: () => {} }) },
@@ -75,13 +74,14 @@ describe("gateway worker environment startup", () => {
           to: "ready",
           patch: {
             leaseId: "device-lease",
+            nodeDeviceId: DEVICE_ID,
             sshEndpoint: null,
             sharedHost: true,
             bootstrapReceipt: {
               bundleHash: "a".repeat(64),
               openclawVersion: "2026.8.14",
               protocolFeatures: ["worker-heartbeat-v1"],
-              installKind: "local",
+              installKind: "bundle",
             },
             credential: {
               credentialHash: hashWorkerCredential("device-credential"),
@@ -94,7 +94,6 @@ describe("gateway worker environment startup", () => {
 
         const runtime = await createGatewayWorkerEnvironmentRuntime({
           getPluginRegistry: () => ({ workerProviders: new Map() }),
-          resolveWorkerGateway: () => undefined,
           desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
           startup,
           log: { child: () => ({ warn: () => {} }) },

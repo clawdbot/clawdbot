@@ -9,6 +9,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
 import {
   BUILD_STAMP_FILE,
   writeBuildStamp,
@@ -17,8 +18,6 @@ import {
 import { parseStrictNonNegativeDecimal as readNonNegativeInteger } from "./lib/numeric-options.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveBuildRequirement } from "./run-node.mts";
-
-export { readNonNegativeInteger };
 
 const DEFAULTS = {
   outputDir: path.join(process.cwd(), ".local", "gateway-watch-regression"),
@@ -447,79 +446,6 @@ function runCheckedCommand(command: string, args: string[]) {
     return;
   }
   throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? "unknown"}`);
-}
-
-function parsePsCpuTimeMs(timeText: string): number | null {
-  const [maybeDays, clockText] = timeText.includes("-") ? timeText.split("-", 2) : ["0", timeText];
-  const days = Number(maybeDays);
-  const parts = clockText!.split(":");
-  if (!Number.isFinite(days) || parts.length < 2 || parts.length > 3) {
-    return null;
-  }
-  const seconds = Number(parts.at(-1));
-  const minutes = Number(parts.at(-2));
-  const hours = parts.length === 3 ? Number(parts[0]) : 0;
-  if (![seconds, minutes, hours].every(Number.isFinite)) {
-    return null;
-  }
-  return Math.round(((days * 24 + hours) * 60 * 60 + minutes * 60 + seconds) * 1000);
-}
-
-function readProcessTreeCpuMs(rootPid: number): number | null {
-  if (!Number.isInteger(rootPid) || rootPid <= 0) {
-    return null;
-  }
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-
-  const rows: Array<{ pid: number; ppid: number; cpuMs: number }> = [];
-  for (const line of result.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/);
-    if (!match) {
-      continue;
-    }
-    const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const cpuMs = parsePsCpuTimeMs(match[3]!);
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs == null) {
-      continue;
-    }
-    rows.push({ pid, ppid, cpuMs });
-  }
-
-  const childrenByParent = new Map<number, number[]>();
-  const cpuByPid = new Map<number, number>();
-  for (const row of rows) {
-    cpuByPid.set(row.pid, row.cpuMs);
-    const children = childrenByParent.get(row.ppid) ?? [];
-    children.push(row.pid);
-    childrenByParent.set(row.ppid, children);
-  }
-  if (!cpuByPid.has(rootPid)) {
-    return null;
-  }
-
-  let totalCpuMs = 0;
-  const seen = new Set<number>();
-  const stack = [rootPid];
-  while (stack.length > 0) {
-    const pid = stack.pop();
-    if (!pid || seen.has(pid)) {
-      continue;
-    }
-    seen.add(pid);
-    totalCpuMs += cpuByPid.get(pid) ?? 0;
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      stack.push(childPid);
-    }
-  }
-  return totalCpuMs;
 }
 
 /**

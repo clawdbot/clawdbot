@@ -4,6 +4,7 @@
 
 .connect-splash {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100vh;
@@ -13,6 +14,12 @@
   /* Stay invisible past fast handshakes so a quick connect paints nothing. */
   opacity: 0;
   animation: fade-in 0.3s var(--ease-out) 0.2s forwards;
+}
+
+.connect-splash__status {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 openclaw-session-owner-chip {
@@ -60,6 +67,48 @@ openclaw-session-owner-chip {
   font-size: inherit;
 }
 
+.session-owner-stack {
+  position: relative;
+  display: inline-flex;
+  width: 24px;
+  height: 20px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.session-owner-stack__back {
+  position: absolute;
+  z-index: 0;
+  left: 0;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.session-owner-stack__back .viewer-avatar,
+.session-owner-stack__overflow {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--sidebar-bg, var(--bg));
+  border-radius: var(--radius-full);
+  font-size: 7px;
+}
+
+.session-owner-stack__overflow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.session-owner-stack__front {
+  position: relative;
+  z-index: 1;
+}
+
 /* Leading slot shared by every sidebar row: the row's own artwork plus a run
    ring and corner badge, so run state always reads at the row's left edge. */
 .session-glyph {
@@ -86,9 +135,28 @@ openclaw-session-owner-chip {
   transition: transform var(--duration-fast) ease;
 }
 
+.channel-avatar {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
 .session-glyph__emoji {
   font-size: 15px;
   line-height: 1;
+}
+
+.session-glyph__icon,
+.session-glyph__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-glyph__icon {
+  display: inline-flex;
+  color: inherit;
 }
 
 /* The ring is a circle, so square artwork (page icons, thumbnails, arbitrary
@@ -742,6 +810,31 @@ openclaw-github-link-hovercard-provider {
   display: contents;
 }
 
+openclaw-session-progress-hovercard-provider {
+  display: contents;
+}
+
+.session-progress-hovercard {
+  position: fixed;
+  z-index: 1990;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 24px));
+  padding: 14px 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  pointer-events: none;
+}
+
+@media (hover: hover) {
+  .session-progress-hovercard {
+    pointer-events: auto;
+  }
+}
+
 .github-link-hovercard {
   position: fixed;
   z-index: 1990;
@@ -754,7 +847,9 @@ openclaw-github-link-hovercard-provider {
   box-shadow: var(--shadow-lg);
   color: var(--text);
   font-family: var(--font-body);
-  pointer-events: none;
+  /* Interactive by design: hover intent and text selection both need the card to
+     receive pointer events (see github-link-hovercard.runtime.ts). */
+  pointer-events: auto;
   opacity: 0;
   transform: translateY(-5px) scale(0.99);
   transform-origin: bottom left;
@@ -817,11 +912,23 @@ openclaw-github-link-hovercard-provider {
   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
 }
 
+/* The repo reference, author and files chip are links too, but the title owns
+   the card's only underline; the rest stay text until hovered or focused. */
 .github-link-hovercard__repo {
   min-width: 0;
+  color: inherit;
   overflow: hidden;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.github-link-hovercard__repo:hover,
+.github-link-hovercard__repo:focus-visible,
+.github-link-hovercard__author:hover,
+.github-link-hovercard__author:focus-visible {
+  color: var(--text-strong);
+  text-decoration: none;
 }
 
 .github-link-hovercard__time {
@@ -831,6 +938,7 @@ openclaw-github-link-hovercard-provider {
 }
 
 .github-link-hovercard__title {
+  display: block;
   margin: 15px 0 17px;
   color: var(--text-strong);
   font-size: var(--control-ui-text-lg);
@@ -838,6 +946,12 @@ openclaw-github-link-hovercard-provider {
   letter-spacing: -0.012em;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.github-link-hovercard__title:hover,
+.github-link-hovercard__title:focus-visible {
+  text-decoration: underline;
 }
 
 .github-link-hovercard__footer {
@@ -857,6 +971,7 @@ openclaw-github-link-hovercard-provider {
   color: var(--muted);
   font-size: var(--control-ui-text-md);
   overflow: hidden;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -885,6 +1000,17 @@ openclaw-github-link-hovercard-provider {
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.github-link-hovercard__metric--files {
+  text-decoration: none;
+}
+
+.github-link-hovercard__metric--files:hover,
+.github-link-hovercard__metric--files:focus-visible {
+  background: var(--bg-muted);
+  color: var(--text-strong);
+  text-decoration: none;
 }
 
 .github-link-hovercard__metric--additions {
@@ -994,7 +1120,8 @@ openclaw-github-link-hovercard-provider {
 
 .field input,
 .field textarea,
-.field select {
+.field select,
+.input {
   border: 1px solid var(--input);
   background: var(--card);
   border-radius: var(--radius-md);
@@ -1007,21 +1134,25 @@ openclaw-github-link-hovercard-provider {
 }
 
 .field input:not([type="checkbox"]):not([type="radio"]),
-.field select {
+.field select,
+input.input:not([type="checkbox"]):not([type="radio"]),
+select.input {
   height: 38px;
 }
 
 @media (hover: none) and (pointer: coarse) {
   .field input,
   .field textarea,
-  .field select {
+  .field select,
+  .input {
     font-size: 16px;
   }
 }
 
 .field input:focus-visible,
 .field textarea:focus-visible,
-.field select:focus-visible {
+.field select:focus-visible,
+.input:focus-visible {
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
 }
@@ -1673,6 +1804,16 @@ openclaw-chat-session-rail {
   animation: none;
 }
 
+.chat-session-rail--embedded {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
 .chat-session-rail__header {
   display: flex;
   flex: 0 0 auto;
@@ -1686,7 +1827,6 @@ openclaw-chat-session-rail {
 .chat-session-rail__status-row,
 .chat-session-rail__status,
 .chat-session-rail__actions,
-.chat-session-rail__plan-heading,
 .chat-session-rail__prs,
 .chat-session-rail__pr {
   display: flex;
@@ -1825,47 +1965,6 @@ openclaw-chat-session-rail {
   line-height: 1.45;
 }
 
-.chat-session-rail__plan {
-  margin-top: 11px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.chat-session-rail__plan-heading {
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.chat-session-rail__plan-list {
-  display: grid;
-  gap: 5px;
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.chat-session-rail__plan-item {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  gap: 5px;
-  color: var(--text);
-  font-size: 11.5px;
-}
-
-.chat-session-rail__plan-item[data-status="completed"] {
-  color: var(--muted);
-}
-
-.chat-session-rail__plan-icon {
-  color: var(--accent);
-  text-align: center;
-}
-
 .chat-session-rail__prs {
   flex-wrap: wrap;
   gap: 6px;
@@ -1924,16 +2023,6 @@ openclaw-chat-session-rail {
   align-items: flex-start;
   gap: 6px;
   padding: 0 14px 10px;
-}
-
-/* Centred in the thread's empty space, both axes: margin auto claims the free
-   vertical room inside the flex column. */
-.chat-session-rail__empty {
-  margin: auto 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-  text-align: center;
 }
 
 .chat-session-rail__starter {
@@ -2088,7 +2177,7 @@ openclaw-chat-session-rail {
 
   /* No pane can hold a column at this width, so the companion takes the whole
      surface rather than hovering over part of it. */
-  .chat-session-rail--expanded {
+  .chat-session-rail--expanded:not(.chat-session-rail--embedded) {
     position: fixed;
     z-index: 35;
     inset: 0;
@@ -2220,19 +2309,22 @@ openclaw-chat-session-rail {
 
 .code-block-wrapper {
   position: relative;
-  border-radius: var(--radius-sm);
-  overflow: visible;
-  margin-top: 0.75em;
+  box-sizing: border-box;
+  width: 100%;
+  margin-block: 1em;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: var(--radius-md);
+  background: transparent;
 }
 
 .code-block-wrapper pre {
-  margin: 0;
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  margin: 0 6px 6px;
+  padding: 4px 8px 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow-x: auto;
-}
-
-.code-block-wrapper pre:has(> code.markdown-block-art) {
-  background: var(--bg);
 }
 
 .code-block-wrapper :where(pre code.markdown-block-art) {
@@ -2255,20 +2347,25 @@ openclaw-chat-session-rail {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px 4px 12px;
-  background: rgba(0, 0, 0, 0.25);
-  font-size: 12px;
+  min-height: 36px;
+  padding: 8px 8px 4px 14px;
+  background: transparent;
+  font-size: 11px;
   line-height: 1;
 }
 
-:root[data-theme-mode="light"] .code-block-header {
-  background: rgba(0, 0, 0, 0.08);
+.code-block-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 32px;
+  min-height: 32px;
 }
 
 .code-block-lang {
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 12px; /* was 11px */
+  font-size: 11px;
   text-transform: lowercase;
   user-select: none;
 }
@@ -2278,13 +2375,32 @@ openclaw-chat-session-rail {
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
-  font-family: var(--font-body);
-  padding: 2px 6px;
+  width: 32px;
+  height: 32px;
+  padding: 7px;
   border-radius: var(--radius-sm);
   transition:
     color 150ms ease,
     background 150ms ease;
+}
+
+.code-block-copy__idle {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.code-block-copy__done {
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
 }
 
 .code-block-copy:hover {
@@ -2296,42 +2412,30 @@ openclaw-chat-session-rail {
   background: rgba(0, 0, 0, 0.08);
 }
 
-.code-block-copy__done {
+.code-block-copy__done,
+.code-block-copy__failed {
   display: none;
 }
 
-.code-block-copy.copied .code-block-copy__idle {
+.code-block-copy:is(.copied, .copy-failed) .code-block-copy__idle {
   display: none;
+}
+
+.code-block-copy.copied .code-block-copy__done,
+.code-block-copy.copy-failed .code-block-copy__failed {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  font-size: 13px;
 }
 
 .code-block-copy.copied .code-block-copy__done {
-  display: inline;
-  color: var(--ok);
+  color: inherit;
 }
 
-.json-collapse {
-  margin-top: 0.75em;
-}
-
-.json-collapse summary {
-  display: list-item;
-  font-size: 12px;
-  color: var(--muted);
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  user-select: none;
-}
-
-.json-collapse summary .code-block-copy {
-  float: right;
-}
-
-.json-collapse[open] summary {
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-}
-
-.json-collapse summary:hover {
-  color: var(--text);
+.code-block-copy.copy-failed .code-block-copy__failed {
+  color: var(--danger);
 }
 
 /* ===========================================
@@ -2354,6 +2458,10 @@ openclaw-chat-session-rail {
   padding: 12px;
   background: var(--card);
   transition: border-color var(--duration-fast) ease;
+}
+
+.list-item-clickable {
+  text-decoration: none;
 }
 
 .list-item-clickable:hover {
@@ -2854,10 +2962,6 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.chat-queue__item--steered {
-  background: var(--info-subtle);
-}
-
 /* The edited row keeps its slot so the operator can see where the corrected
    message lands; the outline says the composer owns it right now.
    Editing is an active state, not a failure, so it uses the informational
@@ -2940,10 +3044,6 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
-.chat-queue__item--steered .chat-queue__icon {
-  color: var(--info);
-}
-
 /* Reconnect rows mirror the connection pill's amber status dot so the queue
    reads as quiet auto-retry status, not a failure needing action. */
 .chat-queue__dot {
@@ -2974,11 +3074,6 @@ td.data-table-key-col {
   white-space: nowrap;
 }
 
-.chat-queue__badge--steered {
-  background: color-mix(in srgb, var(--info) 16%, transparent);
-  color: var(--info);
-}
-
 .chat-queue__item--failed .chat-queue__badge {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
@@ -3002,6 +3097,27 @@ td.data-table-key-col {
   line-height: 1.4;
 }
 
+.chat-queue__edit-input {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 26px;
+  margin: -1px 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--info) 42%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--chat-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.chat-queue__edit-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
 /* Wraps onto its own flex line below the row (see renderChatQueueItem). */
 .chat-queue__error {
   flex-basis: 100%;
@@ -3023,8 +3139,7 @@ td.data-table-key-col {
   margin-left: auto;
 }
 
-.chat-queue__steer,
-.chat-queue__retry {
+.chat-queue__action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -3039,8 +3154,7 @@ td.data-table-key-col {
   cursor: var(--cursor-action);
 }
 
-.chat-queue__steer svg,
-.chat-queue__retry svg {
+.chat-queue__action svg {
   width: 12px;
   height: 12px;
   fill: none;
@@ -3050,13 +3164,14 @@ td.data-table-key-col {
   stroke-linejoin: round;
 }
 
-.chat-queue__steer:hover:not(:disabled),
-.chat-queue__retry:hover:not(:disabled) {
+.chat-queue__action:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .chat-queue__edit,
-.chat-queue__remove {
+.chat-queue__remove,
+.chat-queue__edit-submit,
+.chat-queue__edit-cancel {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3073,19 +3188,25 @@ td.data-table-key-col {
 /* Inert instead of removed: an open edit keeps every action slot in place so the
    rows below it never shift while the operator retypes. */
 .chat-queue__edit:disabled,
-.chat-queue__remove:disabled {
+.chat-queue__remove:disabled,
+.chat-queue__edit-submit:disabled,
+.chat-queue__edit-cancel:disabled {
   color: color-mix(in srgb, var(--muted) 34%, transparent);
   cursor: default;
 }
 
 .chat-queue__edit:hover:not(:disabled),
-.chat-queue__remove:hover:not(:disabled) {
+.chat-queue__remove:hover:not(:disabled),
+.chat-queue__edit-submit:hover:not(:disabled),
+.chat-queue__edit-cancel:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .chat-queue__edit svg,
-.chat-queue__remove svg {
+.chat-queue__remove svg,
+.chat-queue__edit-submit svg,
+.chat-queue__edit-cancel svg {
   width: 13px;
   height: 13px;
   fill: none;
@@ -3127,8 +3248,9 @@ td.data-table-key-col {
 }
 
 :root[data-theme-mode="light"] .chat-line.user .chat-bubble {
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: transparent;
   background: var(--accent-subtle);
+  box-shadow: none;
 }
 
 .chat-line.assistant .chat-bubble {
@@ -3194,12 +3316,14 @@ td.data-table-key-col {
    =========================================== */
 
 .exec-approval-card {
+  --exec-approval-accent: var(--border);
+
   width: 100%;
   max-height: inherit;
   display: flex;
   flex-direction: column;
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--exec-approval-accent) 5%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--exec-approval-accent) 45%, var(--border));
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: scale-in 0.2s var(--ease-out);
@@ -3215,9 +3339,19 @@ td.data-table-key-col {
 
 .exec-approval-card--inline {
   padding: 14px 16px;
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
-  background: color-mix(in srgb, var(--warn) 5%, var(--card));
   animation: none;
+}
+
+.exec-approval-card--severity-info {
+  --exec-approval-accent: var(--border);
+}
+
+.exec-approval-card--severity-warning {
+  --exec-approval-accent: var(--warn);
+}
+
+.exec-approval-card--severity-danger {
+  --exec-approval-accent: var(--danger);
 }
 
 .exec-approval-header {
@@ -3238,13 +3372,25 @@ td.data-table-key-col {
   margin-top: 4px;
 }
 
-.exec-approval-queue {
+.exec-approval-queue,
+.exec-approval-chip {
   font-size: 12px; /* was 11px */
   font-weight: 500;
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 4px 10px;
+}
+
+.exec-approval-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.exec-approval-chip {
+  padding: 2px 8px;
 }
 
 .exec-approval-command {
@@ -3288,6 +3434,21 @@ td.data-table-key-col {
   font-family: var(--mono);
   overflow-wrap: anywhere;
   text-align: right;
+}
+
+.exec-approval-details {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exec-approval-details summary {
+  width: fit-content;
+  cursor: var(--cursor-action);
+}
+
+.exec-approval-details .exec-approval-meta {
+  margin-top: 8px;
 }
 
 .exec-approval-error {
@@ -5061,29 +5222,6 @@ td.data-table-key-col {
   }
 }
 
-/* ── Shared collapse chevron ── */
-
-.collapse-chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform var(--duration-fast) ease;
-}
-
-.collapse-chevron svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.collapse-chevron--collapsed {
-  transform: rotate(-90deg);
-}
-
 /* Mobile pairing */
 .device-pair-setup {
   max-height: calc(100dvh - 48px);
@@ -5609,12 +5747,14 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-.session-row-fork-indicator {
+.sidebar-session-fork-indicator {
   display: inline-flex;
+  margin-right: 4px;
   color: var(--muted);
+  vertical-align: -2px;
 }
 
-.session-row-fork-indicator svg {
+.sidebar-session-fork-indicator svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -5623,9 +5763,7 @@ td.data-table-key-col {
 }
 
 /* Attribute badges (attached automation, approval, cloud placement):
-   muted metadata that sits after the title inside the row link, outside the
-   trail/action overlap cell, so touch devices (which hide the trail) and
-   hovered rows keep them. */
+   muted metadata grouped in the row's second-line endcap. */
 .session-row-badges {
   display: inline-flex;
   align-items: center;
@@ -5639,8 +5777,9 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.session-row-badge--queued {
+.session-row-badge--attention {
   gap: 2px;
+  color: var(--warn);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }

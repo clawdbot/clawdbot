@@ -56,8 +56,12 @@ function createParams(): EmbeddedRunAttemptParams {
         "plugin.approval.waitDecision",
         { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
         { id: request.approvalId },
-      )) as { id?: string; decision?: "allow-once" | "allow-always" | "deny" | null };
-      return result?.id === request.approvalId ? result.decision : undefined;
+      )) as { id?: string } & Partial<
+        NonNullable<Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>>
+      >;
+      return result?.id === request.approvalId
+        ? { decision: result.decision, terminalReason: result.terminalReason }
+        : undefined;
     },
   };
   return {
@@ -350,6 +354,28 @@ describe("Codex app-server elicitation bridge", () => {
       "plugin.approval.request",
       "plugin.approval.waitDecision",
     ]);
+  });
+
+  it("declines timed-out MCP approvals with explanatory metadata", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-timeout", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-timeout",
+        decision: "deny",
+        terminalReason: "timeout",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildApprovalElicitation(),
+      paramsForRun: createParams(),
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({
+      action: "decline",
+      content: null,
+      _meta: { message: "Approval timed out before an operator responded." },
+    });
   });
 
   it("does not treat inherited request-time MCP decisions as final", async () => {

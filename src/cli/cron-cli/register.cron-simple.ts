@@ -12,8 +12,10 @@ import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
 import { findCronJobByIdOrName } from "./list-jobs.js";
+import { createCronOutputCommand } from "./output-mode.js";
 import {
   enrichCronJsonWithStatus,
+  formatCronLookupMiss,
   handleCronCliError,
   printCronJson,
   printCronShow,
@@ -101,8 +103,7 @@ function registerCronToggleCommand(params: {
   enabled: boolean;
 }) {
   addGatewayClientOptions(
-    params.cron
-      .command(params.name)
+    createCronOutputCommand(params.cron, params.name)
       .description(params.description)
       .argument("<id>", "Job id")
       .action(async (id, opts) => {
@@ -127,13 +128,9 @@ function registerCronToggleCommand(params: {
 
 export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("rm")
-      .alias("remove")
-      .alias("delete")
+    createCronOutputCommand(cron, "rm")
       .description("Remove an automation")
       .argument("<id>", "Job id")
-      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.remove", opts, { id });
@@ -158,11 +155,9 @@ export function registerCronSimpleCommands(cron: Command) {
   });
 
   addGatewayClientOptions(
-    cron
-      .command("get")
+    createCronOutputCommand(cron, "get")
       .description("Get an automation as JSON")
       .argument("<id>", "Job id")
-      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.get", opts, { id: String(id) });
@@ -185,7 +180,7 @@ export function registerCronSimpleCommands(cron: Command) {
             includeDeliveryPreview: !opts.json,
           });
           if (!job) {
-            throw new Error(`automation not found: ${String(id)}`);
+            throw new Error(formatCronLookupMiss(String(id)));
           }
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(job));
@@ -199,11 +194,9 @@ export function registerCronSimpleCommands(cron: Command) {
   );
 
   addGatewayClientOptions(
-    cron
-      .command("runs")
+    createCronOutputCommand(cron, "runs")
       .description("Show automation run history")
       .requiredOption("--id <id>", "Job id")
-      .option("--json", "Output JSON", false)
       .option("--run-id <runId>", "Filter by cron run id")
       .option("--limit <n>", "Max entries (default 50)", "50")
       .action(async (opts) => {
@@ -229,8 +222,7 @@ export function registerCronSimpleCommands(cron: Command) {
   );
 
   addGatewayClientOptions(
-    cron
-      .command("run")
+    createCronOutputCommand(cron, "run")
       .description("Run an automation now (debug)")
       .argument("<id>", "Job id")
       .option("--due", "Run only when due (default behavior in older versions)", false)

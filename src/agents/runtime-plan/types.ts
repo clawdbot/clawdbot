@@ -4,7 +4,7 @@
  * observability decisions shared across embedded-agent hot paths.
  */
 import type { TSchema } from "typebox";
-import type { ModelPickerAction } from "../../interactive/payload.js";
+import type { MessagePresentationAction } from "../../interactive/payload.js";
 import type {
   ModelApi,
   ProviderModelRouteRuntimePolicy,
@@ -101,48 +101,12 @@ type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {
 
 type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
-type AgentRuntimeMessagePresentationAction =
-  | {
-      type: "command";
-      command: string;
-    }
-  | {
-      type: "callback";
-      value: string;
-    }
-  | {
-      type: "approval";
-      approvalId: string;
-      approvalKind: "exec" | "plugin";
-      decision: "allow-once" | "allow-always" | "deny";
-    }
-  | {
-      type: "question";
-      questionId: string;
-      optionValue: string;
-    }
-  | {
-      type: "url";
-      url: string;
-    }
-  | {
-      type: "web-app";
-      url: string;
-      widgetId?: string;
-    }
-  | {
-      type: "web-app";
-      url?: string;
-      widgetId: string;
-    }
-  | ModelPickerAction;
-
 /** Portable action control exposed to agent runtime reply payloads. */
 type AgentRuntimeMessagePresentationButton = {
   /** User-visible button label. */
   label: string;
   /** Typed action sent when pressed. */
-  action?: AgentRuntimeMessagePresentationAction;
+  action?: MessagePresentationAction;
   /** @deprecated Use action. */
   value?: string;
   /** @deprecated Use an action with type "url". */
@@ -164,10 +128,7 @@ type AgentRuntimeMessagePresentationOption = {
   /** User-visible option label. */
   label: string;
   /** Typed action sent when selected. */
-  action?: Extract<
-    AgentRuntimeMessagePresentationAction,
-    { type: "command" | "callback" | "model-picker" }
-  >;
+  action?: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>;
   /** @deprecated Use action. */
   value?: string;
 };
@@ -473,7 +434,6 @@ type AgentRuntimePreparedMetadataSnapshot = object;
 /** Prepared metadata loader used by tool planning without eager manifest reads. */
 type PreparedOpenClawToolPlanning = {
   metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
-  loadMetadataSnapshot?: () => AgentRuntimePreparedMetadataSnapshot;
 };
 
 /** Tool normalization and diagnostics hooks for one runtime attempt. */

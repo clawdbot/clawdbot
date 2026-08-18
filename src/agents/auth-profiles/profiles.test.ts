@@ -1392,6 +1392,40 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
+  it("clears WHAM cooldown classification after a successful profile use", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-success-classification-",
+      async ({ agentDir }) => {
+        fs.mkdirSync(agentDir, { recursive: true });
+        const profileId = "openai:default";
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              [profileId]: { type: "api_key", provider: "openai", key: "sk-test" },
+            },
+            usageStats: {
+              [profileId]: {
+                cooldownUntil: Date.now() + 60_000,
+                cooldownReason: "auth",
+                cooldownClassification: "wham_token_expired",
+              },
+            },
+          },
+          agentDir,
+        );
+        const store = loadAuthProfileStoreForRuntime(agentDir);
+
+        await markAuthProfileSuccess({ store, provider: "openai", profileId, agentDir });
+
+        expect(store.usageStats?.[profileId]?.cooldownClassification).toBeUndefined();
+        expect(loadPersistedAuthProfileStore(agentDir)?.usageStats?.[profileId]).not.toHaveProperty(
+          "cooldownClassification",
+        );
+      },
+    );
+  });
+
   it("removes selected profiles while preserving unrelated provider credentials", async () => {
     await withAuthProfileTestState("openclaw-auth-remove-selected-", async ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });

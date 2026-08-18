@@ -87,7 +87,10 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
-import { resolveProviderAuthOverview } from "./list.auth-overview.js";
+import {
+  formatProviderAuthProfileCounts,
+  resolveProviderAuthOverview,
+} from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import type { AuthProbeSummary } from "./list.probe.js";
 import type { ProviderAuthOverview } from "./list.types.js";
@@ -1258,6 +1261,7 @@ export async function modelsStatusCommand(
         provider?: string;
         kind: "cooldown" | "disabled";
         reason?: string;
+        classification?: string;
         recoveryHint: string;
         until: number;
         remainingMs: number;
@@ -1273,12 +1277,14 @@ export async function modelsStatusCommand(
             ? "disabled"
             : "cooldown";
         const reason = kind === "disabled" ? stats?.disabledReason : stats?.cooldownReason;
+        const classification = kind === "cooldown" ? stats?.cooldownClassification : undefined;
         const provider = store.profiles[profileId]?.provider;
         out.push({
           profileId,
           provider,
           kind,
           reason,
+          ...(classification ? { classification } : {}),
           recoveryHint: buildAuthProfileUnusableHint({
             kind,
             reason,
@@ -1526,12 +1532,7 @@ export async function modelsStatusCommand(
         ),
       );
       if (entry.profiles.count > 0) {
-        bits.push(
-          formatKeyValue(
-            "profiles",
-            `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey})`,
-          ),
-        );
+        bits.push(formatKeyValue("profiles", formatProviderAuthProfileCounts(entry.profiles)));
         if (entry.profiles.labels.length > 0) {
           bits.push(colorize(rich, theme.info, entry.profiles.labels.join(", ")));
         }
@@ -1639,7 +1640,8 @@ export async function modelsStatusCommand(
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Unavailable auth profiles"));
       for (const profile of unusableProfiles) {
-        const reason = profile.reason ? `:${profile.reason}` : "";
+        const diagnostic = profile.classification ?? profile.reason;
+        const reason = diagnostic ? `:${diagnostic}` : "";
         const provider = profile.provider ? ` (${profile.provider})` : "";
         runtime.log(
           `- ${theme.heading(profile.profileId)}${provider} ${profile.kind}${reason} (${formatRemainingShort(profile.remainingMs)}) — ${profile.recoveryHint}`,

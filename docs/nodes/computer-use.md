@@ -54,7 +54,17 @@ The app waits until the private socket accepts connections before advertising CU
 
 #### Trust model
 
-The embedded CUA daemon runs in unrestricted mode because bounded CUA grants require exact launch-time resources and cannot represent OpenClaw's runtime-discovered windows and elements. OpenClaw command arming, pairing approval, and tool policy are the authoritative authorization gate, identical to the shipped Peekaboo fulfiller. The app owns the daemon and its macOS TCC identity, and the daemon accepts local connections only through an owner-only socket directory.
+The Gateway is the authorization chokepoint; the driver is a dumb effector. OpenClaw deliberately leaves the daemon unceilinged and authorizes computer use above it through tool exposure, the dangerous-command allowlist, device and command pairing approval, node-local provider enablement, and OS permissions. This is the same authorization boundary used by the shipped Peekaboo fulfiller.
+
+CUA Driver 0.19.3 fixes its permission mode and bounded manifest when the runtime starts. Exact PID/window grants, and any application-wide window grants, must be declared in that launch-approved manifest; an `ask` entry is a hard denial for unattended dispatch. OpenClaw instead drives applications, windows, and elements discovered while the agent is running. Bounded mode therefore cannot express this provider model without duplicating Gateway policy or preauthorizing broad application classes, so the app starts its managed daemon in unrestricted mode with approvals bypassed.
+
+The `computer.act` node-invoke policy classifies exact arguments before transport dispatch. Forced app termination, browser navigation, browser downloads, browser file inputs, recording start, trajectory replay, and desktop-scope escalation are separate high-risk families; ordinary observation and input remain distinct. Classification does not add a per-action prompt or weaken the command-level gates: every action still requires the same exposed tool, armed command, approved pairing, enabled node provider, and OS permissions.
+
+The managed endpoint is not part of the model contract. The CUA plugin registers no model tool, CLI command, service, or raw node-MCP descriptor, and its action schema accepts neither helper binaries, sockets, native sessions, driver arguments, nor provider tool names. On macOS only the app-owned worker receives the endpoint, while node shell execution is routed through the app host without that worker-only value. These boundaries prevent an OpenClaw model action from selecting an alternate route to the managed daemon.
+
+CUA creates the Unix socket with mode `0600`, and OpenClaw places it in a random owner-only `0700` directory. This excludes remote clients and other local users. It does not authenticate or sandbox processes running as the same logged-in user: those processes are inside this boundary and may be able to discover and use same-user resources. Unrestricted CUA mode does not contain a compromised user account. Stronger same-user isolation would require inherited connected IPC or an OS-enforced process boundary.
+
+Loopback is also reachability, not identity: any process on the machine can connect to `127.0.0.1`. A Gateway client therefore does not receive `operator.write` merely because it arrived over loopback. It must authenticate and pass the Gateway's [device pairing and scope approval](/gateway/pairing); without a separately trusted local or shared credential, another already-authorized device must approve the requested operator scope. The driver and its socket never make that decision.
 
 The CUA descriptor advertises window, element, and browser targets; background and foreground delivery; image, accessibility, and browser observations; and recording. Peekaboo remains the default in this release and does not advertise recording.
 
@@ -66,7 +76,9 @@ Browser targets, pages, page elements, and dialogs are opaque capabilities. Reta
 
 ### Maintainer live-proof rig
 
-The repository includes a macOS-only development rig that preserves the real vertical path: agent-facing `computer` tool, Gateway `node.invoke`, paired Mac node, and the selected node-local provider. It is deliberately isolated from the operator app and Gateway.
+The repository includes a development rig that preserves the real vertical path: agent-facing `computer` tool, Gateway `node.invoke`, paired node, and the selected node-local provider. It is deliberately isolated from the operator app and Gateway. The macOS path uses the signed app node; the Linux path uses the opt-in `cua-computer` plugin in a real X11 session.
+
+#### macOS
 
 Build a signed app from a clean, committed checkout, choose a fresh profile and non-default loopback port, and prepare the two config views:
 
@@ -78,7 +90,9 @@ scripts/dev/computer-use-macos-live-rig.sh prepare \
 
 Run the emitted `gateway` and `app` commands in separate terminals. The split config is intentional: the externally launched daemon reads a scratch config with `gateway.mode: "local"`, while the app profile reads `gateway.mode: "remote"`, direct transport, and the daemon's loopback URL. If the app reads local mode, its Port Guardian owns the route instead of joining the external daemon. The rig keeps its validated launch fields in non-executable `rig.json`; later commands reject unknown fields or paths that do not match the scratch/profile layout. It also seeds a dedicated `node` identity, completed onboarding, unpaused state, Computer Control, and the checkout path used to start the debug node worker. There is no separate node-mode toggle.
 
-In a third terminal, run the emitted `nodes` command. A fresh CLI identity first returns a device-approval request; approve that request from the isolated app's Devices settings or with `openclaw --profile cu-live-proof devices approve <requestId>`, then rerun `nodes` until the paired entry is connected and advertises `computer.act` plus a `computerUse` descriptor.
+In a third terminal, rerun the emitted `nodes` command until the paired entry is connected and advertises `computer.act` plus a `computerUse` descriptor. No operator-device approval step is involved: the loopback gateway silently pairs the rig's CLI identity on its first connect, and the proof runner is admitted as a local backend client without pairing at all. The rig keeps those two identities in separate state directories (`cli-state` and `agent-state`) because a paired operator device is pinned to the scopes of its first connect, and a CLI pairing would otherwise cap the proof client below `operator.write`.
+
+If the node's command surface is still pending approval, take `.pending[0].requestId` from that `nodes` output and run `scripts/dev/computer-use-macos-live-rig.sh approve "$scratch" <request-id>`.
 
 Place a harmless editable fixture window behind a different frontmost app, then run the vertical:
 
@@ -89,9 +103,38 @@ scripts/dev/computer-use-macos-live-rig.sh proof \
 
 The proof runner first requires the sole connected computer node to advertise the requested provider, then executes `screenshot`, `list_windows`, `get_window_state`, background element click and type, and re-observes the window. It saves the structured result and target-window before/after images under the scratch directory and fails unless the provider matches, the target started non-frontmost, the frontmost app and cursor stayed unchanged, target content changed, and the final effect was confirmed or a structured refusal. Restart the isolated app with the other provider and rerun the same proof. Do not use port `18789`, the default profile, or `/Applications/OpenClaw.app` for this rig.
 
+#### Linux X11 through Crabbox
+
+Run Linux proof on a Crabbox Linux host, not on a macOS container. A direct AWS Crabbox lease with Xvfb is sufficient because Xvfb is a real X11 server; a local container on macOS is not remote Linux desktop proof. Install the X11 fixture prerequisites on the disposable host, then start an isolated session:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y at-spi2-core dbus-x11 gir1.2-gtk-3.0 jq openbox python3-gi x11-utils xdotool xvfb
+
+dbus-run-session -- bash
+export DISPLAY=:99 XDG_SESSION_TYPE=x11 NO_AT_BRIDGE=0
+Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp &
+openbox >/tmp/openclaw-cu-openbox.log 2>&1 &
+
+scratch="$(mktemp -d /tmp/openclaw-cu-live.XXXXXX)"
+scripts/dev/computer-use-macos-live-rig.sh prepare-linux \
+  cu-linux-live-proof 29431 "$scratch"
+```
+
+Run the emitted `gateway`, `node`, and `fixture` commands in separate panes that inherit the same `DISPLAY` and `DBUS_SESSION_BUS_ADDRESS`. The isolated configs share one scratch-only random Gateway token, and the gateway silently approves loopback node-device pairing. The node command surface remains an explicit approval: run the emitted `nodes` command after the node finishes reconnecting, read `.pending[0].requestId`, and pass it to `scripts/dev/computer-use-macos-live-rig.sh approve "$scratch" <request-id>`. Rerun `nodes` until exactly one connected node advertises `provider.id: "cua-computer"`.
+
+Execute the same proof runner against the non-frontmost GTK fixture:
+
+```bash
+scripts/dev/computer-use-macos-live-rig.sh proof \
+  "$scratch" cua "OpenClaw CUA X11 Target" "W3-LINUX CONFIRMED"
+```
+
+The result and `window-before.png` / `window-after.png` stay under the scratch directory. A confirmed mutation must preserve the sentinel as the active X11 window and leave the pointer unchanged. An upstream `background_unavailable` or `background_occluded` result is valid refusal evidence only when it remains structured and no foreground retry is attempted. The rig rejects native Wayland even when `DISPLAY` is also present for XWayland; switch to X11 instead of claiming Wayland coverage.
+
 ### Windows and Linux (experimental, direct SDK)
 
-The bundled `cua-computer` plugin provides an experimental fulfiller for Windows and Linux node hosts. It is disabled by default and uses the pinned CUA Driver SDK 0.19.3 contract directly:
+The bundled `cua-computer` plugin provides an experimental fulfiller for Windows and Linux node hosts. It is disabled by default on those platforms (macOS enables it by default for the CUA fulfiller above) and uses the pinned CUA Driver SDK 0.19.3 contract directly:
 
 1. Enable the plugin:
 
@@ -109,17 +152,17 @@ The bundled `cua-computer` plugin provides an experimental fulfiller for Windows
 
 3. Start `openclaw node run` from the interactive desktop session. The plugin repeats the artifact verification at startup before it imports native code, creates its configured SDK runtime lazily, then creates separate fixed window- and desktop-scoped trusted sessions for each provider execution. `escalate_scope` reads the already-desktop session state, so the window identity remains immutable. Completion, cancellation, Gateway disconnect, provider switching, local Stop, and command-host shutdown all close that exact execution, finalize or discard its recording resources, close both sessions, and shut down its runtime.
 
-4. Add `computer.act` to the Gateway allowlist. This plugin registers `computer.act` as a dangerous plugin node command, so enabling the plugin alone is not enough; the operator must opt in explicitly:
+4. Approve the pairing update that includes `computer.act`. Desktop `computer.act` is a built-in platform default, so plugin enablement plus that approval is the whole grant; no `gateway.nodes.commands.allow` entry is required. An operator who wants the command off can deny it:
 
    ```json5
    {
      gateway: {
-       nodes: { commands: { allow: ["computer.act"] } },
+       nodes: { commands: { deny: ["computer.act"] } },
      },
    }
    ```
 
-   Without this entry, `node.invoke` rejects `computer.act` even though the node advertises it.
+   A denied command is withheld from the node's advertised surface together with its `computer` capability, and the Gateway logs which commands it withheld.
 
 This fulfiller currently controls only the primary display. `hold_key`, `left_mouse_down`, and `left_mouse_up` are unavailable because the CUA Driver SDK has no desktop-scope held-input contract. Modifier-held clicks, scrolling, and dragging are rejected because the typed desktop methods do not accept modifiers. The `key` action accepts named keys, letters, and modifier combos (for example `cmd+c` or `Return`); digit and punctuation keys are rejected because the driver drops their layout-dependent shift state, so send that text through the `type` action instead. Cancellation is passed to the SDK for each node invocation.
 
@@ -177,7 +220,7 @@ Once the node-local control is enabled and the pairing update is approved, `comp
 
 On macOS, default-on means a paired gateway can drive pointer and keyboard input as soon as the required macOS grants exist. There is no per-action confirmation. Turn off **Allow Computer Control** before pairing, or at any later time, to stop advertising and accepting `computer.act`.
 
-`gateway.nodes.commands.deny` remains an explicit global revocation and always wins. The native macOS Peekaboo fulfiller does not need a `gateway.nodes.commands.allow` entry. CUA registers `computer.act` as a dangerous plugin node command on every platform, so selecting CUA on macOS or enabling the plugin on Windows/Linux also requires an explicit `gateway.nodes.commands.allow` entry. An authenticated operator with `operator.write` can invoke an enabled, paired command through `node.invoke`; there is no per-action admin check.
+`gateway.nodes.commands.deny` remains an explicit global revocation and always wins; a denied `computer.act` is withheld from the node's advertised surface together with its `computer` capability, and the Gateway records what it withheld. No fulfiller needs a `gateway.nodes.commands.allow` entry: `computer.act` is a built-in desktop platform default, so node-local enablement plus pairing approval is the whole grant on every platform and for either fulfiller. An authenticated operator with `operator.write` can invoke an enabled, paired command through `node.invoke`; there is no per-action admin check.
 
 ## Safety
 

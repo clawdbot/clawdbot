@@ -1,13 +1,18 @@
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewayContextResolver } from "./server-plugin-in-process-dispatch.js";
 
-export function hasInProcessGatewayContext(): boolean {
-  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext());
+export function hasInProcessGatewayContext(
+  resolveGatewayContext?: GatewayContextResolver,
+): boolean {
+  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? resolveGatewayContext?.());
 }
 
-export function projectGatewayRuntimeNodes(nodes: unknown[]): unknown[] {
-  const context = getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
+export function projectGatewayRuntimeNodes(
+  nodes: unknown[],
+  context: GatewayRequestContext | undefined,
+): unknown[] {
   return nodes.map((node) => {
     if (
       !node ||

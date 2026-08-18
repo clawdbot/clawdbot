@@ -11,6 +11,8 @@ import {
   runNodeDaemonUninstall,
 } from "./daemon.js";
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+
 const mocks = vi.hoisted(() => {
   const service = {
     label: "Node service",
@@ -147,7 +149,7 @@ describe("runNodeDaemonInstall", () => {
         port: 18789,
         contextPath: "/saved",
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: TLS_FINGERPRINT,
       },
     });
     mocks.isSystemdUserServiceAvailable.mockReset().mockResolvedValue(true);
@@ -182,7 +184,7 @@ describe("runNodeDaemonInstall", () => {
         port: 18789,
         contextPath: "/saved",
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: TLS_FINGERPRINT,
       }),
     );
   });
@@ -197,7 +199,7 @@ describe("runNodeDaemonInstall", () => {
       expect.objectContaining({
         contextPath: "/saved",
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: TLS_FINGERPRINT,
       }),
     );
   });
@@ -217,11 +219,41 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("rejects a TLS fingerprint when installing an explicitly plaintext node", async () => {
-    await runNodeDaemonInstall({ force: true, tls: false, tlsFingerprint: "new-fingerprint" });
+    await runNodeDaemonInstall({ force: true, tls: false, tlsFingerprint: TLS_FINGERPRINT });
 
     expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("--no-tls cannot be combined with --tls-fingerprint"),
+    );
+  });
+
+  it("rejects an invalid TLS fingerprint before building an install plan", async () => {
+    await runNodeDaemonInstall({ force: true, tlsFingerprint: "sha256:abc123" });
+
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid TLS fingerprint"),
+    );
+  });
+
+  it("rejects Access credentials before installing a plaintext node service", async () => {
+    mocks.loadNodeHostConfig.mockResolvedValue({
+      gateway: {
+        host: "saved-gateway.local",
+        port: 18789,
+        tls: false,
+        cloudflareAccess: {
+          clientId: "$CF_ACCESS_CLIENT_ID",
+          clientSecret: "$CF_ACCESS_CLIENT_SECRET",
+        },
+      },
+    });
+
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Cloudflare Access credentials require --tls for the node Gateway connection",
     );
   });
 
@@ -440,14 +472,12 @@ describe("runNodeDaemonStatus", () => {
     error.name = "ServiceManagerError";
     mocks.service.isLoaded.mockRejectedValue(error);
 
-    await runNodeDaemonStatus({ json: true });
+    await expect(runNodeDaemonStatus({ json: true })).rejects.toThrow(
+      "Node service check failed: systemd unavailable",
+    );
 
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-      error: expect.stringContaining("Node service check failed: systemd unavailable"),
-    });
-    expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain(error.name);
-    expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain(secret);
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
     expect(mocks.runtime.error).not.toHaveBeenCalled();
   });
 

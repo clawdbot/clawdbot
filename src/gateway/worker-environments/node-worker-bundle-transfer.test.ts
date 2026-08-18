@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { NodeWorkerBundleInstaller } from "../../node-host/node-worker-bundle-installer.js";
@@ -42,22 +42,15 @@ describe("node worker bundle transfer", () => {
   it("streams one authorized Gateway artifact into an atomic node install", async () => {
     const source = path.join(root, "source");
     const tarballPath = path.join(root, "bundle.tgz");
-    await fs.mkdir(path.join(source, "dist"), { recursive: true });
-    await fs.writeFile(path.join(source, "openclaw.mjs"), "#!/usr/bin/env node\n");
-    await fs.chmod(path.join(source, "openclaw.mjs"), 0o700);
-    await fs.writeFile(path.join(source, "package.json"), '{"name":"openclaw"}\n');
-    await fs.chmod(path.join(source, "package.json"), 0o600);
-    await fs.writeFile(path.join(source, "dist", "worker.js"), "export {};\n");
-    await fs.chmod(path.join(source, "dist", "worker.js"), 0o600);
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "worker.mjs"), "export {};\n", { mode: 0o700 });
     const manifest = await readWorkerBundleDirectoryManifest({
       root: source,
       limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
     });
     const bundleHash = hashWorkerBundleManifest(manifest);
     await tar.create({ cwd: source, file: tarballPath, gzip: true, noDirRecurse: true }, [
-      "dist/worker.js",
-      "openclaw.mjs",
-      "package.json",
+      "worker.mjs",
     ]);
     const tarball = await fs.readFile(tarballPath);
     const service = createNodeWorkerBundleTransferService({
@@ -71,6 +64,7 @@ describe("node worker bundle transfer", () => {
       clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
       clientMode: "node",
       protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+      workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
       commands: [],
     };
     const prepared = service.prepare({
@@ -103,17 +97,7 @@ describe("node worker bundle transfer", () => {
     if (!address || typeof address === "string") {
       throw new Error("test server did not bind a TCP port");
     }
-    const installer = new NodeWorkerBundleInstaller({
-      root: path.join(root, "node-host"),
-      runCommand: vi.fn(async () => ({
-        stdout: "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      })),
-    });
+    const installer = new NodeWorkerBundleInstaller({ root: path.join(root, "node-host") });
 
     await expect(
       installer.ensure({

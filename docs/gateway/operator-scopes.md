@@ -99,6 +99,14 @@ dispatch so authorization failures have one canonical structured response:
   `projectId`, and `operator.admin` for incognito sessions or any `execNode`
   request. For non-admin callers, the handler limits `cwd` to configured agent
   workspaces; `projectId` cannot be combined with `cwd` or `execNode`.
+- `environments.list` needs `operator.read`. Operators with `operator.write`
+  can use administrator-provisioned shared runner infrastructure through
+  `sessions.dispatch`, `sessions.reclaim`, and `sessions.move`; those methods
+  retain session ownership, participation, and commit-time revalidation
+  fences. `operator.read` alone cannot start, stop, or move a session. Cloud
+  profile mutation, pairing and Connect machine, raw `environments.create` or
+  `environments.destroy`, incognito sessions, direct `execNode` execution, and
+  arbitrary host or node paths remain `operator.admin`.
 - `worktrees.branches` needs `operator.write`. Its handler limits non-admin
   callers to workspace-contained paths or registered-project roots; other host
   paths require `operator.admin`.
@@ -198,10 +206,10 @@ can approve, reject, rotate, revoke, or remove only its own device entry.
 
 ## Node pairing approvals
 
-Legacy `node.pair.*` methods use a separate Gateway-owned node pairing store.
-WS nodes use device pairing (`role: node`) instead, but the same approval
-vocabulary applies. See [Gateway pairing](/gateway/pairing) for how the two
-stores relate.
+`node.pair.*` capability approvals are stored on the paired device record in
+the shared SQLite pairing store. Gateways migrate any remaining entries from
+the retired standalone `nodes/paired.json` store into those records once at
+startup. See [Gateway pairing](/gateway/pairing) for details.
 
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:

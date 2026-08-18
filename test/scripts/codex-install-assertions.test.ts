@@ -893,8 +893,21 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("accepts explicit progress and completion final controls", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-explicit-finals-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      messageFinals: [false, true],
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
   it.each([
-    ["explicit progress", [false, true]],
+    ["terminal progress", [true, true]],
     ["nonfinal completion", [undefined, false]],
   ] as const)("rejects %s Codex message final controls", (_label, messageFinals) => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-final-controls-");

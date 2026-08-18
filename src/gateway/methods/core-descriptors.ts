@@ -65,7 +65,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["config.set", "config", "operator.admin", "<=2026.7"],
   ["config.apply", "config", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["config.patch", "config", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
-  ["config.schema", "config", "operator.admin", "<=2026.7"],
+  ["config.schema", "config", "operator.read", "<=2026.7"],
   ["config.schema.lookup", "config", "operator.read", "<=2026.7"],
   ["exec.approvals.get", "exec-approvals", "operator.admin", "<=2026.7"],
   ["exec.approvals.set", "exec-approvals", "operator.admin", "<=2026.7"],
@@ -167,7 +167,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Params-aware: Gateway paths start at write scope and are containment-checked
   // by the handler; node browsing remains admin-only.
   ["fs.listDir", "fs", "dynamic", "<=2026.7"],
-  ["worktrees.create", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
+  ["worktrees.create", "worktrees", "operator.write", "2026.7", { controlPlaneWrite: true }],
   ["worktrees.remove", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
   ["worktrees.restore", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
   ["worktrees.gc", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
@@ -392,6 +392,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   ["controlUi.sessionPullRequests.subscribe", "control-ui", "operator.read", "2026.7"],
+  ["controlUi.sessionPreview", "control-ui", "operator.read", "2026.8"],
   [
     "gateway.suspend.prepare",
     "suspend",
@@ -437,14 +438,14 @@ const CORE_GATEWAY_METHOD_SPECS = [
   [
     "sessions.dispatch",
     "sessions-dispatch",
-    "operator.admin",
+    "operator.write",
     "2026.7",
     { startup: true, controlPlaneWrite: true },
   ],
   [
     "sessions.reclaim",
     "sessions-dispatch",
-    "operator.admin",
+    "operator.write",
     "2026.7",
     { startup: true, controlPlaneWrite: true },
   ],
@@ -533,6 +534,27 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["portal.list", "portals", "operator.read", "2026.8"],
   ["portal.open", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
   ["portal.close", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
+  [
+    "sessions.move",
+    "sessions-dispatch",
+    "operator.write",
+    "2026.8",
+    { startup: true, controlPlaneWrite: true },
+  ],
+  ["sessions.assignOwner", "sessions-mutations", "operator.write", "2026.8"],
+  ["progressCard.get", "progress-card", "operator.read", "2026.8"],
+  ["progressCard.put", "progress-card", "operator.write", "2026.8"],
+  ["tools.github.status", "tools-github", "operator.read", "2026.8"],
+  [
+    "tools.github.configure",
+    "tools-github",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
+  ["users.setGitHubIdentity", "users", "operator.write", "2026.8"],
+  ["users.clearGitHubIdentity", "users", "operator.write", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

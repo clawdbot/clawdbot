@@ -1,4 +1,5 @@
 // Codex tests cover run attempt.native hook relay plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   abortAgentHarnessRun,
@@ -53,6 +54,12 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
   web_search: "disabled",
 });
+
+function createLoopRelayParams(sessionFile: string, workspaceDir: string) {
+  const params = createParams(sessionFile, workspaceDir);
+  params.config = { tools: { loopDetection: { enabled: true } } } as never;
+  return params;
+}
 
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
@@ -136,7 +143,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -206,7 +213,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createLoopRelayParams(sessionFile, workspaceDir);
     params.messageChannel = "discord";
     params.agentAccountId = "operations";
     params.currentChannelId = "channel:target";
@@ -274,7 +281,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
-  it("auto-answers defensive yolo command and workspace file approvals when the hook allows", async () => {
+  it("auto-answers defensive yolo command and workspace file approvals at their safe scopes", async () => {
     const approvalSpy = vi.spyOn(approvalBridge, "handleCodexAppServerApprovalRequest");
     const beforeToolCall = vi.fn(() => undefined);
     initializeGlobalHookRunner(
@@ -282,6 +289,9 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     );
     const sessionFile = path.join(tempDir, "policy-allow.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-policy-allow");
+    const commandFile = path.join(workspaceDir, "byte-bound-command.mjs");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(commandFile, "process.stdout.write('ok\\n');\n");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.trigger = "user";
@@ -309,12 +319,13 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "cmd-policy-allow",
-        command: "gh run view 1",
+        command: `node ${commandFile}`,
         cwd: workspaceDir,
       },
     });
     expect(approvalSpy).toHaveBeenCalledWith(expect.objectContaining({ autoApprove: true }));
-    expect(commandResponse).toEqual({ decision: "acceptForSession" });
+    // Commands backed by mutable file bytes cannot receive reusable approval.
+    expect(commandResponse).toEqual({ decision: "accept" });
     await expect(
       harness.handleServerRequest({
         id: "request-file-policy-allow",
@@ -407,7 +418,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const relayFloorMs = 30 * 60_000;
 
     const startedAtMs = Date.now();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -435,7 +446,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -500,7 +511,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const explicitTtlMs = 123_456;
 
     const startedAtMs = Date.now();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -529,7 +540,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       pluginConfig: {
         appServer: {
           mode: "guardian",
@@ -595,7 +606,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createLoopRelayParams(sessionFile, workspaceDir);
     const abortController = new AbortController();
     const attemptTimeoutMs = 45 * 60_000;
     const startupTimeoutMs = attemptTimeoutMs;
@@ -647,7 +658,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const firstHarness = createStartedThreadHarness();
 
-    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const firstRun = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -679,7 +690,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     ).resolves.toMatchObject({ exitCode: 0 });
 
     const secondHarness = createResumeHarness();
-    const secondParams = createParams(sessionFile, workspaceDir);
+    const secondParams = createLoopRelayParams(sessionFile, workspaceDir);
     secondParams.runId = "run-2";
     const secondRun = runCodexAppServerAttempt(secondParams, {
       nativeHookRelay: {
@@ -720,7 +731,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const firstHarness = createStartedThreadHarness();
 
-    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const firstRun = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -740,7 +751,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     );
 
     const secondHarness = createResumeHarness();
-    const secondParams = createParams(sessionFile, workspaceDir);
+    const secondParams = createLoopRelayParams(sessionFile, workspaceDir);
     secondParams.runId = "run-2";
     const secondRun = runCodexAppServerAttempt(secondParams, {
       nativeHookRelay: {
@@ -773,7 +784,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createResumeHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -837,7 +848,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -893,7 +904,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       return undefined;
     });
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],

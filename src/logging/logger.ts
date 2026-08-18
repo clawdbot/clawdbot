@@ -25,8 +25,11 @@ import {
 import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
-import { isLegacyRollingLogFilePath, resolveRollingLogFilePathForDate } from "./log-file-path.js";
-import { resolveDefaultRollingLogFile } from "./log-file-path.js";
+import {
+  isLegacyRollingLogFilePath,
+  resolveRollingLogFilePathForDate,
+  resolveDefaultRollingLogFile,
+} from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";

@@ -6,6 +6,7 @@ import type {
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -85,19 +86,29 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       store.refresh(pullRequestKey);
     }
     const result = store.get(pullRequestKey);
-    if (
-      !result ||
-      result.status === "unavailable" ||
-      !this.isConnectionScopeCurrent(scope) ||
-      sessionKey !== scope.state.sessionKey
-    ) {
+    if (!this.isConnectionScopeCurrent(scope) || sessionKey !== scope.state.sessionKey) {
+      return;
+    }
+    if (!result) {
+      if (this.sessionPullRequests.length > 0 || this.sessionPullRequestsBranch !== undefined) {
+        scope.context.sessions.setPullRequestSummary(sessionKey, undefined, pullRequestEpoch);
+      }
+      this.sessionPullRequests = [];
+      this.sessionPullRequestsBranch = undefined;
+      this.sessionPullRequestsRateLimited = false;
+      this.dismissedSessionPullRequestIds = new Set();
+      this.requestUpdate();
+      return;
+    }
+    if (result.status === "unavailable") {
       return;
     }
     this.sessionPullRequests = result.pullRequests;
     if (!result.rateLimited || result.pullRequests.length > 0) {
+      const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
         sessionKey,
-        summarizeSessionPullRequests(result.pullRequests),
+        summarizeSessionPullRequests(result.pullRequests, previousSummary),
         pullRequestEpoch,
       );
     }
@@ -234,7 +245,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         failure = scope.sessions.state.error;
       }
     } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
+      failure = formatUiError(error);
     }
     if (failure && this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
       scope.state.lastError = failure;
@@ -384,23 +395,25 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (older && !this.catalogCursor) {
       return false;
     }
+    const agentId = resolveChatAgentId(state);
     const generation = older ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
     const requestedSessionKey = buildCatalogSessionKey(key);
     const isCurrent = () =>
-      generation === this.catalogLoadGeneration && this.sessionKey === requestedSessionKey;
+      generation === this.catalogLoadGeneration &&
+      this.sessionKey === requestedSessionKey &&
+      resolveChatAgentId(state) === agentId;
     if (!older) {
       this.catalogLoading = true;
       this.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
       this.historyObserverArmed = false;
-      this.historyBootstrapPagesLoaded = 0;
       this.transcriptScrollTop = null;
       this.historyObserver?.disconnect();
       this.historyObserver = null;
     }
     try {
       if (!older) {
-        const lookup = await lookupCatalogSession({ client, key, isCurrent });
+        const lookup = await lookupCatalogSession({ agentId, client, key, isCurrent });
         if (!lookup) {
           return false;
         }
@@ -412,9 +425,13 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         this.olderCursorsSeen.add(requestedOlderCursor);
       }
       const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
+        agentId,
         catalogId: key.catalogId,
         hostId: key.hostId,
         threadId: key.threadId,
+        ...(this.catalogSession?.sourceHomeId
+          ? { sourceHomeId: this.catalogSession.sourceHomeId }
+          : {}),
         limit: 50,
         ...(older && this.catalogCursor ? { cursor: this.catalogCursor } : {}),
       });
@@ -426,6 +443,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         .map((item) => this.catalogItemMessage(item))
         .filter((message) => message !== null);
       const nextMessages = older ? this.prependUniqueCatalogMessages(messages) : messages;
+      const addedMessages = nextMessages.length > this.catalogMessages.length;
       // Exhaust when the cursor cannot make new forward progress: absent, unchanged,
       // or already visited this session (a provider cycling c1 -> c2 -> c1). Any of
       // these stops the re-armed observer from looping. An advancing, never-seen
@@ -441,10 +459,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       const currentState = this.state ?? state;
       currentState.lastError = null;
       scheduleChatScroll(currentState, !older);
-      return older ? !olderExhausted : true;
+      return !older || addedMessages || !olderExhausted;
     } catch (error) {
       if (isCurrent()) {
-        (this.state ?? state).lastError = error instanceof Error ? error.message : String(error);
+        (this.state ?? state).lastError = formatUiError(error);
       }
       return false;
     } finally {
@@ -454,7 +472,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           this.catalogLoading = false;
           currentState.chatLoading = false;
         }
-        currentState.requestUpdate();
+        if (!older) {
+          currentState.requestUpdate();
+        }
       }
     }
   }

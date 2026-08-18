@@ -1,7 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } from "./types.js";
 
 const dispatchTestMocks = vi.hoisted(() => ({
   findLiveByOwner: vi.fn(),
@@ -31,7 +32,10 @@ import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 export const dispatchTestSessionKey = "agent:main:cloud-test";
 export const dispatchTestSessionId = "session-cloud-test";
 
-export function makeReclaimedPlacement(): WorkerSessionPlacementRecord {
+export function makeReclaimedPlacement(): Extract<
+  WorkerSessionPlacementRecord,
+  { state: "reclaimed" }
+> {
   return {
     sessionId: dispatchTestSessionId,
     agentId: "main",
@@ -56,7 +60,7 @@ export function makeReclaimedPlacement(): WorkerSessionPlacementRecord {
   };
 }
 
-export function makeFailedPlacement(): WorkerSessionPlacementRecord {
+export function makeFailedPlacement(): Extract<WorkerSessionPlacementRecord, { state: "failed" }> {
   return {
     ...makeReclaimedPlacement(),
     state: "failed",
@@ -65,16 +69,21 @@ export function makeFailedPlacement(): WorkerSessionPlacementRecord {
   };
 }
 
-export function makeSessionTarget(entry?: {
-  sessionId: string;
-  worktree?: { id: string; branch: string; repoRoot: string };
-  agentHarnessId?: string;
-  agentRuntimeOverride?: string;
-  archivedAt?: number;
-  modelSelectionLocked?: boolean;
-  providerOverride?: string;
-  modelOverride?: string;
-}) {
+type DispatchSessionEntry = Pick<
+  SessionEntry,
+  | "sessionId"
+  | "worktree"
+  | "agentHarnessId"
+  | "agentRuntimeOverride"
+  | "archivedAt"
+  | "modelSelectionLocked"
+  | "providerOverride"
+  | "modelOverride"
+  | "permissionMode"
+  | "sessionRoot"
+>;
+
+export function makeSessionTarget(entry?: DispatchSessionEntry) {
   // Pin an anthropic model by default: the effective-runtime fallback consults
   // the process-global harness registry, so the default openai model resolves
   // to "codex" whenever a sibling test in the shard registered that harness.
@@ -102,12 +111,19 @@ export function makeDispatchTestContext(
       },
     }),
     ...overrides,
+    workerEnvironmentService: {
+      supportsExecutionMode: () => true,
+      ...overrides.workerEnvironmentService,
+    } as never,
   } as unknown as GatewayRequestContext;
 }
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: { profileId: string } | { deviceId: string } = { profileId: "test" },
+  target: { profileId: string; machineClass?: string } | { deviceId: string } = {
+    profileId: "test",
+  },
+  sessionMutationAuthorization?: SessionMutationAuthorization,
 ) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
@@ -120,11 +136,42 @@ export async function invokeSessionDispatch(
     context,
     client: null,
     isWebchatConnect: () => false,
+    sessionMutationAuthorization,
   });
   return respond;
 }
 
-export async function invokeSessionReclaim(context: GatewayRequestContext) {
+export async function invokeSessionMove(
+  context: GatewayRequestContext,
+  params: {
+    expected: { generation: number; environmentId: string; ownerEpoch: number };
+    target:
+      | { kind: "gateway" }
+      | { kind: "profile"; profileId: string; machineClass?: string }
+      | { kind: "device"; deviceId: string };
+  },
+  sessionMutationAuthorization?: SessionMutationAuthorization,
+) {
+  const respond = vi.fn() as unknown as RespondFn;
+  await expectDefined(
+    sessionDispatchHandlers["sessions.move"],
+    'sessionDispatchHandlers["sessions.move"] test invariant',
+  )({
+    req: { id: "move-request" } as never,
+    params: { key: dispatchTestSessionKey, ...params },
+    respond,
+    context,
+    client: null,
+    isWebchatConnect: () => false,
+    sessionMutationAuthorization,
+  });
+  return respond;
+}
+
+export async function invokeSessionReclaim(
+  context: GatewayRequestContext,
+  sessionMutationAuthorization?: SessionMutationAuthorization,
+) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
     sessionDispatchHandlers["sessions.reclaim"],
@@ -136,6 +183,7 @@ export async function invokeSessionReclaim(context: GatewayRequestContext) {
     context,
     client: null,
     isWebchatConnect: () => false,
+    sessionMutationAuthorization,
   });
   return respond;
 }

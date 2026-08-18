@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, type Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -44,6 +44,20 @@ function createSpawnMock(params?: { pid?: number }) {
 
 function signalHandoffReady(child: ReturnType<typeof createSpawnMock>): void {
   child.stdout.write("OPENCLAW_UPDATE_HANDOFF_READY\n");
+}
+
+async function waitForHandoffReady(output: Readable | null): Promise<void> {
+  if (!output) {
+    throw new Error("expected managed handoff helper stdout");
+  }
+  let buffered = "";
+  for await (const chunk of output) {
+    buffered = `${buffered}${chunk.toString()}`.slice(-1024);
+    if (buffered.includes("OPENCLAW_UPDATE_HANDOFF_READY\n")) {
+      return;
+    }
+  }
+  throw new Error("managed handoff helper exited before readiness");
 }
 
 vi.mock("node:child_process", async () => {
@@ -178,7 +192,7 @@ async function runHelperWithExistingSentinel(params: {
   prepareStateDatabase?: (env: NodeJS.ProcessEnv) => Promise<void> | void;
   sentinel?: unknown;
   deepStatePath?: boolean;
-  parentExitTimeoutMs?: number;
+  commandDelayMs?: number;
   whileHelperRunning?: (env: NodeJS.ProcessEnv) => Promise<void> | void;
 }) {
   const { execFile } =
@@ -228,13 +242,16 @@ async function runHelperWithExistingSentinel(params: {
     writeRestartSentinelRow(env, params.sentinel);
   }
   const helperParamsPath = path.join(tmpDir, "helper-params.json");
+  const exitedParentPid = await spawnExitedPid();
+  const failureScript = `setTimeout(() => process.exit(1), ${params.commandDelayMs ?? 0})`;
   await fs.writeFile(
     helperParamsPath,
     `${JSON.stringify(
       {
         ...helperParams,
-        parentPid: process.pid,
-        parentExitTimeoutMs: params.parentExitTimeoutMs ?? 1,
+        parentPid: exitedParentPid,
+        parentExitTimeoutMs: 5_000,
+        commandArgv: [process.execPath, "-e", failureScript],
         logPath: path.join(tmpDir, "handoff.log"),
         sensitivePaths: [],
       },
@@ -300,7 +317,11 @@ async function runHelperWithCommand(params: {
   parentExitTimeoutMs?: number | null;
   serviceRecovery?: Record<string, unknown>;
   pathPrepend?: string;
-}): Promise<{ code: number }> {
+}): Promise<{
+  ready: Promise<void>;
+  completion: Promise<{ code: number }>;
+  logPath: string;
+}> {
   const { execFile } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
@@ -328,6 +349,7 @@ async function runHelperWithCommand(params: {
   >;
 
   const helperParamsPath = path.join(tmpDir, "helper-params.json");
+  const logPath = path.join(tmpDir, "handoff.log");
   await fs.writeFile(
     helperParamsPath,
     `${JSON.stringify(
@@ -338,7 +360,7 @@ async function runHelperWithCommand(params: {
           params.parentExitTimeoutMs === undefined ? 5000 : params.parentExitTimeoutMs,
         cwd: tmpDir,
         commandArgv: params.commandArgv,
-        logPath: path.join(tmpDir, "handoff.log"),
+        logPath,
         sensitivePaths: [],
         ...(params.serviceRecovery ? { serviceRecovery: params.serviceRecovery } : {}),
       },
@@ -353,12 +375,19 @@ async function runHelperWithCommand(params: {
       ? { PATH: `${params.pathPrepend}${path.delimiter}${process.env.PATH ?? ""}` }
       : {}),
   };
-  return await new Promise<{ code: number }>((resolve) => {
-    execFile(process.execPath, [helperScriptPath, helperParamsPath], { env: childEnv }, (err) => {
-      const childError = err as NodeJS.ErrnoException | null;
-      resolve({ code: typeof childError?.code === "number" ? childError.code : 0 });
-    });
+  let child!: ReturnType<typeof execFile>;
+  const completion = new Promise<{ code: number }>((resolve) => {
+    child = execFile(
+      process.execPath,
+      [helperScriptPath, helperParamsPath],
+      { env: childEnv },
+      (err) => {
+        const childError = err as NodeJS.ErrnoException | null;
+        resolve({ code: typeof childError?.code === "number" ? childError.code : 0 });
+      },
+    );
   });
+  return { ready: waitForHandoffReady(child.stdout), completion, logPath };
 }
 
 async function writeFakeSystemctl(): Promise<{ binDir: string; recordPath: string }> {
@@ -642,11 +671,12 @@ describe("managed service update handoff", () => {
     "starts the managed gateway service when the update command fails after handoff",
     async () => {
       const { binDir, recordPath } = await writeFakeSystemctl();
-      const result = await runHelperWithCommand({
+      const { completion } = await runHelperWithCommand({
         commandArgv: [process.execPath, "-e", "process.exit(7)"],
         serviceRecovery: { kind: "systemd", unit: "openclaw-gateway.service" },
         pathPrepend: binDir,
       });
+      const result = await completion;
 
       expect(result.code).toBe(7);
       await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
@@ -657,11 +687,12 @@ describe("managed service update handoff", () => {
 
   it("leaves the gateway service alone when the update command succeeds", async () => {
     const { binDir, recordPath } = await writeFakeSystemctl();
-    const result = await runHelperWithCommand({
+    const { completion } = await runHelperWithCommand({
       commandArgv: [process.execPath, "-e", "process.exit(0)"],
       serviceRecovery: { kind: "systemd", unit: "openclaw-gateway.service" },
       pathPrepend: binDir,
     });
+    const result = await completion;
 
     expect(result.code).toBe(0);
     await expect(pathExists(recordPath)).resolves.toBe(false);
@@ -669,7 +700,7 @@ describe("managed service update handoff", () => {
 
   itUnix("retries launchd start when bootstrap reports an already-loaded label", async () => {
     const { binDir, recordPath } = await writeFakeLaunchctl();
-    const result = await runHelperWithCommand({
+    const { completion } = await runHelperWithCommand({
       commandArgv: [process.execPath, "-e", "process.exit(7)"],
       serviceRecovery: {
         kind: "launchd",
@@ -679,6 +710,7 @@ describe("managed service update handoff", () => {
       },
       pathPrepend: binDir,
     });
+    const result = await completion;
 
     expect(result.code).toBe(7);
     await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
@@ -755,7 +787,7 @@ describe("managed service update handoff", () => {
         sessionKey: "agent:test:webchat:dm:user-123",
         stats: {
           handoffId: "handoff-123",
-          reason: "managed-service-handoff-parent-timeout",
+          reason: "managed-service-handoff-failed",
         },
       },
     });
@@ -812,7 +844,7 @@ describe("managed service update handoff", () => {
         status: "error",
         stats: {
           handoffId: "handoff-locked",
-          reason: "managed-service-handoff-parent-timeout",
+          reason: "managed-service-handoff-failed",
         },
       },
     });
@@ -832,7 +864,7 @@ describe("managed service update handoff", () => {
         kind: "update",
         status: "error",
         stats: {
-          reason: "managed-service-handoff-parent-timeout",
+          reason: "managed-service-handoff-failed",
         },
       },
     });
@@ -909,7 +941,7 @@ describe("managed service update handoff", () => {
       handoffId: "old-handoff",
       metaHandoffId: "old-handoff",
       sentinel: oldSentinel,
-      parentExitTimeoutMs: 200,
+      commandDelayMs: 200,
       whileHelperRunning: async (stateEnv) => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 50);
@@ -975,17 +1007,19 @@ describe("managed service update handoff", () => {
     await expect(pathExists(unrelatedDir)).resolves.toBe(true);
   });
 
-  it("waits for the configured restart drain and shutdown reserve (#99666)", async () => {
+  it.each([
+    ["the configured restart drain and shutdown reserve (#99666)", 60_000, 2_000, 92_000],
+    ["indefinitely when restart draining has no deadline", undefined, 0, null],
+  ])("waits %s", async (_name, restartDrainTimeoutMs, restartDelayMs, expectedTimeoutMs) => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-timeout-test-"));
     tempDirs.add(tmpDir);
-
     const { startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
+
     await startManagedServiceUpdateHandoff({
       root: tmpDir,
-      timeoutMs: 1_800_000,
-      restartDrainTimeoutMs: 60_000,
-      restartDelayMs: 2_000,
+      restartDrainTimeoutMs,
+      restartDelayMs,
       parentPid: process.pid,
       execPath: "/usr/local/bin/node",
       argv1: "/opt/openclaw/openclaw.mjs",
@@ -994,58 +1028,54 @@ describe("managed service update handoff", () => {
     });
 
     const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
-    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as Record<
-      string,
-      unknown
-    >;
-
-    expect(helperParams.parentExitTimeoutMs).toBe(92_000);
+    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as {
+      parentExitTimeoutMs?: unknown;
+    };
+    expect(helperParams.parentExitTimeoutMs).toBe(expectedTimeoutMs);
   });
 
-  it("waits indefinitely when restart draining has no deadline", async () => {
-    const tmpDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-handoff-default-timeout-test-"),
-    );
-    tempDirs.add(tmpDir);
-
-    const { startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-    await startManagedServiceUpdateHandoff({
-      root: tmpDir,
-      restartDrainTimeoutMs: undefined,
-      restartDelayMs: 0,
-      parentPid: process.pid,
-      execPath: "/usr/local/bin/node",
-      argv1: "/opt/openclaw/openclaw.mjs",
-      env: {},
-      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
-    });
-
-    const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
-    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as Record<
-      string,
-      unknown
-    >;
-
-    expect(helperParams.parentExitTimeoutMs).toBeNull();
-  });
-
-  it("runs the handoff after an indefinitely awaited parent exits", async () => {
+  it.each([
+    ["past the expected parent-exit deadline", 50, true],
+    ["through an indefinite parent wait", null, false],
+  ])("runs the update only after the parent exits %s", async (_name, timeoutMs, expectLateLog) => {
     const { spawn } =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    const parent = spawn(process.execPath, ["-e", "setTimeout(() => {}, 750)"], {
-      stdio: "ignore",
+    const markerDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-marker-test-"));
+    tempDirs.add(markerDir);
+    const markerPath = path.join(markerDir, "update-ran");
+    const markerScript = `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "ran")`;
+    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+      stdio: ["pipe", "ignore", "ignore"],
     });
+    let completion: Promise<{ code: number }> | undefined;
 
     try {
-      const result = await runHelperWithCommand({
-        commandArgv: [process.execPath, "-e", ""],
+      const helper = await runHelperWithCommand({
+        commandArgv: [process.execPath, "-e", markerScript],
         parentPid: parent.pid,
-        parentExitTimeoutMs: null,
+        parentExitTimeoutMs: timeoutMs,
       });
-      expect(result.code).toBe(0);
+      completion = helper.completion;
+      await helper.ready;
+
+      if (expectLateLog) {
+        await vi.waitFor(
+          async () => {
+            const log = await fs.readFile(helper.logPath, "utf-8");
+            const expected = `gateway parent pid ${parent.pid} exceeded expected handoff timeout; continuing to wait`;
+            expect(log.split(expected)).toHaveLength(2);
+          },
+          { interval: 10, timeout: 2_000 },
+        );
+      }
+      expect(parent.exitCode).toBeNull();
+      await expect(pathExists(markerPath)).resolves.toBe(false);
+      parent.stdin.end();
+      await expect(completion).resolves.toEqual({ code: 0 });
+      await expect(fs.readFile(markerPath, "utf-8")).resolves.toBe("ran");
     } finally {
-      parent.kill();
+      parent.stdin.end();
+      await completion?.catch(() => undefined);
     }
   });
 });

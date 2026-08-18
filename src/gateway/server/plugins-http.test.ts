@@ -10,6 +10,7 @@ import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
 import {
   createGatewayPluginUpgradeHandler,
   createGatewayPluginRequestHandler,
+  isPluginAuthenticatedRoutePath,
   isRegisteredPluginHttpRoutePath,
   shouldEnforceGatewayAuthForPluginPath,
 } from "./plugins-http.js";
@@ -620,5 +621,22 @@ describe("plugin HTTP route auth checks", () => {
       ],
     });
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/plugin/secure/report")).toBe(true);
+  });
+
+  it("recognizes only existing, unambiguous plugin-authenticated routes", () => {
+    const registry = createGatewayTestRegistry({
+      httpRoutes: [
+        createRoute({ path: "/googlechat", match: "prefix", auth: "plugin" }),
+        createRoute({ path: "/plugin/secure", match: "prefix", auth: "gateway" }),
+        createRoute({ path: "/plugin/secure/report", auth: "plugin" }),
+      ],
+    });
+
+    expect(isPluginAuthenticatedRoutePath(registry, "/googlechat")).toBe(true);
+    expect(isPluginAuthenticatedRoutePath(registry, "/googlechat/events")).toBe(true);
+    expect(isPluginAuthenticatedRoutePath(registry, "/missing")).toBe(false);
+    expect(isPluginAuthenticatedRoutePath(registry, "/api/channels/status")).toBe(false);
+    expect(isPluginAuthenticatedRoutePath(registry, "/plugin/secure/report")).toBe(false);
+    expect(isPluginAuthenticatedRoutePath(registry, decodeOverflowPublicPath)).toBe(false);
   });
 });

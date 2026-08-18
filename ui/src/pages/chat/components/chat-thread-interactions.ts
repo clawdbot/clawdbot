@@ -7,10 +7,15 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { copyMarkdownLabel } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatGuardianNotice,
+  ChatQueueItem,
+  ChatStreamSegment,
+} from "../../../lib/chat/chat-types.ts";
 import {
   buildCompanionQuestionPrefill,
   buildMoreDetailsCompanionQuestion,
@@ -22,7 +27,6 @@ import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import type { PlanStatus } from "../tool-stream.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
@@ -60,9 +64,10 @@ export type ChatThreadProps = {
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
-  historyPagination?: { loading: boolean };
+  historyLoading?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
+  guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
@@ -76,7 +81,6 @@ export type ChatThreadProps = {
   runWorking?: boolean;
   startupStatus?: ChatRunStartupStatus | null;
   waitingApproval?: boolean;
-  planStatus?: PlanStatus | null;
   questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
   sessionHost?: UiSessionDefaultsHost | null;
@@ -97,8 +101,10 @@ export type ChatThreadProps = {
   allowExternalEmbedUrls?: boolean;
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+  typingActors?: readonly { id: string; label: string }[];
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
@@ -354,7 +360,37 @@ function createMessageActionContextButton(params: {
   return { element: tooltip, button };
 }
 
-export function handleTranscriptSelection(event: PointerEvent, props: TranscriptInteractionProps) {
+function toggleTouchMessageMeta(event: PointerEvent): void {
+  const transcript = event.currentTarget;
+  const target = event.target;
+  if (
+    event.pointerType !== "touch" ||
+    !(transcript instanceof HTMLElement) ||
+    !(target instanceof Element)
+  ) {
+    return;
+  }
+  const group = target.closest(".chat-group--with-footer");
+  if (
+    !(group instanceof HTMLElement) ||
+    !transcript.contains(group) ||
+    target.closest("a, button, details, input, label, select, textarea, [contenteditable]")
+  ) {
+    return;
+  }
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed) {
+    return;
+  }
+  const reveal = !group.classList.contains("chat-group--meta-revealed");
+  for (const revealed of transcript.querySelectorAll(".chat-group--meta-revealed")) {
+    revealed.classList.remove("chat-group--meta-revealed");
+  }
+  group.classList.toggle("chat-group--meta-revealed", reveal);
+}
+
+export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
+  toggleTouchMessageMeta(event);
   if (
     typeof props.onCompanionQuestion !== "function" ||
     typeof props.onCompanionPrefill !== "function"

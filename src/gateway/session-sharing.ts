@@ -263,37 +263,41 @@ export function authorizeSessionSharingTarget(params: {
       });
 }
 
-const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey">([
-  ["agent", "sessionKey"],
-  ["board.event", "sessionKey"],
-  ["board.update", "sessionKey"],
-  ["board.widget.grant", "sessionKey"],
-  ["board.widget.put", "sessionKey"],
-  ["chat.abort", "sessionKey"],
-  ["chat.inject", "sessionKey"],
-  ["chat.send", "sessionKey"],
-  ["message.action", "sessionKey"],
-  ["plugins.sessionAction", "sessionKey"],
-  ["send", "sessionKey"],
-  ["session.discussion.open", "sessionKey"],
-  ["sessions.abort", "key"],
-  ["sessions.compaction.branch", "key"],
-  ["sessions.compaction.restore", "key"],
-  ["sessions.compact", "key"],
-  ["sessions.create", "key"],
-  ["sessions.delete", "key"],
-  ["sessions.dispatch", "key"],
-  ["sessions.files.set", "sessionKey"],
-  ["sessions.fork", "key"],
-  ["sessions.patch", "key"],
-  ["sessions.pluginPatch", "key"],
-  ["sessions.reclaim", "key"],
-  ["sessions.reset", "key"],
-  ["sessions.rewind", "key"],
-  ["sessions.send", "key"],
-  ["sessions.steer", "key"],
-  ["sessions.branches.switch", "key"],
-  ["tools.invoke", "sessionKey"],
+type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
+const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutationTargetField[]>([
+  ["agent", ["sessionKey"]],
+  ["board.event", ["sessionKey"]],
+  ["board.update", ["sessionKey"]],
+  ["board.widget.grant", ["sessionKey"]],
+  ["board.widget.put", ["sessionKey"]],
+  ["chat.abort", ["sessionKey"]],
+  ["chat.inject", ["sessionKey"]],
+  ["chat.send", ["sessionKey"]],
+  ["message.action", ["sessionKey"]],
+  ["plugins.sessionAction", ["sessionKey"]],
+  ["progressCard.get", ["sessionKey"]],
+  ["progressCard.put", ["sessionKey"]],
+  ["send", ["sessionKey"]],
+  ["session.discussion.open", ["sessionKey"]],
+  ["sessions.abort", ["key"]],
+  ["sessions.compaction.branch", ["key"]],
+  ["sessions.compaction.restore", ["key"]],
+  ["sessions.compact", ["key"]],
+  ["sessions.create", ["key", "parentSessionKey"]],
+  ["sessions.delete", ["key"]],
+  ["sessions.dispatch", ["key"]],
+  ["sessions.files.set", ["sessionKey"]],
+  ["sessions.fork", ["sessionKey"]],
+  ["sessions.patch", ["key"]],
+  ["sessions.pluginPatch", ["key"]],
+  ...(["sessions.move", "sessions.reclaim"] as const).map((method) => [method, ["key"]] as const),
+  ["sessions.recover", ["key"]],
+  ["sessions.reset", ["key"]],
+  ["sessions.rewind", ["sessionKey"]],
+  ["sessions.send", ["key"]],
+  ["sessions.steer", ["key"]],
+  ["sessions.branches.switch", ["sessionKey"]],
+  ["tools.invoke", ["sessionKey"]],
 ]);
 
 const REQUIRED_SESSION_TARGET_METHODS = new Set([
@@ -305,6 +309,8 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "chat.abort",
   "chat.inject",
   "chat.send",
+  "progressCard.get",
+  "progressCard.put",
   "session.discussion.open",
   "sessions.abort",
   "sessions.branches.switch",
@@ -321,6 +327,8 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "sessions.patch",
   "sessions.pluginPatch",
   "sessions.reclaim",
+  "sessions.recover",
+  "sessions.move",
   "sessions.reset",
   "sessions.rewind",
   "sessions.send",
@@ -405,15 +413,31 @@ function resolveSessionMutationTargets(params: {
     );
     return target ? [target] : undefined;
   }
-  const field = SESSION_KEY_PARAM_BY_METHOD.get(params.method);
-  const directKey = field ? readStringParam(params.requestParams, field) : undefined;
-  if (!directKey && (params.method === "board.event" || params.method === "board.action")) {
+  const requestedAgentId = readStringParam(params.requestParams, "agentId");
+  const directTargets: SessionMutationTarget[] = [];
+  for (const field of SESSION_TARGET_FIELDS_BY_METHOD.get(params.method) ?? []) {
+    const sessionKey = readStringParam(params.requestParams, field);
+    if (!sessionKey) {
+      continue;
+    }
+    // sessions.create applies its selected agent to the parent only for the
+    // unqualified global sentinels; other parents resolve their own store.
+    const parentUsesRequestedAgent =
+      field !== "parentSessionKey" || ["global", "unknown"].includes(sessionKey.toLowerCase());
+    directTargets.push({
+      sessionKey,
+      ...(requestedAgentId && parentUsesRequestedAgent ? { agentId: requestedAgentId } : {}),
+    });
+  }
+  if (directTargets.length) {
+    return directTargets;
+  }
+  if (params.method === "board.event" || params.method === "board.action") {
     const ticket = readStringParam(params.requestParams, "ticket");
     const claims = ticket ? verifyBoardViewTicket(ticket) : undefined;
     if (!claims) {
       return undefined;
     }
-    const requestedAgentId = readStringParam(params.requestParams, "agentId");
     if (requestedAgentId && requestedAgentId !== claims.agentId) {
       return undefined;
     }
@@ -424,16 +448,8 @@ function resolveSessionMutationTargets(params: {
       },
     ];
   }
-  if (directKey || params.method !== "sessions.abort") {
-    const agentId = readStringParam(params.requestParams, "agentId");
-    return directKey
-      ? [
-          {
-            sessionKey: directKey,
-            ...(agentId ? { agentId } : {}),
-          },
-        ]
-      : undefined;
+  if (params.method !== "sessions.abort") {
+    return undefined;
   }
   const runId = readStringParam(params.requestParams, "runId");
   const run = runId ? params.context.chatAbortControllers.get(runId) : undefined;

@@ -168,15 +168,10 @@ describe("createSessionMessageSubscriberRegistry", () => {
     subscribers.subscribe("conn-other", "agent:main:child", { includeApprovals: true });
 
     subscribers.unsubscribeAll("conn-reviewer");
-    expect([...subscribers.getForConnection("conn-reviewer")]).toEqual([]);
     expect([...subscribers.get("agent:main:main")]).toEqual([]);
     expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
     expect([...subscribers.get("agent:main:child")]).toEqual(["conn-other"]);
     expect([...subscribers.getApprovals("agent:main:child")]).toEqual(["conn-other"]);
-
-    subscribers.clear();
-    expect([...subscribers.get("agent:main:child")]).toEqual([]);
-    expect([...subscribers.getApprovals("agent:main:child")]).toEqual([]);
   });
 
   it.each(["first", "second"])(
@@ -195,7 +190,6 @@ describe("createSessionMessageSubscriberRegistry", () => {
       }
 
       expect([...subscribers.get("agent:main:main")]).toEqual([]);
-      expect([...subscribers.getForConnection("conn")]).toEqual([]);
     },
   );
 
@@ -215,10 +209,8 @@ describe("createSessionMessageSubscriberRegistry", () => {
         first();
       }
 
-      expect([...subscribers.getForConnection("conn")]).toEqual([
-        "agent:main:other",
-        "agent:main:main",
-      ]);
+      expect([...subscribers.get("agent:main:other")]).toEqual(["conn"]);
+      expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
     },
   );
 
@@ -230,10 +222,8 @@ describe("createSessionMessageSubscriberRegistry", () => {
 
     rollback();
 
-    expect([...subscribers.getForConnection("conn")]).toEqual([
-      "agent:main:main",
-      "agent:main:child",
-    ]);
+    expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
+    expect([...subscribers.get("agent:main:child")]).toEqual(["conn"]);
   });
 
   it("does not restore a replay invalidated by unsubscribe", () => {
@@ -245,7 +235,6 @@ describe("createSessionMessageSubscriberRegistry", () => {
     subscribers.unsubscribe("conn", "agent:main:main");
     subscription.commit();
 
-    expect([...subscribers.getForConnection("conn")]).toEqual([]);
     expect([...subscribers.get("agent:main:main")]).toEqual([]);
   });
 });

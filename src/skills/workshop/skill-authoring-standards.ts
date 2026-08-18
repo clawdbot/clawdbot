@@ -8,3 +8,6 @@ export const SKILL_AUTHORING_STANDARDS_PROMPT = [
   "- Evidence: never invent flags, commands, paths, APIs, tool behavior, or requirements that the source material does not establish. Omit unsupported details or mark them as unknown.",
   "- Durable learning: capture the working fix, recovery, or procedure. Never preserve a standalone claim that something does not work after the problem may be gone.",
 ].join("\n");
+
+export const SKILL_AUTONOMOUS_CAPTURE_EXCLUSIONS_PROMPT =
+  "- NEVER capture: environment-dependent failures; claims that a tool or provider is broken or unavailable; transient errors that later resolved; one-off task narratives or session recaps; sequences of failed attempts dressed up as best practice; procedures the evidence did not verify.";

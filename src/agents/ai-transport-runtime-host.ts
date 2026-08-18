@@ -15,10 +15,7 @@ import {
 import { createAnthropicVertexStreamFnForModel } from "./anthropic-vertex-stream.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
-import {
-  resolveProviderRequestCapabilities,
-  resolveProviderEndpoint,
-} from "./provider-attribution.js";
+import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import {
   attachModelProviderLocalService,
   getModelProviderLocalService,
@@ -26,7 +23,8 @@ import {
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
-  inheritModelProviderMetadataOwners,
+  getModelProviderRequestRouteFacts,
+  inheritModelProviderRequestRouteFacts,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -77,12 +75,13 @@ export function configureAiTransportRuntimeHost(): void {
     },
     buildCopilotDynamicHeaders: (messages) =>
       buildCopilotDynamicHeaders({ messages, hasImages: hasCopilotVisionInput(messages) }),
-    resolveProviderEndpointClass: (baseUrl) => resolveProviderEndpoint(baseUrl).endpointClass,
     resolveProviderRequestCapabilities: (input) =>
-      resolveProviderRequestCapabilities(input) as AiProviderRequestCapabilities,
+      (getModelProviderRequestRouteFacts(input.model ?? {})?.capabilities ??
+        resolveProviderRequestCapabilities(input)) as AiProviderRequestCapabilities,
     resolveProviderRequestHeaders: (input) =>
       resolveProviderRequestPolicyConfig({
         ...input,
+        routeFacts: getModelProviderRequestRouteFacts(input.model ?? {}),
         capability: "llm",
         transport: "stream",
       }).headers,
@@ -91,7 +90,7 @@ export function configureAiTransportRuntimeHost(): void {
       return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
     },
     inheritManagedTransport: (source, target) =>
-      inheritModelProviderMetadataOwners(
+      inheritModelProviderRequestRouteFacts(
         source,
         attachModelProviderLocalService(
           attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),

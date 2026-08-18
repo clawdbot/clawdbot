@@ -4,6 +4,7 @@ import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   client,
   createGatewayHarness,
+  deferred,
   flushMicrotasks,
   type RequestFn,
 } from "./overlays-access.test-support.ts";
@@ -37,10 +38,41 @@ describe("application update campaign overlays", () => {
 
     await overlays.refreshUpdateStatus();
 
-    expect(request).toHaveBeenCalledWith("update.status", {}, { timeoutMs: 5_000 });
+    expect(request).toHaveBeenCalledWith(
+      "update.status",
+      { refreshCheckout: true },
+      { timeoutMs: 5_000 },
+    );
     expect(overlays.snapshot.updateSchedule?.install?.git).toEqual({
       status: "behind",
       commitsBehind: 12,
+    });
+    overlays.dispose();
+  });
+
+  it("publishes pending and error state when a manual status refresh fails", async () => {
+    const updateStatus = deferred();
+    const request = vi.fn<RequestFn>((method) =>
+      method === "update.status" ? updateStatus.promise : Promise.resolve({}),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    const refresh = overlays.refreshUpdateStatus();
+    expect(overlays.snapshot.updateStatusRefreshing).toBe(true);
+
+    updateStatus.reject(new Error("Gateway unavailable"));
+    await refresh;
+
+    expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
+    expect(overlays.snapshot.updateStatusBanner).toEqual({
+      tone: "danger",
+      text: expect.stringContaining("Gateway unavailable"),
     });
     overlays.dispose();
   });

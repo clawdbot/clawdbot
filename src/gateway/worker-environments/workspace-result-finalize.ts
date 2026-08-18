@@ -229,7 +229,6 @@ export async function reconcileWorkspaceAfterTurn(params: {
           root: params.localWorkspaceDir,
           stagedResultRef: recordedStagedResultRef,
           conflictRetained: finalized.conflictRetained,
-          reclaim: false,
           beforeComplete: async () => {
             await quiescence.resume();
             resumed = true;
@@ -413,25 +412,17 @@ type StagedWorkspaceResultSettlement = {
   root: string;
   stagedResultRef: string | null | undefined;
   conflictRetained: boolean;
-  reclaim: boolean;
   beforeComplete: () => Promise<void>;
+  complete?: () => WorkerSessionPlacementRecord;
   afterComplete?: (completed: WorkerSessionPlacementRecord) => Promise<void>;
   validateCompleted?: (completed: WorkerSessionPlacementRecord) => void;
 };
-
-export function settleStagedWorkspaceResult(
-  params: StagedWorkspaceResultSettlement & { reclaim: true },
-): Promise<Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>>;
-export function settleStagedWorkspaceResult(
-  params: StagedWorkspaceResultSettlement & { reclaim: false },
-): Promise<WorkerSessionPlacementRecord>;
-export function settleStagedWorkspaceResult(
-  params: StagedWorkspaceResultSettlement,
-): Promise<WorkerSessionPlacementRecord>;
 export async function settleStagedWorkspaceResult(
   params: StagedWorkspaceResultSettlement,
 ): Promise<WorkerSessionPlacementRecord> {
-  await params.placements.closeWorkerTurnToolState(params.turnClaim);
+  if (params.turnClaim.owner.kind === "worker") {
+    await params.placements.closeWorkerTurnToolState(params.turnClaim);
+  }
   const cleanupRef =
     params.stagedResultRef && !params.conflictRetained
       ? isWorkerWorkspaceResultCleanupRef(params.stagedResultRef)
@@ -442,8 +433,8 @@ export async function settleStagedWorkspaceResult(
           })
       : undefined;
   await params.beforeComplete();
-  const completed = params.reclaim
-    ? params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim, { reclaim: true })
+  const completed = params.complete
+    ? params.complete()
     : params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
   params.validateCompleted?.(completed);
   await params.afterComplete?.(completed);

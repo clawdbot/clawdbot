@@ -147,6 +147,14 @@ export class TuiSessionRunCoordinator {
     );
   }
 
+  isHistoryTerminalDiagnosticRun(runId: string): boolean {
+    return (
+      this.finalizedRuns.has(runId) &&
+      this.persistedTerminalRunIds.has(runId) &&
+      this.liveTerminalErrorMessages.has(runId)
+    );
+  }
+
   resolveMostRecentPromotableRun(): string | undefined {
     const pendingRunId = getPendingSubmitAcceptedRunId(this.context.state);
     let nextRunId: string | undefined;
@@ -308,7 +316,10 @@ export class TuiSessionRunCoordinator {
         const historyOwned = Boolean(flags & HISTORY_RELOAD_OWNED);
         const previouslyDisplayed = Boolean(flags & HISTORY_RELOAD_DISPLAYED);
         const gapRecovery = Boolean(flags & HISTORY_RELOAD_GAP_RECOVERY);
-        const restoredInFlight = result.loaded && result.inFlightRunId === runId;
+        const restoredInFlight =
+          result.loaded &&
+          result.runOutcome.state === "active" &&
+          result.runOutcome.runId === runId;
 
         if (historyOwned && !restoredInFlight && (result.loaded || !gapRecovery)) {
           this.context.finalizeHistoryOwnedRun({ runId, result, previouslyDisplayed });

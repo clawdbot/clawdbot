@@ -10,11 +10,11 @@ import {
   normalizePreparedModelRuntimeInput,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
+  resolveCommittedConfiguredOwner,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeOwnerRetention,
-  type PreparedModelRuntimePublicationOptions,
   type PreparedModelRuntimeReplacement,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
@@ -30,11 +30,29 @@ type PreparedModelRuntimeLeaseContext = {
   getGatewayLifecycleActive(): boolean;
   getPendingReplacement(): PreparedModelRuntimeReplacement | undefined;
   prepareSnapshot(input: PreparedModelRuntimeInput): Promise<PreparedModelRuntimeSnapshot>;
-  publishSnapshot(
-    input: PreparedModelRuntimeInput,
-    options: PreparedModelRuntimePublicationOptions,
-  ): Promise<PreparedModelRuntimeSnapshot>;
 };
+
+function resolveReusableConfiguredPluginGeneration(
+  input: PreparedModelRuntimeInput,
+  workspacePluginRootPresent: boolean | undefined,
+  context: PreparedModelRuntimeLeaseContext,
+) {
+  if (workspacePluginRootPresent !== false) {
+    return undefined;
+  }
+  const owner = resolveCommittedConfiguredOwner(context.owners, input);
+  const generation = owner?.pluginGeneration;
+  if (
+    !owner ||
+    !generation ||
+    JSON.stringify(owner.input.runtimePluginSelections) !==
+      JSON.stringify(input.runtimePluginSelections) ||
+    generation.pluginMetadataSnapshot.index.plugins.some((plugin) => plugin.origin === "workspace")
+  ) {
+    return undefined;
+  }
+  return generation;
+}
 
 async function resolveCoalescedWorkspacePluginRootPresence(
   input: PreparedModelRuntimeInput,
@@ -81,6 +99,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   options: {
     retainIdleRunOwner?: boolean;
     catalogMode?: PreparedModelRuntimeCatalogMode;
+    pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
   let normalizedInput = normalizePreparedModelRuntimeInput({
@@ -91,6 +110,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   if (
     provenance === "run" &&
     context.getGatewayLifecycleActive() &&
+    !options.pluginGeneration &&
     !context.getPendingReplacement()
   ) {
     try {
@@ -125,7 +145,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       if (context.getPendingReplacement()) {
         continue;
       }
-      if (provenance === "run") {
+      if (provenance === "run" && !options.pluginGeneration) {
         input = rebindInputToCommittedConfiguredOwner(context.owners, input);
         key = ownerKey(input);
       }
@@ -139,6 +159,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     if (
       context.getGatewayLifecycleActive() &&
       provenance === "run" &&
+      !options.pluginGeneration &&
       (!existing || staleDynamicOwner)
     ) {
       // Dynamic workspaces still inherit the committed agent/config generation. Only their
@@ -166,9 +187,15 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       }
     }
     try {
-      if (staleDynamicOwner) {
-        // Existing leases retain their immutable snapshot. Publish a distinct owner so their release
-        // cannot delete the replacement generation admitted for new work at the same dynamic key.
+      const reusablePluginGeneration =
+        options.pluginGeneration ??
+        resolveReusableConfiguredPluginGeneration(input, workspacePluginRootPresent, context);
+      if (existing && !staleDynamicOwner) {
+        snapshot = await context.prepareSnapshot(input);
+      } else {
+        // Fresh keys publish a first generation; stale dynamic owners publish a distinct
+        // replacement owner because existing leases retain their immutable snapshot, so
+        // their release cannot delete the generation admitted for new work at this key.
         snapshot = await publishModelRuntimeSnapshot(
           input,
           context.owners,
@@ -177,14 +204,8 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           undefined,
           provenance,
           options.catalogMode,
+          reusablePluginGeneration,
         );
-      } else if (existing) {
-        snapshot = await context.prepareSnapshot(input);
-      } else {
-        snapshot = await context.publishSnapshot(input, {
-          provenance,
-          catalogMode: options.catalogMode,
-        });
       }
     } catch (error) {
       if (error instanceof PreparedModelRuntimePublicationSupersededError) {

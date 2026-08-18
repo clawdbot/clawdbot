@@ -15,6 +15,7 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
+import { isMessageBroadcastSuccessful } from "../../../infra/outbound/message-action-contracts.js";
 import { withActivatedPluginIds } from "../../../plugins/activation-context.js";
 import {
   resolveConfiguredChannelPluginIds,
@@ -167,6 +168,7 @@ export function createMessageCliHelpers(
   const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
     setVerbose(Boolean(opts.verbose));
     let failed = false;
+    let result: Awaited<ReturnType<typeof messageCommand>> | undefined;
     let pluginRegistry: PluginRegistry | undefined;
     await runCommandWithRuntime(
       defaultRuntime,
@@ -208,7 +210,7 @@ export function createMessageCliHelpers(
             deps,
             defaultRuntime,
           );
-        await withPluginRuntimeRegistryScope(pluginRegistry, run);
+        result = await withPluginRuntimeRegistryScope(pluginRegistry, run);
       },
       (err) => {
         failed = true;
@@ -219,6 +221,7 @@ export function createMessageCliHelpers(
     if (!ACTIONS_WITHOUT_STOP_HOOKS.has(action)) {
       await withPluginRuntimeRegistryScope(pluginRegistry, runPluginStopHooks);
     }
+    failed ||= result?.kind === "broadcast" && !isMessageBroadcastSuccessful(result);
     defaultRuntime.exit(failed ? 1 : 0);
   };
 

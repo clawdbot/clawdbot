@@ -132,6 +132,60 @@ function createSaveState(): {
 }
 
 describe("createAgentCapability lifecycle", () => {
+  it("keeps an adopted startup roster ahead of an older list request", async () => {
+    const pending = deferred<unknown>();
+    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+
+    const staleLoad = agents.refreshList();
+    const adopted = {
+      defaultId: "research",
+      mainKey: "main",
+      scope: "per-sender" as const,
+      agents: [{ id: "main" }, { id: "research" }],
+    };
+    agents.adoptList(adopted, client, agents.state.listRevision);
+
+    expect(agents.state.agentsList).toEqual(adopted);
+    expect(agents.state.agentsLoading).toBe(false);
+
+    pending.resolve({ defaultId: "main", agents: [{ id: "main" }] });
+    await staleLoad;
+    expect(agents.state.agentsList).toEqual(adopted);
+    agents.dispose();
+  });
+
+  it("rejects startup adoption after a newer list request begins", async () => {
+    const pending = deferred<unknown>();
+    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+    const startupRevision = agents.state.listRevision;
+
+    const currentLoad = agents.refreshList();
+    expect(
+      agents.adoptList(
+        { defaultId: "stale", mainKey: "main", scope: "per-sender", agents: [{ id: "stale" }] },
+        client,
+        startupRevision,
+      ),
+    ).toBe(false);
+
+    const current = {
+      defaultId: "research",
+      mainKey: "main",
+      scope: "per-sender" as const,
+      agents: [{ id: "research" }],
+    };
+    pending.resolve(current);
+    await currentLoad;
+    expect(agents.state.agentsList).toEqual(current);
+    agents.dispose();
+  });
+
   it("starts a fresh list request after a same-client reconnect", async () => {
     const first = deferred<unknown>();
     const second = deferred<unknown>();
@@ -313,7 +367,7 @@ describe("loadToolsCatalog", () => {
     await loadToolsCatalog(state, "main");
 
     expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogError).toBe("Error: gateway unavailable");
+    expect(state.toolsCatalogError).toBe("gateway unavailable");
     expect(state.toolsCatalogLoading).toBe(false);
   });
 
@@ -421,7 +475,7 @@ describe("loadToolsEffective", () => {
 
     expect(state.toolsEffectiveResult).toBeNull();
     expect(state.toolsEffectiveResultKey).toBeNull();
-    expect(state.toolsEffectiveError).toBe("Error: gateway unavailable");
+    expect(state.toolsEffectiveError).toBe("gateway unavailable");
     expect(state.toolsEffectiveLoading).toBe(false);
   });
 

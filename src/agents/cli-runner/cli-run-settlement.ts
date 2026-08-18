@@ -19,6 +19,7 @@ import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
+import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
 import { coerceToFailoverError, isFailoverError } from "../failover-error.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { hashCliReseedPrompt } from "./reseed-envelope.js";
@@ -425,6 +426,7 @@ export function buildCliRunResult(params: {
   effectiveCliSessionId?: string;
   bindingFlushOk?: boolean;
   assistantTranscriptOwned?: boolean;
+  assistantTranscriptIdempotencyKey?: string;
   usedHistoryPrompt: boolean;
   userTurnHandled: boolean;
   sessionBindingDisabled: boolean;
@@ -432,6 +434,7 @@ export function buildCliRunResult(params: {
 }): EmbeddedAgentRunResult {
   const {
     assistantTranscriptOwned,
+    assistantTranscriptIdempotencyKey,
     bindingFlushOk,
     context,
     effectiveCliSessionId,
@@ -460,12 +463,27 @@ export function buildCliRunResult(params: {
         : text
           ? [
               assistantTranscriptOwned
-                ? setReplyPayloadMetadata({ text }, { assistantTranscriptOwned: true })
+                ? setReplyPayloadMetadata(
+                    { text },
+                    {
+                      assistantTranscriptOwned: true,
+                      ...(assistantTranscriptIdempotencyKey
+                        ? { assistantTranscriptIdempotencyKey }
+                        : {}),
+                    },
+                  )
                 : { text },
             ]
           : runParams.allowEmptyAssistantReplyAsSilent === true
             ? [{ text: SILENT_REPLY_TOKEN }]
             : undefined;
+  const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
+    payloads,
+    toolMediaUrls: output.toolMediaUrls,
+    toolAudioAsVoice: output.toolAudioAsVoice,
+    toolTrustedLocalMedia: output.toolTrustedLocalMedia,
+    sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
+  });
   const unflushedCliSessionId =
     !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false
       ? effectiveCliSessionId
@@ -524,7 +542,7 @@ export function buildCliRunResult(params: {
   });
 
   return {
-    payloads,
+    payloads: payloadsWithToolMedia,
     meta: {
       durationMs: Date.now() - context.started,
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
@@ -536,6 +554,7 @@ export function buildCliRunResult(params: {
         : {}),
       systemPromptReport: context.systemPromptReport,
       ...(yielded ? { yielded: true, livenessState: "paused" as const, stopReason } : {}),
+      ...(output.yieldAcknowledgment ? { yieldAcknowledgment: output.yieldAcknowledgment } : {}),
       executionTrace: {
         winnerProvider: runParams.provider,
         winnerModel: context.modelId,

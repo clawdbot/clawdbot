@@ -18,6 +18,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../pairing/setup-code.js", () => ({
   resolvePairingSetupFromConfig: mocks.resolvePairingSetupFromConfig,
+  resolveConfiguredPairingPublicUrl: (config: {
+    plugins?: { entries?: Record<string, { config?: Record<string, unknown> }> };
+  }) => {
+    const value = config.plugins?.entries?.["device-pair"]?.config?.publicUrl;
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  },
   encodePairingSetupCode: mocks.encodePairingSetupCode,
 }));
 vi.mock("../../media/qr-image.js", () => ({

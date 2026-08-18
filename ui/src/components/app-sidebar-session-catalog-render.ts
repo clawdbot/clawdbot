@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -42,7 +43,7 @@ type SessionCatalogGroupsParams = {
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
-  creatorId?: string | null;
+  ownerId?: string | null;
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
   draggingSectionId: string | null;
@@ -53,7 +54,7 @@ type SessionCatalogGroupsParams = {
   onStartSectionDrag: (sectionId: string) => void;
   onFinishSectionDrag: () => void;
   viewMenuOpenCatalogId: string | null;
-  creatorFilterActive: boolean;
+  ownerFilterActive: boolean;
   onOpenViewMenu: (
     catalogId: string,
     trigger: HTMLElement,
@@ -66,7 +67,7 @@ type SessionCatalogGroupsParams = {
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   catalogOpenTarget: "viewer" | "terminal";
   terminalAvailable: boolean;
-  onOpenTerminal: (key: CatalogSessionKey) => void;
+  onOpenTerminal: (key: CatalogSessionKey, agentId: string) => void;
   onOpenMenu: (
     request: CatalogSessionMenuRequest,
     x: number,
@@ -101,7 +102,7 @@ function catalogErrorMessages(catalog: SessionCatalog): string[] {
   const messages = new Set<string>();
   const add = (error: SessionCatalog["error"]) => {
     if (error) {
-      messages.add(`[${error.code}] ${error.message}`);
+      messages.add(formatUiError(`[${error.code}] ${error.message}`));
     }
   };
   add(catalog.error);
@@ -119,9 +120,11 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows reuse the live session row so activity, unread state, and
   // the session menu behave exactly like the regular list.
   const liveRowsByKey = new Map<string, GatewaySessionRow>();
+  const liveOwnerIdBySessionKey = new Map<string, string | undefined>();
   for (const row of params.liveRows) {
     if (!liveRowsByKey.has(row.key)) {
       liveRowsByKey.set(row.key, row);
+      liveOwnerIdBySessionKey.set(row.key, row.owner?.actor.id);
     }
   }
   return params.catalogs.map((catalog) => {
@@ -129,7 +132,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const collapsed = params.collapsedSections.has(sectionId);
     const hosts = catalog.hosts;
     // Catalog providers own host identity; the sidebar only removes hosts with no visible rows.
-    const visibleHosts = visibleCatalogHosts(hosts, params.creatorId);
+    const visibleHosts = visibleCatalogHosts(hosts, params.ownerId, liveOwnerIdBySessionKey);
     const rows = visibleHosts.flatMap((host) =>
       host.sessions.map((session) => ({ host, session })),
     );
@@ -231,7 +234,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             </button>
             <button
               type="button"
-              class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.creatorFilterActive
+              class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.ownerFilterActive
                 ? "sidebar-session-sort--filtered"
                 : ""}"
               data-session-catalog-view-menu=${catalog.id}
@@ -296,7 +299,9 @@ function renderCatalogHostGroup(
   liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
   params: SessionCatalogGroupsParams,
 ) {
-  const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
+  const errorHelp = host.error
+    ? formatUiError(`[${host.error.code}] ${host.error.message}`)
+    : undefined;
   const projectGroups =
     params.projectGrouping === "project"
       ? groupCatalogSessionsByProject(host.sessions)
@@ -399,8 +404,6 @@ function renderCatalogSessionRow(
     const label = session.name || session.threadId;
     return params.renderLiveRow(adoptedRow, {
       label,
-      meta: formatSidebarTimestamp(timestamp),
-      title: `${label} · ${host.label}`,
       ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
     });
   }
@@ -426,11 +429,12 @@ function renderCatalogSessionRow(
   const stateDescription = running ? t("sessionsView.activeRun") : "";
   const stateId = running ? sidebarSessionStateId(key) : undefined;
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
-  const openTerminal = () => params.onOpenTerminal(catalogKey);
+  const openTerminal = () => params.onOpenTerminal(catalogKey, params.newSessionAgentId);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(
       {
         key: catalogKey,
+        agentId: params.newSessionAgentId,
         routeId,
         navigation,
         canOpenTerminal: session.canOpenTerminal === true,
@@ -463,7 +467,6 @@ function renderCatalogSessionRow(
       <a
         href=${href}
         class="sidebar-recent-session__link"
-        title=${[`${label} · ${host.label}`, stateDescription].filter(Boolean).join(" · ")}
         aria-current=${active ? "page" : nothing}
         aria-describedby=${stateId ?? nothing}
         @click=${(event: MouseEvent) => {
@@ -481,22 +484,28 @@ function renderCatalogSessionRow(
         <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+          <span class="sidebar-recent-session__details">
+            <span class="sidebar-recent-session__details-endcap">
+              ${renderSessionRowBadges({
+                hasAutomation: false,
+                pullRequest: session.pullRequest,
+              })}
+              ${running
+                ? html`<span class="session-row-aside">
+                    <span
+                      class="session-row-state"
+                      id=${stateId}
+                      role="img"
+                      aria-label=${stateDescription}
+                      >${renderSessionRunSpinner(false)}</span
+                    >
+                  </span>`
+                : nothing}
+            </span>
+          </span>
         </span>
-        ${renderSessionRowBadges({
-          hasAutomation: false,
-          pullRequest: session.pullRequest,
-        })}
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
-        ${running
-          ? html`<span
-              class="session-row-state"
-              id=${stateId}
-              role="img"
-              aria-label=${stateDescription}
-              >${renderSessionRunSpinner(false)}</span
-            >`
-          : nothing}
         <span class="session-row-actions">
           <button
             class="session-action"

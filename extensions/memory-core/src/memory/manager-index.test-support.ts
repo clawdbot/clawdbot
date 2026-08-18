@@ -1,9 +1,9 @@
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -59,6 +59,8 @@ type ProviderCall = {
 };
 
 type ProviderControls = {
+  embedQueryCalls: number;
+  embeddedQueryTexts: string[];
   embedBatchCalls: number;
   embeddedBatchTexts: string[];
   embedBatchInputCalls: number;
@@ -117,6 +119,8 @@ export type ManagerIndexFixture = {
 };
 
 const providerState = vi.hoisted(() => ({
+  embedQueryCalls: 0,
+  embeddedQueryTexts: [] as string[],
   embedBatchCalls: 0,
   embeddedBatchTexts: [] as string[],
   embedBatchInputCalls: 0,
@@ -257,7 +261,11 @@ vi.mock("./embeddings.js", async (importOriginal) => {
               throw providerState.providerCloseFailure;
             }
           },
-          embedQuery: async (text: string) => embedText(text),
+          embedQuery: async (text: string) => {
+            providerState.embedQueryCalls += 1;
+            providerState.embeddedQueryTexts.push(text);
+            return embedText(text);
+          },
           embedBatch: async (texts: string[]) => {
             providerState.embedBatchCalls += 1;
             providerState.embeddedBatchTexts.push(...texts);
@@ -548,6 +556,8 @@ export function createManagerIndexFixture(deps: {
   beforeEach(async () => {
     vi.useRealTimers();
     clearRegistry();
+    providerState.embedQueryCalls = 0;
+    providerState.embeddedQueryTexts = [];
     providerState.embedBatchCalls = 0;
     providerState.embeddedBatchTexts = [];
     providerState.embedBatchInputCalls = 0;

@@ -372,55 +372,6 @@ describe("widget-card", () => {
     expect(app.querySelector("[data-pin-widget]")).toBeNull();
   });
 
-  it("announces a failed Canvas dashboard pin and leaves it retryable", async () => {
-    const pinWidget = vi.fn(async () => {
-      throw new Error("canvas document is stale");
-    });
-    const provider = {
-      sessionKey: "agent:main:main",
-      canPinWidgets: true,
-      pinWidget,
-      snapshot$: {
-        value: {
-          sessionKey: "agent:main:main",
-          revision: 0,
-          tabs: [],
-          widgets: [],
-        },
-        subscribe: () => () => {},
-      },
-    } as unknown as BoardProvider;
-    const toastHost = document.body.appendChild(document.createElement("openclaw-toast-host"));
-    const canvas = document.createElement("div");
-    render(
-      renderToolPreview(
-        {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          viewId: "cv_stale",
-          url: "/__openclaw__/canvas/documents/cv_stale/index.html",
-          sandbox: "scripts",
-        },
-        "chat_message",
-        { boardProvider: provider },
-      ),
-      canvas,
-    );
-
-    const button = canvas.querySelector<HTMLButtonElement>("[data-pin-widget]");
-    button?.click();
-
-    await vi.waitFor(() => {
-      expect(pinWidget).toHaveBeenCalledOnce();
-      expect(button?.disabled).toBe(false);
-      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
-        "Could not pin to dashboard. Try again.",
-      );
-    });
-    toastHost.remove();
-  });
-
   it("pins an MCP App using only its view identity", async () => {
     const pinMcpApp = vi.fn(async () => undefined);
     const provider = {
@@ -534,19 +485,17 @@ describe("widget-card presentation", () => {
     } as unknown as BoardProvider;
   }
 
-  it("drops the panel inset for non-card pinned presentations", () => {
+  it("keeps widget content edge-to-edge with controls outside a visible header", () => {
     const host = document.createElement("div");
     render(
       renderToolPreview(preview, "chat_message", { boardProvider: providerWith("full-bleed") }),
       host,
     );
-    expect(host.querySelector(".chat-tool-card__preview-panel")?.hasAttribute("data-bleed")).toBe(
-      true,
-    );
-
-    render(renderToolPreview(preview, "chat_message", { boardProvider: providerWith() }), host);
-    expect(host.querySelector(".chat-tool-card__preview-panel")?.hasAttribute("data-bleed")).toBe(
-      false,
+    expect(host.querySelector(".chat-tool-card__preview-header")).toBeNull();
+    expect(host.querySelector(".chat-tool-card__preview-label")).toBeNull();
+    expect(host.querySelector(".chat-tool-card__preview-actions")).not.toBeNull();
+    expect(host.querySelector(".chat-tool-card__preview-frame")?.getAttribute("title")).toBe(
+      "Clock",
     );
   });
 });

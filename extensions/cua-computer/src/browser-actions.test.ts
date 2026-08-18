@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { driver, execution } from "./commands.test-helpers.js";
 import {
   CUA_DRIVER_CONTRACT_FIXTURES,
@@ -9,18 +8,8 @@ import {
 } from "./cua-driver-contract.test-fixtures.js";
 import type { CuaToolResult } from "./driver-client.js";
 
-const tempRoots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
-  );
-});
-
 describe("cua-computer browser actions", () => {
   it("maps every browser action to the pinned driver tool contract", async () => {
-    const resourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cua-browser-"));
-    tempRoots.push(resourceRoot);
     const { session, callTool } = driver();
     let downloadedFile = "";
     callTool.mockImplementation(async (name, args) => {
@@ -60,7 +49,7 @@ describe("cua-computer browser actions", () => {
           return cuaToolResult({});
       }
     });
-    const computer = await execution(session, { resourceRoot });
+    const computer = await execution(session);
     const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
       details: { windows: Array<{ windowRef: string }> };
     };
@@ -144,7 +133,7 @@ describe("cua-computer browser actions", () => {
         elementRef: firstElement,
       }),
     );
-    expect(downloadJson).not.toContain(resourceRoot);
+    expect(downloadJson).not.toContain(path.dirname(downloadedFile));
     const download = JSON.parse(downloadJson) as {
       details: { fileResourceHandles: string[]; resourceHandle: string };
     };
@@ -276,6 +265,9 @@ describe("cua-computer browser actions", () => {
         undefined,
       ],
     ]);
+
+    await computer.close("cancel");
+    await expect(fs.access(downloadedFile)).rejects.toThrow();
   });
 
   it("invalidates browser capabilities across navigation, generation, and execution", async () => {
@@ -320,6 +312,19 @@ describe("cua-computer browser actions", () => {
       observationId: observed.observation.observationId,
       elementRef: observed.details.elements[0]!.elementRef,
     };
+
+    const callsBeforeForgedRefs = first.callTool.mock.calls.length;
+    for (const forged of [
+      { ...staleAction, browserRef: "/tmp/native-browser-target" },
+      { ...staleAction, pageRef: "../native-page" },
+      { ...staleAction, observationId: "/tmp/native-observation" },
+      { ...staleAction, elementRef: "p7:0" },
+    ]) {
+      await expect(computer.act(JSON.stringify(forged))).rejects.toThrow(
+        "COMPUTER_STALE_OBSERVATION",
+      );
+    }
+    expect(first.callTool).toHaveBeenCalledTimes(callsBeforeForgedRefs);
 
     await computer.act(
       JSON.stringify({ action: "browser_navigate", browserRef, pageRef, url: "about:blank" }),

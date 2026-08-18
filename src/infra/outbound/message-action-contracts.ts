@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent } from "../../channels/message/types.js";
@@ -17,6 +18,7 @@ import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { MessageBroadcastAccountPlan } from "./message-account-selection.js";
+import type { MessageActionDeniedError } from "./message-action-denial.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
@@ -61,6 +63,10 @@ export type MessageActionInput = {
     toolContext?: InternalChannelThreadingToolContext;
   };
   sessionId?: string;
+  /** @internal Admitted run correlation carried into owner-native delivery audit. */
+  runId?: string;
+  /** @internal Exact admitted execution provenance for owner-native delivery audit. */
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionGateway;
   deps?: OutboundSendDeps;
@@ -88,6 +94,12 @@ export type MessageActionInput = {
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
   /** @internal Runs on identified platform evidence before queue acknowledgement. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** @internal Runs when broadcast converts a typed target denial into result text. */
+  onActionDenied?: (
+    error: MessageActionDeniedError,
+    channel: ChannelId,
+    receiptDiscriminator: string,
+  ) => void;
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -156,6 +168,10 @@ export type MessageActionResult =
       toolResult?: AgentToolResult<unknown>;
       dryRun: boolean;
     };
+
+export const isMessageBroadcastSuccessful = (
+  result: Extract<MessageActionResult, { kind: "broadcast" }>,
+): boolean => result.payload.results.every((entry) => entry.ok);
 
 export type ResolvedActionContext = {
   cfg: OpenClawConfig;

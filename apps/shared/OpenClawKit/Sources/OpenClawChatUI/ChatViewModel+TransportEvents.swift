@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import OSLog
 
 private let transportEventsLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
@@ -27,6 +28,7 @@ extension OpenClawChatViewModel {
             let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
             if reconnected {
+                self.scheduleProgressCardFetch()
                 Task { [weak self] in await self?.refreshQuestions() }
                 Task { [weak self] in await self?.refreshSwarmCapability() }
             }
@@ -46,6 +48,8 @@ extension OpenClawChatViewModel {
             self.handleSessionMessageEvent(message)
         case let .agent(agent):
             self.handleAgentEvent(agent)
+        case let .progressCardChanged(event):
+            self.handleProgressCardChanged(event)
         case let .task(task):
             self.handleTaskEvent(task)
         case let .questionRequested(question):
@@ -55,6 +59,11 @@ extension OpenClawChatViewModel {
             self.resolveQuestionEvent(resolved)
             self.reconcileQuestionsAfterEvent()
         case .routeChanged:
+            // A replacement route may be a different Gateway, so a cached
+            // known-absent store must not authorize the legacy plan fallback
+            // against a new Gateway that dual-emits both sources.
+            self.progressCardStoreAvailable = nil
+            self.clearProgressCard()
             self.swarmEnabled = false
             self.resetSwarmProgress()
             Task { [weak self] in await self?.refreshSwarmCapability() }
@@ -71,7 +80,6 @@ extension OpenClawChatViewModel {
             self.invalidateIncompleteLiveRunUsage()
             self.pendingToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
-            self.clearPlan()
             let context = self.beginHistoryRequest()
             // Question refresh is best-effort and must not delay transcript
             // recovery behind a slow gateway round trip.
@@ -201,7 +209,6 @@ extension OpenClawChatViewModel {
             if wasSelectedRun {
                 self.pendingToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
-                self.clearPlan(for: runID)
             }
             if self.liveUsageRunID == nil {
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
@@ -499,9 +506,6 @@ extension OpenClawChatViewModel {
                     self.updateStreamingAssistantText(nil)
                     self.pendingToolCallsById = [:]
                 }
-                if let explicitRunID {
-                    self.clearPlan(for: explicitRunID)
-                }
                 self.appendFinalChatMessageIfPresent(chat)
                 let context = self.beginHistoryRequest()
                 Task { await self.refreshHistoryAfterRun(historyRequest: context) }
@@ -644,8 +648,27 @@ extension OpenClawChatViewModel {
                 self.updateStreamingAssistantText(text)
             }
         case "plan":
-            guard Self.lowercasedAgentEventString(evt.data["phase"]) == "update" else { return }
-            self.applyPlanSnapshot(runId: evt.runId, data: evt.data)
+            // Released Gateways through v2026.8.x lack progressCard.get and only emit stream:"plan".
+            // Rendering these only when the store is known-absent keeps a dual-emitting Gateway from
+            // fighting the durable card. SUNSET 2026-10-18: this fallback is a fixed cutover window,
+            // not a permanent contract. On that date delete it together with the Gateway's legacy
+            // stream:"plan" dual-emit and the Android twin in ChatController.kt. Tracked: #125639.
+            guard self.progressCardStoreAvailable == false else { return }
+            guard evt.data["phase"]?.value as? String == "update" else { return }
+            let steps = Self.parseLegacyProgressCardSteps(evt.data["steps"])
+            guard !steps.isEmpty else {
+                self.clearProgressCard()
+                return
+            }
+            self.legacyProgressCardRevision &+= 1
+            let explanation = (evt.data["explanation"]?.value as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            self.applyProgressCard(ProgressCard(
+                sessionkey: self.sessionKey,
+                revision: self.legacyProgressCardRevision,
+                updatedat: evt.ts ?? 0,
+                markdown: explanation?.isEmpty == false ? explanation : nil,
+                steps: steps))
         case "tool":
             guard let phase = evt.data["phase"]?.value as? String else { return }
             guard let name = evt.data["name"]?.value as? String else { return }
@@ -747,7 +770,6 @@ extension OpenClawChatViewModel {
         }
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
-        self.clearPlan(for: evt.runId)
         let context = self.beginHistoryRequest()
         self.applyDeferredExternalStateIfReady()
         Task { await self.refreshHistoryAfterRun(historyRequest: context) }
@@ -1396,7 +1418,6 @@ extension OpenClawChatViewModel {
     {
         let wasPending = self.pendingRuns.contains(runId)
         self.pendingRuns.remove(runId)
-        self.clearPlan(for: runId)
         self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
         self.pendingRunOwnerTasks[runId]?.cancel()
         self.pendingRunOwnerTasks[runId] = nil
@@ -1413,8 +1434,7 @@ extension OpenClawChatViewModel {
 
     func clearPendingRuns(
         reason: String?,
-        hapticEvent: OpenClawChatHaptics.Event? = nil,
-        preservePlan: Bool = false)
+        hapticEvent: OpenClawChatHaptics.Event? = nil)
     {
         let runIds = Array(pendingRuns)
         for runId in self.pendingRuns {
@@ -1424,9 +1444,6 @@ extension OpenClawChatViewModel {
         self.pendingRunOwnerTasks.removeAll()
         self.pendingRunOwnerArmIDs.removeAll()
         self.pendingRuns.removeAll()
-        if !preservePlan {
-            self.clearPlan()
-        }
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         if !runIds.isEmpty, let hapticEvent {
             self.haptics.perform(hapticEvent)

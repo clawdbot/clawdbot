@@ -188,21 +188,25 @@ export class CodexToolTranscriptProjection {
   }
 
   recordNativeToolResult(item: CodexThreadItem | undefined, details?: unknown): void {
-    if (!item || !shouldRecordNativeToolTranscript(item)) {
+    if (!item || !shouldRecordNativeToolTranscript(item) || this.resultIds.has(item.id)) {
       return;
     }
     const name = itemName(item);
     if (name) {
+      const status = itemStatus(item);
+      const approvalTimeoutExplanation = this.progress.approvalTimeoutExplanation(item.id, status);
       this.recordToolResult({
         id: item.id,
         name,
         text:
+          approvalTimeoutExplanation ??
           this.rawNativeToolOutputByCallId.get(item.id) ??
           itemTranscriptResultText(item, this.progress.outputTextByItem),
-        isError: isNonSuccessItemStatus(itemStatus(item)),
+        isError: isNonSuccessItemStatus(status),
         details,
         ...(item.type === "webSearch" ? { resultContentSource: "network" } : {}),
       });
+      this.progress.approvalTimeoutKinds.delete(item.id);
     }
   }
 
@@ -313,9 +317,8 @@ export class CodexToolTranscriptProjection {
     }
     this.rawNativeToolOutputByCallId.set(callId, text);
     const result = this.messages.find(
-      (message) =>
-        message.role === "toolResult" &&
-        (message as unknown as { toolCallId?: unknown }).toolCallId === callId,
+      (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
+        message.role === "toolResult" && message.toolCallId === callId,
     );
     if (!result) {
       if (NATIVE_PATCH_REJECTION_RE.test(text)) {
@@ -336,11 +339,9 @@ export class CodexToolTranscriptProjection {
       id: callId,
       name: "apply_patch",
       text,
-      isError: (result as unknown as { isError?: unknown }).isError === true,
+      isError: result.isError,
     });
-    (result as unknown as { content: unknown }).content = (
-      replacement as unknown as { content: unknown }
-    ).content;
+    result.content = replacement.content;
   }
 
   async recordNativeToolResultWithDetails(item: CodexThreadItem | undefined): Promise<void> {
@@ -401,7 +402,9 @@ export class CodexToolTranscriptProjection {
     }
     this.trajectoryResultIds.add(params.item.id);
     const toolResult = itemToolResult(params.item).result;
-    const output = itemOutputText(params.item, this.progress.outputTextByItem);
+    const output =
+      this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
+      itemOutputText(params.item, this.progress.outputTextByItem);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
       threadId: this.threadId,
       turnId: this.turnId,
@@ -426,7 +429,9 @@ export class CodexToolTranscriptProjection {
     }
     this.afterToolCallObservedItemIds.add(item.id);
     const result = itemToolResult(item).result;
-    const error = itemToolError(item, status, this.progress.outputTextByItem);
+    const error =
+      this.progress.approvalTimeoutExplanation(item.id, status) ??
+      itemToolError(item, status, this.progress.outputTextByItem);
     const startedAt = resolveStartedAtFromDurationMs(item.durationMs);
     const hookParams = {
       toolName: name,
@@ -467,6 +472,7 @@ export class CodexToolTranscriptProjection {
           name,
           text: formatMissingToolResultError({ id, name }),
           isError: true,
+          details: { reason: "missing_tool_result" },
         });
       }
     }
@@ -599,7 +605,9 @@ export class CodexToolTranscriptProjection {
     } as unknown as AgentMessage;
   }
 
-  private createToolResultMessage(params: ToolTranscriptResultInput): AgentMessage {
+  private createToolResultMessage(
+    params: ToolTranscriptResultInput,
+  ): Extract<AgentMessage, { role: "toolResult" }> {
     const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
     return {
       role: "toolResult",
@@ -624,7 +632,7 @@ export class CodexToolTranscriptProjection {
         ? { __openclaw: { resultContentSource: params.resultContentSource } }
         : {}),
       timestamp: this.nextTranscriptTimestamp(),
-    } as unknown as AgentMessage;
+    } as unknown as Extract<AgentMessage, { role: "toolResult" }>;
   }
 }
 

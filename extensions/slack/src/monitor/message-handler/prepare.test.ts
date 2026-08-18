@@ -11,8 +11,7 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -463,6 +462,32 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared, "open-policy Slack DM");
     expect(prepared.ctxPayload.RawBody).toContain("hello");
     expect(prepared.ctxPayload.From).toBe("slack:U123");
+  });
+
+  it("projects cached sender avatars for DMs only", async () => {
+    const ctx = createDefaultSlackCtx();
+    const resolveUserAvatar = vi.fn(() => "/media/inbound/slack-avatar.png");
+    ctx.resolveUserAvatar = resolveUserAvatar;
+
+    const direct = await prepareSlackMessage({
+      ctx,
+      account: defaultAccount,
+      message: createSlackMessage({ channel: "D123", channel_type: "im", user: "U1" }),
+      opts: { source: "message" },
+    });
+    const channel = await prepareSlackMessage({
+      ctx,
+      account: defaultAccount,
+      message: createSlackMessage({ channel: "C123", channel_type: "channel", user: "U1" }),
+      opts: { source: "app_mention", wasMentioned: true },
+    });
+
+    assertPrepared(direct, "Slack DM avatar");
+    assertPrepared(channel, "Slack channel without avatar");
+    expect(direct.ctxPayload.ConversationAvatar).toBe("/media/inbound/slack-avatar.png");
+    expect(channel.ctxPayload.ConversationAvatar).toBeUndefined();
+    expect(resolveUserAvatar).toHaveBeenCalledOnce();
+    expect(resolveUserAvatar).toHaveBeenCalledWith("U1", undefined);
   });
 
   it("carries the validated event workspace through reusable DM routing", async () => {

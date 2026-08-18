@@ -3,6 +3,7 @@ import {
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { expect, it } from "vitest";
+import { expectWindowRetiredWithoutSummary } from "./bot-message-dispatch.progress-window.test-helpers.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   type DispatchReplyWithBufferedBlockDispatcherArgs,
@@ -19,7 +20,6 @@ import {
   expectDeliveredReply,
   expectDeliverRepliesParams,
   expectRecordFields,
-  expectWindowCollapsedTo,
   loadSessionStore,
   mockCallArg,
   mockDefaultSessionEntry,
@@ -52,7 +52,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 
@@ -83,7 +83,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 
@@ -118,7 +118,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 
@@ -149,7 +149,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: fullAnswer });
   });
 
@@ -447,10 +447,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       expect(rollingPreview?.text).toContain(`command-${index}`);
     }
     expectDeliveredReply(0, { text: "Done" });
-    const collapsePreview = draftStream.finalizeToPreview.mock.calls.at(-1)?.[0] as
-      | { text?: string }
-      | undefined;
-    expect(collapsePreview?.text).toMatch(/^🛠️ 10 tool calls · ⏱️ \d+s$/u);
+    expectWindowRetiredWithoutSummary(draftStream);
   });
 
   it("renders command status without command output in Telegram progress draft previews", async () => {
@@ -590,7 +587,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
         "<b>Shelling</b>\n<b>🧠 Thinking… (~200 tokens)</b>",
       ),
     );
-    expectWindowCollapsedTo(draftStream, "🧠 1 thought · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(draftStream);
     expectDeliveredReply(0, { text: "Done" });
   });
 

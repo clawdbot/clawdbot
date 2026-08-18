@@ -2,8 +2,53 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AuthenticatedAvatarRouteLoader } from "./authenticated-avatar-route.ts";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("cancels an advertised retry when the last consumer releases the route", async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 503,
+    headers: new Headers({ "retry-after": "1" }),
+  } as Response);
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const loader = new AuthenticatedAvatarRouteLoader(vi.fn(), { retryUnavailable: true });
+
+  expect(loader.resolve("/avatar/retrying", ["token"])).toBeNull();
+  await Promise.resolve();
+  expect(fetchMock).toHaveBeenCalledOnce();
+
+  loader.reset();
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+});
+
+it("backs off after one retry window before a later render can recover", async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 503,
+    headers: new Headers({ "retry-after": "1" }),
+  } as Response);
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const loader = new AuthenticatedAvatarRouteLoader(vi.fn(), { retryUnavailable: true });
+
+  expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(fetchMock).toHaveBeenCalledTimes(4);
+
+  expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
+  expect(fetchMock).toHaveBeenCalledTimes(4);
+
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
+  await Promise.resolve();
+  expect(fetchMock).toHaveBeenCalledTimes(5);
+  loader.reset();
 });
 
 it("shares pending fetches and revokes the resolved blob on reset", async () => {

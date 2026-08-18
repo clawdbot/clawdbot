@@ -11,10 +11,6 @@ const DISCORD_THREAD_STARTER_CACHE_MAX = 500;
 
 const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarterCacheEntry>();
 
-export function resetDiscordThreadStarterCacheForTest() {
-  DISCORD_THREAD_STARTER_CACHE.clear();
-}
-
 export function getCachedThreadStarter(key: string, now: number): DiscordThreadStarter | undefined {
   const entry = DISCORD_THREAD_STARTER_CACHE.get(key);
   if (!entry) {

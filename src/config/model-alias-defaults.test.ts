@@ -2,7 +2,6 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
 import type { ModelProviderConfig, OpenClawConfig } from "./types.js";
@@ -96,7 +95,7 @@ describe("applyModelDefaults", () => {
   }
 
   function buildProviderTokenDefaultsConfig(params: {
-    provider: { contextWindow?: number; contextTokens?: number; maxTokens?: number };
+    provider: { maxTokens?: number };
     model?: { contextWindow?: number; contextTokens?: number; maxTokens?: number };
   }) {
     return {
@@ -462,8 +461,8 @@ describe("applyModelDefaults", () => {
     expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
   });
 
-  it("fills missing model provider defaults", () => {
-    const cfg = buildProxyProviderConfig();
+  it("leaves an omitted native context window undefined", () => {
+    const cfg = buildProviderTokenDefaultsConfig({ provider: {} });
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];
@@ -471,7 +470,7 @@ describe("applyModelDefaults", () => {
     expect(model?.reasoning).toBe(false);
     expect(model?.input).toEqual(["text"]);
     expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-    expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
+    expect(model?.contextWindow).toBeUndefined();
     expect(model?.maxTokens).toBe(8192);
   });
 
@@ -487,21 +486,21 @@ describe("applyModelDefaults", () => {
 
   it.each([
     {
-      name: "inherits provider defaults",
-      provider: { contextWindow: 50_000, contextTokens: 32_000, maxTokens: 4_096 },
+      name: "inherits only the provider output-token default",
+      provider: { maxTokens: 4_096 },
       model: undefined,
-      expected: { contextWindow: 50_000, contextTokens: 32_000, maxTokens: 4_096 },
+      expected: { contextWindow: undefined, contextTokens: undefined, maxTokens: 4_096 },
     },
     {
       name: "keeps model overrides",
-      provider: { contextWindow: 50_000, contextTokens: 32_000, maxTokens: 4_096 },
+      provider: { maxTokens: 4_096 },
       model: { contextWindow: 10_000, contextTokens: 8_000, maxTokens: 2_048 },
       expected: { contextWindow: 10_000, contextTokens: 8_000, maxTokens: 2_048 },
     },
     {
-      name: "clamps inherited maxTokens to the inherited contextWindow",
-      provider: { contextWindow: 4_096, maxTokens: 8_192 },
-      model: undefined,
+      name: "clamps provider maxTokens to the model contextWindow",
+      provider: { maxTokens: 8_192 },
+      model: { contextWindow: 4_096 },
       expected: { contextWindow: 4_096, contextTokens: undefined, maxTokens: 4_096 },
     },
   ])("$name", ({ provider, model, expected }) => {

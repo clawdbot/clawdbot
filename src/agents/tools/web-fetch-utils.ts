@@ -4,8 +4,9 @@
  * Converts lightweight HTML into bounded markdown/text without pulling in a full renderer.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
-import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
+import { sanitizeHtml } from "./web-fetch-visibility.js";
 
 /** Output mode requested by web_fetch extraction. */
 export type ExtractMode = "markdown" | "text";

@@ -971,6 +971,105 @@ describe("setupChannels workspace shadow exclusion", () => {
     });
   });
 
+  it("fails visibly when configured channel setup has no post-write hook sink", async () => {
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard: {
+        channel: "external-chat",
+        getStatus: vi.fn(async () => ({
+          channel: "external-chat",
+          configured: false,
+          statusLines: [],
+        })),
+        configure: vi.fn(),
+        configureInteractive: vi.fn(async ({ cfg }) => ({
+          cfg: {
+            ...cfg,
+            channels: { ...cfg.channels, "external-chat": { token: "configured" } },
+          },
+          accountId: "external-account",
+        })),
+        afterConfigWritten: vi.fn(async () => {}),
+      } as ChannelSetupPlugin["setupWizard"],
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+
+    await expect(
+      setupChannels(
+        {} as OpenClawConfig,
+        {} as never,
+        {
+          confirm: vi.fn(async () => true),
+          note: vi.fn(async () => undefined),
+          select: vi.fn(async () => "__done__"),
+        } as never,
+        {
+          initialSelection: ["external-chat"],
+          finishAfterInitialSelection: true,
+          deferStatusUntilSelection: true,
+          skipDmPolicyPrompt: true,
+        },
+      ),
+    ).rejects.toThrow(/post-write hook.*transaction sink/i);
+  });
+
+  it("keeps completed setup when the follow-up status refresh fails", async () => {
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce({
+        channel: "external-chat",
+        configured: false,
+        statusLines: [],
+      })
+      .mockRejectedValueOnce(new Error("controlled status failure"));
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard: {
+        channel: "external-chat",
+        getStatus,
+        configure: vi.fn(async ({ cfg }) => ({
+          cfg: {
+            ...cfg,
+            channels: { ...cfg.channels, "external-chat": { token: "configured" } },
+          },
+          accountId: "external-account",
+        })),
+      } as ChannelSetupPlugin["setupWizard"],
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+    const note = vi.fn(async () => undefined);
+
+    const result = await setupChannels(
+      {} as OpenClawConfig,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note,
+        select: vi.fn(async () => "__done__"),
+      } as never,
+      {
+        initialSelection: ["external-chat"],
+        finishAfterInitialSelection: true,
+        deferStatusUntilSelection: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(result).toMatchObject({
+      channels: { "external-chat": { token: "configured" } },
+    });
+    expect(getStatus).toHaveBeenCalledTimes(2);
+    expect(note).toHaveBeenCalledWith(
+      "Status unavailable (controlled status failure).\n" +
+        "Retry: openclaw channels status --channel external-chat",
+      "Channel status",
+    );
+  });
+
   it("returns targeted channel setup Back navigation to the channel picker", async () => {
     const promptOrder: string[] = [];
     const configureInteractive = vi.fn(async ({ prompter }) => {

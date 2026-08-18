@@ -49,6 +49,7 @@ describe("AppSidebar footer identity menu", () => {
       "command:usage",
       "command:pair-mobile",
       "command:apps",
+      "command:debug-overlay",
       "command:help",
     ]);
     expect(menu?.querySelector(".sidebar-identity-menu__header")?.textContent?.trim()).toBe(

@@ -312,6 +312,8 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
 /** Runs durable generated-media handoffs through the normal owning-session agent loop. */
 export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   canonicalKey: string;
+  agentId: string;
+  storePath: string;
   entry: QueuedSessionDelivery;
   sessionEntry?: SessionEntry;
   stateDir?: string;
@@ -342,7 +344,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             throw new Error("queued internal generated-media delivery has no owning session");
           }
           const appended = await appendAssistantMessageToSessionTranscript({
+            agentId: params.agentId,
             sessionKey: params.canonicalKey,
+            storePath: params.storePath,
             expectedSessionId: sessionId,
             ...(params.sessionEntry?.cronRunContinuation?.lifecycleRevision
               ? {

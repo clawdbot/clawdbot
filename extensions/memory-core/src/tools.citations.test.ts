@@ -14,6 +14,7 @@ import {
   resetMemoryToolMockState,
   setMemoryReadFileImpl,
   setMemorySearchImpl,
+  setMemorySearchManagerImpl,
   setMemoryWorkspaceDir,
   type MemoryReadParams,
 } from "./memory-tool-manager.test-mocks.js";
@@ -234,6 +235,35 @@ describe("memory tools", () => {
     });
     expect(getReadAgentMemoryFileMockCalls()).toBe(1);
     expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("revokes retained memory tools when live config disables memory", async () => {
+    const startupConfig = asOpenClawConfig({
+      agents: { list: [{ id: "main", default: true }] },
+    });
+    let liveConfig = startupConfig;
+    const getConfig = () => liveConfig;
+    const searchTool = createMemorySearchTool({ config: startupConfig, getConfig });
+    const getTool = createMemoryGetTool({ config: startupConfig, getConfig });
+    if (!searchTool || !getTool) {
+      throw new Error("memory tools missing");
+    }
+
+    liveConfig = asOpenClawConfig({
+      agents: {
+        list: [{ id: "main", default: true, memory: { search: { enabled: false } } }],
+      },
+    });
+    const disabledMessage =
+      "Memory is disabled for this agent. Enable memory search for this agent, then retry.";
+    await expect(
+      searchTool.execute("revoked-search", { query: "private preference" }),
+    ).rejects.toThrow(disabledMessage);
+    await expect(getTool.execute("revoked-get", { path: "MEMORY.md" })).rejects.toThrow(
+      disabledMessage,
+    );
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+    expect(getReadAgentMemoryFileMockCalls()).toBe(0);
   });
 
   it("rejects fractional memory_get ranges before reading files", async () => {
@@ -623,6 +653,35 @@ describe("memory tools", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("surfaces a memory-corpus warning when corpus=all hits a returned manager error", async () => {
+    setMemorySearchManagerImpl(async () => ({ error: "sqlite support missing" }));
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "entities/alpha.md",
+          title: "Alpha",
+          kind: "entity",
+          score: 4,
+          snippet: "Alpha wiki entry",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_all_manager_error", { query: "alpha", corpus: "all" });
+    const details = result.details as {
+      results: Array<{ corpus: string }>;
+      warning?: string;
+    };
+
+    // Wiki supplements still serve, but the omitted memory corpus is recorded.
+    expect(details.results.map((entry) => entry.corpus)).toEqual(["wiki"]);
+    expect(details.warning).toContain("Memory corpus unavailable");
+    expect(details.warning).toContain("sqlite support missing");
   });
 
   it("cooldowns primary memory when corpus=all memory search stalls", async () => {

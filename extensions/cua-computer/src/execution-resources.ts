@@ -29,13 +29,9 @@ export type CuaExecutionResources = {
   dispose(discard: boolean): Promise<void>;
 };
 
-export function createLazyCuaExecutionResources(
-  options: {
-    rootDir?: string;
-  } = {},
-): CuaExecutionResources {
+export function createLazyCuaExecutionResources(): CuaExecutionResources {
   let resourcesPromise: Promise<CuaExecutionResources> | undefined;
-  const resources = () => (resourcesPromise ??= createCuaExecutionResources(options));
+  const resources = () => (resourcesPromise ??= createCuaExecutionResources());
   return {
     createDirectory: async (label) => await (await resources()).createDirectory(label),
     resolveFiles: async (handles) => await (await resources()).resolveFiles(handles),
@@ -90,16 +86,18 @@ async function requireEntry(
   return { entry, path: resolved };
 }
 
-async function createCuaExecutionResources(
-  options: {
-    rootDir?: string;
-  } = {},
-): Promise<CuaExecutionResources> {
-  const baseRoot = await root(
-    options.rootDir ?? path.join(resolvePreferredOpenClawTmpDir(), RESOURCE_ROOT_NAME),
-    { hardlinks: "reject", mode: 0o700, symlinks: "reject" },
-  );
-  await baseRoot.ensureRoot();
+async function createCuaExecutionResources(): Promise<CuaExecutionResources> {
+  const preferredTmpRoot = await root(resolvePreferredOpenClawTmpDir(), {
+    hardlinks: "reject",
+    mode: 0o700,
+    symlinks: "reject",
+  });
+  await preferredTmpRoot.mkdir(RESOURCE_ROOT_NAME);
+  const baseRoot = await root(await preferredTmpRoot.resolve(RESOURCE_ROOT_NAME), {
+    hardlinks: "reject",
+    mode: 0o700,
+    symlinks: "reject",
+  });
   const executionDirectory = `execution-${randomUUID()}`;
   await baseRoot.mkdir(executionDirectory);
   const executionPath = await baseRoot.resolve(executionDirectory);

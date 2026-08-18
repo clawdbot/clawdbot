@@ -31,9 +31,11 @@ type EventContext = Pick<
   | "rejectedProviderCallIds"
   | "provider"
   | "config"
+  | "coreSession"
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "endCallOperations"
   | "onCallAnswered"
   | "streamSessionIssuer"
 >;
@@ -104,6 +106,7 @@ function createWebhookCall(params: {
       config: effectiveConfig,
       callId,
       phone: params.direction === "outbound" ? params.to : params.from,
+      coreSession: params.ctx.coreSession,
     }),
     agentId: normalizeAgentId(effectiveConfig.agentId),
     startedAt: Date.now(),
@@ -242,9 +245,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     startMaxDurationTimer({
       ctx,
       callId: activeCall.callId,
-      onTimeout: async (callId) => {
-        await endCall(ctx, callId, { reason: "timeout" });
-      },
+      onTimeout: (callId) => endCall(ctx, callId, { reason: "timeout" }),
     });
   };
   const prepareLiveDurationTimer = () => {

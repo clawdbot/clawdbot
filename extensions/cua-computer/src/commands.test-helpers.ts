@@ -134,16 +134,12 @@ export function driver(
   };
 }
 
-export async function execution(
-  session: CuaDriverSession,
-  options: { resourceRoot?: string } = {},
-) {
+export async function execution(session: CuaDriverSession) {
   return await createCuaComputerProvider({
     platform: "linux",
     driver: session,
     imageProcessor: {
       encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
     },
-    resourceRoot: options.resourceRoot,
   }).openExecution({ executionId: randomUUID() });
 }

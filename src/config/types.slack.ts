@@ -60,6 +60,8 @@ type SlackPresenceEventsMode = "off" | "auto" | "on";
 type SlackPresenceEventsConfig = {
   /** Presence wake mode. Default: off. */
   mode?: SlackPresenceEventsMode;
+  /** Override the default presence-event guidance. Empty omits guidance. Maximum: 20,000 characters. */
+  prompt?: string;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";

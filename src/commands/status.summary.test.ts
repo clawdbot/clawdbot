@@ -6,6 +6,7 @@ import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { registerStatusSummarySessionRowCases } from "./status.summary.test-support.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
@@ -17,7 +18,6 @@ const statusSummaryMocks = vi.hoisted(() => ({
       entry: Record<string, unknown>;
     }>
   >(() => []),
-  configureTaskRegistryMaintenance: vi.fn(),
   taskRegistrySummary: {
     total: 0,
     active: 0,
@@ -40,7 +40,11 @@ const statusSummaryMocks = vi.hoisted(() => ({
     },
   } as TaskRegistrySummary,
   inspectableTasks: [] as TaskRecord[],
-  reconcileInspectableTasks: vi.fn(() => statusSummaryMocks.inspectableTasks),
+  taskRegistryReadOnlyState: "ready" as "ready" | "migration-required",
+  inspectTasksReadOnly: vi.fn(() => ({
+    state: statusSummaryMocks.taskRegistryReadOnlyState,
+    tasks: statusSummaryMocks.inspectableTasks,
+  })),
   getInspectableTaskRegistrySummary: vi.fn(
     (_tasks?: TaskRecord[]) => statusSummaryMocks.taskRegistrySummary,
   ),
@@ -83,7 +87,7 @@ vi.mock("../status/summary.runtime.js", () => ({
       provider: "openai",
       model: "gpt-5.5",
     })),
-    resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Default"),
+    resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
     resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
       typeof model === "string" && model.length > 0
         ? {
@@ -97,6 +101,7 @@ vi.mock("../status/summary.runtime.js", () => ({
         ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
         : null,
     ),
+    resolveAuthoredModelContextTokens: vi.fn(() => undefined),
     resolveContextTokensForModel: vi.fn(() => 200_000),
     waitForContextWindowCacheLoad: vi.fn(async () => "idle" as const),
   },
@@ -164,8 +169,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  configureTaskRegistryMaintenance: statusSummaryMocks.configureTaskRegistryMaintenance,
-  reconcileInspectableTasks: statusSummaryMocks.reconcileInspectableTasks,
+  inspectTasksReadOnly: statusSummaryMocks.inspectTasksReadOnly,
   getInspectableTaskRegistrySummary: statusSummaryMocks.getInspectableTaskRegistrySummary,
   getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
 }));
@@ -237,6 +241,7 @@ describe("getStatusSummary", () => {
         cron: 0,
       },
     };
+    statusSummaryMocks.taskRegistryReadOnlyState = "ready";
     statusSummaryMocks.inspectableTasks = [];
     statusSummaryMocks.taskAuditFindings = [
       {
@@ -267,6 +272,12 @@ describe("getStatusSummary", () => {
           : undefined,
     );
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
+    vi.mocked(statusSummaryRuntime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
+    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
+      id: "openclaw",
+      label: "OpenClaw Default",
+    });
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
@@ -274,6 +285,15 @@ describe("getStatusSummary", () => {
       scope: "per-sender",
       agents: [{ id: "main" }],
     });
+  });
+
+  registerStatusSummarySessionRowCases({
+    getStatusSummary: () => getStatusSummary(),
+    getStatusSummaryRuntime: () => statusSummaryRuntime,
+    rejectProviderStaticModel: (error) =>
+      statusSummaryMocks.resolveProviderStaticModel.mockRejectedValueOnce(error),
+    setSessions: (store) =>
+      statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -490,12 +510,23 @@ describe("getStatusSummary", () => {
 
     await getStatusSummary();
 
-    expect(statusSummaryMocks.reconcileInspectableTasks).toHaveBeenCalledTimes(1);
+    expect(statusSummaryMocks.inspectTasksReadOnly).toHaveBeenCalledTimes(1);
     expect(statusSummaryMocks.getInspectableTaskRegistrySummary).toHaveBeenCalledWith(
       inspectableTasks,
     );
     expect(statusSummaryMocks.getInspectableTaskAuditFindings).toHaveBeenCalledWith(
       inspectableTasks,
+    );
+  });
+
+  it("reports task schema migration state without failing status", async () => {
+    statusSummaryMocks.taskRegistryReadOnlyState = "migration-required";
+
+    const summary = await getStatusSummary();
+
+    expect(summary.tasks.total).toBe(0);
+    expect(summary.tasks.warning).toBe(
+      "Task history is unavailable until Gateway startup or openclaw doctor --fix repairs the state database.",
     );
   });
 
@@ -591,28 +622,6 @@ describe("getStatusSummary", () => {
       modelContextWindow: 1_000_000,
       modelContextTokens: 272_000,
     });
-  });
-
-  it("does not pass stale session contextTokens as status row overrides", async () => {
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        "agent:main:main": {
-          sessionId: "stale-context",
-          updatedAt: Date.now(),
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          contextTokens: 1_000_000,
-        },
-      }),
-    );
-
-    await getStatusSummary();
-
-    expect(
-      vi
-        .mocked(statusSummaryRuntime.resolveContextTokensForModel)
-        .mock.calls.some((call) => call[0]?.contextTokensOverride === 1_000_000),
-    ).toBe(false);
   });
 
   it.each([
@@ -726,41 +735,6 @@ describe("getStatusSummary", () => {
     });
   });
 
-  it("keeps status available when static catalog lookup fails", async () => {
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
-      provider: "broken-provider",
-      model: "broken-model",
-    });
-    statusSummaryMocks.resolveProviderStaticModel.mockRejectedValueOnce(
-      new Error("static catalog unavailable"),
-    );
-
-    await expect(getStatusSummary()).resolves.toMatchObject({
-      sessions: {
-        defaults: {
-          model: "broken-model",
-          contextTokens: 200_000,
-        },
-      },
-    });
-  });
-
-  it("includes the selected agent runtime on recent sessions", async () => {
-    vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        "agent:main:main": {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      }),
-    );
-
-    const summary = await getStatusSummary();
-
-    expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
-  });
-
   it("hydrates only recent session rows while preserving total counts", async () => {
     const store = Object.fromEntries(
       Array.from({ length: 12 }, (_, index) => {
@@ -797,7 +771,7 @@ describe("getStatusSummary", () => {
     );
 
     const hydratedKeys = vi
-      .mocked(statusSummaryRuntime.resolveSessionRuntimeLabel)
+      .mocked(statusSummaryRuntime.resolveSessionRuntime)
       .mock.calls.map(([params]) => params.sessionKey);
     expect(hydratedKeys).not.toContain("agent:main:session-1");
     expect(hydratedKeys).not.toContain("agent:main:session-2");
@@ -948,6 +922,11 @@ describe("getStatusSummary", () => {
           modelOverrideSource: "auto",
           modelOverrideFallbackOriginProvider: "zhipu",
           modelOverrideFallbackOriginModel: "glm-4.5-air",
+          modelProvider: "deepseek",
+          model: "deepseek-v4-flash",
+          agentHarnessId: "openclaw",
+          contextTokens: 128_000,
+          contextTokensSource: "runtime",
         },
       }),
     );
@@ -957,6 +936,7 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
     expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBe("fallback selected");
+    expect(summary.sessions.recent[0]?.contextTokens).toBe(128_000);
   });
 
   it("does not mark configured subagent models as auto fallback", async () => {
@@ -1064,7 +1044,7 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.recent[0]?.configuredModel).toBe("anthropic/claude-opus-4-8");
     expect(summary.sessions.recent[0]?.selectedModel).toBe("anthropic/opus");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
-    expect(statusSummaryRuntime.resolveSessionRuntimeLabel).toHaveBeenCalledWith(
+    expect(statusSummaryRuntime.resolveSessionRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "anthropic",
         model: "claude-opus-4-8",

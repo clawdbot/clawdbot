@@ -24,13 +24,29 @@ describe("createComputerTool v2 execution", () => {
     const actions: ComputerUseV2ActionName[] = ["screenshot", "list_apps", "get_window_state"];
     listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
     const tool = createVisionComputerTool();
-    expect(readActionEnum(tool)).toHaveLength(15);
     expect(tool.description).not.toContain("get_window_state");
 
     await tool.execute("select", { action: "screenshot" });
 
     expect(readActionEnum(tool)).toEqual(actions);
     expect(tool.description).toContain("Observe first with `get_window_state`");
+  });
+
+  it("advertises execution-owned actions only with an attempt cleanup owner", async () => {
+    const actions: ComputerUseV2ActionName[] = [
+      "screenshot",
+      "browser_download",
+      "start_recording",
+    ];
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+
+    const withoutCleanup = createVisionComputerTool();
+    await withoutCleanup.execute("bind-without-cleanup", { action: "screenshot" });
+    expect(readActionEnum(withoutCleanup)).toEqual(["screenshot"]);
+
+    const withCleanup = createVisionComputerTool({ registerRunCleanup: () => {} });
+    await withCleanup.execute("bind-with-cleanup", { action: "screenshot" });
+    expect(readActionEnum(withCleanup)).toEqual(actions);
   });
 
   it("projects a provider observation without taking a duplicate desktop screenshot", async () => {
@@ -58,7 +74,7 @@ describe("createComputerTool v2 execution", () => {
         },
       },
     });
-    const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+    const tool = createVisionComputerTool();
 
     const result = await tool.execute("observe", {
       action: "get_window_state",
@@ -85,7 +101,7 @@ describe("createComputerTool v2 execution", () => {
         observation: { kind: "window", observationId: "observation-current" },
       },
     });
-    const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+    const tool = createVisionComputerTool();
     await tool.execute("observe", { action: "get_window_state", windowRef: "window-1" });
     callGatewayToolMock.mockClear();
 
@@ -116,7 +132,7 @@ describe("createComputerTool v2 execution", () => {
         },
       },
     });
-    const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+    const tool = createVisionComputerTool();
 
     await tool.execute("observe-browser", {
       action: "get_browser_state",
@@ -181,7 +197,7 @@ describe("createComputerTool v2 execution", () => {
       }
       return { payload: { ok: true, effect: "confirmed" } };
     });
-    const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+    const tool = createVisionComputerTool();
     await tool.execute("observe", { action: "get_window_state", windowRef: "window-1" });
 
     await expect(
@@ -212,10 +228,7 @@ describe("createComputerTool v2 execution", () => {
       "replay_trajectory",
     ];
     listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
-    const tool = createVisionComputerTool({
-      capabilityDescriptor: v2Descriptor(actions),
-      registerRunCleanup: () => {},
-    });
+    const tool = createVisionComputerTool({ registerRunCleanup: () => {} });
     const resourceHandle = "openclaw:computer-resource:v1:123e4567-e89b-42d3-a456-426614174000";
 
     await tool.execute("record", { action: "start_recording", recordVideo: true });
@@ -239,7 +252,6 @@ describe("createComputerTool v2 execution", () => {
     listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
     let cleanup: ((reason: string) => Promise<void>) | undefined;
     const tool = createVisionComputerTool({
-      capabilityDescriptor: v2Descriptor(actions),
       registerRunCleanup: (registered) => {
         cleanup = registered;
       },

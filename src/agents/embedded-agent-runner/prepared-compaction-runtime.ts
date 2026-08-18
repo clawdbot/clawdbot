@@ -3,6 +3,7 @@
  * prepared direct compaction attempt.
  */
 import os from "node:os";
+import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -70,6 +71,7 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import {
+  createSandboxPromptEntryLoader,
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
@@ -141,17 +143,23 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       workspaceOnly: loadSkillsWorkspaceOnly,
     } = resolveSandboxSkillRuntimeInputs({
       sandbox,
-      effectiveWorkspace,
+      skillsAnchorWorkspace: params.bootstrapWorkspaceDir ?? effectiveWorkspace,
       skillsSnapshot: params.skillsSnapshot,
     });
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveSkillsWorkspace,
-      config: params.config,
-      agentId: effectiveSkillAgentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: skillsSnapshotForRun,
-      workspaceOnly: loadSkillsWorkspaceOnly,
-    });
+    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
+      resolveEmbeddedRunSkillEntries({
+        workspaceDir: effectiveSkillsWorkspace,
+        config: params.config,
+        agentId: effectiveSkillAgentId,
+        eligibility: skillsEligibility,
+        skillsSnapshot: skillsSnapshotForRun,
+        // Sandbox fallbacks stay inside their sandbox skill workspace;
+        // host execution skills are not mounted there.
+        ...(sandbox?.enabled === true
+          ? {}
+          : { executionSkillsDir: path.join(effectiveWorkspace, "skills") }),
+        workspaceOnly: loadSkillsWorkspaceOnly,
+      });
     restoreSkillEnv = skillsSnapshotForRun
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: skillsSnapshotForRun,
@@ -174,10 +182,16 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const skillsPrompt = resolveSkillsPrompt({
       skillsSnapshot: skillsSnapshotForRun,
       entries: promptSkillEntries,
+      loadEntries: createSandboxPromptEntryLoader({
+        loadEntries: loadSkillEntries,
+        skillsWorkspaceDir: effectiveSkillsWorkspace,
+        skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+      }),
       config: params.config,
       workspaceDir: effectiveSkillsPromptWorkspace,
       agentId: effectiveSkillAgentId,
       eligibility: skillsEligibility,
+      preserveEntryOrder,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -290,6 +304,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       sandboxToolPolicy: sandbox?.tools,
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: params.trustedInternalHandoff,
+      pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
     const toolsRaw = toolsEnabled
@@ -338,6 +353,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           skillsSnapshot: skillsSnapshotForRun,
           skillUsagePaths,
           conversationCapabilityProfile: runtimeCapabilityProfile,
+          preparedModelRuntime: params.preparedModelRuntime,
           modelAuthMode: resolveModelAuthMode(effectiveModel.provider, params.config, undefined, {
             workspaceDir: effectiveWorkspace,
           }),

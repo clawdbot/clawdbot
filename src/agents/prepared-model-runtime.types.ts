@@ -72,6 +72,7 @@ export type PreparedReplyDispatchRuntime = Readonly<{
   config: OpenClawConfig;
   modelCatalog: ModelCatalogSnapshot;
   inboundPluginRegistry: PluginRegistry;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
 }>;
 
 export type PreparedModelRuntimeStores = {
@@ -114,6 +115,7 @@ export type PreparedModelRuntimeRefreshOptions = {
   catalogMode?: PreparedModelRuntimeCatalogMode;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{

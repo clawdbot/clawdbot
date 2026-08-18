@@ -180,6 +180,31 @@ describe("OpenAI realtime voice provider routing", () => {
     });
   });
 
+  it("checks Platform API-key profiles in the requested agent scope", () => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ agentDir }: { agentDir?: string }) => agentDir?.includes("voice-agent") === true,
+    );
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const cfg = {
+      agents: { list: [{ id: "main" }, { id: "voice-agent" }] },
+    } as never;
+
+    expect(
+      provider.isConfigured({
+        agentId: "voice-agent",
+        cfg,
+        providerConfig: {},
+      }),
+    ).toBe(true);
+    expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
+      provider: "openai",
+      cfg,
+      agentDir: expect.stringContaining("voice-agent"),
+      profileTypes: ["api_key"],
+      includeExternalCliAuth: false,
+    });
+  });
+
   it("routes gpt-live Platform sessions through the native quicksilver broker", async () => {
     const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({
@@ -444,6 +469,43 @@ describe("OpenAI realtime voice provider routing", () => {
     expect(
       readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
         cfg: {},
+        providerConfig: {},
+        model: "gpt-realtime-2.1",
+      }),
+    ).not.toHaveProperty("supportsGatewayControl");
+  });
+
+  it("advertises GA Gateway control from the requested agent's Platform auth", () => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ agentDir, profileTypes }: { agentDir?: string; profileTypes?: readonly string[] }) =>
+        agentDir === "/tmp/openclaw-molty-agent" && profileTypes?.includes("api_key") === true,
+    );
+    const { broker } = createQuicksilverBrowserBrokerFixture();
+    const provider = buildOpenAIRealtimeVoiceProvider({
+      quicksilverBrowserSessionBroker: broker,
+    });
+    const cfg = {
+      agents: {
+        list: [
+          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
+          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
+        ],
+      },
+    } as never;
+    const resolveCapabilities =
+      readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities;
+
+    expect(
+      resolveCapabilities({
+        cfg,
+        providerConfig: {},
+        agentId: "molty",
+        model: "gpt-realtime-2.1",
+      }),
+    ).toMatchObject({ supportsGatewayControl: true });
+    expect(
+      resolveCapabilities({
+        cfg,
         providerConfig: {},
         model: "gpt-realtime-2.1",
       }),

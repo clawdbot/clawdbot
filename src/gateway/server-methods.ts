@@ -16,6 +16,7 @@ import {
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
+  tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
@@ -45,6 +46,7 @@ import {
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -92,7 +94,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   diagnostics: () =>
     import("./server-methods/diagnostics.js").then((module) => module.diagnosticsHandlers),
-  doctor: () => import("./server-methods/doctor.js").then((module) => module.doctorHandlers),
+  doctor: () =>
+    import("./server-methods/doctor.js").then((module) => module.createDoctorHandlers()),
   environments: () =>
     import("./server-methods/environments.js").then((module) => module.environmentsHandlers),
   worktrees: () =>
@@ -128,6 +131,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   plugins: () => import("./server-methods/plugins.js").then((module) => module.pluginsHandlers),
   projects: () => import("./server-methods/projects.js").then((module) => module.projectsHandlers),
   portals: () => import("./server-methods/portals.js").then((module) => module.portalHandlers),
+  "progress-card": () =>
+    import("./server-methods/progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () =>
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
@@ -204,6 +209,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
   "tools-catalog": () =>
     import("./server-methods/tools-catalog.js").then((module) => module.toolsCatalogHandlers),
+  "tools-github": () =>
+    import("./server-methods/tools-github.js").then((module) => module.toolsGitHubHandlers),
   "tools-effective": () =>
     import("./server-methods/tools-effective.js").then((module) => module.toolsEffectiveHandlers),
   "tools-invoke": () =>
@@ -409,6 +416,7 @@ type GatewayRequestEnvelopeOptions<T> = Pick<
   "context" | "isWebchatConnect"
 > & {
   methodRegistry: GatewayMethodRegistry;
+  requestParams?: unknown;
   reject: (error: ReturnType<typeof errorShape>) => T | Promise<T>;
 };
 
@@ -452,7 +460,12 @@ export async function runWithGatewayRequestEnvelope<T>(
     // Preparation must stay protected even before it owns the root admission that it closes.
     return await options.reject(preAdmissionRateLimitError);
   }
-  const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
+  const rootWorkAdmission =
+    tryBeginGatewayRootWorkAdmission() ??
+    (method === "gateway.restart.request" &&
+    isTargetedNonSafeGatewayRestartRequest(options.requestParams)
+      ? tryBeginGatewayPreparedRestartRootWorkAdmission()
+      : null);
   if (isSuspendPrepare && rootWorkAdmission && !rootWorkAdmission.ownsRoot) {
     return await options.reject(
       errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
@@ -581,6 +594,7 @@ export async function handleGatewayRequest(
     context,
     isWebchatConnect,
     methodRegistry,
+    requestParams: req.params,
     reject: (error) => respond(false, undefined, error),
   });
 }

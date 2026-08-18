@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   ChatEventSchema,
+  ChatHistoryCursorResultSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
   ChatStatusEventSchema,
@@ -22,6 +23,24 @@ describe("ChatHistoryParamsSchema", () => {
 
     expect(Value.Check(ChatHistoryParamsSchema, { ...request, limit: 1000 })).toBe(true);
     expect(Value.Check(ChatHistoryParamsSchema, { ...request, limit: 1001 })).toBe(false);
+    expect(Value.Check(ChatHistoryParamsSchema, { ...request, cursor: "" })).toBe(true);
+  });
+});
+
+describe("ChatHistoryCursorResultSchema", () => {
+  const sessionInfo = { key: "agent:main:main" };
+
+  it("accepts only the closed delta and reset outcomes", () => {
+    const delta = {
+      kind: "delta",
+      messages: [],
+      deltaCursor: "cursor-2",
+      sessionInfo,
+    };
+    expect(Value.Check(ChatHistoryCursorResultSchema, delta)).toBe(true);
+    expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);
+    expect(Value.Check(ChatHistoryCursorResultSchema, { ...delta, extra: true })).toBe(false);
+    expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset", messages: [] })).toBe(false);
   });
 });
 
@@ -56,7 +75,6 @@ describe("ChatSendParamsSchema", () => {
         expectedLeafEntryId: "leaf-1",
       }),
     ).toBe(true);
-    expect(Value.Check(ChatSendParamsSchema, { ...send, expectedRunId: "run-1" })).toBe(true);
     expect(Value.Check(ChatSendParamsSchema, { ...send, unknown: true })).toBe(false);
   });
 });

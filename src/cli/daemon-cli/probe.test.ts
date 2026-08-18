@@ -24,6 +24,7 @@ function createDaemonStatus(rpc: NonNullable<DaemonStatus["rpc"]>): DaemonStatus
     service: {
       label: "test service",
       loaded: true,
+      loadState: { status: "loaded" },
       loadedText: "loaded",
       notLoadedText: "not loaded",
     },
@@ -322,6 +323,7 @@ describe("probeGatewayStatus", () => {
       tlsFingerprint: "abc123",
       method: "status",
       timeoutMs: 5_000,
+      sharedStateMode: "read-only",
       configPath: "/tmp/openclaw-daemon/openclaw.json",
     });
   });
@@ -351,6 +353,7 @@ describe("probeGatewayStatus", () => {
 
     expect(probeGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
+      config,
       auth: {
         token: "temp-token",
         password: undefined,
@@ -368,6 +371,7 @@ describe("probeGatewayStatus", () => {
       config,
       method: "status",
       timeoutMs: 30_000,
+      sharedStateMode: "read-only",
     });
   });
 
@@ -413,6 +417,7 @@ describe("probeGatewayStatus", () => {
       tlsFingerprint: undefined,
       method: "status",
       timeoutMs: 5_000,
+      sharedStateMode: "read-only",
     });
   });
 

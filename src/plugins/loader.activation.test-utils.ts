@@ -420,12 +420,24 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
-  it("can include plugin export shape when register is missing", () => {
+  it("reports plugin export shape without registering activation metadata when register is missing", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "missing-register-shape",
       filename: "missing-register-shape.cjs",
-      body: `module.exports = { default: { default: { id: "missing-register-shape" } } };`,
+      body: `module.exports = {
+        default: {
+          default: {
+            id: "missing-register-shape",
+            reload: { restartPrefixes: ["plugins.entries.missing-register-shape"] },
+            nodeHostCommands: [{
+              command: "missing-register-shape.command",
+              handle: async () => "ok",
+            }],
+            securityAuditCollectors: [async () => []],
+          },
+        },
+      };`,
     });
 
     const registry = withEnv({ OPENCLAW_PLUGIN_LOAD_DEBUG: "1" }, () =>
@@ -443,6 +455,15 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.error).toContain("module shape:");
     expect(loaded?.error).toContain("export:object keys=default");
     expect(loaded?.error).toContain("export.default:object keys=default");
+    expect({
+      reloads: registry.reloads.map((entry) => entry.pluginId),
+      nodeHostCommands: registry.nodeHostCommands.map((entry) => entry.pluginId),
+      securityAuditCollectors: registry.securityAuditCollectors.map((entry) => entry.pluginId),
+    }).toStrictEqual({
+      reloads: [],
+      nodeHostCommands: [],
+      securityAuditCollectors: [],
+    });
   });
 
   it.each([

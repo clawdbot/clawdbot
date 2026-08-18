@@ -316,7 +316,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
     const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
     const counts = resolveInboundReplyDispatchCounts(dispatchResult);
     log.info("dispatch complete", {
-      queuedFinal: dispatchResult?.queuedFinal ?? false,
       counts,
     });
     if (hasFinalInboundReplyDispatch(dispatchResult)) {

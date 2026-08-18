@@ -85,7 +85,7 @@ const SHOW_WIDGET_VARIANT: DiscordWidgetToolVariant = {
   name: "show_widget",
   label: "Show Widget",
   description:
-    "Show an interactive, self-contained HTML widget to the user on their current surface. In Discord, posts an Activity launch button.",
+    "Visual helps? Make widget. Do not wait for ask. Use for comparisons, trends, timelines, flows, hierarchies, dashboards, status, progress, layouts, and choices. Text clearer? Skip. Show an interactive, self-contained HTML widget to the user on their current surface. In Discord, posts an Activity launch button.",
   htmlParam: "widget_code",
   parameters: ShowWidgetParameters,
 };

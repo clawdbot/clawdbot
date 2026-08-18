@@ -11,14 +11,13 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 /** Native approval availability for the channel/account that initiated an approval. */
 export type ExecApprovalInitiatingSurfaceState =
   | { kind: "enabled"; channel: string | undefined; channelLabel: string; accountId?: string }
   | { kind: "disabled"; channel: string; channelLabel: string; accountId?: string }
   | { kind: "unsupported"; channel: string; channelLabel: string; accountId?: string };
-
-type ApprovalKind = "exec" | "plugin";
 
 function labelForChannel(channel?: string): string {
   if (channel === "tui") {
@@ -55,7 +54,7 @@ export function resolveApprovalInitiatingSurfaceState(params: {
   channel?: string | null;
   accountId?: string | null;
   cfg?: OpenClawConfig;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
 }): ExecApprovalInitiatingSurfaceState {
   const channel = normalizeMessageChannel(params.channel);
   const channelLabel = labelForChannel(channel);

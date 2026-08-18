@@ -69,6 +69,40 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.browserPanelIsOpen()).toBe(true);
   });
 
+  it("mounts when ResizeObserver is unavailable", async () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      embedded: boolean;
+      renderRoot: ShadowRoot;
+      updateComplete: Promise<unknown>;
+    };
+    panel.available = true;
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.renderRoot.querySelector(".bp")).not.toBeNull();
+  });
+
+  it("uses the shared surface empty state when the embedded browser has no tabs", async () => {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      embedded: boolean;
+      renderRoot: ShadowRoot;
+      updateComplete: Promise<unknown>;
+    };
+    panel.available = true;
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const empty = panel.renderRoot.querySelector("openclaw-panel-empty-state");
+    await empty?.updateComplete;
+    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
+    expect(empty?.querySelector("svg")).not.toBeNull();
+  });
+
   it("suppresses an open dock without overwriting its persisted preference", async () => {
     localStorage.setItem(
       "openclaw.browser.panel.v1",
@@ -171,5 +205,40 @@ describe("normalizeBrowserUrlDraft", () => {
     );
 
     expect(panel.browserPanelIsOpen()).toBe(false);
+  });
+
+  it("treats an embedded panel as open while the side panel owns visibility", async () => {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      embedded: boolean;
+      browserPanelIsOpen: () => boolean;
+      updateComplete: Promise<unknown>;
+    };
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.browserPanelIsOpen()).toBe(true);
+  });
+
+  it("starts a fresh browser tab draft when an embedded panel receives a new-tab request", async () => {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      embedded: boolean;
+      handleToggleRequest: (event: Event) => void;
+      renderRoot: ShadowRoot;
+      updateComplete: Promise<unknown>;
+    };
+    panel.available = true;
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:browser-toggle", { detail: { open: true, newTab: true } }),
+    );
+    await panel.updateComplete;
+    await Promise.resolve();
+
+    expect(panel.renderRoot.activeElement).toBe(panel.renderRoot.querySelector(".bp-url"));
   });
 });

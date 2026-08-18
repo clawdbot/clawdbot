@@ -200,6 +200,7 @@ final class CuaDriverHostCoordinator {
 
     static let shared = CuaDriverHostCoordinator(
         observeNotifications: true,
+        enablementAllowed: { AppLaunchRuntimePlan.current.allowsCuaComputerControl },
         beforeDaemonStop: {
             await MacNodeModeCoordinator.shared.prepareForCuaDaemonStop()
         })
@@ -229,6 +230,7 @@ final class CuaDriverHostCoordinator {
     private let readinessProbe: ReadinessProbe
     private let restartSleep: @Sendable (Duration) async -> Void
     private let permissionSnapshot: @MainActor () async -> [Capability: CapabilityAuthorizationStatus]
+    private let enablementAllowed: @MainActor () -> Bool
     private let beforeDaemonStop: @MainActor () async -> Void
 
     private var desiredEnabled = false
@@ -261,6 +263,7 @@ final class CuaDriverHostCoordinator {
         permissionSnapshot: @escaping @MainActor () async -> [Capability: CapabilityAuthorizationStatus] = {
             await PermissionManager.authorizationStatus([.accessibility, .screenRecording])
         },
+        enablementAllowed: @escaping @MainActor () -> Bool = { true },
         beforeDaemonStop: @escaping @MainActor () async -> Void = {})
     {
         self.notificationCenter = notificationCenter
@@ -271,6 +274,7 @@ final class CuaDriverHostCoordinator {
         self.readinessProbe = readinessProbe
         self.restartSleep = restartSleep
         self.permissionSnapshot = permissionSnapshot
+        self.enablementAllowed = enablementAllowed
         self.beforeDaemonStop = beforeDaemonStop
 
         guard observeNotifications else { return }
@@ -297,12 +301,13 @@ final class CuaDriverHostCoordinator {
     }
 
     func setEnabled(_ enabled: Bool) async {
+        let effectiveEnabled = enabled && self.enablementAllowed()
         let wasEnabled = self.desiredEnabled
-        self.desiredEnabled = enabled
-        if enabled, !wasEnabled {
+        self.desiredEnabled = effectiveEnabled
+        if effectiveEnabled, !wasEnabled {
             self.restartAttempt = 0
         }
-        if !enabled {
+        if !effectiveEnabled {
             self.restartTask?.cancel()
             self.restartTask = nil
             self.restartAttempt = 0
@@ -371,15 +376,20 @@ final class CuaDriverHostCoordinator {
                     self?.processExited(generation: generation, status: status)
                 }
             }
-            // Record the pid we spawned so startup/teardown reaping can attribute and
-            // terminate exactly this daemon; without it a reaper can only delete the
-            // directory and would leave an orphaned privileged process running.
-            Self.writeProcessIdentifier(process.processIdentifier, to: socketDirectory)
             self.runningChild = RunningChild(
                 generation: generation,
                 process: process,
                 socketDirectory: socketDirectory,
                 executableURL: executableURL)
+            // Record the pid we spawned so startup/teardown reaping can attribute and
+            // terminate exactly this daemon; without it a reaper can only delete the
+            // directory and would leave an orphaned privileged process running.
+            guard Self.writeProcessIdentifier(process.processIdentifier, to: socketDirectory) else {
+                self.logger.error("embedded CUA could not record the spawned daemon pid")
+                await self.ensureStopped()
+                self.scheduleRestartIfNeeded()
+                return
+            }
         } catch {
             Self.cleanupSocketDirectory(socketDirectory)
             self.logger.error("embedded CUA launch failed: \(error.localizedDescription, privacy: .public)")

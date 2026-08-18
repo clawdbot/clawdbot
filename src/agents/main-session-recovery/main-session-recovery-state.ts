@@ -380,14 +380,15 @@ export function transitionMainSessionRecovery(
       if (command.attempt !== state.chargedAttempts + 1) {
         return { kind: "rejected", reason: "stale_revision" };
       }
-      const executionIdentityAdmission =
-        command.executionIdentity.state === "disabled"
-          ? undefined
-          : state.executionIdentity?.runId === command.runId
-            ? ({ kind: "retry-reference", token: state.executionIdentity } as const)
-            : undefined;
+      const retryExecutionIdentity =
+        command.executionIdentity.state === "enabled" && state.executionIdentity
+          ? state.executionIdentity
+          : undefined;
+      const executionIdentityAdmission = retryExecutionIdentity
+        ? ({ kind: "retry-reference", token: retryExecutionIdentity } as const)
+        : undefined;
       updateRecoveryState(entry, state, {
-        ...(command.executionIdentity.state === "disabled" ? { executionIdentity: undefined } : {}),
+        executionIdentity: retryExecutionIdentity,
         chargedAttempts: command.attempt,
         reservation: {
           runId: command.runId,
@@ -421,8 +422,7 @@ export function transitionMainSessionRecovery(
         !entry.restartRecoveryRuns?.some(
           (run) =>
             run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
-        ) ||
-        command.token.runId !== command.runId
+        )
       ) {
         return { kind: "rejected", reason: "stale_reservation" };
       }
@@ -430,6 +430,9 @@ export function transitionMainSessionRecovery(
         return JSON.stringify(state.executionIdentity) === JSON.stringify(command.token)
           ? { kind: "no_change" }
           : { kind: "rejected", reason: "stale_reservation" };
+      }
+      if (command.token.runId !== command.runId) {
+        return { kind: "rejected", reason: "stale_reservation" };
       }
       updateRecoveryState(entry, state, { executionIdentity: command.token });
       return { kind: "applied" };

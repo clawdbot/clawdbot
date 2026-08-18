@@ -70,6 +70,7 @@
     "features.code_mode_only": false,
     "features.goals": false,
     "features.standalone_web_search": false,
+    "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
@@ -113,6 +114,7 @@
     "features.code_mode_only": false,
     "features.goals": false,
     "features.standalone_web_search": false,
+    "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -222,20 +224,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 50585,
-    "roughTokens": 12647
+    "chars": 54710,
+    "roughTokens": 13678
   },
   "openClawDeveloperInstructions": {
-    "chars": 3370,
-    "roughTokens": 843
+    "chars": 3390,
+    "roughTokens": 848
   },
   "totalTextOnly": {
-    "chars": 27798,
-    "roughTokens": 6950
+    "chars": 27818,
+    "roughTokens": 6955
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78385,
-    "roughTokens": 19597
+    "chars": 82530,
+    "roughTokens": 20633
   },
   "userInputText": {
     "chars": 1271,
@@ -426,7 +428,7 @@ Deferred searchable OpenClaw dynamic tools available: automations, gateway, node
 
 Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
+Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
@@ -566,6 +568,7 @@ Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dyn
           "type": "boolean"
         },
         "asVoice": {
+          "description": "Send audio as a voice note; combines with voiceText.",
           "type": "boolean"
         },
         "attachments": {
@@ -668,6 +671,18 @@ Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dyn
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "voiceId": {
+          "description": "Per-send speech voice override.",
+          "type": "string"
+        },
+        "voiceProvider": {
+          "description": "Per-send speech provider override.",
+          "type": "string"
+        },
+        "voiceText": {
+          "description": "Text to synthesize; message remains visible.",
+          "type": "string"
         }
       },
       "required": ["action"],
@@ -677,7 +692,7 @@ Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dyn
     "type": "function"
   },
   {
-    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

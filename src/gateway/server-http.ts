@@ -23,6 +23,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
+  CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
   CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX,
 } from "./control-ui-contract.js";
@@ -45,7 +46,12 @@ import {
   sendGatewayAuthFailure,
   setDefaultSecurityHeaders,
 } from "./http-common.js";
-import { resolveRequestClientIp } from "./net.js";
+import {
+  markGatewayIngressTransport,
+  prepareGatewayIngressAttribution,
+  type GatewayIngressTransport,
+  type GatewayUnattributableProxyReporter,
+} from "./ingress-attribution.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
   getCachedPluginGatewayAuthBypassPaths,
@@ -94,6 +100,9 @@ const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-ap
 const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
 const getWorkspaceIconHttpModule = createLazyRuntimeModule(
   () => import("./workspace-icon-http.js"),
+);
+const getChannelAvatarHttpModule = createLazyRuntimeModule(
+  () => import("./channel-avatar-http.js"),
 );
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
 const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
@@ -160,6 +169,7 @@ export function createGatewayHttpServer(opts: {
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
+  isPluginAuthenticatedRoute?: (pathContext: PluginRoutePathContext) => boolean;
   resolvePluginNodeCapabilityRoute?: ResolvePluginNodeCapabilityRoute;
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
@@ -177,6 +187,8 @@ export function createGatewayHttpServer(opts: {
   isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;
+  ingressTransport?: GatewayIngressTransport;
+  reportUnattributableProxy?: GatewayUnattributableProxyReporter;
 }): HttpServer {
   const {
     clients,
@@ -204,6 +216,7 @@ export function createGatewayHttpServer(opts: {
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
   const handleServerRequest = (req: IncomingMessage, res: ServerResponse) => {
+    markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
       handleRequest(req, res),
     ).catch((error: unknown) => {
@@ -248,6 +261,7 @@ export function createGatewayHttpServer(opts: {
           getResolvedAuth(),
           [],
           false,
+          rateLimiter,
           getReadiness,
           getStartup,
         );
@@ -257,6 +271,11 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadGatewayConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const ingressAttribution = prepareGatewayIngressAttribution({
+        req,
+        trustedProxies,
+        allowRealIpFallback,
+      });
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -270,6 +289,22 @@ export function createGatewayHttpServer(opts: {
       const scopedRequestPath = scopedNodeCapability.pathname;
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
+      if (ingressAttribution.kind === "unattributable-proxy") {
+        opts.reportUnattributableProxy?.(ingressAttribution);
+        if (
+          !nodeCapability &&
+          handlePluginRequest &&
+          opts.isPluginAuthenticatedRoute?.(pluginPathContext) &&
+          (await handlePluginRequest(req, res, pluginPathContext, {
+            gatewayRequestClientIp: ingressAttribution.remoteAddress,
+          }))
+        ) {
+          return;
+        }
+        sendGatewayAuthFailure(res, { ok: false, reason: ingressAttribution.reason });
+        return;
+      }
+      const requestClientIp = ingressAttribution.clientIp;
       const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
         auth: resolvedAuthValue,
@@ -299,6 +334,7 @@ export function createGatewayHttpServer(opts: {
               resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
+              rateLimiter,
               getReadiness,
               getStartup,
             ),
@@ -328,7 +364,7 @@ export function createGatewayHttpServer(opts: {
         handleNodeWorkerBundleTransferHttpRequest({
           req,
           res,
-          clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
+          clientIp: ingressAttribution.rateLimit.subject.key,
           rateLimiter: joinRateLimiter,
           callback: opts.handleNodeWorkerBundleTransferRequest,
         }),
@@ -338,7 +374,7 @@ export function createGatewayHttpServer(opts: {
         handleNodeWorkspaceTransferHttpRequest({
           req,
           res,
-          clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
+          clientIp: ingressAttribution.rateLimit.subject.key,
           rateLimiter: joinRateLimiter,
           callback: opts.handleNodeWorkspaceTransferRequest,
         }),
@@ -351,7 +387,7 @@ export function createGatewayHttpServer(opts: {
             req,
             res,
             shortcode: devicePairingJoinShortcode,
-            clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
+            clientIp: ingressAttribution.rateLimit.subject.key,
             rateLimiter: joinRateLimiter,
           }),
         );
@@ -366,6 +402,8 @@ export function createGatewayHttpServer(opts: {
           Boolean(opts.handleMcpOAuthCallbackRequest),
         () => opts.handleMcpOAuthCallbackRequest?.(req, res) ?? false,
       );
+      // The hook owner claims only its configured base path before entering HTTP admission;
+      // this unconditional dispatcher must stay plain so unrelated routes can fall through.
       addRequestStage(true, () => handleHooksRequest(req, res));
       addAdmittedStage(
         Boolean(opts.handleWatchNodeRequest) && scopedRequestPath.startsWith("/api/nodes/watch/"),
@@ -494,7 +532,6 @@ export function createGatewayHttpServer(opts: {
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {
-        const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
         let pluginGatewayAuthSatisfied = false;
         let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
         let pluginRequestOperatorScopes: string[] | undefined;
@@ -578,6 +615,18 @@ export function createGatewayHttpServer(opts: {
             controlUiRouteOptions,
           ),
       );
+      addRequestStage(
+        controlUiEnabled &&
+          scopedRequestPath.startsWith(
+            `${controlUiRouteBasePath}${CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX}/`,
+          ),
+        async () =>
+          (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest(
+            req,
+            res,
+            controlUiRouteOptions,
+          ),
+      );
       addRequestStage(controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,
@@ -612,7 +661,4 @@ export function createGatewayHttpServer(opts: {
   return httpServer;
 }
 
-export {
-  attachGatewayUpgradeHandler,
-  attachWorkerGatewayUpgradeHandler,
-} from "./server-http-upgrades.js";
+export { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";

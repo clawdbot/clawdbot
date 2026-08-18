@@ -46,7 +46,7 @@ import {
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
-  assertCodexRestrictedToolSurfaceHasNoManagedHooks,
+  assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
@@ -250,7 +250,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
     if (params.requireNoExternalCapabilities) {
-      await assertCodexRestrictedToolSurfaceHasNoManagedHooks(client, abortController.signal);
+      await assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+        client,
+        { restrictedToolSurface: true },
+        abortController.signal,
+      );
     }
     const threadConfig = buildCodexRuntimeThreadConfig(
       resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),

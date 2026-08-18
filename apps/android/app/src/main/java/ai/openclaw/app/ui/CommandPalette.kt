@@ -100,7 +100,7 @@ internal fun CommandPalette(
   val sessionRows =
     sessions
       .filter { session ->
-        val title = commandSessionTitle(session.displayName)
+        val title = sessionPresentationTitle(session) { nativeString("Main thread") }
         commandSessionMatches(title = title, query = normalizedQuery)
       }.take(5)
 
@@ -173,7 +173,7 @@ internal fun CommandPalette(
                   CommandSessionRow(
                     key = session.key,
                     ownerAgentId = session.ownerAgentId,
-                    title = commandSessionTitle(session.displayName),
+                    title = sessionPresentationTitle(session) { nativeString("Main thread") },
                     subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw thread"),
                     metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: nativeString("now"),
                   )
@@ -372,6 +372,3 @@ internal fun providerCommandSubtitle(
   if (rows.any { it.availability == ProviderAvailability.Unknown }) return nativeString("Provider availability unknown")
   return nativeString("No ready providers")
 }
-
-/** Falls back to the canonical main-session label when gateway display names are blank. */
-private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main thread")

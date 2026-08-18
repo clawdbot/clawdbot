@@ -98,7 +98,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
-  const pullRequestEpochs = new Map<string, symbol>();
+  const pullRequestEpochs = new Map<string, object>();
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
   let canonicalListRevision = 0;
@@ -198,28 +198,23 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const pullRequestSummary = (key: string) => pullRequestSummaries.get(key.trim());
 
-  const capturePullRequestEpoch = (key: string): symbol => {
-    const normalizedKey = key.trim();
-    const epoch = Symbol(normalizedKey);
-    pullRequestEpochs.set(normalizedKey, epoch);
+  const capturePullRequestEpoch = (key: string): object => {
+    const epoch = {};
+    pullRequestEpochs.set(key.trim(), epoch);
     return epoch;
   };
 
   const setPullRequestSummary = (
     key: string,
     summary: SessionCatalogPullRequestSummary | undefined,
-    epoch?: symbol,
+    epoch?: object,
   ) => {
     const normalizedKey = key.trim();
     if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
       return;
     }
     const previous = pullRequestSummaries.get(normalizedKey);
-    const unchanged =
-      previous?.state === summary?.state &&
-      previous?.numbers.length === summary?.numbers.length &&
-      previous?.numbers.every((number, index) => number === summary?.numbers[index]);
-    if (unchanged || (!previous && !summary)) {
+    if (previous === summary) {
       return;
     }
     if (summary) {
@@ -258,10 +253,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     );
   };
 
-  const reconcileChangedOptions = (
-    payload: unknown,
-    options?: SessionReconcileOptions,
-  ): SessionReconcileOptions | undefined => {
+  const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
+    const previous = state.result;
     const eventInfo = readSessionChangedEvent(payload);
     const selectedSessionKey = gateway.snapshot.sessionKey?.trim();
     const archivesSelectedSession =
@@ -278,25 +271,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           eventInfo.agentId,
         ),
       );
-    if (!archivesSelectedSession) {
-      return options;
-    }
     // The capability owns the shared roster, so every event consumer must
     // preserve the routed archive regardless of subscriber delivery order.
-    return {
-      ...options,
-      archivedFilter: "all",
-    };
-  };
-
-  const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
-    const previous = state.result;
-    const eventInfo = readSessionChangedEvent(payload);
-    const reconciled = reconcileSessionChanged(
-      previous,
-      payload,
-      reconcileChangedOptions(payload, options),
-    );
+    const reconcileOptions = archivesSelectedSession
+      ? { ...options, archivedFilter: "all" as const }
+      : options;
+    const reconciled = reconcileSessionChanged(previous, payload, reconcileOptions);
     if (reconciled.result !== previous && reconciled.key && eventInfo) {
       mutations.observeArchiveState(reconciled.key, eventInfo.archived, reconciled.row);
     }
@@ -328,7 +308,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           ? normalizeAgentId(options.resultAgentId)
           : state.agentId,
         deletedSessions: reconciled.deletedKey
-          ? [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }]
+          ? [
+              {
+                key: reconciled.deletedKey,
+                ...(reconciled.agentId ? { agentId: reconciled.agentId } : {}),
+                retireBeforeRevision: Date.now(),
+              },
+            ]
           : [],
       });
     }
@@ -400,6 +386,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             backgroundHydrate: true,
             force: true,
           });
+          if (connection.isCurrent(scope)) {
+            await roster.refreshManagedLists();
+          }
         }
       })();
     }
@@ -441,7 +430,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       retirePullRequestSummary(reconciled.deletedKey);
       publish({
         ...state,
-        deletedSessions: [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }],
+        deletedSessions: [
+          {
+            key: reconciled.deletedKey,
+            ...(reconciled.agentId ? { agentId: reconciled.agentId } : {}),
+            retireBeforeRevision: Date.now(),
+          },
+        ],
       });
     } else if ((eventReason === "create" || eventReason === "new") && eventInfo) {
       const remainingDeletedSessions = state.deletedSessions.filter(
@@ -460,13 +455,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         publish({ ...state, deletedSessions: remainingDeletedSessions });
       }
     }
-    // Gateway lists own filtering/order; events coalesce into one canonical refresh.
+    // Gateway lists own filtering/order; authoritative events invalidate every matching roster.
     roster.scheduleEvent({
       agentId:
         eventInfo?.agentId ??
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
-      filtered: event.event === "sessions.changed",
     });
   });
 
@@ -477,10 +471,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    captureConnectionScope: () => connection.capture(),
+    isConnectionScopeCurrent: (scope) => connection.isCurrent(scope),
     list: roster.list,
     listSnapshot: (scope) => roster.listSnapshot(scope),
     subscribeList(scope, listener) {
-      if (scope.archivedFilter && scope.archivedFilter !== "active") {
+      if (!roster.isPrimaryList(scope)) {
         return roster.subscribeList(scope, listener);
       }
       const notify = () => listener(roster.listSnapshot(scope));
@@ -488,7 +484,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(notify);
     },
     refreshList: (options) => roster.refreshList(options),
-    setCreatorFilter: (creatorId) => roster.setCreatorFilter(creatorId),
+    setOwnerFilter: (ownerId) => roster.setOwnerFilter(ownerId),
+    setInvolvingMeFilter: (enabled) => roster.setInvolvingMeFilter(enabled),
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,
@@ -498,6 +495,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create: mutations.create,
     recover: mutations.recover,
     patch: mutations.patch,
+    assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
     setModelOverride: mutations.setModelOverride,
     patchRowLocal: mutations.patchRowLocal,

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   rootRead: vi.fn(),
   rootWrite: vi.fn(),
   mkdir: vi.fn(),
+  recordAgentProvenance: vi.fn(),
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   claimCompletedAgentDeletion: vi.fn(() => true),
   migrateLegacyMainSessionKeys: vi.fn(),
@@ -47,6 +48,10 @@ vi.mock("./agent-lifecycle-registry.js", () => ({
 
 vi.mock("../state/agent-deletion-journal.js", () => ({
   readAgentDeletionJournal: mocks.readAgentDeletionJournal,
+}));
+
+vi.mock("../state/agent-provenance.js", () => ({
+  recordAgentProvenance: mocks.recordAgentProvenance,
 }));
 
 vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
@@ -261,6 +266,9 @@ describe("createAgent", () => {
       workspace: "/tmp/default-researcher",
       bootstrapPending: true,
     });
+    expect(mocks.recordAgentProvenance).toHaveBeenCalledWith("researcher", {
+      createdVia: "operator",
+    });
   });
 
   it("accepts a complete staged entry", async () => {
@@ -311,11 +319,15 @@ describe("createAgent", () => {
     });
 
     expect(result).toMatchObject({ status: "created", agentId: "researcher" });
+    if (result.status === "error") {
+      throw new Error(result.message);
+    }
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
     expect(mocks.persisted).toMatchObject({
       agents: { entries: { main: expect.any(Object), researcher: expect.any(Object) } },
       channels: { telegram: { enabled: true } },
     });
+    expect(result.config).toEqual(mocks.persisted);
   });
 
   it("requires a config revision for guided staging", async () => {

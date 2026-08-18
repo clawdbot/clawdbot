@@ -70,6 +70,7 @@
     "features.code_mode_only": false,
     "features.goals": false,
     "features.standalone_web_search": false,
+    "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
@@ -112,6 +113,7 @@
     "features.code_mode_only": false,
     "features.goals": false,
     "features.standalone_web_search": false,
+    "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -227,20 +229,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 49051,
-    "roughTokens": 12263
+    "chars": 53153,
+    "roughTokens": 13289
   },
   "openClawDeveloperInstructions": {
-    "chars": 3370,
-    "roughTokens": 843
+    "chars": 3390,
+    "roughTokens": 848
   },
   "totalTextOnly": {
-    "chars": 27382,
-    "roughTokens": 6846
+    "chars": 27402,
+    "roughTokens": 6851
   },
   "totalWithDynamicToolsJson": {
-    "chars": 76435,
-    "roughTokens": 19109
+    "chars": 80557,
+    "roughTokens": 20140
   },
   "userInputText": {
     "chars": 929,
@@ -431,7 +433,7 @@ Deferred searchable OpenClaw dynamic tools available: automations, gateway, node
 
 Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
+Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
@@ -570,6 +572,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "boolean"
         },
         "asVoice": {
+          "description": "Send audio as a voice note; combines with voiceText.",
           "type": "boolean"
         },
         "attachments": {
@@ -672,6 +675,18 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "voiceId": {
+          "description": "Per-send speech voice override.",
+          "type": "string"
+        },
+        "voiceProvider": {
+          "description": "Per-send speech provider override.",
+          "type": "string"
+        },
+        "voiceText": {
+          "description": "Text to synthesize; message remains visible.",
+          "type": "string"
         }
       },
       "required": ["action"],

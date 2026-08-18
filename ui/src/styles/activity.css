@@ -49,6 +49,407 @@ openclaw-activity-page {
   max-height: none;
 }
 
+.activity-mode-tabs + #activity-mode-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.activity-feed {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.activity-feed__toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 58%, transparent);
+}
+
+.activity-feed__search {
+  position: relative;
+  flex: 1 1 240px;
+  min-width: 180px;
+}
+
+.activity-feed__search svg {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  width: 14px;
+  height: 14px;
+  translate: 0 -50%;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.8px;
+  pointer-events: none;
+}
+
+.activity-feed__search input {
+  height: var(--settings-control-height);
+  padding-left: 30px;
+}
+
+.activity-feed__time-filter {
+  flex: 0 0 auto;
+}
+
+.activity-feed__people-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.activity-feed__people-trigger,
+.activity-feed__people-clear {
+  height: var(--settings-control-height);
+  color: var(--muted);
+}
+
+.activity-feed__people-trigger {
+  min-width: 64px;
+  max-width: 220px;
+  padding: 3px 10px;
+}
+
+.activity-feed__people-trigger:has(+ .activity-feed__people-clear) {
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.activity-feed__people-clear {
+  width: 28px;
+  padding: 0;
+  margin-left: -1px;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-size: var(--control-ui-text-lg);
+}
+
+.activity-feed__people-trigger:focus-visible,
+.activity-feed__people-clear:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+}
+
+.activity-feed__selected-person {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__facepile {
+  display: inline-flex;
+  align-items: center;
+}
+
+.activity-feed__facepile .activity-feed__person-avatar + .activity-feed__person-avatar,
+.activity-feed__facepile .activity-feed__person-avatar + .viewer-avatar--overflow {
+  margin-left: -5px;
+}
+
+.activity-feed__facepile .viewer-avatar {
+  border-color: var(--bg-elevated);
+}
+
+.activity-feed__person-avatar {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.activity-feed__presence-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--bg-elevated);
+  border-radius: var(--radius-full);
+  background: var(--ok);
+}
+
+.activity-feed__unknown-avatar {
+  flex: none;
+}
+
+.activity-feed__unknown-avatar svg {
+  width: 12px;
+  height: 12px;
+}
+
+.activity-feed__people-popover {
+  --max-width: min(360px, calc(100vw - 32px));
+}
+
+.activity-feed__people-popover::part(body) {
+  padding: 0;
+}
+
+.activity-feed__people-panel {
+  width: min(340px, calc(100vw - 32px));
+  max-height: min(480px, 70vh);
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.activity-feed__people-row {
+  cursor: var(--cursor-action);
+}
+
+.activity-feed__people-row[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-hover));
+}
+
+.activity-feed__people-copy {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 4px;
+}
+
+.activity-feed__people-name,
+.activity-feed__last-active {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__people-name {
+  color: var(--text-strong);
+}
+
+.activity-feed__last-active,
+.activity-feed__people-count,
+.activity-feed__people-group-label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__people-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-feed__people-group-label {
+  padding: var(--space-1) var(--space-2);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.activity-feed__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+.activity-feed__summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.activity-feed__summary h2,
+.activity-feed__identity h2,
+.activity-feed__identity h3,
+.activity-feed__not-found h2 {
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.activity-feed__summary h2 {
+  font-size: var(--control-ui-text-xl);
+}
+
+.activity-feed__summary span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-feed__day + .activity-feed__day {
+  margin-top: var(--space-6);
+}
+
+.activity-feed__day > h3 {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.activity-feed__sessions,
+.activity-feed__viewing-list {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.activity-feed__session {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  min-height: 54px;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.activity-feed__session + .activity-feed__session {
+  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.activity-feed__session:hover,
+.activity-feed__session:focus-visible {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
+.activity-feed__session .viewer-avatar {
+  width: 26px;
+  height: 26px;
+  border-color: var(--card);
+  font-size: 9px;
+}
+
+.activity-feed__session-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.activity-feed__session-title {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__session-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-feed__session-scope {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__session-time {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+}
+
+.activity-feed__identity {
+  padding: var(--space-4);
+  margin-bottom: var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-elevated) 54%, transparent);
+}
+
+.activity-feed__identity-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.activity-feed__identity-main .viewer-avatar--profile {
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+
+.activity-feed__identity-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-feed__identity-copy h2,
+.activity-feed__identity-copy p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__identity-copy h2 {
+  font-size: var(--control-ui-text-lg);
+}
+
+.activity-feed__identity-copy p,
+.activity-feed__empty-note,
+.activity-feed__not-found p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-feed__devices {
+  display: grid;
+  gap: 2px;
+  margin-top: var(--space-4);
+}
+
+.activity-feed__device {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 5px 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-feed__device-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.activity-feed__viewing {
+  margin-top: var(--space-4);
+}
+
+.activity-feed__viewing h3 {
+  margin-bottom: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-feed__viewing-list .activity-feed__session {
+  min-height: 46px;
+  padding-block: var(--space-2);
+}
+
+.activity-feed__empty,
+.activity-feed__not-found {
+  padding: var(--space-8) var(--space-4);
+  color: var(--muted);
+  text-align: center;
+}
+
 .activity-count {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -216,6 +617,33 @@ openclaw-activity-page {
 }
 
 @media (max-width: 768px) {
+  .activity-feed {
+    height: auto;
+    overflow: visible;
+  }
+
+  .activity-feed__toolbar {
+    flex-wrap: wrap;
+  }
+
+  .activity-feed__search {
+    flex-basis: 100%;
+    order: -1;
+  }
+
+  .activity-feed__main {
+    overflow: visible;
+    padding: var(--space-4);
+  }
+
+  .activity-feed__session {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .activity-feed__session-time {
+    grid-column: 2;
+  }
+
   .activity-entry__meta {
     white-space: normal;
     grid-column: 2;

@@ -39,8 +39,9 @@ export const REQUEST: WorkerDispatchRequest = {
 export function seedSyncingPlacement(
   store: PlacementStore,
   environmentId: string,
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
 ): WorkerSessionPlacementRecord {
-  let current = store.startDispatch(REQUEST);
+  let current = store.startDispatch({ ...REQUEST, executionMode });
   current = store.transition({
     sessionId: REQUEST.sessionId,
     from: "requested",
@@ -61,8 +62,9 @@ export function seedSyncingPlacement(
 export function seedStartingPlacement(
   store: PlacementStore,
   environmentId: string,
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
 ): WorkerSessionPlacementRecord {
-  let current = seedSyncingPlacement(store, environmentId);
+  let current = seedSyncingPlacement(store, environmentId, executionMode);
   current = store.transition({
     sessionId: REQUEST.sessionId,
     from: "syncing",
@@ -78,9 +80,13 @@ export function seedStartingPlacement(
 
 export function seedActivePlacement(
   store: PlacementStore,
-  params: { environmentId: string; ownerEpoch: number },
+  params: {
+    environmentId: string;
+    ownerEpoch: number;
+    executionMode?: WorkerDispatchRequest["executionMode"];
+  },
 ): WorkerSessionPlacementRecord {
-  const current = seedStartingPlacement(store, params.environmentId);
+  const current = seedStartingPlacement(store, params.environmentId, params.executionMode);
   return store.transition({
     sessionId: REQUEST.sessionId,
     from: "starting",
@@ -113,6 +119,8 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     profileId: "development",
     profileSnapshot,
     provisionOperationId: "provision-1",
+    nodeSetupId: null,
+    nodeDeviceId: null,
     sharedHost: false,
     bootstrapReceipt,
     teardownTerminalState: null,

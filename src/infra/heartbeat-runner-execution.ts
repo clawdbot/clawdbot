@@ -45,7 +45,6 @@ import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import {
   getQueueSize,
   isCommandLaneTaskMarkerCurrent,
-  type CommandLaneSnapshot,
   type CommandLaneTaskMarker,
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -96,7 +95,6 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { consumeSelectedSystemEventEntries } from "./system-events.js";
 
 const log = heartbeatLog;
 
@@ -105,7 +103,6 @@ export type HeartbeatDeps = OutboundSendDeps &
     getReplyFromConfig?: typeof import("./heartbeat-runner.runtime.js").getReplyFromConfig;
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
-    getCommandLaneSnapshots?: () => readonly CommandLaneSnapshot[];
     isReplyRunActive?: (sessionKey: string) => boolean;
     listActiveReplyRunSessionKeys?: () => readonly string[];
     listActiveEmbeddedRunSessionKeys?: () => readonly string[];
@@ -187,6 +184,14 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     wakeSource !== "cron" &&
     !isWithinActiveHours(cfg, heartbeat, startedAt)
   ) {
+    // Documented observable skip (`system heartbeat last` / troubleshooting
+    // docs promise reason=quiet-hours); every sibling skip past this point
+    // emits, so a silent return here hides the window from operators.
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "quiet-hours",
+      durationMs: Date.now() - startedAt,
+    });
     return { kind: "skipped", reason: "quiet-hours" } as const;
   }
 
@@ -479,21 +484,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
   });
 
-  if (heartbeatRunPrompt.prompt === null) {
-    // Wake-triggered events should stay queued when the run short-circuits:
-    // no reply turn ran, so there is nothing that actually consumed that wake payload.
-    const shouldConsumeInspectedEvents =
-      !preflight.isWakePayload && preflight.shouldInspectPendingEvents;
-    const inspectedSystemEventsToConsume = selectSystemEventsConsumedByHeartbeat({
-      preflight,
-      hasExecCompletion: heartbeatRunPrompt.hasExecCompletion,
-      hasCronEvents: heartbeatRunPrompt.hasCronEvents,
-    });
-    if (shouldConsumeInspectedEvents && inspectedSystemEventsToConsume.length > 0) {
-      consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
-    }
-    return { kind: "skipped", reason: "not-due" } as const;
-  }
   let runSessionKey = sessionKey;
   let runSessionEntry = entry;
   let outboundPolicySessionKey: string | undefined;
@@ -602,10 +592,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     }
   }
   const { hasExecCompletion, hasCronEvents } = heartbeatRunPrompt;
-  const prompt = heartbeatRunPrompt.prompt;
-  if (prompt === null) {
-    return { kind: "skipped", reason: "not-due" } as const;
-  }
   return {
     kind: "ready",
     ...preflight.session,
@@ -617,7 +603,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     runSessionKey,
     outboundPolicySessionKey,
     ...heartbeatRunPrompt,
-    prompt,
     inspectedSystemEventsToConsume: selectSystemEventsConsumedByHeartbeat({
       preflight,
       hasExecCompletion,

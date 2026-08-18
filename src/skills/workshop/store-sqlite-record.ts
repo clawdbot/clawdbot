@@ -60,6 +60,7 @@ function proposalRowValues(params: {
   record: SkillProposalRecord;
   ownerAgentId: string | null;
   workspaceDir: string;
+  claimReleasedTime: number | null;
 }): Insertable<SkillWorkshopDatabase["skill_workshop_proposals"]> {
   const { record } = params;
   return {
@@ -81,6 +82,7 @@ function proposalRowValues(params: {
     quarantined_at: record.quarantinedAt ?? null,
     stale_at: record.staleAt ?? null,
     status_reason: record.statusReason ?? null,
+    claim_released_time: params.claimReleasedTime,
   };
 }
 
@@ -113,7 +115,9 @@ export function insertProposal(
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   executeSqliteQuerySync(
     database,
-    kysely.insertInto("skill_workshop_proposals").values(proposalRowValues(params)),
+    kysely
+      .insertInto("skill_workshop_proposals")
+      .values(proposalRowValues({ ...params, claimReleasedTime: null })),
   );
   replaceOriginRuns(database, params.record, kysely);
 }
@@ -128,6 +132,7 @@ export function updateProposal(
     record,
     ownerAgentId: current.owner_agent_id,
     workspaceDir: current.workspace_dir,
+    claimReleasedTime: current.claim_released_time,
   });
   executeSqliteQuerySync(
     database,

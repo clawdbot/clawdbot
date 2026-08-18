@@ -41,7 +41,17 @@ const testProfile = {
   createdAt: 1,
   updatedAt: 2,
   emails: ["test@example.com"],
+  githubIdentity: null,
   hasAvatar: false,
+};
+const githubAvatarUrl = "https://avatars.githubusercontent.com/u/583231?v=4";
+const linkedGitHubProfile = {
+  ...testProfile,
+  githubIdentity: {
+    login: "octocat",
+    profileUrl: "https://github.com/octocat",
+    avatarUrl: githubAvatarUrl,
+  },
 };
 const testPresenceUsers = [
   {
@@ -88,6 +98,80 @@ suite.define(() => {
         0,
       );
     });
+  });
+
+  it("links and disconnects a public GitHub identity", async () => {
+    if (captureUiProof) {
+      await mkdir(proofDir, { recursive: true });
+    }
+    await suite.withPage(
+      {
+        ...(captureUiProof
+          ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
+          : {}),
+        viewport: { width: 1280, height: 800 },
+      },
+      async ({ page }) => {
+        const avatarRequests: string[] = [];
+        await page.route(githubAvatarUrl, async (route) => {
+          avatarRequests.push(route.request().url());
+          await route.fulfill({
+            body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#24292f"/><circle cx="32" cy="27" r="14" fill="white"/><path d="M12 62c2-15 10-23 20-23s18 8 20 23" fill="white"/></svg>`,
+            contentType: "image/svg+xml",
+            status: 200,
+          });
+        });
+        const gateway = await openProfilePage(page, {
+          "users.setGitHubIdentity": { profile: linkedGitHubProfile },
+          "users.clearGitHubIdentity": { profile: testProfile },
+        });
+
+        const githubRow = page
+          .locator("#settings-profile-identity .settings-row")
+          .filter({ has: page.locator(".settings-row__title", { hasText: "GitHub" }) });
+        await expect(githubRow).toContainText(
+          "Linking opts you into public GitHub co-author credit when you participate in agent sessions that create commits.",
+        );
+        await expect(githubRow).toContainText(
+          "Commit credit uses GitHub's public noreply address, never a private email.",
+        );
+        await expect(githubRow).toContainText("Link only an account you control.");
+        await expect(githubRow.locator(".settings-account")).toHaveCount(0);
+        await screenshot(page, "08-github-identity-unlinked.png");
+
+        const username = githubRow.getByRole("textbox", { name: "GitHub username" });
+        await username.fill("octocat");
+        await githubRow.getByRole("button", { name: "Link GitHub" }).click();
+
+        const linkRequest = await gateway.waitForRequest("users.setGitHubIdentity");
+        expect(linkRequest.params).toEqual({ username: "octocat" });
+        const account = githubRow.getByRole("link", { name: "@octocat" });
+        await expect(account).toBeVisible();
+        await expect(account).toHaveAttribute("href", "https://github.com/octocat");
+        await expect(account).toHaveAttribute("target", "_blank");
+        await account.focus();
+        await expect(account).toBeFocused();
+        const avatar = account.locator("img");
+        await expect(avatar).toBeVisible();
+        await expect(avatar).toHaveAttribute("src", githubAvatarUrl);
+        await expect
+          .poll(() => avatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+          .toBe(64);
+        expect(avatarRequests).toEqual([githubAvatarUrl]);
+        await expect(username).toHaveValue("octocat");
+        const unchangedSubmit = githubRow.getByRole("button", { name: "Change" });
+        await expect(unchangedSubmit).toBeDisabled();
+        expect(await gateway.getRequests("users.setGitHubIdentity")).toHaveLength(1);
+        await screenshot(page, "09-github-identity-linked.png");
+
+        await githubRow.getByRole("button", { name: "Disconnect" }).click();
+        const clearRequest = await gateway.waitForRequest("users.clearGitHubIdentity");
+        expect(clearRequest.params).toEqual({});
+        await expect(githubRow.locator(".settings-account")).toHaveCount(0);
+        await expect(username).toHaveValue("");
+        await expect(githubRow.getByRole("button", { name: "Link GitHub" })).toBeVisible();
+      },
+    );
   });
 
   it("renders the protected assistant avatar through an authenticated blob fetch", async () => {
@@ -424,55 +508,69 @@ suite.define(() => {
   });
 
   it("keeps identity refresh single-flight and retries after a failed request", async () => {
-    await suite.withPage(undefined, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        basePath,
-        deferredMethods: ["users.self"],
-        presenceUsers: testPresenceUsers,
-        methodResponses: {
-          "users.self": { profile: testProfile },
-        },
-      });
+    await suite.withPage(
+      {
+        ...(captureUiProof
+          ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
+          : {}),
+        viewport: { width: 1280, height: 800 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          basePath,
+          deferredMethods: ["users.self"],
+          presenceUsers: testPresenceUsers,
+          methodResponses: {
+            "users.self": { profile: testProfile },
+          },
+        });
 
-      const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
-      expect(response?.status()).toBe(200);
+        const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
+        expect(response?.status()).toBe(200);
 
-      const refresh = page.locator(".profile-refresh");
-      await gateway.waitForRequest("users.self");
-      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(1);
-      await expect.poll(() => refresh.isDisabled()).toBe(true);
-      expect(await refresh.ariaSnapshot()).toContain('button "Refreshing…" [disabled]');
+        const refresh = page.locator(".profile-refresh");
+        await gateway.waitForRequest("users.self");
+        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(1);
+        await expect.poll(() => refresh.isDisabled()).toBe(true);
+        expect(await refresh.ariaSnapshot()).toContain('button "Refreshing…" [disabled]');
 
-      await refresh.evaluate((element) => {
-        const button = element as HTMLButtonElement;
-        button.click();
-        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      });
-      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(1);
+        await refresh.evaluate((element) => {
+          const button = element as HTMLButtonElement;
+          button.click();
+          button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(1);
 
-      await gateway.rejectDeferred("users.self", { message: "identity unavailable" });
-      await page.getByText("identity unavailable", { exact: true }).waitFor({ timeout: 10_000 });
-      await expect.poll(() => refresh.isEnabled()).toBe(true);
-      expect(await refresh.ariaSnapshot()).toContain('button "Refresh"');
+        await gateway.rejectDeferred("users.self", {
+          message: "identity unavailable: OPENAI_API_KEY=sk-1234567890abcdef",
+        });
+        await page
+          .getByText("identity unavailable: OPENAI_API_KEY=sk-123...cdef", { exact: true })
+          .waitFor({ timeout: 10_000 });
+        await expect(page.getByText("sk-1234567890abcdef").count()).resolves.toBe(0);
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        expect(await refresh.ariaSnapshot()).toContain('button "Refresh"');
+        await screenshot(page, "07-redacted-identity-error.png");
 
-      await gateway.deferNext("users.self");
-      await refresh.click();
-      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
-      await expect.poll(() => refresh.isDisabled()).toBe(true);
-      expect(await refresh.ariaSnapshot()).toContain('button "Refreshing…" [disabled]');
+        await gateway.deferNext("users.self");
+        await refresh.click();
+        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+        await expect.poll(() => refresh.isDisabled()).toBe(true);
+        expect(await refresh.ariaSnapshot()).toContain('button "Refreshing…" [disabled]');
 
-      await refresh.evaluate((element) => {
-        (element as HTMLButtonElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      });
-      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+        await refresh.evaluate((element) => {
+          (element as HTMLButtonElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
 
-      await gateway.resolveDeferred("users.self", { profile: testProfile });
-      const displayName = page.locator('.identity-name-control input[type="text"]');
-      await displayName.waitFor({ timeout: 10_000 });
-      await expect(displayName.inputValue()).resolves.toBe(testProfile.displayName);
-      await expect.poll(() => refresh.isEnabled()).toBe(true);
-      expect(await refresh.ariaSnapshot()).toContain('button "Refresh"');
-    });
+        await gateway.resolveDeferred("users.self", { profile: testProfile });
+        const displayName = page.locator('.identity-name-control input[type="text"]');
+        await displayName.waitFor({ timeout: 10_000 });
+        await expect(displayName.inputValue()).resolves.toBe(testProfile.displayName);
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        expect(await refresh.ariaSnapshot()).toContain('button "Refresh"');
+      },
+    );
   });
 
   it("keeps event revisions through same-timestamp avatar responses", async () => {

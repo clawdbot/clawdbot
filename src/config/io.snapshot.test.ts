@@ -9,6 +9,7 @@ import {
   readConfigFileSnapshotFromContext,
   readConfigFileSnapshotWithPluginMetadataFromContext,
 } from "./io.snapshot.js";
+import { getConfigResolutionFacts } from "./resolution-facts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -36,6 +37,36 @@ function createContext(root: string) {
 }
 
 describe("config snapshot plugin metadata", () => {
+  it("records only genuinely missing substitutions as private facts", async () => {
+    const root = tempDirs.make("openclaw-config-snapshot-env-facts-");
+    const context = createContext(root);
+    context.deps.env.GATEWAY_TOKEN = "${ENV_LITERAL_GATEWAY_TOKEN}";
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        gateway: {
+          auth: {
+            mode: "password",
+            password: "${MISSING_GATEWAY_PASSWORD}",
+            token: "$${ESCAPED_GATEWAY_TOKEN}",
+          },
+          remote: { token: "${GATEWAY_TOKEN}", password: "literal-${" },
+        },
+      }),
+      "utf8",
+    );
+
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+
+    expect([...(getConfigResolutionFacts(snapshot.sourceConfigBeforeMigrations) ?? [])]).toEqual([
+      "gateway.auth.password",
+    ]);
+    expect(snapshot.config.gateway?.auth?.token).toBe("${ESCAPED_GATEWAY_TOKEN}");
+    expect(snapshot.config.gateway?.remote?.token).toBe("${ENV_LITERAL_GATEWAY_TOKEN}");
+    expect(snapshot.config.gateway?.remote?.password).toBe("literal-${");
+    expect(JSON.stringify(snapshot)).not.toContain("resolutionFacts");
+  });
+
   it("loads metadata for an explicit valid missing-config read without changing plain reads", async () => {
     const root = tempDirs.make("openclaw-config-snapshot-metadata-");
     const context = createContext(root);

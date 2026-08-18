@@ -109,6 +109,8 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
     "worker_environments.desktop_json": ["desktop_json TEXT"],
     "worker_environments.bootstrap_install_kind": ["bootstrap_install_kind TEXT"],
     "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
+    "worker_environments.node_setup_id": ["node_setup_id TEXT"],
+    "worker_environments.node_device_id": ["node_device_id TEXT"],
     "worker_session_placements.terminal_reason": ["terminal_reason TEXT"],
     "worker_session_placements.terminal_at_ms": ["terminal_at_ms INTEGER"],
   },

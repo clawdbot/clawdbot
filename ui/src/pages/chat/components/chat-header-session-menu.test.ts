@@ -4,6 +4,7 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import type { SessionOwnerOption } from "../../../components/session-owner-chip.ts";
 import "./chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
@@ -49,6 +50,9 @@ async function mountMenu(
     settings?: UiSettings;
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
+    ownerOptions?: SessionOwnerOption[];
+    selfOwner?: SessionOwnerOption | null;
+    currentOwnerId?: string | null;
     actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
     forkFromLastCompleted?: boolean;
@@ -73,6 +77,9 @@ async function mountMenu(
       .settings=${options.settings ?? settings()}
       .panelActions=${options.panelActions ?? []}
       .layoutActions=${options.layoutActions ?? []}
+      .ownerOptions=${options.ownerOptions ?? []}
+      .selfOwner=${options.selfOwner ?? null}
+      .currentOwnerId=${options.currentOwnerId ?? null}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${options.forkDisabled ?? false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
@@ -92,7 +99,7 @@ async function mountMenu(
   return menu;
 }
 
-function itemLabel(menuItem: HTMLElement): string {
+function itemLabel(menuItem: Element): string {
   return menuItem.querySelector(":scope > .session-menu__text")?.textContent?.trim() ?? "";
 }
 
@@ -234,6 +241,36 @@ describe("chat header session menu", () => {
     expect(showTasks).toHaveBeenCalledOnce();
     expect(showChanges).toHaveBeenCalledOnce();
     expect(splitRight).toHaveBeenCalledOnce();
+  });
+
+  it("offers direct and submenu owner assignment", async () => {
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
+    const research = { type: "agent", id: "research:one", label: "Research" } as const;
+    const menu = await mountMenu({
+      ownerOptions: [ada, research],
+      selfOwner: ada,
+      currentOwnerId: research.id,
+      onAction,
+    });
+
+    expect(item(menu, "Assign to me").disabled).toBe(false);
+    const submenu = item(menu, "Assign to…");
+    expect(
+      Array.from(submenu.querySelectorAll("wa-dropdown-item[slot='submenu']")).map(itemLabel),
+    ).toEqual(["Ada", "Research"]);
+    const selected = item(menu, "Research");
+    expect(selected.getAttribute("role")).toBe("menuitemradio");
+    expect(selected.getAttribute("aria-checked")).toBe("true");
+    expect(selected.disabled).toBe(true);
+    expect(selected.querySelector("[slot='details']")).not.toBeNull();
+
+    select(menu, "assign-owner:self");
+    select(menu, "assign-owner:agent:research%3Aone");
+    expect(onAction.mock.calls).toEqual([
+      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada", label: "Ada" } }],
+      [{ kind: "assign-owner", owner: { type: "agent", id: "research:one" } }],
+    ]);
   });
 
   it("renders quick actions directly in the compact menu", async () => {

@@ -280,6 +280,7 @@ async function buildSnapshotBatch(
     PreparedModelRuntimeInput,
     PreparedModelRuntimePluginGeneration
   >,
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const freshGroups = new Map<string, PreparedModelRuntimeInput[]>();
@@ -345,6 +346,7 @@ async function buildSnapshotBatch(
       {},
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
+      pluginMetadataSnapshot,
     );
     assertPreparedModelRuntimeInputsCurrent(groupInputs, buildGuards);
     runtimePluginMs += prepared.buildStats.runtimePluginMs;
@@ -545,6 +547,7 @@ export function startSerializedSnapshotBuildBatch(
     PreparedModelRuntimeInput,
     PreparedModelRuntimePluginGeneration
   > = new Map(),
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -572,6 +575,7 @@ export function startSerializedSnapshotBuildBatch(
         buildGuards,
         inboundPluginRegistryInputs,
         reusablePluginGenerations,
+        pluginMetadataSnapshot,
         onBuildStats,
       ),
     };
@@ -610,6 +614,8 @@ export function startSerializedSnapshotBuild(
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   generationGuard: () => boolean = () => true,
   prepareInboundPluginRegistry = false,
+  reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
+  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult>;
   completion: Promise<void>;
@@ -623,6 +629,8 @@ export function startSerializedSnapshotBuild(
     new Map([[input, generationGuard]]),
     undefined,
     prepareInboundPluginRegistry ? new Set([input]) : undefined,
+    reusablePluginGeneration ? new Map([[input, reusablePluginGeneration]]) : undefined,
+    pluginMetadataSnapshot,
   );
   return {
     pending: build.pending.then((results) => results[0]!),

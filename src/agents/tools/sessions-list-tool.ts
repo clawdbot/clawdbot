@@ -23,6 +23,7 @@ import {
   optionalPositiveIntegerSchema,
 } from "../schema/typebox.js";
 import {
+  describeSessionLinkRule,
   describeSessionsListTool,
   describeSessionVisibilityScope,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -113,6 +114,11 @@ const SessionsListOutputSchema = Type.Object(
   {
     count: Type.Number(),
     sessions: Type.Array(SessionListRowOutputSchema),
+    sessionLinkRule: Type.Optional(
+      Type.String({
+        description: "How to build Control UI URLs for sessionKey values in this result.",
+      }),
+    ),
     visibility: Type.Optional(
       Type.Object(
         {
@@ -148,21 +154,23 @@ export function createSessionsListTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  sessionLinkBase?: string;
 }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_list",
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsListTool(),
+    description: describeSessionsListTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
+      const { mainKey, alias, requesterInternalKey, mainSessionKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          requesterAgentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
       const effectiveRequesterKey = requesterInternalKey ?? alias;
@@ -202,6 +210,7 @@ export function createSessionsListTool(opts?: {
         action: "list",
         defaultAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         visibility,
         a2aPolicy,
       });
@@ -388,6 +397,8 @@ export function createSessionsListTool(opts?: {
           : undefined;
         const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : undefined;
         const model = readStringValue(entry.model);
+        // sessions.list owns runtime/context provenance; this tool only filters and
+        // narrows its GatewaySessionListRow without reinterpreting raw session state.
         const contextTokens =
           typeof entry.contextTokens === "number" ? entry.contextTokens : undefined;
         const totalTokens = typeof entry.totalTokens === "number" ? entry.totalTokens : undefined;
@@ -526,6 +537,9 @@ export function createSessionsListTool(opts?: {
       return jsonResult({
         count: rows.length,
         sessions: rows,
+        ...(opts?.sessionLinkBase
+          ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+          : {}),
         ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
       });
     },

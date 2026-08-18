@@ -239,8 +239,11 @@ importers:
         version: 4.4.3
     devDependencies:
       '@a2ui/lit':
-        specifier: 0.10.2
-        version: 0.10.2(signal-polyfill@0.2.2)
+        specifier: 0.10.3
+        version: 0.10.3(signal-polyfill@0.2.2)
+      '@a2ui/web_core':
+        specifier: 0.10.6
+        version: 0.10.6
       '@copilotkit/aimock':
         specifier: 1.37.4
         version: 1.37.4(vitest@4.1.10)
@@ -538,6 +541,9 @@ importers:
       ws:
         specifier: 8.21.1
         version: 8.21.1
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -571,8 +577,11 @@ importers:
   extensions/canvas:
     dependencies:
       '@a2ui/lit':
-        specifier: 0.10.2
-        version: 0.10.2(signal-polyfill@0.2.2)
+        specifier: 0.10.3
+        version: 0.10.3(signal-polyfill@0.2.2)
+      '@a2ui/web_core':
+        specifier: 0.10.6
+        version: 0.10.6
       '@lit/context':
         specifier: 1.1.6
         version: 1.1.6
@@ -932,6 +941,9 @@ importers:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1085,6 +1097,9 @@ importers:
       '@line/bot-sdk':
         specifier: 11.2.0
         version: 11.2.0
+      typebox:
+        specifier: 1.3.6
+        version: 1.3.6
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1224,12 +1239,6 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
-
-  extensions/media-understanding-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
 
   extensions/memory-core:
     dependencies:
@@ -2187,12 +2196,20 @@ importers:
       ws:
         specifier: 8.21.1
         version: 8.21.1
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/gateway-protocol:
     dependencies:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/llm-core:
     dependencies:
@@ -2295,6 +2312,9 @@ importers:
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../gateway-client
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../gateway-protocol
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
@@ -2366,6 +2386,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@noble/hashes':
+        specifier: 2.2.0
+        version: 2.2.0
       '@novnc/novnc':
         specifier: 1.7.0
         version: 1.7.0
@@ -2429,6 +2452,9 @@ importers:
       remend:
         specifier: 1.3.0
         version: 1.3.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@types/markdown-it':
         specifier: 14.1.2
@@ -2439,6 +2465,9 @@ importers:
       '@vitest/browser-playwright':
         specifier: 4.1.10
         version: 4.1.10(playwright@1.62.1)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
+      fake-indexeddb:
+        specifier: 6.2.5
+        version: 6.2.5
       jsdom:
         specifier: 29.1.1
         version: 29.1.1(@noble/hashes@2.2.0)
@@ -2457,16 +2486,16 @@ importers:
 
 packages:
 
-  '@a2ui/lit@0.10.2':
-    resolution: {integrity: sha512-Jn/nlytHi0nXF6BRSEYPTJ27o4k8ozd+dTxeHZlNGG/ppVSw/EVWZ0N5uaxDoiCDhMNdQXQ3qZREMp9GsYXmMw==}
+  '@a2ui/lit@0.10.3':
+    resolution: {integrity: sha512-/kkL0BqJJfC6sn3XNKbo7QDWKE9K06blUVIoLHLU2PZQJalE1KBv/HLTpupBJ94SMhG+NaOUUu8yBUT+ACsm2Q==}
     peerDependencies:
       '@a2ui/markdown-it': '*'
     peerDependenciesMeta:
       '@a2ui/markdown-it':
         optional: true
 
-  '@a2ui/web_core@0.10.5':
-    resolution: {integrity: sha512-q+HyK1V/jM8l+/VmuXRbBNCS9yDguqdjsJ7/8aqY9O/WUdRE14FbhkFyQyGWQNqPJa9QbVfQyAjGQIK0B1aQtg==}
+  '@a2ui/web_core@0.10.6':
+    resolution: {integrity: sha512-kTwir93Fk5eupl4FZ6CkhJDrisR2fnQgEIlDCTp06uzx2PvUhItbq1E+h7hFyeHGTu/NMci9Tqn7Is1IVRpufw==}
 
   '@agentclientprotocol/claude-agent-acp@0.62.0':
     resolution: {integrity: sha512-8QRNmyk5Cfy4XVREeg5KCPoCDtmYS0xALY9WqI640PfopLMpeUzMByXbzLkBLbD819zB67DBhLG5ta98uOEPKg==}
@@ -9083,9 +9112,9 @@ packages:
 
 snapshots:
 
-  '@a2ui/lit@0.10.2(signal-polyfill@0.2.2)':
+  '@a2ui/lit@0.10.3(signal-polyfill@0.2.2)':
     dependencies:
-      '@a2ui/web_core': 0.10.5
+      '@a2ui/web_core': 0.10.6
       '@lit-labs/signals': 0.3.0
       '@lit/context': 1.1.6
       lit: 3.3.3
@@ -9094,7 +9123,7 @@ snapshots:
     transitivePeerDependencies:
       - signal-polyfill
 
-  '@a2ui/web_core@0.10.5':
+  '@a2ui/web_core@0.10.6':
     dependencies:
       '@preact/signals-core': 1.14.4
       date-fns: 4.4.0

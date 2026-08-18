@@ -40,6 +40,18 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
     } => ({ canonicalKey: sessionKey, entry: undefined }),
   ),
 );
+const cronTaskRunHistoryPageOverride = vi.hoisted(() => vi.fn());
+
+vi.mock("../../cron/task-run-history.js", async () => {
+  const actual = await vi.importActual<typeof import("../../cron/task-run-history.js")>(
+    "../../cron/task-run-history.js",
+  );
+  return {
+    ...actual,
+    readCronTaskRunHistoryPage: (...args: Parameters<typeof actual.readCronTaskRunHistoryPage>) =>
+      cronTaskRunHistoryPageOverride(...args) ?? actual.readCronTaskRunHistoryPage(...args),
+  };
+});
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -552,7 +564,7 @@ function expectCronUpdateDeliveryPatch(
 
 function expectResponseError(
   respond: ReturnType<typeof vi.fn>,
-  expected: { code?: string; messageIncludes?: string },
+  expected: { code?: string; messageIncludes?: string; details?: Record<string, unknown> },
 ) {
   const call = respond.mock.calls.at(0);
   if (!call) {
@@ -567,6 +579,9 @@ function expectResponseError(
   if (expected.messageIncludes) {
     expect(String(error.message)).toContain(expected.messageIncludes);
   }
+  if (expected.details) {
+    expect(error.details).toEqual(expected.details);
+  }
 }
 
 function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void {
@@ -576,6 +591,7 @@ function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void 
 describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    cronTaskRunHistoryPageOverride.mockReset().mockReturnValue(undefined);
     loadGatewaySessionEntry
       .mockReset()
       .mockImplementation((sessionKey: string) => ({ canonicalKey: sessionKey, entry: undefined }));
@@ -617,7 +633,8 @@ describe("cron method validation", () => {
     );
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.remove params: id not found",
+      messageIncludes: "Automation not found: missing-id",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-id" },
     });
   });
 
@@ -646,7 +663,7 @@ describe("cron method validation", () => {
     expect(context.cron.remove).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.remove params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -672,7 +689,7 @@ describe("cron method validation", () => {
     expect(context.cron.remove).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.remove params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -730,6 +747,7 @@ describe("cron method validation", () => {
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "cron job not found: cron-42",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "cron-42" },
     });
   });
 
@@ -1690,7 +1708,7 @@ describe("cron method validation", () => {
     expect(siblingUpdate.respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: "invalid cron.update params: id not found" }),
+      expect.objectContaining({ message: expect.stringContaining("Automation not found: cron-1") }),
     );
     expect(context.cron.updateWithPrecondition).not.toHaveBeenCalled();
 
@@ -1795,13 +1813,13 @@ describe("cron method validation", () => {
     );
     expectResponseError(update.respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.update params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
 
     const run = await invokeCron("cron.run", { id: accountJob.id }, { context, client: runClient });
     expectResponseError(run.respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.run params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
   });
@@ -2309,7 +2327,7 @@ describe("cron method validation", () => {
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.update params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3618,7 +3636,7 @@ describe("cron method validation", () => {
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.update params: id not found",
+      messageIncludes: "Automation not found: missing",
     });
   });
 
@@ -3666,7 +3684,7 @@ describe("cron method validation", () => {
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.update params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3678,8 +3696,24 @@ describe("cron method validation", () => {
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.run params: id not found",
+      messageIncludes: "Automation not found: missing",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing" },
     });
+  });
+
+  it("keeps malformed cron.run params classified as invalid params", async () => {
+    const { context, respond } = await invokeCron(
+      "cron.run",
+      { id: 42 },
+      { context: createCronContext() },
+    );
+
+    expect(context.cron.readJob).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.run params",
+    });
+    expect(requireRecord(respond.mock.calls[0]?.[2], "response error").details).toBeUndefined();
   });
 
   it("allows caller-scoped cron.run for the same agent", async () => {
@@ -3736,7 +3770,7 @@ describe("cron method validation", () => {
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.run params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3763,7 +3797,7 @@ describe("cron method validation", () => {
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.run params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3804,6 +3838,14 @@ describe("cron method validation", () => {
   });
 
   it("preserves deleted-job history without listing unrelated cron jobs", async () => {
+    cronTaskRunHistoryPageOverride.mockReturnValue({
+      entries: [{ jobId: "deleted-cron", action: "finished", status: "ok", ts: 1 }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
     const context = createCronContext();
 
     const { respond } = await invokeCron("cron.runs", { id: "deleted-cron" }, { context });
@@ -3813,6 +3855,39 @@ describe("cron method validation", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ entries: expect.any(Array) }),
+      undefined,
+    );
+  });
+
+  it("returns a typed lookup miss when cron.runs has no live job or retained history", async () => {
+    const context = createCronContext();
+
+    const { respond } = await invokeCron("cron.runs", { id: "missing-cron" }, { context });
+
+    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("missing-cron");
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Automation not found: missing-cron",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-cron" },
+    });
+  });
+
+  it("keeps the exact empty cron.runs page for a live job with no history", async () => {
+    const context = createCronContext(createCronJob({ id: "empty-cron" }));
+
+    const { respond } = await invokeCron("cron.runs", { id: "empty-cron" }, { context });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        entries: [],
+        total: 0,
+        offset: 0,
+        limit: 50,
+        hasMore: false,
+        nextOffset: null,
+      },
       undefined,
     );
   });
@@ -3830,7 +3905,7 @@ describe("cron method validation", () => {
     expect(context.cron.list).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.runs params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3892,7 +3967,7 @@ describe("cron method validation", () => {
     expect(context.cron.list).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.runs params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3919,7 +3994,7 @@ describe("cron method validation", () => {
     expect(context.cron.list).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.runs params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 

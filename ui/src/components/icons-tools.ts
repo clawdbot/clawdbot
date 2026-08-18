@@ -22,6 +22,8 @@ export function strokeIcon(body: SVGTemplateResult): TemplateResult {
 }
 
 export const toolIcons = {
+  shieldCheck: strokeIcon(svg` <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z" />
+    <path d="m9 12 2 2 4-4" />`),
   cpu: strokeIcon(svg` <rect width="16" height="16" x="4" y="4" rx="2" />
     <rect width="6" height="6" x="9" y="9" rx="1" />
     <path d="M15 2v2" />
@@ -159,6 +161,14 @@ export const toolIcons = {
     <path d="M6 21V9a9 9 0 0 0 9 9" />`),
   terminal: strokeIcon(svg` <polyline points="4 17 10 11 4 5" />
     <line x1="12" x2="20" y1="19" y2="19" />`),
+  squareTerminal: strokeIcon(svg` <path d="m7 11 2-2-2-2" />
+    <path d="M11 13h4" />
+    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />`),
+  listTree: strokeIcon(svg` <path d="M21 12h-8" />
+    <path d="M21 6H8" />
+    <path d="M21 18h-8" />
+    <path d="M3 6v4c0 1.1.9 2 2 2h3" />
+    <path d="M3 10v6c0 1.1.9 2 2 2h3" />`),
   claw: strokeIcon(svg` <path
       d="M8.2 10 A5.2 5.2 0 1 0 8.2 20.4 A5.2 5.2 0 0 0 8.2 10 Z M10.2 20 C14.5 20.8 19 18.6 22.3 13.2 C21 12.9 19.7 12.7 18.4 12.8 L17.5 14.6 L16 12.9 L14.3 14.5 L13.5 13 L11.5 14.2 Z"
     />

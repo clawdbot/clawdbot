@@ -4,17 +4,12 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path, { win32 } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  fetchJsonWithTimeout,
-  runCommand,
-  signalChildProcessTree,
-} from "../../scripts/e2e/telegram-user-credential-io.ts";
+import { fetchJsonWithTimeout, runCommand } from "../../scripts/e2e/telegram-user-credential-io.ts";
 import {
   expandHome,
   resolvePrivateJsonDirectory,
   writePrivateJson,
 } from "../../scripts/e2e/telegram-user-credential-paths.ts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
@@ -30,10 +25,6 @@ const PROCESS_WAIT_TIMEOUT_MS = 30_000;
 // the timeout fires. This one is paid in wall-clock, so it stays modest while
 // keeping an order-of-magnitude margin over measured child startup.
 const TIMEOUT_TRIGGER_MS = 1_500;
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -449,75 +440,6 @@ setInterval(() => {}, 1000);
         process.kill(childPid, "SIGKILL");
       }
     }
-  });
-
-  it("signals Windows credential helper process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalChildProcessTree(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows credential helper process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it.runIf(process.platform !== "win32")(

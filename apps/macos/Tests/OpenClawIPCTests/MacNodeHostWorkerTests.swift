@@ -311,6 +311,36 @@ struct MacNodeHostWorkerTests {
             workerManifest: cua) == descriptor)
     }
 
+    @Test func `elevation host never advertises a persisted CUA provider`() throws {
+        let suiteName = "MacNodeElevationHostProviderTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: computerControlEnabledKey)
+        defaults.set(ComputerControlProvider.cua.rawValue, forKey: computerControlProviderKey)
+        let provider = ComputerControlProvider.current(
+            defaults: defaults,
+            cuaAvailable: true,
+            launchPlan: AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"]))
+        #expect(provider == .peekaboo)
+
+        let cuaDescriptor = OpenClawProtocol.AnyCodable(["provider": "cua"])
+        let manifest = MacNodeHostManifest(
+            version: "test",
+            caps: ["screen", "computer"],
+            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            computerUse: cuaDescriptor,
+            pathEnv: "/usr/bin:/bin")
+        let workerManifest = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: provider))
+        #expect(workerManifest.computerUse == nil)
+        let advertised = try #require(MacNodeModeCoordinator.computerUseDescriptor(
+            provider: provider,
+            commands: manifest.commands,
+            workerManifest: workerManifest))
+        let data = try JSONEncoder().encode(advertised)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect((object["provider"] as? [String: Any])?["id"] as? String == "peekaboo")
+    }
+
     @Test func `stale route updates cannot replace newer worker authority`() {
         #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 4, currentGeneration: 4))
         #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 5, currentGeneration: 4))
@@ -398,33 +428,65 @@ struct MacNodeHostWorkerTests {
         }
     }
 
-    @Test func `worker forwards terminal input and cancellation frames`() async throws {
+    @Test func `worker cancellation settles when the child suppresses its result`() async throws {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-worker-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
         let script = """
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["terminal"],"commands":["codex.terminal.resume.v1"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
-        IFS= read -r invoke
+        IFS= read -r buffered_invoke
         IFS= read -r input
-        IFS= read -r cancel
-        printf '%s' "$invoke" | grep -q '"id":"terminal-1"' || exit 40
+        IFS= read -r buffered_cancel
+        printf '%s' "$buffered_invoke" | grep -q '"id":"terminal-1"' || exit 40
         printf '%s' "$input" | grep -q '"type":"invoke-input"' || exit 41
         printf '%s' "$input" | grep -q '"invokeId":"terminal-1"' || exit 42
         printf '%s' "$input" | grep -q '"seq":7' || exit 43
-        printf '%s' "$cancel" | grep -q '"type":"invoke-cancel"' || exit 44
-        printf '%s' "$cancel" | grep -q '"invokeId":"terminal-1"' || exit 45
-        printf '%s\\n' '{"type":"invoke-result","result":{"id":"terminal-1","ok":true}}'
+        printf '%s' "$buffered_cancel" | grep -q '"type":"invoke-cancel"' || exit 44
+        printf '%s' "$buffered_cancel" | grep -q '"invokeId":"terminal-1"' || exit 45
+        IFS= read -r active_invoke
+        printf '%s' "$active_invoke" | grep -q '"id":"terminal-2"' || exit 46
+        printf '%s\\n' "$$" > "$1"
+        IFS= read -r active_cancel
+        printf '%s' "$active_cancel" | grep -q '"type":"invoke-cancel"' || exit 47
+        printf '%s' "$active_cancel" | grep -q '"invokeId":"terminal-2"' || exit 48
         while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
+            command: ["/bin/sh", "-c", script, "worker", marker.path]))
         await worker.handleInput(invokeId: "terminal-1", seq: 7, payloadJSON: #"{"data":"x"}"#)
         await worker.cancel(invokeId: "terminal-1")
-        let response = await worker.invoke(BridgeInvokeRequest(
-            id: "terminal-1",
-            command: "codex.terminal.resume.v1"))
+        do {
+            let buffered = try await AsyncTimeout.withTimeout(
+                seconds: 1,
+                onTimeout: { WorkerBackpressureTimeout() },
+                operation: {
+                    await worker.invoke(BridgeInvokeRequest(
+                        id: "terminal-1",
+                        command: "codex.terminal.resume.v1"))
+                })
+            #expect(!buffered.ok)
+            #expect(buffered.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
 
-        #expect(response.ok)
-        await worker.stop()
+            let invoking = Task {
+                await worker.invoke(BridgeInvokeRequest(
+                    id: "terminal-2",
+                    command: "codex.terminal.resume.v1"))
+            }
+            _ = try await TestProcessSupport.waitForPID(in: marker)
+            await worker.cancel(invokeId: "terminal-2")
+            let active = try await AsyncTimeout.withTimeout(
+                seconds: 1,
+                onTimeout: { WorkerBackpressureTimeout() },
+                operation: { await invoking.value })
+            await worker.stop()
+            #expect(!active.ok)
+            #expect(active.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
+        } catch {
+            await worker.stop()
+            throw error
+        }
     }
 
     @Test func `ready worker exit notifies its route owner`() async throws {

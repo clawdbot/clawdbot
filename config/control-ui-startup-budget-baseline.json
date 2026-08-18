@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 334391,
-  "reason": "cumulative 2026-08-15 UI growth plus folder group defaults catalog and lazy New Session route resolution",
-  "updatedAt": "2026-08-15"
+  "startupJsGzipBytes": 344429,
+  "reason": "Channel conversation avatars (PR #125668): lead-slot render branch + row plumbing on top of the 344395 B main baseline; avatar element itself is code-split out of startup",
+  "updatedAt": "2026-08-18"
 }

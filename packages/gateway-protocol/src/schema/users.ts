@@ -20,6 +20,11 @@ export const UserProfileAvatarMimeSchema = Type.Union([
   Type.Literal("image/jpeg"),
   Type.Literal("image/webp"),
 ]);
+export const UserProfileGitHubIdentitySchema = closedObject({
+  login: Type.String({ minLength: 1, maxLength: 39 }),
+  profileUrl: NonEmptyString,
+  avatarUrl: NonEmptyString,
+});
 
 export const UserProfileSchema = closedObject({
   id: UserProfileIdSchema,
@@ -29,6 +34,7 @@ export const UserProfileSchema = closedObject({
   createdAt: Type.Integer({ minimum: 0 }),
   updatedAt: Type.Integer({ minimum: 0 }),
   emails: Type.Array(NonEmptyString),
+  githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
   hasAvatar: Type.Boolean(),
 });
 
@@ -60,6 +66,13 @@ export const UsersSetAvatarResultSchema = closedObject({
   avatarRevision: NonEmptyString,
 });
 
+export const UsersSetGitHubIdentityParamsSchema = closedObject({
+  username: Type.String({ minLength: 1, maxLength: 39 }),
+});
+export const UsersSetGitHubIdentityResultSchema = closedObject({ profile: UserProfileSchema });
+export const UsersClearGitHubIdentityParamsSchema = closedObject({});
+export const UsersClearGitHubIdentityResultSchema = closedObject({ profile: UserProfileSchema });
+
 export const UsersPrefsGetParamsSchema = closedObject({
   keys: Type.Optional(
     Type.Array(UserPreferenceKeySchema, {
@@ -79,6 +92,7 @@ export const UsersPrefsSetResultSchema = Type.Union([
 ]);
 
 export type UserProfile = Static<typeof UserProfileSchema>;
+export type UserProfileGitHubIdentity = Static<typeof UserProfileGitHubIdentitySchema>;
 export type UsersListParams = Static<typeof UsersListParamsSchema>;
 export type UsersListResult = Static<typeof UsersListResultSchema>;
 export type UsersSelfParams = Static<typeof UsersSelfParamsSchema>;
@@ -89,6 +103,10 @@ export type UsersSetDisplayNameParams = Static<typeof UsersSetDisplayNameParamsS
 export type UsersSetDisplayNameResult = Static<typeof UsersSetDisplayNameResultSchema>;
 export type UsersSetAvatarParams = Static<typeof UsersSetAvatarParamsSchema>;
 export type UsersSetAvatarResult = Static<typeof UsersSetAvatarResultSchema>;
+export type UsersSetGitHubIdentityParams = Static<typeof UsersSetGitHubIdentityParamsSchema>;
+export type UsersSetGitHubIdentityResult = Static<typeof UsersSetGitHubIdentityResultSchema>;
+export type UsersClearGitHubIdentityParams = Static<typeof UsersClearGitHubIdentityParamsSchema>;
+export type UsersClearGitHubIdentityResult = Static<typeof UsersClearGitHubIdentityResultSchema>;
 export type UsersPrefsGetParams = Static<typeof UsersPrefsGetParamsSchema>;
 export type UsersPrefsGetResult = Static<typeof UsersPrefsGetResultSchema>;
 export type UsersPrefsSetParams = Static<typeof UsersPrefsSetParamsSchema>;

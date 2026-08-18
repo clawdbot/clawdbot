@@ -5,11 +5,21 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
+import {
+  createModelGenerationFixture,
+  GENERATION_WORKSPACE_DIR,
+  publishCurrentModelGeneration,
+  resetModelGenerationFixtureState,
+} from "./embedded-agent-runner/model.generation-scope.test-support.js";
 import type { AgentHarnessHostCapabilities } from "./harness/host-capability-types.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
@@ -62,6 +72,10 @@ const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn((..._args: unknown[]) => 
 const hasUsableCustomProviderApiKeyMock = vi.fn((..._args: unknown[]) => false);
 const resolveProviderEntryApiKeyProfileReferenceMock = vi.fn((_params?: unknown): unknown => ({
   kind: "none",
+}));
+const preparedRuntimeSnapshotState = vi.hoisted(() => ({
+  snapshot: undefined as unknown,
+  useSnapshotPluginRegistry: false,
 }));
 
 vi.mock("../llm/stream.js", async () => {
@@ -127,6 +141,10 @@ vi.mock("./prepared-model-runtime.js", () => ({
       ...workspaceOptions,
     });
     return {
+      ...(preparedRuntimeSnapshotState.snapshot as object),
+      ...(preparedRuntimeSnapshotState.useSnapshotPluginRegistry
+        ? {}
+        : { pluginRegistry: getActivePluginRegistry() }),
       agentId: params.agentId,
       agentDir: params.agentDir,
       config: params.config,
@@ -349,6 +367,7 @@ const DEFAULT_STORE_PATH = "/tmp/sessions.json";
 const DEFAULT_QUESTION = "What changed?";
 const MATH_QUESTION = "What is 17 * 19?";
 const MATH_ANSWER = "323";
+let defaultPluginMetadataSnapshot: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
 
 const DEFAULT_USAGE = {
   input: 1,
@@ -659,6 +678,7 @@ function mockOpenAIPlatformProfile(): void {
 describe("runBtwSideQuestion", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    resetModelGenerationFixtureState();
   });
 
   beforeEach(() => {
@@ -709,6 +729,15 @@ describe("runBtwSideQuestion", () => {
     resolveProviderEntryApiKeyProfileReferenceMock.mockReset();
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "none" });
     clearAgentHarnesses();
+    defaultPluginMetadataSnapshot ??= resolvePluginMetadataSnapshot({
+      config: {},
+      workspaceDir: "/tmp/workspace",
+      allowCurrent: false,
+    });
+    preparedRuntimeSnapshotState.snapshot = {
+      metadataSnapshot: defaultPluginMetadataSnapshot,
+    };
+    preparedRuntimeSnapshotState.useSnapshotPluginRegistry = false;
 
     readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
@@ -881,6 +910,81 @@ describe("runBtwSideQuestion", () => {
     );
   });
 
+  it("keeps model, runtime auth, and stream selection on prepared A after current advances to B", async () => {
+    const cfg = { agents: { entries: { main: { default: true } } } } as never;
+    const generationA = createModelGenerationFixture({
+      config: cfg,
+      label: "btw-a",
+      provider: "local-proxy",
+      requestProvider: "local-proxy",
+      modelId: "side-model",
+    });
+    const generationB = createModelGenerationFixture({
+      config: cfg,
+      label: "btw-b",
+      provider: "local-proxy",
+      requestProvider: "local-proxy",
+      modelId: "side-model",
+    });
+    preparedRuntimeSnapshotState.snapshot = generationA.preparedModelRuntime;
+    preparedRuntimeSnapshotState.useSnapshotPluginRegistry = true;
+    resolveAgentWorkspaceDirMock.mockReturnValue(GENERATION_WORKSPACE_DIR);
+    publishCurrentModelGeneration(generationB);
+    const runtimeAuthA = vi.fn(async () => ({ apiKey: "runtime-auth-a" }));
+    const runtimeAuthB = vi.fn(async () => ({ apiKey: "runtime-auth-b" }));
+    const streamA = vi.fn(
+      (model: { name?: string }, _context: unknown, options?: { apiKey?: string }) => {
+        const apiKey = options?.apiKey;
+        const resolvedApiKey =
+          apiKey && looksLikeSecretSentinel(apiKey) ? resolveSecretSentinel(apiKey) : apiKey;
+        return makeAsyncEvents([
+          createDoneEvent(`${model.name ?? "missing model"} / ${resolvedApiKey} / Stream A`),
+        ]);
+      },
+    );
+    const streamB = vi.fn(() =>
+      makeAsyncEvents([createDoneEvent("Generation B / runtime-auth-b / Stream B")]),
+    );
+    const activeGenerationRegistry = () =>
+      getPluginRuntimeGenerationRegistry() ?? getActivePluginRegistry();
+    resolveModelWithRegistryMock.mockImplementation(() => {
+      const snapshot = getCurrentPluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: GENERATION_WORKSPACE_DIR,
+      });
+      const label = snapshot === generationA.metadataSnapshot ? "A" : "B";
+      return {
+        provider: "local-proxy",
+        id: "side-model",
+        name: `Generation ${label}`,
+        api: "openai-responses",
+        baseUrl: `https://generation-${label.toLowerCase()}.example.test/v1`,
+      };
+    });
+    prepareProviderRuntimeAuthMock.mockImplementation(async () =>
+      activeGenerationRegistry() === generationA.pluginRegistry
+        ? await runtimeAuthA()
+        : await runtimeAuthB(),
+    );
+    registerProviderStreamForModelMock.mockImplementation(() =>
+      activeGenerationRegistry() === generationA.pluginRegistry ? streamA : streamB,
+    );
+
+    await expect(
+      runSideQuestion({ cfg, provider: "local-proxy", model: "side-model" }),
+    ).resolves.toEqual({ text: "Generation A / runtime-auth-a / Stream A" });
+    expect(runtimeAuthA).toHaveBeenCalledOnce();
+    expect(runtimeAuthB).not.toHaveBeenCalled();
+    expect(streamA).toHaveBeenCalledOnce();
+    expect(streamA).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Generation A" }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+    expect(streamB).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
     const supports = vi.fn(supportsPreparedOpenAIAuth);
     const codexSideQuestionMock = registerCodexSideQuestionHarness({
@@ -993,6 +1097,13 @@ describe("runBtwSideQuestion", () => {
           inlineProviderModels: [],
         }),
       }),
+    );
+    const preparedModelRuntime = (
+      mockArg(resolveModelAsyncMock, 0, 4) as { preparedModelRuntime?: unknown }
+    ).preparedModelRuntime;
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toHaveProperty(
+      "preparedModelRuntime",
+      preparedModelRuntime,
     );
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
@@ -1518,14 +1629,16 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Copilot fallback answer." });
     expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledOnce();
-    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith({
-      provider: "github-copilot",
-      modelId: "gpt-4o",
-      config: expect.any(Object),
-      agentId: "main",
-      sessionKey: DEFAULT_SESSION_KEY,
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        modelId: "gpt-4o",
+        config: expect.any(Object),
+        agentId: "main",
+        sessionKey: DEFAULT_SESSION_KEY,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
     expect(streamSimpleMock).toHaveBeenCalledOnce();
   });
 
@@ -1767,6 +1880,13 @@ describe("runBtwSideQuestion", () => {
     });
     requireApiKeyMock.mockReturnValueOnce("claude-cli-access");
     resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce(undefined);
+    resolveModelAsyncMock.mockResolvedValueOnce({
+      model: {
+        provider: DEFAULT_PROVIDER,
+        id: DEFAULT_MODEL,
+        api: "anthropic-messages",
+      },
+    });
     mockDoneAnswer("Claude CLI answer.");
 
     const result = await runSideQuestion();
@@ -1780,10 +1900,12 @@ describe("runBtwSideQuestion", () => {
       externalCliProviderIds: ["claude-cli"],
       allowKeychainPrompt: false,
     });
-    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
-      profileId: "anthropic:claude-cli",
-      store: claudeAuthStore,
-    });
+    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "anthropic:claude-cli",
+        store: claudeAuthStore,
+      }),
+    );
   });
 
   it("rematerializes the direct model when automatic auth rotates to a SecretRef backup", async () => {

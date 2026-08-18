@@ -6,11 +6,13 @@ import type { HealthSummary } from "./health/types.js";
 const CURATOR_INITIAL_DELAY_MS = 5 * 60_000;
 const CURATOR_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { createChatAbortMarker } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
+const pruneOutboundMediaMock = vi.fn(async () => {});
 const prunePlaybackTranscodeCacheMock = vi.fn(async () => {});
 const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   deletedRecordCount: 0,
@@ -47,6 +49,7 @@ vi.mock("../media/store.js", async () => {
   return {
     ...actual,
     cleanOldMedia: cleanOldMediaMock,
+    pruneOutboundMedia: pruneOutboundMediaMock,
     prunePlaybackTranscodeCache: prunePlaybackTranscodeCacheMock,
   };
 });
@@ -170,6 +173,7 @@ describe("startGatewayMaintenanceTimers", () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     cleanOldMediaMock.mockReset().mockResolvedValue(undefined);
+    pruneOutboundMediaMock.mockReset().mockResolvedValue(undefined);
     prunePlaybackTranscodeCacheMock.mockReset().mockResolvedValue(undefined);
     pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
     cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue({
@@ -210,10 +214,12 @@ describe("startGatewayMaintenanceTimers", () => {
 
     await vi.advanceTimersByTimeAsync(0);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
+    expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(1);
     expect(cleanOldMediaMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(2);
+    expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(2);
     expect(cleanOldMediaMock).not.toHaveBeenCalled();
 
     await stopMaintenanceTimers(timers);
@@ -375,6 +381,7 @@ describe("startGatewayMaintenanceTimers", () => {
 
     await vi.advanceTimersByTimeAsync(0);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
+    expect(pruneOutboundMediaMock).not.toHaveBeenCalled();
     expect(cleanOldMediaMock).toHaveBeenCalledWith(MEDIA_CLEANUP_TTL_MS, {
       recursive: true,
       pruneEmptyDirs: true,
@@ -385,6 +392,7 @@ describe("startGatewayMaintenanceTimers", () => {
     });
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(2);
+    expect(pruneOutboundMediaMock).not.toHaveBeenCalled();
     expect(cleanOldMediaMock).toHaveBeenCalledTimes(2);
     expect(cleanOldMediaMock).toHaveBeenLastCalledWith(MEDIA_CLEANUP_TTL_MS, {
       recursive: true,
@@ -555,6 +563,37 @@ describe("startGatewayMaintenanceTimers", () => {
 
     resolveCleanup();
     await vi.advanceTimersByTimeAsync(0);
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("does not overlap default outbound cleanup and drains it on shutdown", async () => {
+    vi.useFakeTimers();
+    let resolveCleanup = () => {};
+    pruneOutboundMediaMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCleanup = resolve;
+        }),
+    );
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+    timers.startMediaCleanup();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(1);
+
+    let stopped = false;
+    const stopping = timers.stopMediaCleanup().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+    resolveCleanup();
+    await stopping;
+    expect(stopped).toBe(true);
+
     await stopMaintenanceTimers(timers);
   });
 
@@ -792,7 +831,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const runId = "run-aborted";
-    deps.chatRunState.getOrCreate(runId).abortMarker = staleRunTimestamp();
+    deps.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker(staleRunTimestamp());
     seedStaleRunBuffers(deps, runId);
     seedBufferedAgentEvent(deps, runId);
     const agentText = deps.chatRunState.getOrCreate(runId).agentText?.assistant;

@@ -63,6 +63,8 @@ Gateway-hosted targets under `/__openclaw__/canvas/` and
 Canvas URL. The app refreshes that short-lived capability before navigation;
 you do not need to construct or copy a capability URL yourself.
 
+`show_widget` can target `node_panel` to open its hosted document in this panel. These widget documents are render-only in the panel; interactive widget actions remain disabled.
+
 ## A2UI in Canvas
 
 A2UI is hosted by the Gateway canvas host and rendered inside the Canvas

@@ -1,13 +1,11 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
-import type {
-  GatewayApprovalEventKind,
-  GatewayNativeApprovalRuntime,
-} from "../infra/approval-gateway-runtime.types.js";
+import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 
 export type GatewayApprovalEventPublisher = {
-  publishRequested: (kind: GatewayApprovalEventKind, request: unknown) => number;
-  publishResolved: (kind: GatewayApprovalEventKind, resolved: unknown) => void;
+  publishRequested: (kind: ChannelApprovalKind, request: unknown) => number;
+  publishResolved: (kind: ChannelApprovalKind, resolved: unknown) => void;
 };
 
 export type GatewayRecoveryRuntime = {
