@@ -891,4 +891,23 @@ describe("release Telegram QA workflow", () => {
     expect(launcher.match(/exec "\$runtime_node_bin"/gu)).toHaveLength(1);
     expect(launcher).toContain('grep -Ev "^(PWD|SHLVL|_)$"');
   });
+
+  it("mounts an isolated SUT-owned tmp without exposing the host tmp tree", () => {
+    const createSut = requireRun(
+      "run_telegram",
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const launcher = extractHereDocument(createSut, "LAUNCHER");
+
+    expect(launcher).toContain('for masked_path in "$RUNNER_HOME" /var/tmp /dev/shm; do');
+    expect(launcher).toContain("set_launcher_stage mount-private-tmp");
+    expect(launcher).toContain(
+      '-o "mode=0700,uid=${SUT_UID},gid=${SUT_GID},nosuid,nodev,noexec"',
+    );
+    expect(launcher).toContain("openclaw-telegram-sut-tmp");
+    expect(launcher).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' /tmp)" == "directory:700:${SUT_UID}:${SUT_GID}"',
+    );
+    expect(launcher).not.toContain('for masked_path in "$RUNNER_HOME" /tmp');
+  });
 });
