@@ -20,12 +20,12 @@ import {
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import { renderChatPrimaryActions } from "./chat-composer-controls.ts";
-import { focusComposerFromChrome } from "./chat-composer-dom.ts";
+import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
 import { renderSkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
-import { paneDomId, renderSlashMenu } from "./chat-composer-slash-menu.ts";
+import { renderSlashMenu } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import {
   renderChatRunStatusIndicator,
