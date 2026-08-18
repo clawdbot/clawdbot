@@ -75,6 +75,35 @@ function readPrecheckField(existingPrecheck: unknown): {
   };
 }
 
+/** Keep schema-supported precheck settings across partial CLI edits (ClawSweeper P1). */
+function mergeCronEditPrecheckPatch(params: {
+  existingPrecheck: unknown;
+  command: string;
+  timeoutMs?: number;
+  cwd?: string;
+}): Record<string, unknown> {
+  const base =
+    params.existingPrecheck && typeof params.existingPrecheck === "object"
+      ? { ...(params.existingPrecheck as Record<string, unknown>) }
+      : {};
+  const next: Record<string, unknown> = {
+    ...base,
+    kind: "exec",
+    command: params.command,
+  };
+  if (params.timeoutMs !== undefined) {
+    next.timeoutMs = params.timeoutMs;
+  } else {
+    delete next.timeoutMs;
+  }
+  if (params.cwd) {
+    next.cwd = params.cwd;
+  } else {
+    delete next.cwd;
+  }
+  return next;
+}
+
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
     registerCronMutationOptions(
@@ -331,11 +360,14 @@ export function registerCronEditCommand(cron: Command) {
               }
               return timeoutMs;
             };
-            // Ancillary-only edits must merge onto an existing gate (ClawSweeper P2).
-            const existingPrecheck =
-              !precheckCommand && hasPrecheckAncillary
-                ? (await readExistingCronJob()).precheck
+            // Validate CLI-supplied timeout before any gateway read so bad flags fail closed.
+            const cliTimeoutMs =
+              precheckTimeoutRaw !== undefined
+                ? parsePositiveTimeoutMs(precheckTimeoutRaw)
                 : undefined;
+            // Partial CLI edits must merge onto the full existing gate (ClawSweeper P1).
+            // Always load existing when any precheck flag is set so contract/codes/prefixes/onError survive.
+            const existingPrecheck = (await readExistingCronJob()).precheck;
             const existingFields = readPrecheckField(existingPrecheck);
             if (!precheckCommand && hasPrecheckAncillary && !existingFields.command) {
               throw new Error(
@@ -348,19 +380,14 @@ export function registerCronEditCommand(cron: Command) {
                 "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
               );
             }
-            const existingTimeoutMs = existingFields.timeoutMs;
-            const existingCwd = existingFields.cwd;
-            const timeoutMs =
-              precheckTimeoutRaw !== undefined
-                ? parsePositiveTimeoutMs(precheckTimeoutRaw)
-                : existingTimeoutMs;
-            const cwd = precheckCwd !== undefined ? precheckCwd : existingCwd;
-            patch.precheck = {
-              kind: "exec",
+            const timeoutMs = cliTimeoutMs ?? existingFields.timeoutMs;
+            const cwd = precheckCwd !== undefined ? precheckCwd : existingFields.cwd;
+            patch.precheck = mergeCronEditPrecheckPatch({
+              existingPrecheck,
               command: baseCommand,
-              ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-              ...(cwd ? { cwd } : {}),
-            };
+              timeoutMs,
+              cwd,
+            });
           }
           if (opts.clearTrigger) {
             patch.trigger = null;

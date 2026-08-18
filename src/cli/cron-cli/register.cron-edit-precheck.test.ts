@@ -101,6 +101,51 @@ describe("cli cron edit precheck flags", () => {
     });
   });
 
+  it("preserves custom contract/exit codes/prefixes/onError on ancillary timeout edit", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          name: "n",
+          precheck: {
+            kind: "exec",
+            command: "probe.sh",
+            timeoutMs: 1000,
+            cwd: "/tmp/work",
+            contract: "exit-code",
+            workExitCodes: [0],
+            noWorkExitCodes: [2],
+            workStdoutPrefix: "WORK:",
+            noWorkStdoutPrefix: "IDLE:",
+            onError: "skip",
+          },
+        };
+      }
+      return { ok: true };
+    });
+    await createCronProgram().parseAsync(
+      ["edit", "job-1", "--precheck-timeout-ms", "9000", "--json"],
+      { from: "user" },
+    );
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        precheck: {
+          kind: "exec",
+          command: "probe.sh",
+          timeoutMs: 9000,
+          cwd: "/tmp/work",
+          contract: "exit-code",
+          workExitCodes: [0],
+          noWorkExitCodes: [2],
+          workStdoutPrefix: "WORK:",
+          noWorkStdoutPrefix: "IDLE:",
+          onError: "skip",
+        },
+      },
+    });
+  });
+
   it("rejects invalid --precheck-timeout-ms on edit", async () => {
     await expectCronEditRejection(
       ["--precheck-command", "true", "--precheck-timeout-ms", "0"],
