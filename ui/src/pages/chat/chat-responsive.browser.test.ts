@@ -930,9 +930,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     try {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
       const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
-      const settingsCss = readStyleSheet("ui/src/styles/settings.css");
+      const settingsControlsCss = readStyleSheet("ui/src/styles/settings-controls.css");
       await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${settingsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
+        `<!doctype html><html><head><style>${readUiCss()}\n${settingsControlsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 320px;">
             <div class="chat-pane__header">
               <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
