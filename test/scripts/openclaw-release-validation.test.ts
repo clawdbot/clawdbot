@@ -442,7 +442,9 @@ describe("openclaw release validation", () => {
     const manifest = loadScenarioManifest();
     const overview = renderMissionOverview(manifest, "copied");
 
-    expect(overview).toContain("Choose any numbers or names");
+    expect(overview).toContain("Choose one number or name");
+    expect(overview).toContain("After it finishes, choose the next one");
+    expect(overview).not.toContain("choose `all`");
     expect(overview).toContain("Reply exactly `finish validation` to end the run.");
     expect(overview).toContain("1. Pairing");
     expect(overview).toContain("19. OpenClaw harness");

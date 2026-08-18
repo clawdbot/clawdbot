@@ -942,7 +942,7 @@ export function renderMissionOverview(manifest: ScenarioManifest, fixture: Fixtu
     "",
     `Fixture: ${fixture}`,
     "",
-    "Choose any numbers or names, or choose `all`. No mission starts until you confirm.",
+    "Choose one number or name. After it finishes, choose the next one or finish validation. No mission starts until you confirm.",
     renderExitInstruction(),
     "",
     ...manifest.subsystems.map(

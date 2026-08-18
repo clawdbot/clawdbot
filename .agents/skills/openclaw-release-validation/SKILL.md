@@ -123,12 +123,13 @@ Load the complete checklist JSON, but use progressive disclosure:
 
 1. Show a compact overview of all available subsystem names with one short
    sentence describing what each tests. Do not show procedures yet.
-2. Ask: **Which subsystems do you want to test in this run?** Prefer a
-   multiselect UI when available; otherwise accept names, numbers, or `all`.
-3. Echo the selected scope and let the tester adjust it before continuing.
-4. Mark unchosen missions `not selected`, not `skipped`, and omit them from the
-   active checklist. The tester may add another mission later.
-5. Start no mission until the tester confirms the selection. In particular,
+2. Ask: **Which subsystem do you want to test first?** Accept exactly one name
+   or number. Do not ask for the complete run scope and do not offer `all` or a
+   multiselect UI.
+3. Echo that one choice and let the tester change it before continuing.
+4. Add only that mission to the active checklist. Leave every other mission
+   available for later without marking it skipped.
+5. Start no mission until the tester confirms that one choice. In particular,
    never start Pairing merely because it is first in the manifest.
 
 After selection, create the visible checklist from only the chosen missions.
@@ -140,10 +141,13 @@ Then handle one selected mission at a time:
 4. Count `fail` and `blocked` as completed coverage; require a useful note.
 5. Update the visible checklist immediately.
 6. Say exactly: **Reply exactly `finish validation` to end the run.**
+7. Show the compact overview of remaining missions and ask: **Which subsystem
+   do you want to test next?** Accept one name or number, or `finish validation`.
 
-Reveal the next mission's detailed procedure only when the tester chooses or
-reaches it. Keep the compact overview available without dumping every mission's
-instructions into the conversation.
+Repeat this one-at-a-time loop until the tester finishes. Never require them to
+choose or queue later missions in advance. Reveal detailed procedures only for
+the current choice, and keep the compact overview available without dumping
+every mission's instructions into the conversation.
 
 For Channels on copied state, first prove the inherited channel while the
 source is stopped. Then remove that channel's configuration from the copied
