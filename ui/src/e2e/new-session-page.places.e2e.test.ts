@@ -687,12 +687,17 @@ suite.define(() => {
       await whereTrigger.click();
       await whereSelect.getByRole("button", { name: "Old node" }).click();
       expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.id))
+        .toBe("new-session-where-trigger");
       await projectTrigger.click();
       const nodeCwd = projectSelect.getByLabel("Working directory");
+      await nodeCwd.waitFor({ state: "visible" });
       await expect.poll(() => nodeCwd.inputValue()).toBe("");
       await nodeCwd.fill(EXEC_ONLY_PICKED);
       await captureProjectUiProof(page, "node-path-picker.png");
       await nodeCwd.press("Enter");
+      await pollLocatorText(projectLabel).toBe("repo");
       expect(
         (await gateway.getRequests("fs.listDir")).filter(
           (request) => (request.params as { nodeId?: string } | undefined)?.nodeId === "old-node",
