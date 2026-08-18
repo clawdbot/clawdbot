@@ -899,6 +899,8 @@ export const en: TranslationMap = {
       "{count} session worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
       "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
+    deleteDraftCleanupFailed:
+      "Session deleted, but browser draft cleanup failed. Clear this site's data to remove it.",
     title: "Sessions",
     subtitle: "Browse sessions and manage per-session overrides.",
     store: "Store: {path}",

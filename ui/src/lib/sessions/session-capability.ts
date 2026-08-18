@@ -38,13 +38,19 @@ export type SessionState = {
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
   error: string | null;
-  deletedSessions: readonly SessionDeleteTarget[];
+  deletedSessions: readonly SessionDeletionFact[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
   /** New Session defaults associated with each gateway-owned group. */
   groupSettings: readonly SessionGroupSettings[];
   /** Gateway-owned sidebar section order; pinned is intentionally absent. */
   sectionOrder: readonly string[];
+};
+
+type SessionDeletionFact = {
+  key: string;
+  agentId?: string;
+  retireBeforeRevision: number;
 };
 
 export type SessionGroupMutationResult = "completed" | "stale";
