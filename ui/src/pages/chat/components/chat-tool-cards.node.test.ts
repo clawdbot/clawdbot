@@ -601,6 +601,9 @@ describe("isRunningToolCard", () => {
 
     expect(resolveToolCardOutcome(call, false)).toBe("unknown");
     expect(resolveToolCardOutcome({ ...call, live: true }, true)).toBe("running");
+    expect(resolveToolCardOutcome({ ...call, live: true, interrupted: true }, false)).toBe(
+      "interrupted",
+    );
     expect(resolveToolCardOutcome({ ...call, completed: true, outputText: "" }, false)).toBe(
       "succeeded",
     );
@@ -619,6 +622,16 @@ describe("isRunningToolCard", () => {
     });
     expect(running).toHaveLength(1);
     expect(running[0]).toMatchObject({ live: true, completed: false });
+
+    const interrupted = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-live",
+      __openclawToolStreamLive: true,
+      __openclawToolStreamResultReceived: false,
+      __openclawToolStreamInterrupted: true,
+      content: [{ type: "toolcall", name: "bash", arguments: { command: "sleep 5" } }],
+    });
+    expect(interrupted[0]).toMatchObject({ live: true, completed: false, interrupted: true });
 
     const finished = extractToolCards({
       role: "assistant",

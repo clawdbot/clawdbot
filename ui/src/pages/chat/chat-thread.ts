@@ -26,7 +26,6 @@ export {
   assistantGroupCanOwnActiveRunStatus,
   coalesceActivityRuns,
   coalesceStreamRuns,
-  collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
 
 type CachedChatItems = {

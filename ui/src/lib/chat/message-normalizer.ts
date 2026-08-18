@@ -74,6 +74,7 @@ const rawAudioSourceSchema = z
   .catch(undefined);
 const rawContentBlockSchema = z.looseObject({
   text: optionalMessageStringSchema,
+  thinking: optionalMessageStringSchema,
   source: rawAudioSourceSchema,
   attachment: rawAttachmentSchema,
   preview: rawCanvasPreviewSchema,
@@ -641,6 +642,13 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
             rawText: item.rawText ?? null,
           },
         ];
+      }
+      if (
+        item.type === "thinking" ||
+        item.type === "reasoning" ||
+        item.type === "redacted_thinking"
+      ) {
+        return [{ type: item.type, thinking: item.thinking }];
       }
       if (isTextContentBlock(item, role)) {
         if (isAssistantMessage) {

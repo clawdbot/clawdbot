@@ -8,7 +8,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
@@ -233,18 +233,17 @@ export function renderActivityGroup(
   const cards = groups.flatMap((group) =>
     group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
   );
-  const latestGroup = groups[groups.length - 1] ?? firstGroup;
-  const latestCards = latestGroup.messages.flatMap((item) =>
-    extractToolCardsCached(item.message, item.key),
-  );
   // While a run is live, the newest still-running call names the group so
   // the collapsed header reads like a status line; afterwards it aggregates.
   const runningCard = opts.runActive
-    ? latestCards.findLast((card) => isRunningToolCard(card, opts.runActive))
+    ? cards.findLast((card) => isRunningToolCard(card, opts.runActive))
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`
     : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
+  const hasInterrupted = cards.some(
+    (card) => resolveToolCardOutcome(card, opts.runActive) === "interrupted",
+  );
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded =
@@ -274,6 +273,11 @@ export function renderActivityGroup(
               <span class="chat-activity-group__label" title=${groupSummaryLabel}
                 >${groupSummaryLabel}</span
               >
+              ${hasInterrupted
+                ? html`<span class="chat-tool-row__outcome"
+                    >${t("chat.toolCards.interrupted")}</span
+                  >`
+                : nothing}
             </span>
             <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </button>
@@ -351,15 +355,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
 
   if (normalizedRole === "tool" && opts.showToolCalls === false) {
     return nothing;
-  }
-
-  const groupedToolCards =
-    normalizedRole === "tool"
-      ? group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key))
-      : [];
-
-  if (normalizedRole === "tool" && (group.messages.length > 1 || groupedToolCards.length > 1)) {
-    return renderActivityGroup([group], opts);
   }
 
   const messageActionDetails = group.messages.map((item) =>

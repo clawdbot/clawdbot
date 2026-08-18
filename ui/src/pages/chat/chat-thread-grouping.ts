@@ -4,17 +4,23 @@ import {
   isToolCallContentType,
   isToolResultContentType,
 } from "../../../../src/chat/tool-content.js";
-import type { ChatItem, MessageGroup, ToolCard } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatItem,
+  MessageContentItem,
+  MessageGroup,
+  NormalizedMessage,
+  ToolCard,
+} from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveMessageToolUseId, resolveToolBlockId } from "./chat-thread-items.ts";
-import {
-  assistantGroupIsForwardedBoundary,
-  chatItemStartsUserTurn,
-  safeNormalizeMessage,
-} from "./chat-turn-boundary.ts";
+import { assistantGroupIsForwardedBoundary, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 
 export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
   const record = asRecord(message);
@@ -23,6 +29,46 @@ export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean
   }
   const fallback = asRecord(record?.openclawStreamFallback);
   return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
+}
+
+// Assistant text and artifacts are visible outcomes and stay top-level;
+// reasoning and tool blocks are intermediate activity.
+function hasVisibleReplyBlocks(
+  message: unknown,
+  normalized: NormalizedMessage | null = safeNormalizeMessage(message),
+): boolean {
+  if (extractTextCached(message)?.trim()) {
+    return true;
+  }
+  return (normalized?.content ?? []).some((block) => {
+    if (block.type === "text") {
+      return Boolean(block.text?.trim());
+    }
+    if (isReasoningContentBlock(block)) {
+      return false;
+    }
+    return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
+  });
+}
+
+function isReasoningContentBlock(block: MessageContentItem): boolean {
+  return (
+    block.type === "thinking" || block.type === "reasoning" || block.type === "redacted_thinking"
+  );
+}
+
+// normalizeMessage rewrites any message containing tool blocks to toolResult.
+// Preserve the raw assistant role so model-authored words never disappear
+// inside a collapsed tool disclosure.
+function messageCarriesAssistantReply(
+  message: unknown,
+  normalized: NormalizedMessage | null = safeNormalizeMessage(message),
+): boolean {
+  return (
+    normalizeLowercaseStringOrEmpty(asRecord(message)?.role) === "assistant" &&
+    !isStandaloneToolMessageForDisplay(message) &&
+    hasVisibleReplyBlocks(message, normalized)
+  );
 }
 
 function stampReplyAttribution(
@@ -60,6 +106,7 @@ function stampReplyAttribution(
 export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
+  let groupCarriesVisibleReply = false;
 
   for (const item of items) {
     if (item.kind !== "message") {
@@ -85,16 +132,24 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup?.role === "assistant" &&
       isKeyedAssistantStreamFallbackMessage(currentGroup.messages[0]?.message) !==
         isKeyedAssistantStreamFallbackMessage(item.message);
+    const carriesVisibleReply =
+      role === "tool" && messageCarriesAssistantReply(item.message, normalized);
+    const splitsVisibleReplyFromToolWork =
+      role === "tool" &&
+      currentGroup?.role === "tool" &&
+      groupCarriesVisibleReply !== carriesVisibleReply;
 
     if (
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
       splitsAssistantCommentary ||
+      splitsVisibleReplyFromToolWork ||
       (shouldSplitBySender &&
         (currentGroup.senderLabel !== senderLabel ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
+      groupCarriesVisibleReply = carriesVisibleReply;
       if (currentGroup) {
         result.push(currentGroup);
       }
@@ -494,14 +549,6 @@ export function coalesceStreamRuns(
   flush();
   return result;
 }
-/** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
-type WorkGroupRenderItem = {
-  kind: "work-group";
-  key: string;
-  groups: MessageGroup[];
-  durationMs: number | null;
-};
-
 type ActivityRunRenderItem = {
   kind: "activity-run";
   key: string;
@@ -510,188 +557,89 @@ type ActivityRunRenderItem = {
 
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
-function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming) {
-    return false;
-  }
-  const role = item.role.toLowerCase();
-  return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
-}
-
-// Attachment/canvas/media-only replies carry no text but are still the turn's
-// visible outcome; they must never fold into the work rollup. Normalized
-// content passes unknown block types through (e.g. raw image blocks), so
-// anything that is not a tool block counts as visible reply content.
-function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    if (extractTextCached(message)?.trim()) {
-      return true;
-    }
-    const content = safeNormalizeMessage(message)?.content ?? [];
-    return content.some((block) => {
-      if (block.type === "text") {
-        return Boolean(block.text?.trim());
-      }
-      return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
-    });
-  });
-}
-
 export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolean {
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
-    assistantGroupHasVisibleReplyContent(group)
+    group.messages.some(({ message }) => hasVisibleReplyBlocks(message))
   );
 }
 
-// History carries no final-vs-commentary marker (commentary exists only as
-// live stream segments), so the last assistant group with visible content
-// stands in for the final reply. Turns whose last content is commentary
-// merely collapse less; the visible reply is never folded away.
-function isFinalReplyGroup(item: TurnRenderItem): boolean {
+function groupFoldsIntoActivity(group: MessageGroup): boolean {
   return (
-    isCollapsibleWorkGroup(item) &&
-    item.role.toLowerCase() === "assistant" &&
-    assistantGroupHasVisibleReplyContent(item)
+    group.messages.some((item) => extractToolCardsCached(item.message, item.key).length > 0) &&
+    !group.messages.some(({ message }) => messageCarriesAssistantReply(message))
   );
 }
 
-/**
- * Once a turn is done, its intermediate work (tool groups and assistant
- * commentary before the final reply) collapses behind one "Worked for X"
- * disclosure so the thread reads final-output-first. Live turns stay fully
- * expanded; the collapse itself is the done signal.
- */
-export function collapseCompletedTurnWork(
-  items: TurnRenderItem[],
-  opts: { sessionKey: string; runWorking: boolean; searchActive?: boolean },
-): Array<TurnRenderItem | WorkGroupRenderItem> {
-  const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
-    opts.sessionKey,
-  ).split(":");
-  const isDashboardSession =
-    scope === "agent" &&
-    Boolean(agentId) &&
-    kind === "dashboard" &&
-    Boolean(sessionId) &&
-    extraParts.length === 0;
-  // Channel sessions can also be opened in the Control UI, but their full
-  // transcript remains the canonical presentation on message surfaces.
-  if (!isDashboardSession || opts.searchActive) {
-    return items;
+function groupNeedsActivityDisclosure(group: MessageGroup): boolean {
+  if (group.messages.length > 1) {
+    return true;
   }
-  const turns: TurnRenderItem[][] = [];
-  let currentTurn: TurnRenderItem[] = [];
-  for (const item of items) {
-    if (item.kind !== "stream-run" && chatItemStartsUserTurn(item) && currentTurn.length > 0) {
-      turns.push(currentTurn);
-      currentTurn = [];
-    }
-    currentTurn.push(item);
-  }
-  if (currentTurn.length > 0) {
-    turns.push(currentTurn);
-  }
-
-  const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
-  for (const [turnIndex, turn] of turns.entries()) {
-    // In-flight content (stream runs, streaming groups) marks the turn live.
-    // While the run works, the trailing turn also stays expanded so activity
-    // is watchable until the terminal rebuild collapses it.
-    const isLive =
-      (opts.runWorking && turnIndex === turns.length - 1) ||
-      turn.some(
-        (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
-      );
-    if (isLive) {
-      result.push(...turn);
-      continue;
-    }
-    let finalReplyIndex = -1;
-    for (let index = turn.length - 1; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (candidate && isFinalReplyGroup(candidate)) {
-        finalReplyIndex = index;
-        break;
-      }
-    }
-    // Without a final reply, the tool rows are the turn's only visible result.
-    // Keep them exposed instead of replacing the result with an opaque rollup.
-    if (finalReplyIndex === -1) {
-      result.push(...turn);
-      continue;
-    }
-    const segmentEnd = finalReplyIndex - 1;
-    let segmentStart = segmentEnd + 1;
-    for (let index = segmentEnd; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (!candidate || !isCollapsibleWorkGroup(candidate)) {
-        break;
-      }
-      segmentStart = index;
-    }
-    const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
-    const firstGroup = groups[0];
-    if (!firstGroup) {
-      result.push(...turn);
-      continue;
-    }
-    const boundary = turn[0];
-    const boundaryTimestamp =
-      boundary &&
-      boundary.kind !== "stream-run" &&
-      chatItemStartsUserTurn(boundary) &&
-      "timestamp" in boundary
-        ? boundary.timestamp
-        : null;
-    const startTimestamp = boundaryTimestamp == null ? firstGroup.timestamp : boundaryTimestamp;
-    const finalReply = turn[finalReplyIndex] as MessageGroup;
-    const endTimestamp = finalReply.timestamp;
-    const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
-    result.push(...turn.slice(0, segmentStart));
-    result.push({
-      kind: "work-group",
-      // The final reply survives older-history prepends; the first work row does not.
-      key: `work:${finalReply.key}`,
-      groups,
-      durationMs,
-    });
-    result.push(...turn.slice(segmentEnd + 1));
-  }
-  return result;
+  return (
+    group.messages.reduce(
+      (count, item) => count + extractToolCardsCached(item.message, item.key).length,
+      0,
+    ) > 1
+  );
 }
 
-type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
+function groupContainsOnlyReasoning(group: MessageGroup): boolean {
+  return (
+    normalizeRoleForGrouping(group.role) === "assistant" &&
+    group.messages.every(({ message }) => {
+      const content = safeNormalizeMessage(message)?.content ?? [];
+      return content.length > 0 && content.every(isReasoningContentBlock);
+    })
+  );
+}
 
-/** Presentation-only rollup for tool groups separated by projected turn boundaries. */
+/** Canonical presentation rollup for each contiguous run of tool activity. */
 export function coalesceActivityRuns(
-  items: CompletedTurnRenderItem[],
+  items: TurnRenderItem[],
   opts: { searchActive?: boolean } = {},
-): Array<CompletedTurnRenderItem | ActivityRunRenderItem> {
+): Array<TurnRenderItem | ActivityRunRenderItem> {
   if (opts.searchActive) {
     return items;
   }
-  const result: Array<CompletedTurnRenderItem | ActivityRunRenderItem> = [];
+  const result: Array<TurnRenderItem | ActivityRunRenderItem> = [];
   let groups: MessageGroup[] = [];
+  let pendingReasoning: MessageGroup[] = [];
   const flush = () => {
     const [first] = groups;
     if (!first) {
       return;
     }
+    const needsDisclosure = groups.length > 1 || groupNeedsActivityDisclosure(first);
     result.push(
-      groups.length === 1 ? first : { kind: "activity-run", key: `activity:${first.key}`, groups },
+      needsDisclosure ? { kind: "activity-run", key: `activity:${first.key}`, groups } : first,
     );
     groups = [];
   };
+  const flushPendingReasoning = () => {
+    result.push(...pendingReasoning);
+    pendingReasoning = [];
+  };
   for (const item of items) {
-    if (item.kind === "group" && item.role.toLowerCase() === "tool") {
+    if (item.kind === "group" && groupFoldsIntoActivity(item)) {
+      groups.push(...pendingReasoning);
+      pendingReasoning = [];
       groups.push(item);
       continue;
     }
+    if (item.kind === "group" && groupContainsOnlyReasoning(item)) {
+      if (groups.length > 0) {
+        groups.push(item);
+      } else {
+        pendingReasoning.push(item);
+      }
+      continue;
+    }
     flush();
+    flushPendingReasoning();
     result.push(item);
   }
   flush();
+  flushPendingReasoning();
   return result;
 }

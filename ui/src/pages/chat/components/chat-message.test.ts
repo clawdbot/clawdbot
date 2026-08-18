@@ -415,6 +415,23 @@ function renderMessageGroups(
   render(html`${groups.map((group) => renderTestMessageGroup(group, opts))}`, container);
 }
 
+function renderActivityGroups(
+  container: HTMLElement,
+  groups: MessageGroup[],
+  opts: Partial<RenderMessageGroupOptions> = {},
+) {
+  render(
+    renderActivityGroup(groups, {
+      showReasoning: true,
+      showToolCalls: true,
+      assistantName: "OpenClaw",
+      assistantAvatar: null,
+      ...opts,
+    }),
+    container,
+  );
+}
+
 function clearConfirmedActionSkip() {
   localStorageValues.delete("openclaw:skip-rewind-confirm");
 }
@@ -2261,7 +2278,7 @@ describe("grouped chat rendering", () => {
       ),
     ]);
 
-    renderMessageGroups(container, [group], {
+    renderActivityGroups(container, [group], {
       isToolMessageExpanded: (id) => (id === "activity:tool-group" ? false : undefined),
     });
 
@@ -2291,7 +2308,7 @@ describe("grouped chat rendering", () => {
       ),
     ]);
 
-    renderMessageGroups(container, [group], {
+    renderActivityGroups(container, [group], {
       isToolMessageExpanded: (id) => (id === "activity:parallel-tool-group" ? false : undefined),
     });
 
@@ -2389,7 +2406,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(3);
   });
 
-  it("uses the newest group's live card label without inheriting an earlier failure", () => {
+  it("keeps the latest running card active through trailing reasoning", () => {
     const container = document.createElement("div");
     const groups = [
       createToolGroup("live-first", [
@@ -2418,6 +2435,13 @@ describe("grouped chat rendering", () => {
           }),
         ],
         { isStreaming: true },
+      ),
+      createMessageGroup(
+        createAssistantMessage([
+          { type: "thinking", thinking: "Check the edited file before replying." },
+        ]),
+        "assistant",
+        { key: "live-reasoning" },
       ),
     ];
     const opts = { showReasoning: true, showToolCalls: true, runActive: true };
@@ -2541,7 +2565,7 @@ describe("grouped chat rendering", () => {
       { timestamp: 1000, isStreaming: true },
     );
 
-    renderMessageGroups(container, [group], { runActive: true });
+    renderActivityGroups(container, [group], { runActive: true });
 
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
       "Editing a.ts…",
@@ -2568,7 +2592,7 @@ describe("grouped chat rendering", () => {
       ),
     ]);
 
-    renderMessageGroups(container, [group], { onToggleToolMessageExpanded });
+    renderActivityGroups(container, [group], { onToggleToolMessageExpanded });
 
     expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
     const activitySummary = expectElement(
@@ -2610,7 +2634,7 @@ describe("grouped chat rendering", () => {
       ),
     ]);
 
-    renderMessageGroups(container, [group]);
+    renderActivityGroups(container, [group]);
 
     expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
     expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
@@ -2648,7 +2672,7 @@ describe("grouped chat rendering", () => {
       ),
     ]);
 
-    renderMessageGroups(container, [group], {
+    renderActivityGroups(container, [group], {
       isToolMessageExpanded: (id) => id === "activity:recovered-tool-group",
     });
 
@@ -2678,7 +2702,7 @@ describe("grouped chat rendering", () => {
       ),
     ]);
 
-    renderMessageGroups(container, [group], { showToolCalls: false });
+    renderActivityGroups(container, [group], { showToolCalls: false });
 
     expect(container.querySelector(".chat-activity-group")).toBeNull();
   });
@@ -3029,6 +3053,61 @@ describe("grouped chat rendering", () => {
     renderMessageGroups(container, groups, { isToolMessageExpanded: () => true });
 
     expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("Exit code 1");
+    container.remove();
+  });
+
+  it("keeps an interrupted live tool visible after its run stops", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const groups = [
+      createMessageGroup(
+        createAssistantMessage(
+          [createToolCall("call-interrupted", "shell", { command: "sleep 10" })],
+          {
+            id: "tool-interrupted",
+            toolCallId: "call-interrupted",
+            __openclawToolStreamLive: true,
+            __openclawToolStreamResultReceived: false,
+            __openclawToolStreamInterrupted: true,
+          },
+        ),
+        "tool",
+      ),
+    ];
+
+    renderMessageGroups(container, groups, { isToolMessageExpanded: () => false });
+
+    expect(container.querySelector(".chat-tool-row__outcome")?.textContent).toBe("Interrupted");
+    container.remove();
+  });
+
+  it("does not present an interrupted progress card as successfully updated", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const groups = [
+      createMessageGroup(
+        createAssistantMessage(
+          [
+            createToolCall("call-progress-interrupted", "progress_card", {
+              plan: [{ step: "Verify the fix", status: "in_progress" }],
+            }),
+          ],
+          {
+            id: "progress-interrupted",
+            toolCallId: "call-progress-interrupted",
+            __openclawToolStreamLive: true,
+            __openclawToolStreamResultReceived: false,
+            __openclawToolStreamInterrupted: true,
+          },
+        ),
+        "tool",
+      ),
+    ];
+
+    renderMessageGroups(container, groups, { isToolMessageExpanded: () => false });
+
+    expect(container.querySelector(".chat-progress-card-receipt")).toBeNull();
+    expect(container.querySelector(".chat-tool-row__outcome")?.textContent).toBe("Interrupted");
     container.remove();
   });
 

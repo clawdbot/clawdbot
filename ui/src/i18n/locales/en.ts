@@ -5861,6 +5861,7 @@ export const en: TranslationMap = {
       fileChanges: "File changes",
       attemptedChanges: "Attempted changes",
       failed: "failed",
+      interrupted: "Interrupted",
       running: "Running",
       completed: "Completed",
       exitCode: "Exit code {code}",
@@ -5909,10 +5910,6 @@ export const en: TranslationMap = {
         emptyOne: "Ran a tool call",
         emptyMany: "Ran {count} tool calls",
       },
-    },
-    workRun: {
-      workedFor: "Worked for {duration}",
-      worked: "Worked",
     },
     backgroundTasks: {
       label: "Background tasks",

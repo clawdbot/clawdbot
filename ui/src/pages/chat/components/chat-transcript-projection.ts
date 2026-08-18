@@ -1,6 +1,6 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { i18n } from "../../../i18n/index.ts";
@@ -20,7 +20,6 @@ import {
   buildCachedChatItems,
   coalesceActivityRuns,
   coalesceStreamRuns,
-  collapseCompletedTurnWork,
   getExpansionStateVersion,
   getExpandedAssistantMessages,
   getExpandedToolCards,
@@ -39,7 +38,6 @@ import {
   renderActivityGroup,
   renderMessageGroup,
   renderStreamGroup,
-  renderWorkGroupSummary,
   type MessageReplyTarget,
   type StreamGroupOptions,
   type StreamGroupPart,
@@ -130,9 +128,6 @@ function latestTranscriptAnnouncement(
 function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown[] {
   if (item.kind === "stream-run") {
     return [item.key, ...item.parts];
-  }
-  if (item.kind === "work-group") {
-    return [item.key, item.durationMs, ...item.groups];
   }
   if (item.kind === "activity-run") {
     return [item.key, ...item.groups];
@@ -456,26 +451,10 @@ export function projectChatTranscript(
         runOutputTokens: props.runOutputTokens,
       });
     }
-    if (item.kind === "work-group") {
-      const workExpanded = expandedToolCards.get(item.key) ?? false;
-      return html`
-        ${renderWorkGroupSummary(item, {
-          expanded: workExpanded,
-          onToggle: () => {
-            setExpansionState(expandedToolCards, item.key, !workExpanded);
-            requestUpdate();
-          },
-        })}
-        ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
-      `;
-    }
     if (item.kind === "activity-run") {
       const firstGroup = item.groups[0];
       if (!firstGroup) {
         return nothing;
-      }
-      if (item.groups.length === 1) {
-        return renderGroupItem(firstGroup);
       }
       return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
     }
@@ -489,14 +468,9 @@ export function projectChatTranscript(
     }
     return nothing;
   });
-  const collapsedItems = coalesceActivityRuns(
-    collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
-      sessionKey: props.sessionKey,
-      runWorking: Boolean(props.runWorking),
-      searchActive: searchFiltering,
-    }),
-    { searchActive: searchFiltering },
-  );
+  const collapsedItems = coalesceActivityRuns(coalesceStreamRuns(chatItems), {
+    searchActive: searchFiltering,
+  });
   // Watch/settle on actual indicator visibility (not runWorking): queued
   // sends show the claw before the run starts, and the recap must never
   // stack under a visible working row.

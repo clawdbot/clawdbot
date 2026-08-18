@@ -23,6 +23,7 @@ import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
 import {
+  interruptOpenToolStream,
   resetToolStream,
   type CompactionStatus,
   type FallbackStatus,
@@ -441,6 +442,12 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   const occurredAt = Date.now();
   const runId = options.runId ?? host.chatRunId ?? null;
   const sessionKey = toSessionKey(options.sessionKey) ?? host.sessionKey;
+
+  // Any terminal run leaves unresolved calls without an owning producer.
+  // Record that fact before cleanup so the transcript never shows unknown work.
+  if (options.outcome && canResetToolStream(host)) {
+    interruptOpenToolStream(host, runId);
+  }
 
   if (options.clearIndicators ?? true) {
     clearRunIndicators(host, runId);

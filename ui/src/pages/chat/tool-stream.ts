@@ -4,6 +4,7 @@ import {
   normalizeNullableString as toTrimmedString,
   normalizeLowercaseStringOrEmpty,
 } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type {
@@ -12,6 +13,7 @@ import type {
   ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
+import { resolveToolCallKind } from "../../lib/chat/tool-call-view.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -60,6 +62,8 @@ export type ToolStreamEntry = {
   exitCode?: number;
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
+  /** The owning run ended before this call received a result. */
+  interrupted?: boolean;
   startedAt: number;
   receivedAt: number;
   message: Record<string, unknown>;
@@ -193,7 +197,7 @@ function extractToolOutputText(value: unknown): string | null {
   return parts.join("\n");
 }
 
-function formatToolOutput(value: unknown): string | null {
+function formatToolOutput(value: unknown, keepLatest = false): string | null {
   if (value === null || value === undefined) {
     return null;
   }
@@ -213,11 +217,17 @@ function formatToolOutput(value: unknown): string | null {
       text = formatUnknownText(value);
     }
   }
-  const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
-  if (!truncated.truncated) {
-    return truncated.text;
+  if (text.length <= TOOL_OUTPUT_CHAR_LIMIT) {
+    return text;
   }
-  return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
+  if (!keepLatest) {
+    const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
+    return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
+  }
+  return `[output truncated; showing latest ${TOOL_OUTPUT_CHAR_LIMIT} chars]\n${sliceUtf16Safe(
+    text,
+    -TOOL_OUTPUT_CHAR_LIMIT,
+  )}`;
 }
 
 function readLiveDiffStat(value: unknown): DiffStat | undefined {
@@ -296,6 +306,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     // so historical output-less calls (aborted runs) stay inert.
     __openclawToolStreamLive: true,
     __openclawToolStreamResultReceived: entry.resultReceived === true,
+    __openclawToolStreamInterrupted: entry.interrupted === true,
     ...(entry.resultReceived !== true && entry.liveDiffStat
       ? { __openclawToolStreamDiffStat: entry.liveDiffStat }
       : {}),
@@ -357,6 +368,26 @@ export function resetToolStream(host: ToolStreamHost) {
   host.waitingApprovalStatuses?.clear();
   // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
   // until snapshot reconciliation observes the approval leaving the queue.
+}
+
+export function interruptOpenToolStream(host: ToolStreamHost, runId: string | null): boolean {
+  if (!runId) {
+    return false;
+  }
+  let changed = false;
+  for (const entry of host.toolStreamById.values()) {
+    if (entry.runId !== runId || entry.resultReceived) {
+      continue;
+    }
+    entry.interrupted = true;
+    entry.liveDiffStat = undefined;
+    entry.message = buildToolStreamMessage(entry);
+    changed = true;
+  }
+  if (changed) {
+    flushToolStreamSync(host);
+  }
+  return changed;
 }
 
 function activityEventIdentity(payload: AgentEventPayload): string | null {
@@ -934,6 +965,52 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
   return true;
 }
 
+type ValidatedToolActivityEvent = {
+  data: Record<string, unknown>;
+  phase: "start" | "input_delta" | "update" | "result";
+  toolCallId: string;
+  toolStreamIdentity: string;
+};
+
+function validateToolActivityEvent(
+  host: ToolStreamHost,
+  payload: AgentEventPayload,
+): ValidatedToolActivityEvent | null {
+  const data = payload.data ?? {};
+  const toolCallId = toTrimmedString(data.toolCallId);
+  const phase = data.phase;
+  if (!toolCallId) {
+    console.warn("[control-ui] Dropped tool activity without a valid target", {
+      phase: toTrimmedString(phase) ?? "unknown",
+      runId: payload.runId,
+    });
+    return null;
+  }
+  if (phase !== "start" && phase !== "input_delta" && phase !== "update" && phase !== "result") {
+    console.warn("[control-ui] Dropped tool activity with an invalid phase", {
+      phase: toTrimmedString(phase) ?? "unknown",
+      runId: payload.runId,
+      toolCallId,
+    });
+    return null;
+  }
+  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
+  if (
+    !host.toolStreamById.has(toolStreamIdentity) &&
+    (phase === "input_delta" || phase === "update")
+  ) {
+    // Progress has no standalone outcome. Without a start it would poison the
+    // sequence fence and create a row that can never resolve.
+    console.warn("[control-ui] Dropped orphaned tool progress", {
+      phase,
+      runId: payload.runId,
+      toolCallId,
+    });
+    return null;
+  }
+  return { data, phase, toolCallId, toolStreamIdentity };
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
   if (!payload) {
     return false;
@@ -944,6 +1021,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   // active chat run; individual run-owned projections apply their own match.
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
+    return false;
+  }
+  const toolActivity =
+    payload.stream === "tool" ? validateToolActivityEvent(host, payload) : undefined;
+  if (payload.stream === "tool" && !toolActivity) {
     return false;
   }
   // History can replay an older active-run snapshot after newer live activity.
@@ -1000,18 +1082,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return true;
   }
 
-  if (payload.stream !== "tool") {
+  if (!toolActivity) {
     return false;
   }
 
-  const data = payload.data ?? {};
-  const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
-  if (!toolCallId) {
-    return false;
-  }
-  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
+  const { data, phase, toolCallId, toolStreamIdentity } = toolActivity;
   let entry = host.toolStreamById.get(toolStreamIdentity);
-  const phase = typeof data.phase === "string" ? data.phase : "";
   // A started call owns its concrete identity even when later events omit or
   // contradict it; an unnamed placeholder can still adopt its first real name.
   const name =
@@ -1022,11 +1098,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     host.chatRunStartup = { state: "activity", runId: payload.runId };
   }
   const args = phase === "start" ? data.args : undefined;
+  const keepLatestOutput = resolveToolCallKind(name, args ?? entry?.args) === "command";
   const output =
     phase === "update"
-      ? formatToolOutput(data.partialResult)
+      ? formatToolOutput(data.partialResult, keepLatestOutput)
       : phase === "result"
-        ? formatToolOutput(data.result)
+        ? formatToolOutput(data.result, keepLatestOutput)
         : undefined;
   const resultDetails = phase === "result" ? readRecord(data.result)?.details : undefined;
   const resultIsError =
@@ -1086,6 +1163,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
     if (phase === "result") {
       entry.liveDiffStat = undefined;
+      entry.interrupted = false;
       entry.resultReceived = true;
     }
   }

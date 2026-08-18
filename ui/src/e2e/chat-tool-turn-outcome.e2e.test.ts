@@ -48,17 +48,6 @@ async function captureFactrowProof(
   });
 }
 
-async function expandCompletedWorkGroups(page: import("playwright").Page) {
-  const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
-  await workSummaries.first().waitFor();
-  for (let index = 0; index < (await workSummaries.count()); index += 1) {
-    const summary = workSummaries.nth(index);
-    if ((await summary.getAttribute("aria-expanded")) !== "true") {
-      await summary.click();
-    }
-  }
-}
-
 suite.define(() => {
   it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
@@ -86,7 +75,6 @@ suite.define(() => {
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     await page.getByText("Recovered on the next autonomous turn.", { exact: true }).waitFor();
-    await expandCompletedWorkGroups(page);
 
     expect(await page.locator(".chat-tool-msg-summary__label").allTextContents()).toEqual([
       "Tool output",
@@ -432,7 +420,6 @@ suite.define(() => {
     const row = page.locator(".chat-tool-msg-summary", { hasText: message });
     await row.waitFor();
 
-    expect(await page.locator(".chat-work-group").count()).toBe(0);
     expect(await row.locator(".chat-tool-msg-summary__label").textContent()).toBe("Message");
     expect(await row.locator(".chat-tool-msg-summary__names").textContent()).toBe(message);
     await captureToolActivityProof(page, "message-only-turn-visible");

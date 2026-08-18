@@ -502,6 +502,100 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(rowActive(host)).toBe(true);
   });
 
+  it.each(["done", "interrupted"] as const)(
+    "marks open tools interrupted when their owning run ends as %s",
+    (outcome) => {
+      const identity = "r1:call-open";
+      const siblingIdentity = "r2:call-open";
+      const completedIdentity = "r1:call-complete";
+      const message = {
+        role: "assistant",
+        runId: "r1",
+        toolCallId: "call-open",
+        content: [{ type: "toolcall", name: "bash", arguments: { command: "sleep 10" } }],
+        __openclawToolStreamLive: true,
+        __openclawToolStreamResultReceived: false,
+      };
+      const host = makeHost({
+        chatRunId: "r1",
+        toolStreamById: new Map([
+          [
+            identity,
+            {
+              toolCallId: "call-open",
+              runId: "r1",
+              name: "bash",
+              args: { command: "sleep 10" },
+              startedAt: 1,
+              receivedAt: 1,
+              message,
+            },
+          ],
+          [
+            siblingIdentity,
+            {
+              toolCallId: "call-open",
+              runId: "r2",
+              name: "bash",
+              args: { command: "sleep 20" },
+              startedAt: 2,
+              receivedAt: 2,
+              message: { ...message, runId: "r2" },
+            },
+          ],
+          [
+            completedIdentity,
+            {
+              toolCallId: "call-complete",
+              runId: "r1",
+              name: "bash",
+              args: { command: "true" },
+              resultReceived: true,
+              startedAt: 3,
+              receivedAt: 3,
+              message: {
+                ...message,
+                toolCallId: "call-complete",
+                __openclawToolStreamResultReceived: true,
+              },
+            },
+          ],
+        ]),
+        toolStreamOrder: [identity, siblingIdentity, completedIdentity],
+        chatToolMessages: [
+          message,
+          { ...message, runId: "r2" },
+          {
+            ...message,
+            toolCallId: "call-complete",
+            __openclawToolStreamResultReceived: true,
+          },
+        ],
+        chatStreamSegments: [],
+        toolStreamSyncTimer: null,
+      });
+
+      reconcileChatRunLifecycle(host, {
+        outcome,
+        runId: "r1",
+        sessionKey: "s1",
+        clearLocalRun: true,
+        clearChatStream: true,
+        publishRunStatus: false,
+      });
+
+      expect(host.toolStreamById?.get(identity)).toMatchObject({
+        interrupted: true,
+        message: { __openclawToolStreamInterrupted: true },
+      });
+      expect(host.chatToolMessages?.[0]).toMatchObject({
+        __openclawToolStreamInterrupted: true,
+      });
+      expect(host.toolStreamById?.get(siblingIdentity)?.interrupted).toBeUndefined();
+      expect(host.toolStreamById?.get(completedIdentity)?.interrupted).toBeUndefined();
+    },
+  );
+
   it("does not clear an unidentified active row from an unowned terminal event", () => {
     const host = makeHost({
       sessionsResult: makeSessionsResult([{ key: "s1", hasActiveRun: true, status: "running" }]),

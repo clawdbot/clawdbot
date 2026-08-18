@@ -285,12 +285,6 @@ function renderStreamGroupMock(
   </div>`;
 }
 
-function renderWorkGroupSummaryMock(
-  ..._args: Parameters<typeof chatMessage.renderWorkGroupSummary>
-): ReturnType<typeof chatMessage.renderWorkGroupSummary> {
-  return html`<div class="chat-work-group"></div>`;
-}
-
 beforeEach(() => {
   vi.spyOn(chatThread, "buildCachedChatItems").mockImplementation(buildChatItemsMock);
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
@@ -301,7 +295,6 @@ beforeEach(() => {
   );
   vi.spyOn(chatMessage, "renderMessageGroup").mockImplementation(renderMessageGroupMock);
   vi.spyOn(chatMessage, "renderStreamGroup").mockImplementation(renderStreamGroupMock);
-  vi.spyOn(chatMessage, "renderWorkGroupSummary").mockImplementation(renderWorkGroupSummaryMock);
 });
 
 function createSessionsResultFromRows(

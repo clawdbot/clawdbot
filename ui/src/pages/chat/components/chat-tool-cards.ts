@@ -664,11 +664,13 @@ export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
       ? exitCode === undefined
         ? t("chat.toolCards.failed")
         : t("chat.toolCards.exitCode", { code: String(exitCode) })
-      : outcome === "running"
-        ? t("chat.toolCards.running")
-        : outcome === "succeeded"
-          ? t("chat.toolCards.completed")
-          : null;
+      : outcome === "interrupted"
+        ? t("chat.toolCards.interrupted")
+        : outcome === "running"
+          ? t("chat.toolCards.running")
+          : outcome === "succeeded"
+            ? t("chat.toolCards.completed")
+            : null;
   return label ? html`<div class="chat-tool-card__outcome">${label}</div>` : nothing;
 }
 
@@ -764,13 +766,17 @@ export function renderToolCard(
   },
 ) {
   const outcome = resolveToolCardOutcome(card, opts.runActive);
-  const progressReceipt = renderProgressCardReceipt(card, outcome);
+  // An interrupted update produced no successful progress receipt; keep its
+  // terminal fact visible through the generic tool row.
+  const progressReceipt =
+    outcome === "interrupted" ? null : renderProgressCardReceipt(card, outcome);
   if (progressReceipt) {
     return progressReceipt;
   }
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const isRunning = outcome === "running";
+  const isInterrupted = outcome === "interrupted";
   const expanded = opts.expanded || isRunning;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
   const workspaceFilePath =
@@ -806,6 +812,9 @@ export function renderToolCard(
                 opts.onOpenWorkspaceFile,
               )}</span
             >
+            ${isInterrupted
+              ? html`<span class="chat-tool-row__outcome">${t("chat.toolCards.interrupted")}</span>`
+              : nothing}
             <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </div>`
         : html`<button
@@ -826,6 +835,9 @@ export function renderToolCard(
             <span class="chat-tool-disclosure__content"
               >${renderToolRowContent(card, view, outcome)}</span
             >
+            ${isInterrupted
+              ? html`<span class="chat-tool-row__outcome">${t("chat.toolCards.interrupted")}</span>`
+              : nothing}
             <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </button>`}
       ${expanded

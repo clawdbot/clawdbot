@@ -246,6 +246,113 @@ describe("app-tool-stream throttled projections", () => {
 });
 
 describe("app-tool-stream result blocks", () => {
+  it("drops orphan progress but retains an orphan final result", () => {
+    const host = createHost();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(
+        handleAgentEvent(
+          host,
+          agentEvent("run-1", 1, "tool", {
+            phase: "update",
+            name: "bash",
+            toolCallId: "orphan-progress",
+            partialResult: "still running",
+          }),
+        ),
+      ).toBe(false);
+      expect(host.toolStreamById.size).toBe(0);
+
+      expect(
+        handleAgentEvent(
+          host,
+          agentEvent("run-1", 2, "tool", {
+            phase: "result",
+            name: "bash",
+            toolCallId: "orphan-result",
+            result: "finished",
+          }),
+        ),
+      ).toBe(true);
+      expect(
+        host.toolStreamById.get(buildToolStreamIdentity("run-1", "orphan-result")),
+      ).toMatchObject({ output: "finished", resultReceived: true });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not let orphan progress fence out a later start for the same call", () => {
+    const host = createHost();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(
+        handleAgentEvent(
+          host,
+          agentEvent("run-1", 10, "tool", {
+            phase: "update",
+            name: "bash",
+            toolCallId: "late-start",
+            partialResult: "orphan",
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        handleAgentEvent(
+          host,
+          agentEvent("run-1", 1, "tool", {
+            phase: "start",
+            name: "bash",
+            toolCallId: "late-start",
+            args: { command: "echo ready" },
+          }),
+        ),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps the newest command output when the live projection is bounded", () => {
+    const host = createHost();
+    const result = `old-prefix-${"x".repeat(120_000)}-newest-tail`;
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "result",
+        name: "bash",
+        toolCallId: "long-output",
+        result,
+      }),
+    );
+
+    const output = host.toolStreamById.get(buildToolStreamIdentity("run-1", "long-output"))?.output;
+    expect(output).toMatch(/^\[output truncated; showing latest 120000 chars\]\n/);
+    expect(output).not.toContain("old-prefix");
+    expect(output).toMatch(/-newest-tail$/);
+  });
+
+  it("keeps the beginning of bounded non-command output", () => {
+    const host = createHost();
+    const result = `old-prefix-${"x".repeat(120_000)}-newest-tail`;
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "result",
+        name: "read",
+        toolCallId: "long-read",
+        result,
+      }),
+    );
+
+    const output = host.toolStreamById.get(buildToolStreamIdentity("run-1", "long-read"))?.output;
+    expect(output).toContain("old-prefix");
+    expect(output).not.toContain("newest-tail");
+    expect(output).toContain("showing first 120000");
+  });
+
   it("projects live edit counts and lets the resolved result replace them without flicker", () => {
     useToolStreamFakeTimers();
     try {

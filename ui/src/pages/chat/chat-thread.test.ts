@@ -11,7 +11,6 @@ import {
   buildCachedChatItems,
   coalesceActivityRuns,
   coalesceStreamRuns,
-  collapseCompletedTurnWork,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
@@ -64,10 +63,6 @@ describe("persistedMessageEntryId", () => {
 
 type CachedChatItemsProps = Parameters<typeof buildCachedChatItems>[0];
 type ChatQueueItem = NonNullable<CachedChatItemsProps["queue"]>[number];
-type WorkGroupItem = Extract<
-  ReturnType<typeof collapseCompletedTurnWork>[number],
-  { kind: "work-group" }
->;
 type ActivityRunItem = Extract<
   ReturnType<typeof coalesceActivityRuns>[number],
   { kind: "activity-run" }
@@ -718,287 +713,6 @@ describe("assistant commentary grouping", () => {
   });
 });
 
-describe("collapseCompletedTurnWork", () => {
-  const collapsedItems = (props: Partial<CachedChatItemsProps>, runWorking = false) =>
-    collapseCompletedTurnWork(coalesceStreamRuns(buildCachedChatItems(createProps(props))), {
-      sessionKey: "agent:main:dashboard:test-session",
-      runWorking,
-    });
-
-  function requireWorkGroup(value: unknown): WorkGroupItem {
-    const record = requireRecord(value);
-    expect(record.kind).toBe("work-group");
-    return value as WorkGroupItem;
-  }
-
-  const toolResult = (id: string, timestamp: number, isError = false) => ({
-    role: "toolResult",
-    toolCallId: id,
-    toolName: "bash",
-    isError,
-    content: isError ? "boom" : "ok",
-    timestamp,
-  });
-
-  it("collapses a completed turn's work behind one worked-for rollup", () => {
-    const items = collapsedItems({
-      messages: [
-        userMessage("do it", 1_000),
-        assistantMessage("Checking…", 2_000),
-        toolResult("call-1", 3_000),
-        assistantMessage("All done.", 10_000),
-      ],
-    });
-
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
-    const work = requireWorkGroup(items[1]);
-    expect(work.groups).toHaveLength(2);
-    expect(work.durationMs).toBe(9_000);
-    expect(requireGroup(items[2]).role).toBe("assistant");
-  });
-
-  it.each([
-    "agent:main:main",
-    "agent:main:telegram:direct:42",
-    "agent:main::dashboard:malformed",
-    "agent:main:dashboard:session:extra",
-  ])("keeps completed work expanded for non-dashboard session %s", (sessionKey) => {
-    const items = coalesceStreamRuns(
-      buildCachedChatItems(
-        createProps({
-          sessionKey,
-          messages: [
-            userMessage("do it", 1_000),
-            assistantMessage("Checking…", 2_000),
-            toolResult("call-1", 3_000),
-            assistantMessage("All done.", 10_000),
-          ],
-        }),
-      ),
-    );
-
-    const rendered = collapseCompletedTurnWork(items, { sessionKey, runWorking: false });
-
-    expect(rendered.map((item) => item.kind)).toEqual(["group", "group", "group", "group"]);
-  });
-
-  it("keeps the trailing turn expanded while the run works", () => {
-    const items = collapsedItems(
-      {
-        runWorking: true,
-        messages: [userMessage("do it", 1_000), toolResult("call-1", 2_000)],
-      },
-      true,
-    );
-
-    expect(items.some((item) => item.kind === "work-group")).toBe(false);
-  });
-
-  it("keeps reply-less turns expanded after the run finishes", () => {
-    const messages = [userMessage("do it", 1_000), toolResult("call-1", 2_000)];
-
-    // A reply-less executing turn stays expanded while live and remains visible
-    // after completion instead of becoming an opaque worked-for rollup.
-    expect(collapsedItems({ messages }, true).some((item) => item.kind === "work-group")).toBe(
-      false,
-    );
-
-    const idle = collapsedItems({ messages });
-    expect(idle.map((item) => item.kind)).toEqual(["group", "group"]);
-    expect(requireGroup(idle[1]).role).toBe("tool");
-  });
-
-  it("keeps failed work visible in turns that never replied", () => {
-    const items = collapsedItems({
-      messages: [userMessage("go", 1_000), toolResult("call-1", 2_000, true)],
-    });
-
-    expect(items.map((item) => item.kind)).toEqual(["group", "group"]);
-    expect(requireGroup(items[1]).role).toBe("tool");
-  });
-
-  it("collapses failed work once the turn recovered with a reply", () => {
-    const items = collapsedItems({
-      messages: [
-        userMessage("go", 1_000),
-        toolResult("call-1", 2_000, true),
-        assistantMessage("Recovered via another route.", 3_000),
-      ],
-    });
-
-    expect(requireWorkGroup(items[1]).groups).toHaveLength(1);
-  });
-
-  it("keeps work after the final reply visible", () => {
-    const items = collapsedItems({
-      messages: [
-        userMessage("go", 1_000),
-        toolResult("call-1", 2_000),
-        assistantMessage("Done.", 3_000),
-        toolResult("call-2", 4_000),
-      ],
-    });
-
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
-    expect(requireGroup(items[3]).role).toBe("tool");
-  });
-
-  it("does not collapse across dividers", () => {
-    const items = collapsedItems({
-      messages: [
-        userMessage("go", 1_000),
-        toolResult("call-1", 2_000),
-        {
-          role: "system",
-          content: "",
-          timestamp: 3_000,
-          __openclaw: { kind: "compaction", id: "c1" },
-        },
-        assistantMessage("Done.", 4_000),
-      ],
-    });
-
-    expect(items.some((item) => item.kind === "work-group")).toBe(false);
-    expect(items.some((item) => item.kind === "divider")).toBe(true);
-  });
-
-  it("keeps attachment-only final replies outside the work rollup", () => {
-    const items = collapsedItems({
-      messages: [
-        userMessage("render it", 1_000),
-        toolResult("call-1", 2_000),
-        assistantMessage(
-          [
-            {
-              type: "image",
-              url: "/media/screenshot.png",
-              source: { type: "url", url: "/media/screenshot.png" },
-            },
-          ],
-          3_000,
-        ),
-      ],
-    });
-
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
-    expect(requireGroup(items[2]).role).toBe("assistant");
-  });
-
-  it("keeps search matches visible instead of folding them into a rollup", () => {
-    const items = collapseCompletedTurnWork(
-      coalesceStreamRuns(
-        buildCachedChatItems(
-          createProps({
-            messages: [
-              userMessage("do it", 1_000),
-              toolResult("call-1", 2_000),
-              assistantMessage("All done.", 3_000),
-            ],
-            searchOpen: true,
-            searchQuery: "ok",
-          }),
-        ),
-      ),
-      {
-        sessionKey: "agent:main:dashboard:test-session",
-        runWorking: false,
-        searchActive: true,
-      },
-    );
-
-    expect(items.some((item) => item.kind === "work-group")).toBe(false);
-  });
-
-  it("collapses each completed turn independently", () => {
-    const items = collapsedItems({
-      messages: [
-        userMessage("first", 1_000),
-        toolResult("call-1", 2_000),
-        assistantMessage("First done.", 3_000),
-        userMessage("second", 4_000),
-        toolResult("call-2", 5_000),
-        assistantMessage("Second done.", 6_000),
-      ],
-    });
-
-    const workGroups = items.filter((item) => item.kind === "work-group");
-    expect(workGroups).toHaveLength(2);
-    expect(new Set(workGroups.map((item) => item.key)).size).toBe(2);
-  });
-
-  it("keeps recovery work separate when a system notice starts the next turn", () => {
-    const items = collapsedItems({
-      messages: [
-        userMessage("first", 1_000),
-        toolResult("call-1", 2_000),
-        assistantMessage("First done.", 3_000),
-        userMessage("[System] Continue the interrupted turn.", 4_000, {
-          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-        }),
-        toolResult("call-2", 5_000),
-        assistantMessage("Recovery done.", 6_000),
-      ],
-    });
-
-    const workGroups = items.filter((item) => item.kind === "work-group");
-    expect(workGroups).toHaveLength(2);
-    expect(workGroups.map((item) => messageRecord(groupAt(item.groups, 0)).toolCallId)).toEqual([
-      "call-1",
-      "call-2",
-    ]);
-  });
-
-  it("collapses hidden-input runs independently without changing duration arithmetic", () => {
-    const items = collapsedItems({
-      messages: [
-        {
-          ...toolResult("call-1", 1_000),
-          __openclaw: { id: "work-1", seq: 1, turnBoundary: true },
-        },
-        assistantMessage("First run done.", 3_000, {
-          __openclaw: { id: "reply-1", seq: 2 },
-        }),
-        {
-          ...toolResult("call-2", 4_000),
-          __openclaw: { id: "work-2", seq: 3, turnBoundary: true },
-        },
-        assistantMessage("Second run done.", 9_000, {
-          __openclaw: { id: "reply-2", seq: 4 },
-        }),
-      ],
-    });
-
-    expect(items.map((item) => item.kind)).toEqual(["work-group", "group", "work-group", "group"]);
-    expect(requireWorkGroup(items[0]).durationMs).toBe(2_000);
-    expect(requireWorkGroup(items[2]).durationMs).toBe(5_000);
-  });
-
-  it("keeps a completed-work row keyed to its final reply as older work is prepended", () => {
-    resetChatThreadState();
-    const finalReply = assistantMessage("Done.", 3_000, {
-      __openclaw: { id: "final-reply", seq: 3 },
-    });
-    const initial = collapsedItems({
-      messages: [toolResult("call-1", 2_000), finalReply],
-    });
-    const initialWork = requireWorkGroup(initial[0]);
-
-    const prepended = collapsedItems({
-      messages: [
-        assistantMessage("Checking.", 1_000, {
-          __openclaw: { id: "older-commentary", seq: 1 },
-        }),
-        toolResult("call-1", 2_000),
-        finalReply,
-      ],
-    });
-    const prependedWork = requireWorkGroup(prepended[0]);
-
-    expect(prependedWork.key).toBe(initialWork.key);
-    expect(prependedWork.durationMs).toBeGreaterThan(initialWork.durationMs ?? 0);
-  });
-});
-
 describe("coalesceActivityRuns", () => {
   const toolResult = (id: string, timestamp: number, overrides: Record<string, unknown> = {}) => ({
     role: "toolResult",
@@ -1055,7 +769,7 @@ describe("coalesceActivityRuns", () => {
     expect(appended.key).toBe(initial.key);
   });
 
-  it("treats every non-tool item as a hard presentation boundary", () => {
+  it("treats user messages and dividers as hard presentation boundaries", () => {
     const groups = projectedToolGroups();
     const userBoundary: MessageGroup = {
       kind: "group",
@@ -1089,6 +803,130 @@ describe("coalesceActivityRuns", () => {
 
     expect(singleton[0]).toBe(groups[0]);
     expect(coalesceActivityRuns(searchInput, { searchActive: true })).toBe(searchInput);
+  });
+
+  it("promotes one group with parallel tool cards into an activity disclosure", () => {
+    const parallelGroup: MessageGroup = {
+      kind: "group",
+      key: "group:tool:parallel",
+      role: "tool",
+      messages: [
+        {
+          key: "tool:parallel",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "call-a", name: "read", arguments: { path: "a.ts" } },
+              { type: "toolCall", id: "call-b", name: "read", arguments: { path: "b.ts" } },
+              { type: "toolResult", id: "call-a", name: "read", text: "A" },
+              { type: "toolResult", id: "call-b", name: "read", text: "B" },
+            ],
+          },
+        },
+      ],
+      timestamp: 1_000,
+      isStreaming: false,
+    };
+
+    expect(requireActivityRun(coalesceActivityRuns([parallelGroup])[0]).groups).toEqual([
+      parallelGroup,
+    ]);
+  });
+
+  it("keeps assistant reply text outside adjacent tool activity", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        paneId: "activity-run-mixed-reply",
+        messages: [
+          toolResult("call-1", 1_000),
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "The result is ready." },
+              {
+                type: "tool_use",
+                id: "call-2",
+                name: "bash",
+                input: { command: "echo done" },
+              },
+            ],
+            timestamp: 2_000,
+          },
+        ],
+      }),
+    ).filter((item): item is MessageGroup => item.kind === "group");
+
+    expect(items).toHaveLength(2);
+    expect(coalesceActivityRuns(items)).toEqual(items);
+  });
+
+  it("folds reasoning carried by a tool call while keeping visible artifacts top-level", () => {
+    const toolItems = buildCachedChatItems(
+      createProps({
+        paneId: "activity-run-reasoning-tool",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "Inspect the file first." },
+              { type: "reasoning", thinking: "Then compare the result." },
+              { type: "redacted_thinking" },
+              {
+                type: "toolCall",
+                id: "call-reasoning",
+                name: "read",
+                arguments: { path: "src/report.ts" },
+              },
+            ],
+            timestamp: 1_000,
+          },
+          toolResult("call-reasoning", 2_000, { toolName: "read" }),
+        ],
+      }),
+    ).filter((item): item is MessageGroup => item.kind === "group");
+    expect(toolItems).toHaveLength(1);
+
+    const reasoning: MessageGroup = {
+      kind: "group",
+      key: "group:assistant:reasoning",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant:reasoning",
+          message: {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "Compare both results." }],
+          },
+        },
+      ],
+      timestamp: 2_500,
+      isStreaming: false,
+    };
+    const visibleArtifact: MessageGroup = {
+      ...reasoning,
+      key: "group:assistant:artifact",
+      messages: [
+        {
+          key: "assistant:artifact",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "Render the image." },
+              { type: "image", url: "/media/result.png" },
+            ],
+          },
+        },
+      ],
+    };
+    const groups = projectedToolGroups().slice(0, 2);
+    const withToolReasoning = coalesceActivityRuns([toolItems[0]!, groups[0]!]);
+    const withReasoning = coalesceActivityRuns([reasoning, ...groups]);
+    const withArtifact = coalesceActivityRuns([visibleArtifact, ...groups]);
+
+    expect(requireActivityRun(withToolReasoning[0]).groups[0]).toBe(toolItems[0]);
+    expect(requireActivityRun(withReasoning[0]).groups[0]).toBe(reasoning);
+    expect(withArtifact[0]).toBe(visibleArtifact);
+    expect(requireActivityRun(withArtifact[1]).groups).toEqual(groups);
   });
 });
 

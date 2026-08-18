@@ -125,6 +125,12 @@
     transform 150ms ease-out;
 }
 
+.chat-tool-row__outcome {
+  flex: 0 0 auto;
+  color: var(--warn);
+  font-size: var(--control-ui-text-xs);
+}
+
 .chat-tool-row__chevron svg {
   width: 14px;
   height: 14px;
@@ -1112,25 +1118,8 @@
   overflow-y: auto;
 }
 
-/* Completed-turn work rollup: slim "Worked for X" disclosure standing in for
-   the turn's intermediate tool/commentary groups. Sits snug above the final
-   reply, aligned with the message column via a gutter matching the avatar. */
-.chat-group--work {
-  padding-bottom: 8px;
-}
-
-.chat-work-group .chat-activity-group__label {
-  color: inherit;
-}
-
 .chat-group--activity .chat-activity-group__label {
   color: inherit;
-}
-
-.chat-work-group__separator {
-  width: 100%;
-  height: 1px;
-  background: var(--border);
 }
 
 /* Reading indicator = working claw: the brand pincer claws in place where the
