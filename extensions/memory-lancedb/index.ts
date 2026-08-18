@@ -174,7 +174,7 @@ export default definePluginEntry({
       if (!runtimePluginConfig) {
         return disabledHookCfg;
       }
-      return memoryConfigSchema.parse({
+      const currentCfg = memoryConfigSchema.parse({
         embedding: {
           provider: cfg.embedding.provider,
           apiKey: cfg.embedding.apiKey,
@@ -194,6 +194,10 @@ export default definePluginEntry({
         ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
         ...asOptionalRecord(runtimePluginConfig),
       });
+      const { apiKey, baseUrl } = currentCfg.embedding;
+      // LanceDB's fixed-size persisted vectors keep semantic identity startup-stable;
+      // changing provider/model/dimensions without re-embedding corrupts search compatibility.
+      return { ...currentCfg, embedding: { ...cfg.embedding, apiKey, baseUrl } };
     };
     const embeddings = createEmbeddings(api);
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {

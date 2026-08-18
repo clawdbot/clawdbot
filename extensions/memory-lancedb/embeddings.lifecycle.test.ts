@@ -482,41 +482,44 @@ describe("memory-lancedb provider lifecycle", () => {
     });
     const closeOldProvider = vi.fn(async () => {});
     const closeReplacementProvider = vi.fn(async () => {});
-    const createProvider = vi.fn(async (options: { provider: string; model: string }) => {
-      const isOld = options.provider === "fixture-old-provider";
-      return {
-        provider: {
-          id: options.provider,
-          model: options.model,
-          embedQuery: vi.fn(async () => {
-            if (isOld) {
-              oldEmbeddingStarted();
-              await oldEmbeddingGate;
-            }
-            return isOld ? [0.1] : [0.2];
-          }),
-          embedBatch: vi.fn(async () => [[0.1]]),
-          close: isOld ? closeOldProvider : closeReplacementProvider,
-        },
-      };
-    });
+    const createProvider = vi.fn(
+      async (options: { provider: string; model: string; remote?: { apiKey?: string } }) => {
+        const isOld = options.remote?.apiKey === "fixture-old-key";
+        return {
+          provider: {
+            id: options.provider,
+            model: options.model,
+            embedQuery: vi.fn(async () => {
+              if (isOld) {
+                oldEmbeddingStarted();
+                await oldEmbeddingGate;
+              }
+              return isOld ? [0.1] : [0.2];
+            }),
+            embedBatch: vi.fn(async () => [[0.1]]),
+            close: isOld ? closeOldProvider : closeReplacementProvider,
+          },
+        };
+      },
+    );
     providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
       id: "fixture-provider",
       create: createProvider,
     });
+    const embeddingIdentity = {
+      provider: "fixture-provider",
+      model: "fixture-model",
+      dimensions: 3,
+    } as const;
     const oldConfig = {
-      provider: "fixture-old-provider",
-      model: "fixture-old-model",
+      ...embeddingIdentity,
       apiKey: "fixture-old-key",
       baseUrl: "https://old.example.test/v1",
-      dimensions: 3,
     } satisfies MemoryConfig["embedding"];
     const newConfig = {
-      provider: "fixture-new-provider",
-      model: "fixture-new-model",
+      ...embeddingIdentity,
       apiKey: "fixture-new-key",
       baseUrl: "https://new.example.test/v1",
-      dimensions: 4,
     } satisfies MemoryConfig["embedding"];
     const embeddings = createEmbeddings(createApi());
 

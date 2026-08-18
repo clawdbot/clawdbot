@@ -908,7 +908,12 @@ describe("memory plugin e2e", () => {
       loadLanceDbModule,
       run: async () => {
         const pluginConfig = {
-          embedding: { apiKey: "fixture-old-key", model: "text-embedding-3-small" },
+          embedding: {
+            apiKey: "fixture-old-key",
+            baseUrl: "https://old.example.test/v1",
+            model: "fixture-startup-model",
+            dimensions: 3,
+          },
           dbPath: getDbPath(),
           autoCapture: false,
           autoRecall: false,
@@ -939,12 +944,18 @@ describe("memory plugin e2e", () => {
         ]);
 
         expect(embeddingsCreate).toHaveBeenCalledWith({
-          model: "text-embedding-3-small",
+          model: "fixture-startup-model",
           input: "private shared-key query",
+          dimensions: 3,
         });
         expect(embeddingsCreate).toHaveBeenCalledWith({
-          model: "text-embedding-3-small",
+          model: "fixture-startup-model",
           input: "main shared-key query",
+          dimensions: 3,
+        });
+        expect(moduleMocks.createOpenAiClient).toHaveBeenNthCalledWith(1, {
+          apiKey: "fixture-old-key",
+          baseURL: "https://old.example.test/v1",
         });
         expect(moduleMocks.createOpenAiClient).toHaveBeenCalledOnce();
 
@@ -957,8 +968,8 @@ describe("memory plugin e2e", () => {
                   embedding: {
                     apiKey: "fixture-new-key",
                     baseUrl: "https://new.example.test/v1",
-                    model: "fixture-new-model",
-                    dimensions: 3,
+                    model: "fixture-ignored-live-model",
+                    dimensions: 4,
                   },
                 },
               },
@@ -974,7 +985,7 @@ describe("memory plugin e2e", () => {
           baseURL: "https://new.example.test/v1",
         });
         expect(embeddingsCreate).toHaveBeenCalledWith({
-          model: "fixture-new-model",
+          model: "fixture-startup-model",
           input: "rotated direct query",
           dimensions: 3,
         });
