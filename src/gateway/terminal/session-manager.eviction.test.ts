@@ -38,7 +38,9 @@ describe("TerminalSessionManager idle eviction", () => {
       }
       // Freshen the second session so the first is the idle-eviction candidate.
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(manager.writeAgent("agent:main:main", second.sessionId, "keepalive\r")).toBe(true);
+      expect(manager.writeAgent("agent:main:main", second.sessionId, "keepalive\r")).toEqual({
+        ok: true,
+      });
 
       const third = await manager.open(baseOpenRequest({ owner: agentOwner }));
       expect(third.ok).toBe(true);
@@ -108,7 +110,9 @@ describe("TerminalSessionManager idle eviction", () => {
     expect(victimPty.killed).toBe(false);
     expect(replacementPty.killed).toBe(true);
     expect(manager.size).toBe(1);
-    expect(manager.writeAgent("agent:main:main", victim.sessionId, "still-alive\r")).toBe(true);
+    expect(manager.writeAgent("agent:main:main", victim.sessionId, "still-alive\r")).toEqual({
+      ok: true,
+    });
   });
 
   it("evicts the freshly idlest session when the claimed victim becomes active mid-spawn", async () => {
@@ -144,7 +148,9 @@ describe("TerminalSessionManager idle eviction", () => {
       // The claimed (oldest) session becomes active during the spawn, making
       // the newer session the genuinely idlest candidate.
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(manager.writeAgent("agent:main:main", oldest.sessionId, "busy\r")).toBe(true);
+      expect(manager.writeAgent("agent:main:main", oldest.sessionId, "busy\r")).toEqual({
+        ok: true,
+      });
       releaseSpawn?.();
 
       const outcome = await opening;
@@ -253,7 +259,9 @@ describe("TerminalSessionManager idle eviction", () => {
     // The victim survives a failed replacement and stays claimable later.
     expect(manager.size).toBe(1);
     expect(pty.killed).toBe(false);
-    expect(manager.writeAgent("agent:main:main", victim.sessionId, "still-alive\r")).toBe(true);
+    expect(manager.writeAgent("agent:main:main", victim.sessionId, "still-alive\r")).toEqual({
+      ok: true,
+    });
 
     failNextSpawn = false;
     const replacement = await manager.open(baseOpenRequest({ owner: agentOwner }));

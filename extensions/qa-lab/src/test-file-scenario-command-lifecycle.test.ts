@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build as esbuild } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -211,7 +213,25 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
   it("cleans the command group before re-raising a parent SIGTERM", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "qa-command-parent-signal-"));
     const descendantPidPath = path.join(root, "descendant.pid");
-    const moduleUrl = new URL("./test-file-scenario-command-lifecycle.ts", import.meta.url).href;
+    const bundlePath = path.join(root, "test-file-scenario-command-lifecycle.mjs");
+    // Compile before the readiness window; a cold tsx child can exceed it under the full QA suite.
+    // The bundle needs only the UTF-16 helper behind this SDK import, not the full plugin runtime.
+    await esbuild({
+      alias: {
+        "openclaw/plugin-sdk/text-utility-runtime": fileURLToPath(
+          new URL("../../../packages/normalization-core/src/utf16-slice.ts", import.meta.url),
+        ),
+      },
+      bundle: true,
+      entryPoints: [
+        fileURLToPath(new URL("./test-file-scenario-command-lifecycle.ts", import.meta.url)),
+      ],
+      format: "esm",
+      outfile: bundlePath,
+      platform: "node",
+      target: "node22",
+    });
+    const moduleUrl = pathToFileURL(bundlePath).href;
     let descendantPid: number | undefined;
     if (!actualSpawn.value) {
       throw new Error("real spawn unavailable");
@@ -235,7 +255,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
     ].join("\n");
     const controller = actualSpawn.value(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", controllerScript],
+      ["--input-type=module", "-e", controllerScript],
       { cwd: process.cwd(), env: process.env, stdio: "ignore" },
     );
     try {
@@ -355,8 +375,10 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
         signal: null,
       });
       expect(spawnSyncMock).toHaveBeenCalledTimes(2);
-      expect(spawnSyncMock.mock.calls[0]?.[1]).toEqual(["/pid", "12345", "/T"]);
-      expect(spawnSyncMock.mock.calls[1]?.[1]).toEqual(["/pid", "12345", "/T", "/F"]);
+      expect(spawnSyncMock.mock.calls.map((call) => call[1])).toEqual([
+        ["/PID", "12345", "/T"],
+        ["/PID", "12345", "/T", "/F"],
+      ]);
     } finally {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);

@@ -392,9 +392,7 @@ suite.define(() => {
       await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("true");
       await where.getByRole("button", { name: "MacBook" }).click();
       await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("false");
-      await pollLocatorText(
-        page.locator("#new-session-detail-trigger .new-session-page__trigger-label"),
-      ).toBe("Node path");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
         .toBe("new-session-where-trigger");
@@ -575,21 +573,13 @@ suite.define(() => {
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
       const projectLabel = projectTrigger.locator(".new-session-page__trigger-label");
-      const detailSelect = page.locator("wa-popover.new-session-page__detail-popover");
-      const detailTrigger = page.locator("#new-session-detail-trigger");
       const browserEntries = page.locator(".new-session-page__browser-list");
 
       // Pick the node from Your devices.
       await whereTrigger.click();
       await whereSelect.getByRole("button", { name: "MacBook" }).click();
       await pollLocatorText(whereLabel).toBe("MacBook");
-      await pollLocatorText(detailTrigger.locator(".new-session-page__trigger-label")).toBe(
-        "Node path",
-      );
-      await detailTrigger.click();
-      expect(await detailSelect.getByRole("button", { name: "Worktree" }).count()).toBe(0);
-      await detailSelect.getByLabel("Working directory").waitFor();
-      await page.keyboard.press("Escape");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
 
       // Manual path entry in the browser head preserves UNC paths; these
       // cannot be rediscovered by starting at the node home directory.
@@ -657,10 +647,12 @@ suite.define(() => {
 
       await whereTrigger.click();
       await whereSelect.getByRole("button", { name: "Old node" }).click();
-      await detailTrigger.click();
-      const nodeCwd = detailSelect.getByLabel("Working directory");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await projectTrigger.click();
+      const nodeCwd = projectSelect.getByLabel("Working directory");
       await expect.poll(() => nodeCwd.inputValue()).toBe("");
       await nodeCwd.fill(EXEC_ONLY_PICKED);
+      await captureProjectUiProof(page, "node-path-picker.png");
       await nodeCwd.press("Enter");
       expect(
         (await gateway.getRequests("fs.listDir")).filter(

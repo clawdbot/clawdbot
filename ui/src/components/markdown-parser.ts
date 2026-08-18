@@ -628,7 +628,7 @@ export function createMarkdownParser(): MarkdownIt {
       (env as Partial<MarkdownRenderEnv> | undefined)?.mode === "document",
   });
 
-  // Override fenced code blocks with copy button + JSON collapse
+  // Fenced and indented blocks share one interaction and overflow surface.
   markdownParser.renderer.rules.fence = (tokens, index, _options, env) => {
     const token = tokens[index];
     if (!token) {

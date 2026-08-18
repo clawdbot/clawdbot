@@ -393,10 +393,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       execNode: this.place.execNode,
     });
     const detailState = resolveDetailChip({
-      execNode: this.place.execNode,
-      cloudProfileId: this.place.cloudProfileId,
+      destination: this.place.execNode || this.place.cloudProfileId ? "remote" : "local",
       worktree: this.place.worktree,
-      repository: this.place.repository,
+      worktreeAvailable: this.place.worktreeAvailable(),
     });
     const gatewayLabel = this.gateway.gatewayName
       ? t("newSession.gatewayNamed", { name: this.gateway.gatewayName })
@@ -454,6 +453,11 @@ export class NewSessionPage extends OpenClawLightDomElement {
       execNodes,
       gatewayLabel,
       execNode: this.place.execNode,
+      cloudProfileId: this.place.cloudProfileId,
+      branches,
+      branchesLoading: this.place.repository.kind === "checking",
+      baseRef: this.place.baseRef,
+      worktreeName: this.place.worktreeName,
       submitting,
       pendingCloud,
       ...this.browser.popoverCallbacks("project"),
@@ -474,6 +478,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
           execNode,
           !execNode && this.browser.browserListing?.path === folder,
         ),
+      onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
+      onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
       onBrowse: (target) => this.browser.selectBrowserTarget(target),
       onBrowserPathDraftChange: (value) => {
         this.browser.browserPathDraft = value;
@@ -482,31 +488,24 @@ export class NewSessionPage extends OpenClawLightDomElement {
       onBrowserBack: () => this.browser.showRoot(),
       onRegisterProject: (path) => void this.browser.registerBrowserProject(path),
       onClose: () => this.browser.close(),
-    })}${renderDetailChip({
-      state: detailState,
-      syncLabel: projectState.label,
-      folder: this.place.folder,
-      execNode: this.place.execNode,
-      worktree: this.place.worktree,
-      worktreeAvailable: this.place.worktreeAvailable(),
-      worktreeDisabledReason:
-        this.place.repository.kind === "checking"
-          ? t("newSession.checkingGit")
-          : this.place.repository.kind === "unavailable"
-            ? t("newSession.gitCheckUnavailable")
-            : undefined,
-      branches,
-      branchesLoading: this.place.repository.kind === "checking",
-      baseRef: this.place.baseRef,
-      worktreeName: this.place.worktreeName,
-      submitting,
-      pendingCloud,
-      ...this.browser.popoverCallbacks("detail"),
-      onToggleWorktree: () => this.place.toggleWorktree(),
-      onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
-      onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
-      onNodeFolderInput: (folder, execNode) => this.place.applyFolder(folder, execNode),
-    })}`;
+    })}${detailState
+      ? renderDetailChip({
+          state: detailState,
+          worktree: this.place.worktree,
+          worktreeAvailable: this.place.worktreeAvailable(),
+          repositoryUnavailable: this.place.repository.kind === "unavailable",
+          branches,
+          branchesLoading: this.place.repository.kind === "checking",
+          baseRef: this.place.baseRef,
+          worktreeName: this.place.worktreeName,
+          submitting,
+          pendingCloud,
+          ...this.browser.popoverCallbacks("detail"),
+          onToggleWorktree: () => this.place.toggleWorktree(),
+          onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
+          onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
+        })
+      : nothing}`;
   }
 
   private openConnectMachine() {

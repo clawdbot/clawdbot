@@ -1,8 +1,5 @@
 // Xai tests cover realtime voice provider plugin behavior.
-import {
-  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
-  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-} from "openclaw/plugin-sdk/realtime-voice";
+import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS } from "./realtime-voice-config.js";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -890,16 +887,13 @@ describe("buildXaiRealtimeVoiceProvider", () => {
   it.each([
     {
       name: "lets server VAD own interruption before an audio item exists",
-      hasAudio: false,
       timestamp: 1000,
       expectedActions: [],
     },
     {
       name: "clamps manual barge-in to produced G.711 audio",
-      hasAudio: true,
       manual: true,
       audioBytes: 3_700 * 8,
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
       timestamp: 4760,
       expectedActions: [
         { type: "response.cancel" },
@@ -913,7 +907,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
     {
       name: "clamps server-VAD barge-in to produced PCM16 audio without cancelling xAI",
-      hasAudio: true,
       audioBytes: 3_700 * 48,
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       timestamp: 4760,
@@ -928,14 +921,14 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
     {
       name: "clears relay playback on server-VAD barge-in after marks are acknowledged",
-      hasAudio: true,
+      audioBytes: 16,
       acknowledged: true,
       timestamp: 1250,
       expectedActions: [],
     },
     {
       name: "does not truncate completed assistant audio on a later user turn",
-      hasAudio: true,
+      audioBytes: 16,
       acknowledged: true,
       completed: true,
       timestamp: 2000,
@@ -943,7 +936,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
     {
       name: "keeps completed assistant item state so relay playback cancel can truncate it",
-      hasAudio: true,
       acknowledged: true,
       completed: true,
       manual: true,
@@ -960,7 +952,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
     {
       name: "lets server VAD interrupt a new response before it produces audio",
-      hasAudio: true,
+      audioBytes: 16,
       acknowledged: true,
       completed: true,
       startNewResponse: true,
@@ -970,7 +962,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
   ])(
     "$name",
     async ({
-      hasAudio,
       acknowledged,
       completed,
       startNewResponse,
@@ -991,12 +982,12 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       const { socket } = await startRealtimeBridge(bridge);
 
       socket.emitServer({ type: "response.created", response: { id: "resp_1" } });
-      if (hasAudio) {
+      if (audioBytes !== undefined) {
         bridge.setMediaTimestamp(1000);
         socket.emitServer({
           type: "response.output_audio.delta",
           item_id: "item_1",
-          delta: Buffer.alloc(audioBytes ?? 16).toString("base64"),
+          delta: Buffer.alloc(audioBytes).toString("base64"),
         });
       }
       if (acknowledged) {
@@ -1016,7 +1007,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       }
       bridge.close();
 
-      expect(onAudio).toHaveBeenCalledTimes(hasAudio ? 1 : 0);
+      expect(onAudio).toHaveBeenCalledTimes(audioBytes === undefined ? 0 : 1);
       expect(onClearAudio).toHaveBeenCalledTimes(1);
       if (!manual) {
         expect(onClearAudio).toHaveBeenCalledWith("barge-in");

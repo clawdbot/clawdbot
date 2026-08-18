@@ -38,6 +38,18 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toEqual({ subtitle: "~/Projects/openclaw", narration: undefined });
   });
 
+  it("explains when admitted work is waiting for a concurrency slot", () => {
+    expect(
+      resolveSidebarSessionSubtitle({
+        session: { ...workSession(), hasActiveRun: true, status: "queued" },
+        hasDisplay: false,
+        displaySubtitle: undefined,
+        sidebarLiveActivity: true,
+        narrationLine: undefined,
+      }),
+    ).toEqual({ subtitle: "Waiting for a concurrency slot", narration: undefined });
+  });
+
   it("uses attention, agent status, observer, narration, then work subtitle precedence", () => {
     const session: SidebarRecentSession = {
       ...workSession(),

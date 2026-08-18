@@ -15,6 +15,7 @@ type WorkboardLifecycleState =
   | "unlinked"
   | "missing"
   | "idle"
+  | "queued"
   | "running"
   | "stale"
   | "succeeded"

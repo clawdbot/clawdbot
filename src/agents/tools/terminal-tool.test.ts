@@ -112,7 +112,7 @@ describe("terminal tool", () => {
     });
     expect(tool.outputSchema).toBeDefined();
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      "{ sessions: Array<{ agentId: string; attached: boolean; createdAtMs: number; cwd: string; owner: string; sessionId: string; shell: string }> } | { agentId: string; cwd: string; ok: true; sessionId: string; shell: string } | { sessionId: string; text: string } | { ok: boolean }",
+      "{ sessions: Array<{ agentId: string; attached: boolean; createdAtMs: number; cwd: string; owner: string; sessionId: string; shell: string }> } | { agentId: string; cwd: string; ok: true; sessionId: string; shell: string } | { sessionId: string; text: string } | { ok: true }",
     );
 
     const opened = await tool.execute("open", { action: "open", command: "echo ready" });
@@ -442,17 +442,21 @@ describe("terminal tool", () => {
 
     for (const sessionId of [conn.sessionId, other.sessionId]) {
       await expect(tool.execute("read", { action: "read", sessionId })).rejects.toThrow(
-        "terminal not owned by this agent session",
+        "Terminal session unavailable. Use action=list to find an owned terminal or action=open to acquire one.",
       );
       await expect(
         tool.execute("input", { action: "input", sessionId, data: "blocked" }),
-      ).resolves.toMatchObject({ details: { ok: false } });
+      ).rejects.toThrow(
+        "Terminal session unavailable. Use action=list to find an owned terminal or action=open to acquire one.",
+      );
       await expect(
         tool.execute("resize", { action: "resize", sessionId, cols: 120, rows: 40 }),
-      ).resolves.toMatchObject({ details: { ok: false } });
-      await expect(tool.execute("close", { action: "close", sessionId })).resolves.toMatchObject({
-        details: { ok: false },
-      });
+      ).rejects.toThrow(
+        "Terminal session unavailable. Use action=list to find an owned terminal or action=open to acquire one.",
+      );
+      await expect(tool.execute("close", { action: "close", sessionId })).rejects.toThrow(
+        "Terminal session unavailable. Use action=list to find an owned terminal or action=open to acquire one.",
+      );
     }
     await expect(tool.execute("list", { action: "list" })).resolves.toMatchObject({
       details: { sessions: [] },
@@ -462,4 +466,60 @@ describe("terminal tool", () => {
     expect(connBackend.killed).toBe(false);
     expect(otherBackend.killed).toBe(false);
   });
+
+  it.each([
+    {
+      name: "initial command",
+      configure: (backend: ReturnType<typeof makeBackend>) => {
+        backend.write = () => {
+          throw new Error("write failed");
+        };
+      },
+      execute: (tool: ReturnType<typeof createTerminalTool>) =>
+        tool.execute("open", { action: "open", command: "echo ready" }),
+    },
+    {
+      name: "input",
+      configure: (backend: ReturnType<typeof makeBackend>) => {
+        backend.write = () => {
+          throw new Error("write failed");
+        };
+      },
+      execute: async (tool: ReturnType<typeof createTerminalTool>) => {
+        const opened = await tool.execute("open", { action: "open" });
+        const sessionId = (opened.details as { sessionId: string }).sessionId;
+        return tool.execute("input", { action: "input", sessionId, data: "yes\r" });
+      },
+    },
+    {
+      name: "resize",
+      configure: (backend: ReturnType<typeof makeBackend>) => {
+        backend.resize = () => {
+          throw new Error("resize failed");
+        };
+      },
+      execute: async (tool: ReturnType<typeof createTerminalTool>) => {
+        const opened = await tool.execute("open", { action: "open" });
+        const sessionId = (opened.details as { sessionId: string }).sessionId;
+        return tool.execute("resize", { action: "resize", sessionId, cols: 120, rows: 40 });
+      },
+    },
+  ])(
+    "throws actionable recovery when backend $name fails",
+    async ({ name, configure, execute }) => {
+      const backend = makeBackend();
+      configure(backend);
+      const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
+      const tool = createTerminalTool({
+        agentId: "main",
+        agentSessionKey: "agent:main:main",
+        getGatewayContext: () => makeContext(manager),
+      });
+
+      await expect(execute(tool)).rejects.toThrow(
+        `Terminal ${name} failed. Use action=list to find an owned terminal or action=open to acquire one.`,
+      );
+      expect(manager.size).toBe(0);
+    },
+  );
 });

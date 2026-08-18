@@ -60,7 +60,7 @@ export function renderSessionOwnerChip(
     : nothing;
 }
 
-function ownerInitials(createdActor: SessionCreatedActor): string {
+export function sessionOwnerInitials(createdActor: SessionCreatedActor): string {
   const source = createdActor.label?.trim() || createdActor.id?.trim() || "";
   if (!source) {
     return "";
@@ -119,7 +119,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
     if (!createdActor?.id) {
       return nothing;
     }
-    const initials = ownerInitials(createdActor);
+    const initials = sessionOwnerInitials(createdActor);
     if (!initials) {
       return nothing;
     }

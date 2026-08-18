@@ -1619,6 +1619,7 @@ async function createChatPickerScenario(
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
+    serverBuildId: "mock",
     // Advertised Gateway methods gate session actions (see
     // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
     // every session context-menu row disabled, so the harness could not show
@@ -2860,7 +2861,7 @@ const server = await createServer({
       branch: null,
       dirty: null,
       release: false,
-      buildId: "mock",
+      buildId: scenario.serverBuildId,
     }),
   },
   logLevel: "error",

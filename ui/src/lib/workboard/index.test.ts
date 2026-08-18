@@ -2770,6 +2770,28 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards[0]).toMatchObject({ sessionKey: sampleSession.key });
   });
 
+  it("captures queued sessions as todo instead of running", async () => {
+    state.loaded = true;
+    const session = makeSession({ status: "queued", hasActiveRun: true });
+    const created = createSessionCard({ status: "todo" });
+    const client = createClient((method) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return { card: created };
+      }
+      return {};
+    });
+
+    await captureSession(client, session);
+
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.create",
+      expect.objectContaining({ status: "todo" }),
+    );
+  });
+
   it("captures a session on the selected named board", async () => {
     state.loaded = true;
     state.boardFilter = "ops";
@@ -3861,6 +3883,12 @@ describe("workboard controller", () => {
     > = [
       ["unlinked", sampleCard, sampleSession, { session: null, state: "unlinked" }],
       ["active", linked, sampleSession, { state: "running", targetStatus: "running" }],
+      [
+        "queued",
+        linked,
+        createGatewaySession({ hasActiveRun: true, status: "queued" }),
+        { state: "queued", targetStatus: "todo" },
+      ],
       [
         "running without an active run",
         linked,

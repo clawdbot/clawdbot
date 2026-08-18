@@ -13,6 +13,7 @@ import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
+  DEBUG_OVERLAY_REQUEST_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -24,13 +25,10 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import {
-  DEBUG_OVERLAY_REQUEST_EVENT,
-  DEBUG_OVERLAY_TOGGLE_EVENT,
-} from "../pages/debug/debug-overlay-contract.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import {
+  DEBUG_OVERLAY_ELEMENT,
   ensureOptionalElementForHost,
   isOptionalElementDefined,
   type OptionalCustomElement,
@@ -46,6 +44,10 @@ import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
+};
+
+type DebugOverlayElement = HTMLElement & {
+  toggle: () => void;
 };
 
 export function isBrowserPanelAvailable(
@@ -74,7 +76,6 @@ export interface ShellChromeHost extends HTMLElement {
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
-  readonly debugOverlayElement: OptionalCustomElement;
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
   readonly desktopPanelElement: OptionalCustomElement;
@@ -429,10 +430,10 @@ export class ShellChromeOwner {
 
   private toggleDebugOverlay(): void {
     const host = this.host;
-    void ensureOptionalElementForHost(host, host.debugOverlayElement)
+    void ensureOptionalElementForHost(host, DEBUG_OVERLAY_ELEMENT)
       .then(async () => {
         await host.updateComplete;
-        window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_TOGGLE_EVENT));
+        host.querySelector<DebugOverlayElement>(DEBUG_OVERLAY_ELEMENT.tagName)?.toggle();
       })
       .catch(() => undefined);
   }

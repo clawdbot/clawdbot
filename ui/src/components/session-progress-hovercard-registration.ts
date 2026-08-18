@@ -24,7 +24,10 @@ const bootstrap = new LazyHovercardBootstrap<HovercardProviderElement, Applicati
 
 function sessionRowFromEvent(event: Event): HTMLElement | null {
   for (const target of event.composedPath()) {
-    if (target instanceof HTMLElement && target.dataset.sessionKey) {
+    if (
+      target instanceof HTMLElement &&
+      target.matches(".sidebar-recent-session[data-session-key]")
+    ) {
       return target;
     }
   }

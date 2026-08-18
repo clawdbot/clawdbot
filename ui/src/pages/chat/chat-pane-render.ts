@@ -45,7 +45,7 @@ import {
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { detailSlotOpen } from "./components/chat-detail-slot.ts";
+import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
 import {
   createSessionWorkspaceProps,
@@ -241,10 +241,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     };
     const backgroundTasksBase = createBackgroundTasksProps(state, {
       narrowLayout: false,
-      openTaskId:
-        state.sidebarContent?.kind === "task" && detailSlotOpen(sidebarLayout)
-          ? state.sidebarContent.taskId
-          : undefined,
+      openTaskId: openTaskDetailId(state.sidebarContent, sidebarLayout),
       onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
     });
     const backgroundTasks = {

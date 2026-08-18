@@ -959,7 +959,8 @@ describe("grouped chat rendering", () => {
 
     expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: false,
-      codeBlockChrome: "copy",
+      codeBlockChrome: "none",
+      codeBlockInteraction: "static",
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,
@@ -1082,6 +1083,7 @@ describe("grouped chat rendering", () => {
     expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
+      codeBlockInteraction: "interactive",
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,
@@ -1626,6 +1628,7 @@ describe("grouped chat rendering", () => {
     expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
       assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
+      codeBlockInteraction: "interactive",
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,

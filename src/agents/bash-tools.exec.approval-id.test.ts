@@ -726,7 +726,7 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain(
-      "Warning: background execution is disabled; running synchronously.",
+      "Warning: continuation options are unavailable; running synchronously.",
     );
     expect(getResultText(result)).toContain("node-ok");
   });
@@ -1005,7 +1005,7 @@ describe("exec approvals", () => {
   });
 
   it.each(["gateway", "node"] as const)(
-    "keeps background fallback warnings out of pending %s approvals",
+    "keeps unavailable continuation guidance out of pending %s approvals",
     async (host) => {
       let approvalRequest: Record<string, unknown> | undefined;
       vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
@@ -1042,7 +1042,7 @@ describe("exec approvals", () => {
       });
 
       expect(result.details.status).toBe("approval-pending");
-      expect(getResultText(result)).not.toContain("background execution is disabled");
+      expect(getResultText(result)).not.toMatch(/process|background|yieldMs|poll/i);
       expect(approvalRequest?.warningText).toBeUndefined();
     },
   );

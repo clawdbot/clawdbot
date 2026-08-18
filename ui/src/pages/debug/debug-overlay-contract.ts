@@ -1,5 +1,4 @@
-export const DEBUG_OVERLAY_REQUEST_EVENT = "openclaw:debug-overlay-request";
-export const DEBUG_OVERLAY_TOGGLE_EVENT = "openclaw:debug-overlay-toggle";
+import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contract.ts";
 
 export const DEBUG_OVERLAY_SHORTCUT_LABEL = /Mac|iP(hone|ad|od)/i.test(
   globalThis.navigator?.platform ?? "",
