@@ -864,4 +864,91 @@ describe("session accessor cross-process concurrency", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("rejects a side-mode append and preserves a foreign append when a foreign row lands before it", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-side-mode-append-race-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-side-mode-append-race";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+      // Populate the transcript so the manager opens with a non-deferred header
+      // and a non-empty tracked snapshot -- same starting point as the raw-append
+      // race above, but this worker then enters side-append mode (a leaf control
+      // with appendMode: "side", the same path compaction/custom_message side
+      // writes use) before the handshake gap.
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "seed-message",
+          parentId: null,
+          message: { role: "user", content: "seed" },
+        },
+      ]);
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-side-mode-append-race",
+          sessionId,
+          storePath,
+          targetEntryId: "seed-message",
+        },
+        async (ready) => {
+          // Header and leaf control filtered out of getEntries(); one seed
+          // message remains.
+          expect(ready).toEqual({ eventCount: 1 });
+          // Foreign row lands after the manager entered side mode but before its
+          // side-mode append. A side-mode append declares its exact parentId and
+          // never rebases, so it carries no active-branch signal for appendEntry
+          // to detect the foreign row through -- the manager's snapshot guard is
+          // the only thing that can reject this instead of silently adopting the
+          // contaminated snapshot a later rewrite could then validate and delete
+          // the foreign row from.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+            parentId: "seed-message",
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, appendRejected: true });
+      // Fix verified: the side-mode append is rejected closed instead of
+      // silently folding the foreign row into the snapshot it would otherwise
+      // adopt, so the foreign row survives untouched and no side note lands.
+      // The leaf-control row that entered side mode is itself a legitimate,
+      // already-committed append from before the handshake gap.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "seed-message",
+          message: expect.objectContaining({ role: "user", content: "seed" }),
+        }),
+        expect.objectContaining({ type: "leaf", targetId: "seed-message" }),
+        expect.objectContaining({
+          type: "message",
+          parentId: "seed-message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

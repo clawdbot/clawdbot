@@ -75,6 +75,19 @@ type SyncInitialHeaderRaceChildResult =
       ok: false;
     };
 
+// Drives a real SessionManager side-mode append (via appendLeafControl then
+// appendCustomEntry) on a non-empty transcript and reports whether that append
+// rejected when a foreign row raced the gap between entering side mode and the
+// append -- side-mode appends never rebase, so they carry no active-branch
+// signal for appendEntry to reconcile a foreign row through.
+type SyncSideModeAppendRaceChildResult =
+  | { appendRejected: boolean; ok: true }
+  | {
+      message: string;
+      name: string;
+      ok: false;
+    };
+
 type ConcurrencyWorkerRequest =
   | {
       kind: "reply-init";
@@ -115,6 +128,12 @@ type ConcurrencyWorkerRequest =
       retryAfterConflict?: boolean;
       sessionId: string;
       storePath: string;
+    }
+  | {
+      kind: "sync-side-mode-append-race";
+      sessionId: string;
+      storePath: string;
+      targetEntryId: string;
     };
 
 type ConcurrencyWorkerReady<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
@@ -135,7 +154,9 @@ type ConcurrencyWorkerResult<TRequest extends ConcurrencyWorkerRequest> = TReque
         ? SyncRawAppendRaceChildResult
         : TRequest extends { kind: "sync-initial-header-race" }
           ? SyncInitialHeaderRaceChildResult
-          : TranscriptRewriteChildResult;
+          : TRequest extends { kind: "sync-side-mode-append-race" }
+            ? SyncSideModeAppendRaceChildResult
+            : TranscriptRewriteChildResult;
 
 type ConcurrencyWorkerMessage =
   | { phase: "booted" }

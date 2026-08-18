@@ -411,6 +411,58 @@ async function runSyncRawAppendRace(request) {
   return result;
 }
 
+async function runSyncSideModeAppendRace(request) {
+  let result;
+  try {
+    // Open an already-populated transcript and enter side-append mode via a
+    // leaf control (the same appendLeafControl({ appendMode: "side" }) path
+    // compaction/custom_message side-writes use) before the handshake gap.
+    // Once in side mode, appendEntry's activeBranchAppend check is false for
+    // every later append, so it carries no active-branch rebase signal -- the
+    // manager's own snapshot guard is the only foreign-row detector left.
+    const manager = SessionManager.open({
+      agentId: AGENT_ID,
+      sessionId: request.sessionId,
+      sessionKey: SESSION_KEY,
+      storePath: request.storePath,
+    });
+    manager.appendLeafControl({
+      targetId: request.targetEntryId,
+      appendParentId: request.targetEntryId,
+      appendMode: "side",
+    });
+    const proceed = waitForProceed(request.requestId);
+    send({
+      phase: "ready",
+      requestId: request.requestId,
+      value: { eventCount: manager.getEntries().length },
+    });
+    await proceed;
+    // Side-mode append (custom entry, no active-branch rebase signal) after a
+    // foreign row raced the gap: must be rejected instead of silently
+    // adopting the contaminated snapshot that a later rewrite could then
+    // validate and delete the foreign row from.
+    let appendRejected = false;
+    try {
+      manager.appendCustomEntry("side-note", { note: "side append" });
+    } catch (error) {
+      if (error instanceof SqliteTranscriptMutationConflictError) {
+        appendRejected = true;
+      } else {
+        throw error;
+      }
+    }
+    result = { ok: true, appendRejected };
+  } catch (error) {
+    result = {
+      ok: false,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return result;
+}
+
 
 process.on("message", (request) => {
   if (!request || typeof request !== "object") {
@@ -442,7 +494,9 @@ process.on("message", (request) => {
                 ? await runSyncRawAppendRace(request)
                 : request.kind === "sync-initial-header-race"
                   ? await runSyncInitialHeaderRace(request)
-                  : await runTranscriptRewrite(request);
+                  : request.kind === "sync-side-mode-append-race"
+                    ? await runSyncSideModeAppendRace(request)
+                    : await runTranscriptRewrite(request);
     send({ phase: "result", requestId: request.requestId, value });
   })().catch((error) => {
     send({
