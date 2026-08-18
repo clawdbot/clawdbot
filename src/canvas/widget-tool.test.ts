@@ -130,9 +130,9 @@ describe("show_widget", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(13075);
+    expect(Buffer.byteLength(html)).toBe(13493);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "3dd21b774b05d53d12088018babfc82604cc098fcacb1cca48dff5be7e7f8812",
+      "e50212b277bc75dc07a1c6c46cc313ff8f5cbfe261211b12d1714ad9d6b8c912",
     );
     expect(html).toContain("openclaw:widget-host-init-ack");
     expect(html).toContain("else push.call(waiting,{send,reject})");
@@ -140,6 +140,7 @@ describe("show_widget", () => {
     expect(html).toContain("openclaw:widget-prompt-host-ready");
     expect(html).toContain("widget host capabilities unavailable");
     expect(html).toContain("widget prompt host unavailable");
+    expect(html).toContain("openclaw:widget-chat-host");
     expect(html).not.toContain("widget is not hosted on a board");
   });
 
