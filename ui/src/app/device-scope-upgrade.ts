@@ -29,10 +29,6 @@ export type ScopeUpgradeState =
   | { phase: "rejected"; requestId: string; expired: boolean }
   | { phase: "error"; message: string };
 
-export function shouldHideDismissedScopeUpgradeBanner(state: ScopeUpgradeState): boolean {
-  return state.phase === "guidance" && hasDismissedScopeUpgradeBanner();
-}
-
 export function readScopeUpgradeAvailability(
   snapshot: ApplicationGatewaySnapshot,
 ): ScopeUpgradeState {

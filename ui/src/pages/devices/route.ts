@@ -27,9 +27,9 @@ async function loadDevicesRouteData(context: ApplicationContext): Promise<Device
   await Promise.all([
     loadNodes(devices),
     Promise.allSettled([
-      ...(canPair ? [loadDevices(devices)] : []),
+      canPair && loadDevices(devices),
       context.runtimeConfig.refresh(),
-      ...(canAdmin ? [loadExecApprovals(devices)] : []),
+      canAdmin && loadExecApprovals(devices),
     ]),
   ]);
   return { gateway, gatewaySnapshot, devices };
