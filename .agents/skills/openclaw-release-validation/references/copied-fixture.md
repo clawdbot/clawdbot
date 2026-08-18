@@ -7,10 +7,18 @@ and must be recorded as a finding.
 ## 1. Create the durable run ledger
 
 Create `<run-root>/run.json` before stopping any gateway. Record the candidate,
-source, env name, source running state, artifact paths, stopped-gateway restore
-obligations, fixture-only config/plugin changes, findings, mission results, and
-cleanup status. Update it immediately after each mutation so another session
-can resume or clean up safely.
+source, env name, artifact paths, stopped-gateway restore obligations,
+fixture-only config/plugin changes, findings, mission results, and cleanup
+status. For every source, separately record the actual process state, desired
+service state, listener state, health, version, and commit. Update the ledger
+immediately after each mutation so another session can resume or clean up
+safely.
+
+Read the source baseline again immediately before stopping or copying it. A
+discovery result can become stale because a service manager may auto-start the
+gateway. If the facts changed, update the ledger and restoration obligation
+before proceeding. If a desired-running source is already unhealthy, disclose
+the pre-existing condition and do not promise a healthy restore.
 
 ## 2. Stage the source
 
@@ -29,6 +37,11 @@ rewrites exact source-root references in the copied top-level config. It
 refuses an existing destination; use a fresh run-owned path instead of merging
 with a partial copy. Never use `ditto` for live OpenClaw state and never chain
 copy and import in one shell command.
+
+`configPathReplacements: 0` proves only that no exact source-root string was
+rewritten. Before import, explicitly inspect path-bearing config such as
+`agents.defaults.workspace`, config includes, and plugin load paths; repair only
+the staged copy when any still resolves outside the run root.
 
 ## 3. Import and upgrade
 
@@ -56,8 +69,22 @@ ocm @<env> -- config set gateway.mode local
 ocm @<env> -- config get agents.defaults.workspace
 ocm @<env> -- config get plugins.load.paths
 ocm @<env> -- plugins list --json
-ocm @<env> -- plugins update --all --dry-run
+ocm @<env> -- plugins registry --json > <run-root>/plugin-registry.json
+node .agents/skills/openclaw-release-validation/scripts/release-validation.mts \
+  check-plugin-isolation \
+  --registry <run-root>/plugin-registry.json \
+  --allowed-root <run-root> \
+  --allowed-root <exact-verified-runtime-root>
 ```
+
+Registry refresh is discovery, not relocation: it can preserve copied
+`installPath`, `sourcePath`, `rootDir`, `source`, or `manifestPath` values that
+still target the source gateway or an unrelated checkout. The isolation receipt
+must pass before any plugin `install`, `update`, or `uninstall`. Capture a fresh
+registry receipt and rerun the guard immediately before every such mutation and
+again afterward. Never run global plugin update unless every durable install
+record and enabled plugin root passes. An inactive stale record may remain a
+finding, but no lifecycle command may target it.
 
 Treat plugin load or SDK incompatibility as a release finding. Prefer the
 supported plugin updater when it offers a compatible version. If it cannot
@@ -91,6 +118,12 @@ substitute broad `status` when copied credentials lack `operator.read`;
 ## 6. Restore
 
 On pause, stop, failure, or cleanup, update `run.json` first. Stop the fixture
-before restoring any prior credential owner. Restore every gateway to its
-recorded prior desired state, confirm its listener/readiness, and list any
-retained run-owned resources explicitly.
+and publish the current run comment before restoring any prior credential
+owner. Restore only when the source identity and lifecycle owner still match
+the ledger. Confirm the prior desired state, listener, and health separately.
+
+Source restoration and run-owned cleanup have independent dispositions. A
+restore blocker does not block comment publication or destruction of the
+fixture/runtime/checkout. Leave a blocked source safely stopped and retain its
+ledger, backup, blocker evidence, and exact recovery action. Update the same
+run comment after cleanup, and list every retained recovery artifact explicitly.

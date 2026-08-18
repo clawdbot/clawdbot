@@ -21,8 +21,14 @@ seven phases. Keep exactly one phase in progress and check each off visibly:
 3. Prepare the isolated candidate runtime.
 4. Create or import the fixture and upgrade it.
 5. Choose the subsystem scope and complete only those missions.
-6. Publish feedback and record the promotion vote.
-7. Destroy run-owned resources and restore any source gateway stopped here.
+6. On exit, collect feedback and the promotion vote, stop the fixture, and
+   publish the run comment.
+7. Restore the source when safe, destroy run-owned resources, update the same
+   comment, and report any retained recovery artifacts.
+
+Tell the tester near the beginning, exactly: **Reply exactly `finish
+validation` to end the run.** This is the run's control phrase at any point,
+including before a mission finishes.
 
 The detailed mission source of truth is
 `references/subsystem-checklist.json`. Print the compact test menu at any time:
@@ -53,8 +59,12 @@ Ask the tester to choose one:
 - `copied`: existing-user upgrade journey.
 
 For `copied`, discover stopped and running OCM environments plus plain
-`~/.openclaw`. Show each detected version and running state, then ask which
-gateway to copy. Never silently choose the personal gateway.
+`~/.openclaw`. Show each detected version, actual process/listener state,
+desired service state, and health, then ask which gateway to copy. Never
+silently choose the personal gateway. Re-read those facts immediately before
+the first source-affecting action. If a desired-running source is already
+unhealthy, disclose that baseline and promise restoration only to its safe
+prior desired state, not to health the run did not inherit.
 
 Before preparing a copied fixture, read `references/copied-fixture.md`
 completely. It owns the exact staging, path normalization, plugin preflight,
@@ -111,6 +121,7 @@ Then handle one selected mission at a time:
 3. Record `pass`, `fail`, `blocked`, `skipped`, or `n/a` plus their note.
 4. Count `fail` and `blocked` as completed coverage; require a useful note.
 5. Update the visible checklist immediately.
+6. Say exactly: **Reply exactly `finish validation` to end the run.**
 
 Reveal the next mission's detailed procedure only when the tester chooses or
 reaches it. Keep the compact overview available without dumping every mission's
@@ -121,20 +132,45 @@ source is stopped. Then remove that channel's configuration from the copied
 fixture, configure it again from scratch, and repeat the round trip. Never
 remove channel configuration from the source gateway.
 
-## 6. Feedback and vote
+## 6. Exit, feedback, and first publication
 
 After each mission, retain concise notes and only the smallest relevant log
 sample. Redact credentials, pairing codes, private endpoints, user identifiers,
 and secret-bearing config. Keep successful rows quiet.
 
-At the end, ask exactly: **Is this release polished enough to promote?** Record
-`yes` or `no`; the skill does not make the release decision. Upsert one run
-comment on the campaign issue containing candidate identity, fixture, source
-gateway version/commit when applicable, every mission result, notes, and vote.
+When the tester submits exactly `finish validation`, stop mission work. In one
+prompt, ask for any final feedback and ask exactly: **Is this release polished
+enough to promote?** Require a `yes` or `no`; the skill does not make the
+release decision.
 
-## 7. Cleanup
+After recording both answers in `run.json`:
 
-Destroy only envs, runtimes, checkouts, and artifacts owned by this run. If the
-run stopped a source gateway, stop the copied fixture first and restore the
-source. Confirm the source's prior running state and report any retained
-resources explicitly.
+1. Stop the validation fixture and confirm its listener is gone.
+2. Upsert the single marker-based, redacted run comment immediately, before
+   source restoration or destructive cleanup. Include candidate identity,
+   fixture/source identity, mission results, setup findings, final feedback,
+   vote, current cleanup state, and retained artifacts.
+
+```sh
+node .agents/skills/openclaw-release-validation/scripts/release-validation.mts comment \
+  --run <run-root>/run.json
+```
+
+Comment publication is independent of restoration and cleanup: a blocker in
+either must never delay or suppress the campaign record.
+
+## 7. Restore, cleanup, and final publication
+
+With the fixture stopped, restore a source only when the exact recorded source,
+lifecycle owner, and prior desired state still match. Destroy run-owned envs,
+runtimes, and checkouts independently of whether source restoration succeeds.
+Do not destroy the ledger or backup until restoration is confirmed.
+
+If restoration is blocked, leave the source safely stopped; retain the ledger,
+backup, and any recovery receipt; and record the blocker plus one exact next
+action. Do not ask the tester to invent or select an unavailable runtime merely
+to finish cleanup.
+
+Finally, update cleanup state in `run.json` and run `comment --run` again. It
+must update the same marker comment, never create a second one. Report the
+source disposition and exact retained artifact paths to the tester.

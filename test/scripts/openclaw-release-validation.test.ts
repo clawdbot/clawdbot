@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
@@ -15,6 +15,7 @@ import {
   renderMissionOverview,
   renderRunComment,
   selectLatestBetaRelease,
+  upsertRunComment,
 } from "../../.agents/skills/openclaw-release-validation/scripts/release-validation.mts";
 
 const releaseValidationScript = fileURLToPath(
@@ -93,6 +94,10 @@ describe("openclaw release validation", () => {
         version: "2026.6.1-beta.1",
         commit: "b".repeat(40),
         wasRunning: false,
+        desiredRunning: false,
+        wasListening: false,
+        health: "unknown",
+        observedAt: "2026-08-17T20:00:00.000Z",
       },
       scenarios: [
         { id: "pairing", title: "Pairing" },
@@ -160,6 +165,10 @@ describe("openclaw release validation", () => {
         version: "2026.6.1-beta.1",
         commit: "b".repeat(40),
         wasRunning: false,
+        desiredRunning: false,
+        wasListening: false,
+        health: "unknown",
+        observedAt: "2026-08-17T20:00:00.000Z",
       },
       scenarios: [{ id: "memory", title: "Memory" }],
     });
@@ -168,13 +177,71 @@ describe("openclaw release validation", () => {
       notes: "Remembered the canary after restart.",
     });
 
-    const comment = renderRunComment({ ...updated, promotionVote: "yes" });
+    const comment = renderRunComment({
+      ...updated,
+      promotionVote: "yes",
+      finalFeedback: "The model switch was clear. API_KEY=secret-value",
+      findings: ["Source restoration is blocked by its pre-existing schema mismatch."],
+      cleanup: {
+        fixtureStopped: true,
+        sourceRestoration: "blocked",
+        sourceRestorationNote: "Source remains safely stopped.",
+        retainedArtifacts: ["~/recovery/run-123/run.json", "~/recovery/run-123/source-backup"],
+      },
+    });
 
     expect(comment).toContain("<!-- openclaw-release-validation-run:run-123 -->");
     expect(comment).toContain("**Candidate:** `v2026.8.1-beta.3`");
     expect(comment).toContain("**Source:** `beta` · `2026.6.1-beta.1`");
     expect(comment).toContain("| Memory | pass | Remembered the canary after restart. |");
+    expect(comment).toContain("The model switch was clear. API_KEY=[REDACTED]");
+    expect(comment).toContain("Source restoration: blocked — Source remains safely stopped.");
+    expect(comment).toContain("Retained recovery artifact: ~/recovery/run-123/source-backup");
     expect(comment).toContain("**Polished enough to promote?** Yes");
+  });
+
+  it("updates the existing marker comment instead of creating a second comment", async () => {
+    const state = createRunState({
+      runId: "run-123",
+      candidateTag: "v2026.8.1-beta.3",
+      candidateSha: "a".repeat(40),
+      fixture: "clean",
+      issueNumber: 124600,
+      envName: "release-validation-run-123",
+      scenarios: [],
+    });
+    const createComment = vi.fn();
+    const updateComment = vi.fn(async (commentId: number, body: string) => ({
+      id: commentId,
+      body,
+    }));
+
+    await expect(
+      upsertRunComment({
+        state,
+        listComments: async () => [
+          { id: 42, body: "<!-- openclaw-release-validation-run:run-123 -->\nold" },
+        ],
+        createComment,
+        updateComment,
+      }),
+    ).resolves.toEqual({ commentId: 42, created: false });
+    expect(createComment).not.toHaveBeenCalled();
+    expect(updateComment).toHaveBeenCalledOnce();
+    expect(updateComment.mock.calls[0]?.[1]).toContain(
+      "**Polished enough to promote?** No verdict",
+    );
+
+    state.github.commentId = 42;
+    await expect(
+      upsertRunComment({
+        state,
+        listComments: async () => [],
+        createComment,
+        updateComment,
+      }),
+    ).rejects.toThrow("refusing to create a duplicate");
+    expect(createComment).not.toHaveBeenCalled();
   });
 
   it("copies real state into a run-owned root before upgrading the imported fixture", () => {
@@ -189,6 +256,10 @@ describe("openclaw release validation", () => {
         version: "2026.6.1-beta.1",
         commit: "b".repeat(40),
         wasRunning: true,
+        desiredRunning: true,
+        wasListening: true,
+        health: "healthy",
+        observedAt: "2026-08-17T20:00:00.000Z",
         stateDir: "/home/tester/.ocm/envs/beta/.openclaw",
       },
     });
@@ -200,6 +271,8 @@ describe("openclaw release validation", () => {
       "upgrade-copy",
       "normalize-local-gateway",
       "preflight-copy",
+      "enforce-plugin-isolation",
+      "preview-plugin-updates-after-isolation",
       "enforce-single-channel-owner",
       "start-copy",
       "verify-copy",
@@ -353,12 +426,94 @@ describe("openclaw release validation", () => {
     const overview = renderMissionOverview(manifest, "copied");
 
     expect(overview).toContain("Choose any numbers or names");
+    expect(overview).toContain("Reply exactly `finish validation` to end the run.");
     expect(overview).toContain("1. Pairing");
     expect(overview).toContain("19. OpenClaw harness");
     expect(overview).not.toContain("Pair one new client or sender");
 
     const details = renderMissionDetails(manifest, "copied", "pairing");
     expect(details).toContain("Pair one new client or sender");
+    expect(details).toContain("Reply exactly `finish validation` to end the run.");
     expect(details).not.toContain("Channels");
+  });
+
+  it("blocks plugin lifecycle work when copied registry paths escape the fixture", () => {
+    const root = mkdtempSync("/tmp/openclaw-rv-plugin-isolation-");
+    const runRoot = path.join(root, "run");
+    const runtimeRoot = path.join(root, "runtime");
+    const sourceRoot = path.join(root, "source");
+    const registryPath = path.join(root, "registry.json");
+    mkdirSync(runRoot);
+    mkdirSync(runtimeRoot);
+    mkdirSync(sourceRoot);
+    writeFileSync(
+      registryPath,
+      JSON.stringify({
+        state: "fresh",
+        persisted: {
+          installRecords: {
+            whatsapp: {
+              source: "clawhub",
+              installPath: path.join(sourceRoot, "extensions", "whatsapp"),
+            },
+          },
+          plugins: [],
+        },
+        current: {
+          installRecords: {
+            whatsapp: {
+              source: "clawhub",
+              installPath: path.join(sourceRoot, "extensions", "whatsapp"),
+            },
+          },
+          plugins: [
+            {
+              pluginId: "whatsapp",
+              enabled: true,
+              rootDir: path.join(sourceRoot, "extensions", "whatsapp"),
+            },
+            {
+              pluginId: "telegram",
+              enabled: true,
+              rootDir: path.join(runtimeRoot, "extensions", "telegram"),
+            },
+          ],
+        },
+      }),
+    );
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          releaseValidationScript,
+          "check-plugin-isolation",
+          "--registry",
+          registryPath,
+          "--allowed-root",
+          runRoot,
+          "--allowed-root",
+          runtimeRoot,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        violations: [
+          {
+            pluginId: "whatsapp",
+            field: "installPath",
+          },
+          {
+            pluginId: "whatsapp",
+            field: "rootDir",
+          },
+        ],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
