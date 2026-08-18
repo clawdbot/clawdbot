@@ -13,7 +13,7 @@ import { readPersistedAuthProfileStateRaw, type AuthProfileDatabase } from "./sq
 import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
-  AuthProfileCooldownReason,
+  AuthProfileCooldownClassification,
   AuthProfileFailureReason,
   AuthProfileState,
   AuthProfileStateStore,
@@ -35,8 +35,7 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
   "unclassified",
   "unknown",
 ]);
-const AUTH_COOLDOWN_REASONS = new Set<AuthProfileCooldownReason>([
-  ...AUTH_FAILURE_REASONS,
+const AUTH_COOLDOWN_CLASSIFICATIONS = new Set<AuthProfileCooldownClassification>([
   "wham_token_expired",
   "wham_account_dead",
 ]);
@@ -119,7 +118,11 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     blockedModel: normalizeOptionalString(raw.blockedModel),
     blockedScope: raw.blockedScope === "model" ? "model" : undefined,
     cooldownUntil: asFiniteNumber(raw.cooldownUntil),
-    cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_COOLDOWN_REASONS),
+    cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
+    cooldownClassification: normalizeEnumValue(
+      raw.cooldownClassification,
+      AUTH_COOLDOWN_CLASSIFICATIONS,
+    ),
     cooldownModel: normalizeOptionalString(raw.cooldownModel),
     disabledUntil: asFiniteNumber(raw.disabledUntil),
     disabledReason: normalizeEnumValue(raw.disabledReason, AUTH_FAILURE_REASONS),

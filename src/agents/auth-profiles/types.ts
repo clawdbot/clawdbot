@@ -78,7 +78,7 @@ export type OAuthCredential = OAuthCredentials & {
 /** Credential variants supported by auth profiles. */
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
 
-/** Closed request-failure reasons that drive failover, disable, and failure counters. */
+/** Closed reasons that drive cooldown, disable, and failure counters. */
 export type AuthProfileFailureReason =
   | "auth"
   | "auth_permanent"
@@ -94,11 +94,8 @@ export type AuthProfileFailureReason =
   | "unclassified"
   | "unknown";
 
-/** Persisted cooldown classifications, including profile-wide WHAM auth findings. */
-export type AuthProfileCooldownReason =
-  | AuthProfileFailureReason
-  | "wham_token_expired"
-  | "wham_account_dead";
+/** Optional host diagnostic attached to a canonical cooldown reason. */
+export type AuthProfileCooldownClassification = "wham_token_expired" | "wham_account_dead";
 
 /** Profile-wide blocked reason reported by provider usage probes. */
 export type AuthProfileBlockedReason = "subscription_limit";
@@ -114,7 +111,8 @@ export type ProfileUsageStats = {
   blockedModel?: string;
   blockedScope?: "model";
   cooldownUntil?: number;
-  cooldownReason?: AuthProfileCooldownReason;
+  cooldownReason?: AuthProfileFailureReason;
+  cooldownClassification?: AuthProfileCooldownClassification;
   cooldownModel?: string;
   disabledUntil?: number;
   disabledReason?: AuthProfileFailureReason;

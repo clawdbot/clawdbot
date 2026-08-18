@@ -5,7 +5,7 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import type { AuthProfileCooldownReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 /** Returns true for providers whose auth-profile cooldowns are provider-managed. */
 export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
@@ -19,9 +19,7 @@ export function isAuthCooldownBypassedForProvider(provider: string | undefined):
 // models, so it stays model-scoped too. Other reasons (auth, billing, format,
 // server_error) remain profile-wide.
 /** Returns true when a failure should only cool down the failing model. */
-export function isModelScopedCooldownReason(
-  reason: AuthProfileCooldownReason | undefined,
-): boolean {
+export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | undefined): boolean {
   return reason === "rate_limit" || reason === "timeout" || reason === "model_not_found";
 }
 
@@ -228,6 +226,7 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     if (cooldownExpired) {
       stats.cooldownUntil = undefined;
       stats.cooldownReason = undefined;
+      stats.cooldownClassification = undefined;
       stats.cooldownModel = undefined;
       profileMutated = true;
     }

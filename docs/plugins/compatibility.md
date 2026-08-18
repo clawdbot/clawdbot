@@ -115,16 +115,15 @@ triage; use the published-artifact sweep before authorizing removal.
 
 ### Auth profile cooldown classifications
 
-`AuthProfileStore.usageStats[*].cooldownReason` is a host diagnostic
-classification. It currently includes the canonical `AuthProfileFailureReason`
-values plus `wham_token_expired` and `wham_account_dead`.
+`AuthProfileStore.usageStats[*].cooldownReason` remains the closed canonical
+`AuthProfileFailureReason` union. Host policy records WHAM HTTP 401 as `auth`
+and HTTP 403 as `auth_permanent`.
 
-Treat cooldown classifications as additive: plugin code should keep a fallback
-path instead of exhaustively assuming the original failure-reason set. For
-canonical failover policy, call `resolveProfilesUnavailableReason`, which
-projects `wham_token_expired` to `auth` and `wham_account_dead` to
-`auth_permanent`. Detailed cooldown values are diagnostic and presentation
-facts, not a new authorization signal.
+`cooldownClassification` is an optional additive host diagnostic. Its current
+values are `wham_token_expired` and `wham_account_dead`. Plugins that display
+this field must keep a default or fallback for future optional classifications.
+Canonical failover uses `resolveProfilesUnavailableReason`; the diagnostic is
+presentation state only and must never be used as authorization.
 
 ### Channel prompt-context identifier aliases
 

@@ -6,6 +6,7 @@ import {
   resolveAuthProfileOrder,
   resolveProfileUnusableUntilForDisplay,
   type AuthProfileCredential,
+  type AuthProfileFailureReason,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -516,16 +517,10 @@ function extractEmailFromProfileId(profileId: string): string | undefined {
 }
 
 function describeFailureStatus(
-  reason: NonNullable<AuthProfileStore["usageStats"]>[string]["cooldownReason"],
+  reason: AuthProfileFailureReason | undefined,
   credential: AuthProfileCredential | undefined,
 ): string {
-  if (
-    reason === "auth" ||
-    reason === "auth_permanent" ||
-    reason === "session_expired" ||
-    reason === "wham_token_expired" ||
-    reason === "wham_account_dead"
-  ) {
+  if (reason === "auth" || reason === "auth_permanent" || reason === "session_expired") {
     return credential?.type === "api_key" ? "auth failed - check key" : "sign-in expired";
   }
   if (reason === "billing") {

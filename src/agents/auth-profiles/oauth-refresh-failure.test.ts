@@ -17,8 +17,8 @@ import {
 } from "./oauth-refresh-failure.js";
 
 describe("buildAuthProfileUnusableHint", () => {
-  it.each(["wham_token_expired", "wham_account_dead"] as const)(
-    "gives re-authentication guidance for %s cooldowns",
+  it.each(["auth", "auth_permanent"] as const)(
+    "gives re-authentication guidance for canonical %s cooldowns",
     (reason) => {
       expect(
         buildAuthProfileUnusableHint({

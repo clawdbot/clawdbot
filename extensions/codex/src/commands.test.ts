@@ -2741,9 +2741,12 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["wham_token_expired", "wham_account_dead"] as const)(
-    "shows %s subscription cooldowns as sign-in expired",
-    async (cooldownReason) => {
+  it.each([
+    ["auth", "wham_token_expired"],
+    ["auth_permanent", "wham_account_dead"],
+  ] as const)(
+    "shows %s subscription cooldowns classified as %s as sign-in expired",
+    async (cooldownReason, cooldownClassification) => {
       const config = {};
       const now = Date.now();
       installAuthProfileStore(
@@ -2771,6 +2774,7 @@ describe("codex command", () => {
             "openai:expired@example.com": {
               cooldownUntil: now + 60 * 60 * 1000,
               cooldownReason,
+              cooldownClassification,
             },
           },
         },

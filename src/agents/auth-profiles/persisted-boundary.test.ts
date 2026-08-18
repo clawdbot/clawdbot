@@ -22,19 +22,23 @@ import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 describe("persisted auth profile boundary", () => {
   it.each(["wham_token_expired", "wham_account_dead"] as const)(
     "retains %s cooldown classification through state normalization",
-    (cooldownReason) => {
+    (cooldownClassification) => {
+      const cooldownReason =
+        cooldownClassification === "wham_token_expired" ? "auth" : "auth_permanent";
       const persisted = buildPersistedAuthProfileState({
         usageStats: {
           "openai:default": {
             cooldownUntil: 1_900_000_000_000,
             cooldownReason,
+            cooldownClassification,
           },
         },
       });
 
-      expect(coerceAuthProfileState(persisted).usageStats?.["openai:default"]?.cooldownReason).toBe(
+      expect(coerceAuthProfileState(persisted).usageStats?.["openai:default"]).toMatchObject({
         cooldownReason,
-      );
+        cooldownClassification,
+      });
     },
   );
 

@@ -21,7 +21,7 @@ import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { updateAuthProfileStoreWithLock } from "./store.js";
 import type {
   AuthProfileBlockedSource,
-  AuthProfileCooldownReason,
+  AuthProfileCooldownClassification,
   AuthProfileCredential,
   AuthProfileFailureReason,
   AuthProfileStore,
@@ -134,10 +134,16 @@ type WhamCooldownProbeResult = {
   blockedSource?: AuthProfileBlockedSource;
 };
 
-function resolveWhamAuthCooldownReason(
+function resolveWhamCooldownClassification(
   reason: string,
-): Extract<AuthProfileCooldownReason, `wham_${string}`> | undefined {
+): AuthProfileCooldownClassification | undefined {
   return reason === "wham_token_expired" || reason === "wham_account_dead" ? reason : undefined;
+}
+
+function resolveWhamCanonicalCooldownReason(
+  classification: AuthProfileCooldownClassification,
+): Extract<AuthProfileFailureReason, "auth" | "auth_permanent"> {
+  return classification === "wham_token_expired" ? "auth" : "auth_permanent";
 }
 
 function shouldProbeWhamForFailure(
@@ -249,10 +255,11 @@ function applyWhamCooldownResult(params: {
       blockedScope: undefined,
       cooldownUntil: undefined,
       cooldownReason: undefined,
+      cooldownClassification: undefined,
       cooldownModel: undefined,
     };
   }
-  const whamAuthCooldownReason = resolveWhamAuthCooldownReason(params.whamResult.reason);
+  const cooldownClassification = resolveWhamCooldownClassification(params.whamResult.reason);
   return {
     ...params.computed,
     lastProbeAt: params.now,
@@ -260,8 +267,11 @@ function applyWhamCooldownResult(params: {
       existingActiveCooldownUntil,
       resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
     ),
-    cooldownReason: whamAuthCooldownReason ?? params.computed.cooldownReason,
-    cooldownModel: whamAuthCooldownReason ? undefined : params.computed.cooldownModel,
+    cooldownReason: cooldownClassification
+      ? resolveWhamCanonicalCooldownReason(cooldownClassification)
+      : params.computed.cooldownReason,
+    cooldownClassification,
+    cooldownModel: cooldownClassification ? undefined : params.computed.cooldownModel,
   };
 }
 
@@ -320,7 +330,7 @@ async function probeWhamForCooldown(
           event: "auth_profile_wham_auth_classification",
           profileId,
           status: res.status,
-          cooldownReason: result.reason,
+          cooldownClassification: result.reason,
           cooldownMs: result.cooldownMs,
           tags: ["auth_profiles", "provider_probe"],
         });
@@ -650,9 +660,9 @@ export function resolveProfilesUnavailableReason(params: {
     }
 
     const whamUnavailableReason =
-      stats.cooldownReason === "wham_token_expired"
+      stats.cooldownClassification === "wham_token_expired"
         ? "auth"
-        : stats.cooldownReason === "wham_account_dead"
+        : stats.cooldownClassification === "wham_account_dead"
           ? "auth_permanent"
           : null;
     if (whamUnavailableReason) {
@@ -827,6 +837,7 @@ function resetUsageStats(
     blockedScope: undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
+    cooldownClassification: undefined,
     cooldownModel: undefined,
     disabledUntil: undefined,
     disabledReason: undefined,
@@ -898,6 +909,9 @@ function computeNextProfileUsageStats(params: {
 
   const updatedStats: ProfileUsageStats = {
     ...params.existing,
+    // Exact provider diagnostics describe only the cooldown generation that
+    // produced them; every ordinary failure replaces that diagnostic state.
+    cooldownClassification: undefined,
     errorCount: nextErrorCount,
     failureCounts,
     lastFailureAt: params.now,
@@ -1100,6 +1114,7 @@ function buildBlockedProfileUsageStats(params: {
     blockedScope: blockedModel ? "model" : undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
+    cooldownClassification: undefined,
     cooldownModel: undefined,
     lastFailureAt: params.now,
     failureCounts: {
