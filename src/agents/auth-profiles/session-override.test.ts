@@ -17,7 +17,6 @@ import {
   createAutomaticSessionEntry,
   prepareCooldownAuthState,
   resolveSession,
-  resolveSessionAuthProfileOverride,
   TEST_PRIMARY_PROFILE_ID,
   TEST_SECONDARY_PROFILE_ID,
   withAuthState,
@@ -36,7 +35,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
+      const resolved = await resolveSession({
         cfg: {} as OpenClawConfig,
         provider: "openrouter",
         agentDir,
@@ -74,7 +73,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
+      const resolved = await resolveSession({
         cfg: {} as OpenClawConfig,
         provider: "z.ai",
         agentDir,
@@ -105,7 +104,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
+      const resolved = await resolveSession({
         cfg: {
           models: {
             providers: {
@@ -163,7 +162,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
+      const resolved = await resolveSession({
         cfg: {
           models: {
             providers: {
@@ -230,7 +229,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
+      const resolved = await resolveSession({
         cfg: {} as OpenClawConfig,
         provider: "openai",
         agentDir,
@@ -273,7 +272,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
+      const resolved = await resolveSession({
         cfg: {} as OpenClawConfig,
         provider: "codex-cli",
         agentDir,
@@ -315,10 +314,9 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
+      const resolved = await resolveSession({
         cfg: {} as OpenClawConfig,
         provider: "openai",
-        acceptedProviderIds: ["openai"],
         agentDir,
         sessionEntry,
         sessionStore,
@@ -363,10 +361,9 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
+      const resolved = await resolveSession({
         cfg: {} as OpenClawConfig,
         provider: "openai",
-        acceptedProviderIds: ["openai"],
         agentDir,
         sessionEntry,
         sessionStore,
@@ -415,7 +412,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
+      const resolved = await resolveSession({
         cfg: {} as OpenClawConfig,
         provider: "openai",
         agentDir,

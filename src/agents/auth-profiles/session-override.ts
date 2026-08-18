@@ -2,6 +2,7 @@
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderModelRouteAuthRequirement } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -15,6 +16,8 @@ import {
   isModelScopedCooldownReason,
 } from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
 
 const sessionAccessorLoader = createLazyImportLoader(
@@ -33,6 +36,21 @@ type SessionAuthProfileOverrideState = Pick<
 >;
 type SessionAuthProfileOverrideSnapshot = SessionAuthProfileOverrideState &
   Pick<SessionEntry, "sessionId">;
+type SessionAuthProfileOverrideResult = {
+  profileId: string | undefined;
+  store: ReturnType<typeof ensureAuthProfileStore> | undefined;
+};
+
+function profileAuthRequirement(params: {
+  cfg: OpenClawConfig;
+  store: ReturnType<typeof ensureAuthProfileStore> | undefined;
+  profileId: string;
+}): ProviderModelRouteAuthRequirement | undefined {
+  return resolveProviderModelRouteAuthRequirement(
+    params.store?.profiles[params.profileId]?.type ??
+      params.cfg.auth?.profiles?.[params.profileId]?.mode,
+  );
+}
 
 function applySessionAuthProfileOverrideState(
   entry: SessionEntry,
@@ -224,10 +242,10 @@ export async function clearSessionAuthProfileOverride(params: {
   });
 }
 
-/** Resolves and optionally rotates the session auth-profile override. */
-export async function resolveSessionAuthProfileOverride(params: {
+async function resolveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   provider: string;
+  modelId: string;
   agentDir: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -235,7 +253,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   storePath?: string;
   isNewSession: boolean;
   acceptedProviderIds?: string[];
-}): Promise<string | undefined> {
+}): Promise<SessionAuthProfileOverrideResult> {
   const {
     cfg,
     provider,
@@ -247,7 +265,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     isNewSession,
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
-    return sessionEntry?.authProfileOverride;
+    return { profileId: sessionEntry?.authProfileOverride, store: undefined };
   }
 
   const hasConfiguredAuthProfiles =
@@ -258,7 +276,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     !hasConfiguredAuthProfiles &&
     !hasAnyAuthProfileStoreSource(agentDir)
   ) {
-    return undefined;
+    return { profileId: undefined, store: undefined };
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
@@ -296,7 +314,7 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   // Explicit user pins are strict until the profile disappears or changes provider.
   if (source === "user" && current) {
-    return current;
+    return { profileId: current, store };
   }
 
   // Automatic pins must stay inside the currently configured rotation order.
@@ -306,7 +324,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (order.length === 0) {
-    return undefined;
+    return { profileId: undefined, store };
   }
 
   if (order.every((profileId) => isProfileGloballyInCooldown(store, profileId))) {
@@ -331,13 +349,17 @@ export async function resolveSessionAuthProfileOverride(params: {
       });
       const latestProfileId = latest?.authProfileOverride;
       const latestSource = resolveSessionAuthProfileOverrideSource(latest);
-      return latestProfileId &&
-        latestSource === "user" &&
-        isProfileForProvider({ cfg, providers, profileId: latestProfileId, store })
-        ? latestProfileId
-        : undefined;
+      return {
+        profileId:
+          latestProfileId &&
+          latestSource === "user" &&
+          isProfileForProvider({ cfg, providers, profileId: latestProfileId, store })
+            ? latestProfileId
+            : undefined,
+        store,
+      };
     }
-    return undefined;
+    return { profileId: undefined, store };
   }
 
   const isProfileUnavailableForSessionModel = (profileId: string) =>
@@ -352,19 +374,17 @@ export async function resolveSessionAuthProfileOverride(params: {
     Boolean(current) && !isNewSession && (currentUnavailable || compactionCount > storedCompaction);
 
   // Provider artifacts own persisted route stickiness; runtime planning owns cross-route failover.
-  const profileAuthRequirement = (profileId: string) =>
-    resolveProviderModelRouteAuthRequirement(
-      store.profiles[profileId]?.type ?? cfg.auth?.profiles?.[profileId]?.mode,
-    );
   const routeResolution = shouldRotateCurrent
-    ? resolveProviderModelRoutes({ provider, modelId: sessionEntry.model, config: cfg })
+    ? resolveProviderModelRoutes({ provider, modelId: params.modelId, config: cfg })
     : null;
   const currentAuthRequirement =
     current && routeResolution?.kind === "routes" && routeResolution.routes.length > 1
-      ? profileAuthRequirement(current)
+      ? profileAuthRequirement({ cfg, store, profileId: current })
       : undefined;
   const rotationOrder = currentAuthRequirement
-    ? order.filter((profileId) => profileAuthRequirement(profileId) === currentAuthRequirement)
+    ? order.filter(
+        (profileId) => profileAuthRequirement({ cfg, store, profileId }) === currentAuthRequirement,
+      )
     : order;
   const pickAvailable = (active?: string) => {
     const startIndex = active ? rotationOrder.indexOf(active) : -1;
@@ -385,7 +405,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (!next) {
-    return current;
+    return { profileId: current, store };
   }
   const shouldPersist =
     next !== sessionEntry.authProfileOverride ||
@@ -405,5 +425,52 @@ export async function resolveSessionAuthProfileOverride(params: {
     });
   }
 
-  return next;
+  return { profileId: next, store };
+}
+
+type SessionAuthSelection = {
+  profileId: string;
+  source: "auto" | "user";
+  routeRequirement: ProviderModelRouteAuthRequirement | undefined;
+};
+
+/** Resolves the session credential and its prepared route facts. */
+export async function resolveSessionAuthSelection(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  configuredProfileId?: string;
+  harnessRuntime?: string;
+  agentDir: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  isNewSession: boolean;
+}): Promise<SessionAuthSelection | undefined> {
+  const { profileId: rotatedProfileId, store } = await resolveSessionAuthProfileOverride({
+    ...params,
+    modelId: splitTrailingAuthProfile(params.modelId).model,
+    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: params.provider,
+      harnessRuntime: params.harnessRuntime,
+      config: params.cfg,
+    }),
+  });
+  const rotatedSource = rotatedProfileId
+    ? params.sessionEntry?.authProfileOverride?.trim() === rotatedProfileId
+      ? (resolveSessionAuthProfileOverrideSource(params.sessionEntry) ?? "auto")
+      : "auto"
+    : undefined;
+  const rotatedUserProfileId = rotatedSource === "user" ? rotatedProfileId : undefined;
+  const configuredProfileId = params.configuredProfileId?.trim() || undefined;
+  const profileId = rotatedUserProfileId ?? configuredProfileId ?? rotatedProfileId;
+  if (!profileId) {
+    return undefined;
+  }
+  return {
+    profileId,
+    source: rotatedUserProfileId || configuredProfileId ? "user" : (rotatedSource ?? "auto"),
+    routeRequirement: profileAuthRequirement({ cfg: params.cfg, store, profileId }),
+  };
 }
