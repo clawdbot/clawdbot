@@ -84,7 +84,10 @@ function mergeCronEditPrecheckPatch(params: {
 }): Record<string, unknown> {
   const base =
     params.existingPrecheck && typeof params.existingPrecheck === "object"
-      ? { ...(params.existingPrecheck as Record<string, unknown>) }
+      ? {
+          // SAFETY: existing precheck object from gateway job; spread into a plain record for CLI patch merge.
+          ...(params.existingPrecheck as Record<string, unknown>),
+        }
       : {};
   const next: Record<string, unknown> = {
     ...base,

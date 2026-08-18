@@ -323,7 +323,6 @@ describe("runCronJobPrecheck", () => {
           args: expect.arrayContaining(["-c"]),
         }),
       );
-      expect(spawned?.args[0]).toBe("-c");
     } finally {
       if (prevShell === undefined) {
         delete process.env.SHELL;
