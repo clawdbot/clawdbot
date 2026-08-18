@@ -399,6 +399,10 @@ plugins can set `path` to a plugin HTTP route (see
 (`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
 hides the tab from connections lacking those operator scopes:
 
+Bundled plugins whose page already has a native Control UI route can set
+`placement: "route:<routeId>"`. The sidebar then opens that route directly while
+the descriptor is present instead of mounting the generic plugin-tab page.
+
 For a gateway-protected external tab, register the descriptor `path` under a
 same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a
 short-lived, HttpOnly grant scoped to that plugin and route root so the

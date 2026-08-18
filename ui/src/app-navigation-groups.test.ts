@@ -31,6 +31,12 @@ describe("sidebar entries", () => {
     expect(normalizeSidebarEntries(["route:worktrees", "route:usage"])).toEqual(["route:usage"]);
   });
 
+  it("keeps the plugin-owned Workboard parent out of customizable routes", () => {
+    expect(normalizeSidebarEntries(["route:workboard", "workboard:ops"])).toEqual([
+      "workboard:ops",
+    ]);
+  });
+
   it("recognizes every settings navigation route", () => {
     expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
   });

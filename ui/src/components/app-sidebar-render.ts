@@ -5,7 +5,7 @@ import {
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -383,14 +383,20 @@ export function renderAppSidebarPluginTabEntry(
 ) {
   const ref = { pluginId: tab.pluginId, id: tab.id };
   const key = pluginTabKey(ref);
+  const routePlacement = tab.placement?.startsWith("route:")
+    ? tab.placement.slice("route:".length)
+    : "";
+  const routeId = isRouteId(routePlacement) ? routePlacement : null;
   return html`
     <div class="sidebar-zone-entry" data-sidebar-entry=${`plugin:${key}`}>
-      ${renderSidebarPluginTab({
-        tab,
-        basePath: host.basePath,
-        active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
-        onNavigate: (search) => host.onNavigate?.("plugin", { search }),
-      })}
+      ${routeId
+        ? host.sidebarMenus.renderRoute(routeId)
+        : renderSidebarPluginTab({
+            tab,
+            basePath: host.basePath,
+            active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
+            onNavigate: (search) => host.onNavigate?.("plugin", { search }),
+          })}
     </div>
   `;
 }

@@ -17,7 +17,6 @@ type NavigationItem = {
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
-  "workboard",
   "dashboards",
   "usage",
   "cron",

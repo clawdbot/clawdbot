@@ -67,7 +67,7 @@ type SidebarMenusRenderer = {
   renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
 };
 
-export interface SidebarMenusControllerHost
+interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
   readonly activeWorkboardBoardId: string;
