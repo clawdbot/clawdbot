@@ -395,23 +395,17 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.discoverModels).toHaveBeenLastCalledWith(
       mocks.authStorage,
       expect.objectContaining({
+        config,
         includePluginCatalogs: true,
         modelsJsonContents: null,
         pluginCatalogs: [],
-        pluginMetadataSnapshot: expect.objectContaining({
-          ...mocks.metadataSnapshot,
-          index: expect.objectContaining({
-            ...mocks.metadataSnapshot.index,
-            workspaceDir: "/tmp/prepared-static-workspace",
-          }),
-          workspaceDir: "/tmp/prepared-static-workspace",
-        }),
+        pluginMetadataSnapshot: mocks.metadataSnapshot,
         workspaceDir: "/tmp/prepared-static-workspace",
       }),
     );
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
-    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(configuredRuntimeModelCount).toBe(1);
     expect(generatedCatalogReadCount).toBe(0);
     const snapshot = getPreparedModelRuntimeSnapshot({
