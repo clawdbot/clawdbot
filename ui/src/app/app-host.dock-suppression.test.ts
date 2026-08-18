@@ -33,6 +33,14 @@ describe("OpenClaw shell dock suppression", () => {
       "matchMedia",
       vi.fn(() => ({ matches: false })),
     );
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
     const client = {} as GatewayBrowserClient;
     const context = {
       basePath: "",
