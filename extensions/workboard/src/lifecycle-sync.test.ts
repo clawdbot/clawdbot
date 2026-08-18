@@ -798,9 +798,10 @@ describe("Workboard gateway lifecycle sync", () => {
     });
 
     await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "running",
       sessionKey: newerSessionKey,
       runId: "newer-run",
-      execution: { sessionKey: newerSessionKey, runId: "newer-run" },
+      execution: { status: "running", sessionKey: newerSessionKey, runId: "newer-run" },
     });
   });
 

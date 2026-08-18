@@ -538,13 +538,18 @@ export class WorkboardCoreStore {
         matches.find((card) => !card.metadata?.archivedAt) ??
         matches.find((card) => Boolean(card.metadata?.archivedAt));
       if (existing) {
-        return existing.metadata?.archivedAt
-          ? await this.updateCard(
-              existing.id,
-              { metadata: { ...existing.metadata, archivedAt: 0 } },
-              { expectedUpdatedAt: existing.updatedAt },
-            )
-          : existing;
+        if (!existing.metadata?.archivedAt) {
+          return existing;
+        }
+        const restored = await this.updateLatestCard(existing.id, (current) => {
+          if (cardSessionKey(current) !== sessionKey) {
+            throw new Error("captured session identity collision.");
+          }
+          return current.metadata?.archivedAt
+            ? { metadata: { ...current.metadata, archivedAt: 0 } }
+            : undefined;
+        });
+        return restored.card;
       }
       const digest = createHash("sha256")
         .update("openclaw.workboard.session-capture.v1\0")

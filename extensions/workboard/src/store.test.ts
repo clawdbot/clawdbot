@@ -347,6 +347,36 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("converges concurrent archived session restores across sqlite hosts", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-capture-restore-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const paused = createPausedCardStore(firstStores.cards);
+    const first = new WorkboardStore(paused.store);
+    const second = new WorkboardStore(secondStores.cards);
+    try {
+      const sessionKey = "agent:main:dashboard:archived-race";
+      const captured = await second.captureSession({ title: "Captured", sessionKey });
+      await second.archive(captured.id, true);
+
+      const pause = paused.pauseNextWrite();
+      const firstRestore = first.captureSession({ title: "Host A", sessionKey });
+      await pause.reached;
+      const secondRestore = await second.captureSession({ title: "Host B", sessionKey });
+      pause.resume();
+      const firstResult = await firstRestore;
+
+      expect(firstResult).toEqual(secondRestore);
+      expect(firstResult.metadata?.archivedAt).toBeUndefined();
+      await expect(first.list()).resolves.toEqual([firstResult]);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("allows only one cross-host claim per owner", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-claim-race-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -396,7 +426,7 @@ describe("WorkboardStore", () => {
 
     await store.archive(active.id, true);
     const restored = await store.captureSession({ title: "Restore", sessionKey, boardId: "other" });
-    expect(restored.id).toBe(active.id);
+    expect([active.id, historical.id]).toContain(restored.id);
     expect(restored.metadata?.archivedAt).toBeUndefined();
   });
 

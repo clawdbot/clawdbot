@@ -156,20 +156,21 @@ export class WorkboardStore extends WorkboardNotificationStore {
         }
         const patch: WorkboardCardPatch = {};
         let metadata: Record<string, unknown> | undefined;
+        const associationIsCurrent =
+          !input.association ||
+          ((input.sourceUpdatedAt === undefined ||
+            !shouldSkipPersistedLifecycleStatusUpdate(card, input.sourceUpdatedAt)) &&
+            cardSessionKey(card) === input.association.expectedSessionKey &&
+            cardRunId(card) === input.association.expectedRunId);
         // Recompute from the latest row after every cross-host CAS conflict.
         if (
+          associationIsCurrent &&
           input.sourceUpdatedAt !== undefined &&
           shouldSyncWorkboardLifecycleStatus(card, input.targetStatus)
         ) {
           patch.status = input.targetStatus;
           metadata = { lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt };
         }
-        const associationIsCurrent =
-          input.association &&
-          (input.sourceUpdatedAt === undefined ||
-            !shouldSkipPersistedLifecycleStatusUpdate(card, input.sourceUpdatedAt)) &&
-          cardSessionKey(card) === input.association.expectedSessionKey &&
-          cardRunId(card) === input.association.expectedRunId;
         const associationNeedsUpdate =
           input.association &&
           (card.sessionKey !== input.association.sessionKey ||
@@ -206,7 +207,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
             updatedAt: input.now,
           };
         }
-        if (input.stale) {
+        if (associationIsCurrent && input.stale) {
           const existing = card.metadata?.stale;
           if (
             !existing ||
@@ -218,7 +219,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
               stale: { ...input.stale, detectedAt: existing?.detectedAt ?? input.stale.detectedAt },
             };
           }
-        } else if (card.metadata?.stale) {
+        } else if (associationIsCurrent && card.metadata?.stale) {
           metadata = { ...metadata, stale: null };
         }
         if (metadata) {
