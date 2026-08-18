@@ -2840,24 +2840,28 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(expectedInstallCommand);
   });
 
-  it("refuses the GitHub main package target before npm pack or install", async () => {
+  it("updates global npm installs from the GitHub main package spec", async () => {
     const sourceSpec = "github:openclaw/openclaw#main";
     const { calls, result } = await runNpmGlobalUpdateCase({
-      expectedInstallCommand: npmGlobalInstallCommand("openclaw@never"),
+      expectedInstallCommand: (argv) =>
+        argv[0] === "npm" &&
+        argv[1] === "i" &&
+        argv[2] === "-g" &&
+        argv[3] === "--allow-scripts=./openclaw-2.0.0.tgz" &&
+        path.basename(argv[4] ?? "") === "openclaw-2.0.0.tgz" &&
+        argv.slice(5).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
       tag: "main",
     });
 
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ok");
     expect(result.mode).toBe("npm");
-    expect(result.reason).toBe("unsupported-package-target");
-    expect(result.steps).toEqual([
-      expect.objectContaining({
-        name: "package target validation",
-        stderrTail: expect.stringContaining("openclaw update --channel dev"),
-      }),
-    ]);
-    expect(calls.some((call) => call.includes(`npm pack ${sourceSpec}`))).toBe(false);
-    expect(calls.some((call) => call.startsWith("npm i -g"))).toBe(false);
+    expect(result.steps.map((step) => step.name)).toContain("global update pack");
+    expect(
+      calls.some((call) => call.startsWith(`npm pack ${sourceSpec} --pack-destination `)),
+    ).toBe(true);
+    const installCall = calls.find((call) => call.includes("openclaw-2.0.0.tgz"));
+    expect(installCall).toContain("--no-fund --no-audit --loglevel=error --min-release-age=0");
+    expect(installCall).not.toContain(sourceSpec);
   });
 
   it("runs doctor after global npm updates before reporting success", async () => {

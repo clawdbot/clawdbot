@@ -20,10 +20,8 @@ import {
   cleanupGlobalRenameDirs,
   globalInstallArgs,
   globalInstallFallbackArgs,
-  isOpenClawSourcePackageInstallSpec,
   listActivePnpmIsolatedGlobalPackages,
   readPackageManagerProbeValue,
-  SOURCE_PACKAGE_TARGET_ERROR,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
   resolvePnpmIsolatedInstallOwner,
@@ -868,25 +866,6 @@ export async function runGlobalPackageUpdateSteps(params: {
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
 }> {
-  if (isOpenClawSourcePackageInstallSpec(params.installSpec)) {
-    const packageRoot = params.packageRoot ?? params.installTarget.packageRoot;
-    const failedStep: PackageUpdateStepResult = {
-      name: "package target validation",
-      command: "validate OpenClaw package target",
-      cwd: packageRoot ?? process.cwd(),
-      durationMs: 0,
-      exitCode: 1,
-      stdoutTail: null,
-      stderrTail: SOURCE_PACKAGE_TARGET_ERROR,
-    };
-    return {
-      steps: [failedStep],
-      verifiedPackageRoot: packageRoot,
-      afterVersion: null,
-      failedStep,
-    };
-  }
-
   let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
 

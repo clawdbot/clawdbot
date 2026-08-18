@@ -186,7 +186,7 @@ ${theme.heading("Switch channels:")}
   - Use --channel stable|extended-stable|beta|dev to persist the update channel in config
   - Run openclaw update status to see the active channel and source
   - Use --tag <dist-tag|version|spec> for a one-off package update without persisting
-  - Use --channel dev for the moving GitHub main checkout; package installs reject OpenClaw Git source
+  - Use --channel dev for the moving GitHub main checkout; package installs reject --tag main
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts

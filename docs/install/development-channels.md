@@ -82,10 +82,10 @@ Notes:
 - `--tag` applies to **package (npm) installs only**; git installs ignore it.
 - The tag is not persisted; the next `openclaw update` uses the configured
   channel.
-- `--tag main` and equivalent official OpenClaw Git source specs are rejected
-  for package installs because the workspace checkout is not a self-contained
-  package artifact. Use `openclaw update --channel dev` (package installs switch
-  to a git checkout) or reinstall with the installer's git method:
+- The `--tag main` shorthand is rejected for package installs because the
+  workspace checkout is not a self-contained package artifact. Use
+  `openclaw update --channel dev` (package installs switch to a git checkout)
+  or reinstall with the installer's git method:
   `curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --version main`.
 - Downgrade protection: if the target version is older than the current
   version, OpenClaw prompts for confirmation (skip with `--yes`).
