@@ -37,6 +37,7 @@ import {
 import {
   createOpenAIModelRoutesResolver,
   openAIModelCatalogRoutePolicy,
+  resolveModelCatalogIdentityKey,
 } from "../../agents/openai-model-routes.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
@@ -144,7 +145,7 @@ function createModelsListEntryEvaluator(params: {
   const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
   return (entry, routeVariants = [entry]) => {
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
-    const cacheKey = resolveGatewayModelCatalogRouteKey(entry);
+    const cacheKey = resolveModelCatalogIdentityKey(entry);
     const cached = pending.get(cacheKey);
     if (cached) {
       return cached;
@@ -190,13 +191,6 @@ function createModelsListEntryEvaluator(params: {
   };
 }
 
-function resolveGatewayModelCatalogRouteKey(entry: ModelCatalogEntry): string {
-  return (
-    openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ??
-    `${normalizeProviderId(entry.provider)}/${entry.id}`
-  );
-}
-
 /** Configured dynamic-catalog providers that omit explicit model inventory. */
 function listConfiguredRuntimeDiscoveryProviderIds(
   cfg: OpenClawConfig,
@@ -232,7 +226,7 @@ function resolveProviderConfigInventoryEntries(params: {
 }): ModelCatalogEntry[] {
   const canonicalByKey = new Map<string, ModelCatalogEntry>();
   for (const entry of params.canonicalEntries) {
-    const key = resolveGatewayModelCatalogRouteKey(entry);
+    const key = resolveModelCatalogIdentityKey(entry);
     if (!canonicalByKey.has(key)) {
       canonicalByKey.set(key, entry);
     }
@@ -240,7 +234,7 @@ function resolveProviderConfigInventoryEntries(params: {
   const seen = new Set<string>();
   const inventory: ModelCatalogEntry[] = [];
   for (const authoredEntry of params.authoredEntries) {
-    const key = resolveGatewayModelCatalogRouteKey(authoredEntry);
+    const key = resolveModelCatalogIdentityKey(authoredEntry);
     if (seen.has(key)) {
       continue;
     }
@@ -253,7 +247,7 @@ function resolveProviderConfigInventoryEntries(params: {
     // Providers configured without explicit model lists (for example litellm)
     // surface their key-scoped discovered rows as the configured inventory.
     for (const canonicalEntry of params.canonicalEntries) {
-      const key = resolveGatewayModelCatalogRouteKey(canonicalEntry);
+      const key = resolveModelCatalogIdentityKey(canonicalEntry);
       if (seen.has(key)) {
         continue;
       }
@@ -291,17 +285,17 @@ export function createGatewayAgentModelCatalogProjector(params: {
       : params.snapshot.entries;
   const routeVariantsByKey = new Map<string, ModelCatalogEntry[]>();
   for (const entry of projectionCatalog) {
-    const key = resolveGatewayModelCatalogRouteKey(entry);
+    const key = resolveModelCatalogIdentityKey(entry);
     const variants = routeVariantsByKey.get(key) ?? [];
     variants.push(entry);
     routeVariantsByKey.set(key, variants);
   }
   const resolveRouteVariants = (entry: ModelCatalogEntry) =>
-    routeVariantsByKey.get(resolveGatewayModelCatalogRouteKey(entry)) ?? [entry];
+    routeVariantsByKey.get(resolveModelCatalogIdentityKey(entry)) ?? [entry];
   const logicalEntries: ModelCatalogEntry[] = [];
   const logicalEntryKeys = new Set<string>();
   for (const entry of params.snapshot.entries) {
-    const key = resolveGatewayModelCatalogRouteKey(entry);
+    const key = resolveModelCatalogIdentityKey(entry);
     if (!logicalEntryKeys.has(key)) {
       logicalEntryKeys.add(key);
       logicalEntries.push(entry);

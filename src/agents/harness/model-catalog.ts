@@ -1,4 +1,3 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -10,32 +9,23 @@ import {
 import { DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { resolveModelRefFromString } from "../model-selection-shared.js";
-import { openAIModelCatalogRoutePolicy } from "../openai-model-routes.js";
+import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
-function catalogKey(entry: Pick<ModelCatalogEntry, "provider" | "id">): string {
-  return (
-    openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ??
-    `${normalizeProviderId(entry.provider)}/${entry.id.trim().toLowerCase()}`
-  );
-}
-
-function mergeHarnessRows(
-  rows: readonly ModelCatalogEntry[],
-  existing: readonly ModelCatalogEntry[],
+function dedupeByKey(
+  entries: readonly ModelCatalogEntry[],
+  keyOf: (entry: ModelCatalogEntry) => string,
 ): ModelCatalogEntry[] {
-  const merged: ModelCatalogEntry[] = [];
-  const seen = new Set<string>();
-  for (const entry of [...rows, ...existing]) {
-    const key = catalogKey(entry);
-    if (!seen.has(key)) {
-      seen.add(key);
-      merged.push(entry);
+  const merged = new Map<string, ModelCatalogEntry>();
+  for (const entry of entries) {
+    const key = keyOf(entry);
+    if (!merged.has(key)) {
+      merged.set(key, entry);
     }
   }
-  return merged;
+  return [...merged.values()];
 }
 
 function normalizeRouteBaseUrl(value: string | undefined): string {
@@ -52,32 +42,27 @@ function normalizeRouteBaseUrl(value: string | undefined): string {
 }
 
 function routeVariantKey(entry: ModelCatalogEntry): string {
-  return [catalogKey(entry), entry.api ?? "", normalizeRouteBaseUrl(entry.baseUrl)].join("\0");
-}
-
-function mergeHarnessRouteVariants(
-  rows: readonly ModelCatalogEntry[],
-  existing: readonly ModelCatalogEntry[],
-): ModelCatalogEntry[] {
-  const merged: ModelCatalogEntry[] = [];
-  const seen = new Set<string>();
-  for (const entry of [...rows, ...existing]) {
-    const key = routeVariantKey(entry);
-    if (!seen.has(key)) {
-      seen.add(key);
-      merged.push(entry);
-    }
-  }
-  return merged;
+  return [
+    resolveModelCatalogIdentityKey(entry),
+    entry.api ?? "",
+    normalizeRouteBaseUrl(entry.baseUrl),
+  ].join("\0");
 }
 
 function enrichHarnessRows(
   rows: readonly ModelCatalogEntry[],
   snapshot: ModelCatalogSnapshot,
 ): ModelCatalogEntry[] {
-  const donors = [...snapshot.entries, ...(snapshot.staticEntries ?? [])];
+  const donors = new Map<string, ModelCatalogEntry>();
+  // First donor wins: live snapshot entries take precedence over static rows.
+  for (const donor of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
+    const key = resolveModelCatalogIdentityKey(donor);
+    if (!donors.has(key)) {
+      donors.set(key, donor);
+    }
+  }
   return rows.map((entry) => {
-    const donor = donors.find((candidate) => catalogKey(candidate) === catalogKey(entry));
+    const donor = donors.get(resolveModelCatalogIdentityKey(entry));
     return donor
       ? {
           ...donor,
@@ -113,8 +98,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   if (!ref) {
     return params.snapshot;
   }
+  const refKey = resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model });
   const routeEntry = [...params.snapshot.entries, ...(params.snapshot.staticEntries ?? [])].find(
-    (entry) => catalogKey(entry) === catalogKey({ provider: ref.provider, id: ref.model }),
+    (entry) => resolveModelCatalogIdentityKey(entry) === refKey,
   );
   const runtime = resolveAgentHarnessPolicy({
     provider: ref.provider,
@@ -147,8 +133,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     const rows = enrichHarnessRows(listedRows, params.snapshot);
     return {
       ...params.snapshot,
-      entries: mergeHarnessRows(rows, params.snapshot.entries),
-      routeVariants: mergeHarnessRouteVariants(rows, params.snapshot.routeVariants),
+      entries: dedupeByKey([...rows, ...params.snapshot.entries], resolveModelCatalogIdentityKey),
+      routeVariants: dedupeByKey([...rows, ...params.snapshot.routeVariants], routeVariantKey),
     };
   } catch (error) {
     params.onError?.(error);
