@@ -353,7 +353,10 @@ async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
   );
   const emptyResult: SessionEntryMaintenanceResult = {
     archivedTranscripts: [],
-    ...committedCounts,
+    archived: committedCounts.archived,
+    modelRunPruned: 0,
+    pruned: 0,
+    capped: 0,
   };
   if (entryRemovals.length === 0 && stateDeletePlans.length === 0) {
     return emptyResult;
