@@ -538,6 +538,25 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
+  it("still connects to an explicit secure url when config cannot be loaded", async () => {
+    // A secure target reads config only for gateway.remote.edgeAuth, so an invalid
+    // config must not block a connection the flags already fully describe.
+    getRuntimeConfig.mockImplementation(() => {
+      throw new Error("invalid config");
+    });
+
+    await callGatewayCli({
+      method: "health",
+      url: "wss://override.example/ws",
+      token: "test-token",
+    });
+
+    expect(getRuntimeConfig).toHaveBeenCalled();
+    expect(lastClientOptions?.url).toBe("wss://override.example/ws");
+    expect(lastClientOptions?.token).toBe("test-token");
+    expect(lastClientOptions?.edgeAuthHeaders).toBeUndefined();
+  });
+
   it("reconnects with admin only after sessions.create cwd returns structured escalation", async () => {
     const scopeAttempts: Array<readonly string[] | undefined> = [];
     gatewayClientRequest = async () => {

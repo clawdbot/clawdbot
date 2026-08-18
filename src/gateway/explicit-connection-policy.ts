@@ -22,6 +22,23 @@ function targetMayRequireConfiguredEdgeAuth(url: string): boolean {
   }
 }
 
+/**
+ * True when the caller fully addressed the Gateway with flags. Config is then
+ * consulted only for gateway.remote.edgeAuth, so a broken config must not block
+ * the connection: this is the historical recovery path for an invalid config.
+ */
+export function isExplicitGatewayConnection(params: {
+  config?: OpenClawConfig;
+  urlOverride?: string;
+  explicitAuth?: ExplicitGatewayAuth;
+}): boolean {
+  return (
+    !params.config &&
+    Boolean(trimToUndefined(params.urlOverride)) &&
+    hasExplicitGatewayConnectionAuth(params.explicitAuth)
+  );
+}
+
 /** Returns true when url/auth flags are sufficient and loading OpenClaw config is unnecessary. */
 export function canSkipGatewayConfigLoad(params: {
   config?: OpenClawConfig;

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
+import {
+  canSkipGatewayConfigLoad,
+  isExplicitGatewayConnection,
+} from "./explicit-connection-policy.js";
 
 describe("canSkipGatewayConfigLoad", () => {
   const explicitAuth = { token: "t" };
@@ -30,6 +33,26 @@ describe("canSkipGatewayConfigLoad", () => {
   it("never skips when a config was already supplied", () => {
     expect(
       canSkipGatewayConfigLoad({ config: {}, urlOverride: "ws://127.0.0.1:18789", explicitAuth }),
+    ).toBe(false);
+  });
+});
+
+describe("isExplicitGatewayConnection", () => {
+  it("is true only when url and explicit auth fully address the gateway", () => {
+    expect(
+      isExplicitGatewayConnection({
+        urlOverride: "wss://gateway.example",
+        explicitAuth: { token: "t" },
+      }),
+    ).toBe(true);
+    expect(isExplicitGatewayConnection({ urlOverride: "wss://gateway.example" })).toBe(false);
+    expect(isExplicitGatewayConnection({ explicitAuth: { token: "t" } })).toBe(false);
+    expect(
+      isExplicitGatewayConnection({
+        config: {},
+        urlOverride: "wss://gateway.example",
+        explicitAuth: { token: "t" },
+      }),
     ).toBe(false);
   });
 });
