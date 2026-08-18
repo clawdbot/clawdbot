@@ -231,8 +231,13 @@ describe("continuation Responses reconciliation", () => {
     emit({ type: "compaction_start" });
     emit({
       type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry", tokensAfter: 100 },
+      outcome: {
+        status: "completed",
+        willRetry: true,
+        summary: "retry",
+        tokensBefore: 200,
+        tokensAfter: 100,
+      },
     });
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "New" });

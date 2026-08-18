@@ -1644,13 +1644,14 @@ function findDirectImportersWithGitGrep(
 
   let skippedBroadTerm = false;
   const importers: string[] = [];
+  const isTopLevelTestHelper = importedFile.startsWith("test/helpers/");
   for (const term of terms) {
     const candidates = listImportGraphGrepMatches(cwd, term, { tooling });
     if (!candidates) {
       cachedDirectImporters.set(cacheKey, null);
       return null;
     }
-    if (candidates.length > 800) {
+    if (candidates.length > 800 && !isTopLevelTestHelper) {
       skippedBroadTerm = true;
       continue;
     }
@@ -1677,14 +1678,12 @@ function findDirectImportersWithGitGrep(
         }
       }
     }
-    if (importedFile.startsWith("test/helpers/") && importers.length > 0 && term.includes("/")) {
+    if (isTopLevelTestHelper && importers.length > 0 && term.includes("/")) {
       break;
     }
   }
   const result =
-    skippedBroadTerm && importers.length === 0 && !importedFile.startsWith("test/helpers/")
-      ? null
-      : importers;
+    skippedBroadTerm && importers.length === 0 && !isTopLevelTestHelper ? null : importers;
   cachedDirectImporters.set(cacheKey, result);
   return result;
 }
