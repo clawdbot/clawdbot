@@ -430,15 +430,18 @@ export async function restoreLatestSkillCollectionBackup(params: {
           backupDir,
           skillDirs: manifest.skillDirs,
           resultSkillDirs: manifest.resultSkillDirs,
+          commit: () =>
+            restoreWorkshopOwnershipClaims(
+              workspaceDir,
+              manifest.skillDirs.map((relativeDir) => path.join(workspaceDir, relativeDir)),
+              manifest.resultSkillDirs.map((relativeDir) => path.join(workspaceDir, relativeDir)),
+              Date.now(),
+              params.env ? { env: params.env } : {},
+            ),
         });
       } finally {
         bumpSkillsSnapshotVersion({ reason: "workshop" });
       }
-      restoreWorkshopOwnershipClaims(
-        workspaceDir,
-        manifest.skillDirs.map((relativeDir) => path.join(workspaceDir, relativeDir)),
-        params.env ? { env: params.env } : {},
-      );
       const changes: SkillCollectionChange[] = [];
       if (shouldDispatch) {
         for (const relativeDir of affectedDirs) {

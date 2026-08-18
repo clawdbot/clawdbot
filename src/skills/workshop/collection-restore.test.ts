@@ -235,21 +235,45 @@ describe("skill collection backup and restore", () => {
     );
   });
 
-  it("restores ownership for a dropped Workshop skill", async () => {
+  it("restores original ownership and releases result-only ownership", async () => {
     await writeWorkshopOwnedSkills([
-      { name: "foo", description: "Workshop procedure", body: "# Original\n" },
+      { name: "updated", description: "Updated procedure", body: "# Updated original\n" },
+      { name: "dropped", description: "Dropped procedure", body: "# Dropped original\n" },
     ]);
     await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
       ...(await readCollectionReceipt()),
-      plan: [{ action: "drop", name: "foo", reason: "Temporarily removed" }],
+      plan: [
+        {
+          action: "write",
+          name: "updated",
+          description: "Updated procedure",
+          content: "# Updated result\n",
+        },
+        { action: "drop", name: "dropped", reason: "Temporarily removed" },
+        {
+          action: "write",
+          name: "created",
+          description: "Created procedure",
+          content: "# Created result\n",
+        },
+      ],
     });
 
     await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
 
     expect(listWritableSkillCollection(workspaceDir, { env: testState.env })).toEqual([
-      expect.objectContaining({ name: "foo", workshopOwned: true }),
+      expect.objectContaining({ name: "dropped", workshopOwned: true }),
+      expect.objectContaining({ name: "updated", workshopOwned: true }),
+    ]);
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "created", description: "Operator procedure", body: "# Operator\n" },
+    ]);
+    expect(listWritableSkillCollection(workspaceDir, { env: testState.env })).toEqual([
+      expect.objectContaining({ name: "created", workshopOwned: false }),
+      expect.objectContaining({ name: "dropped", workshopOwned: true }),
+      expect.objectContaining({ name: "updated", workshopOwned: true }),
     ]);
     await expect(
       reconcileSkillCollection({
@@ -257,15 +281,68 @@ describe("skill collection backup and restore", () => {
         env: testState.env,
         ...(await readCollectionReceipt()),
         plan: [
+          { action: "keep", name: "created" },
+          { action: "keep", name: "dropped" },
           {
             action: "write",
-            name: "foo",
+            name: "updated",
             description: "Restored procedure",
             content: "# Restored and mutable\n",
           },
         ],
       }),
-    ).resolves.toMatchObject({ written: ["foo"] });
+    ).resolves.toMatchObject({ written: ["updated"] });
+  });
+
+  it("keeps restore retryable when ownership persistence fails", async () => {
+    await writeWorkshopOwnedSkills([
+      { name: "original", description: "Original procedure", body: "# Original\n" },
+    ]);
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...(await readCollectionReceipt()),
+      plan: [
+        {
+          action: "write",
+          name: "original",
+          description: "Updated procedure",
+          content: "# Updated\n",
+        },
+        {
+          action: "write",
+          name: "created",
+          description: "Created procedure",
+          content: "# Created\n",
+        },
+      ],
+    });
+    const database = openOpenClawStateDatabase({ env: testState.env }).db;
+    database.exec(`
+      CREATE TRIGGER fail_collection_restore_claims
+      BEFORE UPDATE OF claim_released_time ON skill_workshop_proposals
+      BEGIN
+        SELECT RAISE(FAIL, 'forced ownership persistence failure');
+      END;
+    `);
+
+    await expect(
+      restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+    ).rejects.toThrow("forced ownership persistence failure");
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "original", "SKILL.md"), "utf8"),
+    ).resolves.toContain("# Updated");
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "created", "SKILL.md"), "utf8"),
+    ).resolves.toContain("# Created");
+
+    database.exec("DROP TRIGGER fail_collection_restore_claims;");
+    await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
+
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "original", "SKILL.md"), "utf8"),
+    ).resolves.toContain("# Original");
+    await expect(fs.access(path.join(workspaceDir, "skills", "created"))).rejects.toThrow();
   });
 
   it("restores a legacy backup that predates ownership narrowing", async () => {
