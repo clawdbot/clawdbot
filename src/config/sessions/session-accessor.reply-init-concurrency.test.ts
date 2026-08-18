@@ -708,4 +708,145 @@ describe("session accessor cross-process concurrency", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("rejects a manager raw append when a foreign row lands before it", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-raw-append-race-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-raw-append-race";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+      // Populate the transcript so the manager opens with a non-deferred header
+      // and a non-empty tracked snapshot -- the raw (non-message) append path,
+      // not the header-fold path.
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "seed-message",
+          parentId: null,
+          message: { role: "user", content: "seed" },
+        },
+      ]);
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-raw-append-race",
+          sessionId,
+          storePath,
+        },
+        async (ready) => {
+          // Header filtered out of getEntries(); one seed message remains.
+          expect(ready).toEqual({ eventCount: 1 });
+          // Foreign row lands after the manager's open() read but before its raw
+          // appendModelChange. Pre-fix, that append passed no guard, so the row
+          // was silently folded into the manager's post-append snapshot -- absent
+          // from its fileEntries -- and a later rewrite would delete it. The guard
+          // must now reject on every append, not only the header fold.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+            parentId: "seed-message",
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, appendRejected: true });
+      // Fix verified: the raw append fails closed, so the manager never commits
+      // its model_change against a contaminated snapshot and the foreign row
+      // survives untouched.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "seed-message",
+          message: expect.objectContaining({ role: "user", content: "seed" }),
+        }),
+        expect.objectContaining({
+          type: "message",
+          parentId: "seed-message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("reloads the manager after a deferred-header conflict so a retry succeeds", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-initial-header-retry-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-initial-header-retry";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-initial-header-race",
+          retryAfterConflict: true,
+          sessionId,
+          storePath,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 0 });
+          // Foreign row lands in the gap between open() and the manager's first
+          // appendMessage, so the deferred-header fold fails closed. The manager
+          // must reload durable state from that conflict; a retry on the SAME
+          // instance then observes the foreign header/row and commits instead of
+          // repeating the stale-snapshot conflict forever.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, appendRejected: true, retrySucceeded: true });
+      // Fix verified: the first record rejected closed and reloaded the manager,
+      // so the retry appended a fresh row after the foreign header + reply rather
+      // than repeating the conflict.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ role: "user", content: "manager retry" }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

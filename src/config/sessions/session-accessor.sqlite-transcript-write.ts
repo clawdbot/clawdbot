@@ -673,21 +673,26 @@ function assertSqliteTranscriptSnapshotUnchanged(
 }
 
 /**
- * A session header that a manager deferred until its first record append, paired with the
- * (empty) row snapshot it tracked when the transcript was opened. The two travel together so
- * the fold below can revalidate the exact snapshot the header was deferred against.
+ * Guards a manager-tracked append inside its own write transaction. `expectedSnapshot` is the
+ * row snapshot the manager last observed; revalidating it before the append's post-write
+ * snapshot is captured stops a foreign row that landed before this append from being silently
+ * folded into the snapshot the manager then trusts (it never appeared in the manager's
+ * `fileEntries`, so a later rewrite would validate that contaminated snapshot and delete the
+ * foreign row). `event` is an optional session header the manager deferred until its first
+ * record, folded into this same transaction so header and first record commit atomically.
  */
 export type PendingTranscriptHeader = {
-  event: TranscriptEvent;
+  event?: TranscriptEvent;
   expectedSnapshot: readonly SqliteTranscriptSnapshotRow[];
 };
 
 /**
- * Folds a deferred session header into an in-progress first-record write transaction. Runs
- * inside the caller's BEGIN IMMEDIATE: it first revalidates the caller's tracked (empty)
- * snapshot so a foreign row committed before this transaction cannot be silently absorbed into
- * the post-write snapshot -- which a later rewrite would then delete -- and only then appends
- * the header, so the header and first record commit atomically in one transaction.
+ * Revalidates a manager-tracked append guard inside an in-progress write transaction, then
+ * folds a still-deferred session header if one is present. Runs inside the caller's BEGIN
+ * IMMEDIATE so a foreign row committed before this transaction cannot be silently absorbed
+ * into the post-write snapshot -- which a later rewrite would then delete -- and so the header
+ * (when present) commits atomically with the first record instead of racing it in a separate
+ * prior transaction.
  */
 export function foldPendingTranscriptHeaderInTransaction(
   database: OpenClawAgentDatabase,
@@ -699,5 +704,7 @@ export function foldPendingTranscriptHeaderInTransaction(
     resolved.sessionId,
     pendingHeader.expectedSnapshot,
   );
-  appendTranscriptEventInTransaction(database, resolved, pendingHeader.event);
+  if (pendingHeader.event) {
+    appendTranscriptEventInTransaction(database, resolved, pendingHeader.event);
+  }
 }

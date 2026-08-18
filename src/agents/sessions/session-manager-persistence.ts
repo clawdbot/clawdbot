@@ -5,6 +5,7 @@ import {
   appendTranscriptMessageWithSnapshotSync,
   ensureSessionEntrySync,
   type PendingTranscriptHeader,
+  SqliteTranscriptMutationConflictError,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
@@ -154,16 +155,18 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return this.persistRecord(entry, options);
   }
 
-  private resolvePendingTranscriptHeader(
+  /**
+   * Ensures the deferred session_entries row exists (separate table from transcript_events, so
+   * outside the folded snapshot guard) before the append cores, which no-op when it is missing,
+   * then returns the still-pending header transcript row to fold into the first record's
+   * transaction. Returns undefined once a header is already persisted.
+   */
+  private resolveDeferredSessionHeader(
     scope: NonNullable<SessionManagerPersistence["persistenceTarget"]>,
-  ): PendingTranscriptHeader | undefined {
+  ): PendingTranscriptHeader["event"] {
     if (!this.persistenceHeaderPending) {
       return undefined;
     }
-    // The session_entries row (separate table from transcript_events, so outside the
-    // folded snapshot guard) must exist before the append cores, which no-op when it
-    // is missing. The header transcript row itself is folded into the first record's
-    // transaction below, revalidating this manager's tracked (empty) snapshot first.
     if (!ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() })) {
       throw new Error("Session transcript header was not persisted");
     }
@@ -171,7 +174,32 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (!header || header.type !== "session") {
       throw new Error("Session transcript header was not persisted");
     }
-    return { event: header, expectedSnapshot: this.persistedRowSnapshot ?? [] };
+    return header;
+  }
+
+  /**
+   * Snapshot guard for one record append, folding a still-deferred header when pending.
+   * `additive` message appends reconcile an adopted/rebound parent instead of trusting a captured
+   * snapshot, so they guard only while a header is deferred -- that first record must fold the
+   * header atomically and revalidate the tracked (empty) snapshot, but a later reply must not be
+   * rejected by a concurrent reset the rewrite would preserve anyway. Raw (non-message) and leaf
+   * appends capture and then trust the post-append snapshot, so they always revalidate here: a
+   * foreign row landing before the append -- never in this manager's `fileEntries` -- must fail
+   * the guard, else it is silently absorbed into the tracked snapshot and a later rewrite deletes
+   * it.
+   */
+  private resolveAppendGuard(
+    scope: NonNullable<SessionManagerPersistence["persistenceTarget"]>,
+    additive: boolean,
+  ): PendingTranscriptHeader | undefined {
+    const event = this.resolveDeferredSessionHeader(scope);
+    if (additive && !event) {
+      return undefined;
+    }
+    return {
+      expectedSnapshot: this.persistedRowSnapshot ?? [],
+      ...(event ? { event } : {}),
+    };
   }
 
   private persistSqliteRecord(
@@ -182,19 +210,31 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return undefined;
     }
     const scope = this.persistenceTarget;
-    // A deferred header rides into the first record's transaction instead of a
-    // separate prior append: folding it here closes the cross-process gap where a
-    // foreign commit lands after a standalone header append but before the first
-    // record, is captured into this manager's snapshot, yet never appears in
-    // `fileEntries` -- so a later replacePersistedTranscript would delete it.
-    const pendingHeader = this.resolvePendingTranscriptHeader(scope);
+    try {
+      return this.persistSqliteRecordWithGuard(scope, entry, options);
+    } catch (err) {
+      if (err instanceof SqliteTranscriptMutationConflictError) {
+        // Durable state has moved past what this manager observed. Resync in-memory state from
+        // the authoritative DB before the failure surfaces, so the caller's next read (and any
+        // retry) reflects reality instead of a rejected, now-stale append.
+        this.reloadPersistedTranscript();
+      }
+      throw err;
+    }
+  }
+
+  private persistSqliteRecordWithGuard(
+    scope: NonNullable<SessionManagerPersistence["persistenceTarget"]>,
+    entry: unknown,
+    options: AppendPersistenceOptions | undefined,
+  ): PersistRecordResult {
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
       const { result, snapshot } = appendTranscriptEventWithSnapshotSync(
         scope,
         entry,
         undefined,
-        pendingHeader,
+        this.resolveAppendGuard(scope, false),
       );
       requireTranscriptEventAppend(
         result,
@@ -213,7 +253,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         options?.appendIntent === "active-branch"
           ? { appendIntent: options.appendIntent }
           : undefined,
-        pendingHeader,
+        this.resolveAppendGuard(scope, false),
       );
       requireTranscriptEventAppend(
         result,
@@ -235,7 +275,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const { result, snapshot } = appendTranscriptMessageWithSnapshotSync(
       scope,
       appendOptions,
-      pendingHeader,
+      this.resolveAppendGuard(scope, true),
     );
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
