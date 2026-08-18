@@ -613,7 +613,7 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
   if (!target) {
     return false;
   }
-  const targetKey = target.path[2];
+  const authoredAgentId = target.path[2];
   mutateConfigForm(state, (draft) => {
     const agents = isRecord(draft.agents) ? draft.agents : null;
     const entries = isRecord(agents?.entries) ? agents.entries : null;
@@ -624,7 +624,7 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
       if (!isRecord(entry)) {
         continue;
       }
-      if (id === targetKey) {
+      if (id === authoredAgentId) {
         entry.default = true;
       } else {
         delete entry.default;
