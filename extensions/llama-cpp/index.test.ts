@@ -80,7 +80,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function registerTextProvider(): ProviderPlugin {
+function registerTextProviders(): ProviderPlugin[] {
   const providers: ProviderPlugin[] = [];
   llamaCppPlugin.register(
     createTestPluginApi({
@@ -93,7 +93,14 @@ function registerTextProvider(): ProviderPlugin {
       registerProvider: (provider) => providers.push(provider),
     }),
   );
-  return expectDefined(providers[0], "llama.cpp provider");
+  return providers;
+}
+
+function registerTextProvider(): ProviderPlugin {
+  return expectDefined(
+    registerTextProviders().find((provider) => provider.id === LLAMA_CPP_PROVIDER_ID),
+    "llama.cpp provider",
+  );
 }
 
 function configuredOptions() {
@@ -132,6 +139,13 @@ function configuredOptions() {
 }
 
 describe("llama.cpp provider plugin", () => {
+  it("registers managed and external providers once", () => {
+    expect(registerTextProviders().map((provider) => provider.id)).toEqual([
+      "llama-cpp",
+      "llama-server",
+    ]);
+  });
+
   it("keeps pre-managed installed provider imports loadable without reviving the old runtime", async () => {
     await expect(createLocalEmbeddingProvider({}, {})).rejects.toThrow(
       "The legacy in-process llama.cpp embedding runtime is retired",
