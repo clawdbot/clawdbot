@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import {
   deleteWorkspaceState,
   prepareWorkspaceStateDeletion,
@@ -11,66 +10,17 @@ import {
   resolveWorkspaceStateIdentity,
 } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
 } from "./state-migrations.workspace-setup.js";
+import { useWorkspaceMigrationTestFixture } from "./state-migrations.workspace-setup.test-support.js";
 
 const HASH = "a".repeat(64);
 
 describe("legacy workspace Doctor migration", () => {
-  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      closeOpenClawStateDatabaseForTest();
-      envSnapshot?.restore();
-      envSnapshot = undefined;
-      cleanup();
-    });
-  });
-
-  function setup() {
-    const homeDir = tempDirs.make("openclaw-workspace-migration-home-");
-    const stateDir = path.join(homeDir, ".openclaw");
-    const workspaceDir = path.join(homeDir, "workspace");
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    envSnapshot ??= captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
-    setTestEnvValue("HOME", homeDir);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    const cfg = {
-      agents: { defaults: { workspace: workspaceDir } },
-    } satisfies OpenClawConfig;
-    return {
-      cfg,
-      env: { ...process.env, HOME: homeDir, OPENCLAW_STATE_DIR: stateDir },
-      homeDir,
-      stateDir,
-      workspaceDir,
-    };
-  }
-
-  function detect(context: ReturnType<typeof setup>) {
-    return detectLegacyWorkspaceState({
-      cfg: context.cfg,
-      stateDir: context.stateDir,
-      env: context.env,
-      homedir: () => context.homeDir,
-      doctorOnlyStateMigrations: true,
-    });
-  }
-
-  async function migrate(context: ReturnType<typeof setup>) {
-    return await migrateLegacyWorkspaceState({
-      detected: detect(context),
-      env: context.env,
-      stateDir: context.stateDir,
-    });
-  }
+  const { detect, migrate, setup } = useWorkspaceMigrationTestFixture();
 
   it("detects configured and orphan sources only for explicit Doctor repair", async () => {
     const context = setup();
@@ -882,52 +832,6 @@ describe("legacy workspace Doctor migration", () => {
       source_sha256: createHash("sha256")
         .update(JSON.stringify({ version: 1, bootstrapSeededAt: seededAt }))
         .digest("hex"),
-      removed_source: 1,
-    });
-  });
-
-  it("resumes a recreated generation from its interrupted claim", async () => {
-    const context = setup();
-    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
-    const setupPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
-    await fsp.writeFile(
-      setupPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-15T10:00:00.000Z" }),
-      "utf8",
-    );
-    expect((await migrate(context)).warnings).toEqual([]);
-
-    const recreated = JSON.stringify({
-      version: 1,
-      setupCompletedAt: "2026-07-16T10:00:00.000Z",
-    });
-    await fsp.writeFile(setupPath, recreated, "utf8");
-    const claimPath = `${setupPath}.doctor-importing`;
-    await fsp.rename(setupPath, claimPath);
-
-    const result = await migrate(context);
-
-    expect(result.warnings).toEqual([]);
-    expect(fs.existsSync(claimPath)).toBe(false);
-    const db = openOpenClawStateDatabase({ env: context.env }).db;
-    expect(
-      db
-        .prepare(
-          "SELECT bootstrap_seeded_at, setup_completed_at FROM workspace_setup_state WHERE workspace_key = ?",
-        )
-        .get(identity.workspaceKey),
-    ).toEqual({
-      bootstrap_seeded_at: "2026-07-15T10:00:00.000Z",
-      setup_completed_at: "2026-07-16T10:00:00.000Z",
-    });
-    expect(
-      db
-        .prepare(
-          "SELECT source_sha256, removed_source FROM migration_sources WHERE source_path = ?",
-        )
-        .get(setupPath),
-    ).toEqual({
-      source_sha256: createHash("sha256").update(recreated).digest("hex"),
       removed_source: 1,
     });
   });
