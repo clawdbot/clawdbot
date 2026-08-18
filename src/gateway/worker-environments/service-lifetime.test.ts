@@ -45,6 +45,36 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
+  it.each(["SQLITE_BUSY", "SQLITE_LOCKED"])(
+    "continues reconciliation when terminal cleanup fails with %s",
+    async (code) => {
+      const prune = vi
+        .spyOn(support.testState.store, "pruneTerminalEnvironments")
+        .mockImplementation(() => {
+          throw Object.assign(new Error("database is locked"), { code });
+        });
+
+      await expect(
+        support.createService(support.createProvider()).reconcileOnce(),
+      ).resolves.toBeUndefined();
+      expect(prune).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("propagates non-lock terminal cleanup failures", async () => {
+    const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
+    const prune = vi
+      .spyOn(support.testState.store, "pruneTerminalEnvironments")
+      .mockImplementation(() => {
+        throw error;
+      });
+
+    await expect(support.createService(support.createProvider()).reconcileOnce()).rejects.toBe(
+      error,
+    );
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
   it("waits for timed-out provider work during shutdown", async () => {
     let finishProvision: (() => void) | undefined;
     const provisionPending = new Promise<void>((resolve) => {
