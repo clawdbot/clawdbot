@@ -1710,7 +1710,7 @@ button.chat-reply-preview--message:disabled {
   height: 18px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 0 0 16px 16px;
-  background: var(--panel);
+  background: var(--sidebar-bg, var(--panel-strong));
   box-shadow: 0 8px 18px color-mix(in srgb, var(--bg) 32%, transparent);
 }
 
@@ -1829,12 +1829,12 @@ button.chat-reply-preview--message:disabled {
 .task-suggestion {
   position: relative;
   display: grid;
-  gap: 16px;
-  padding: 20px 22px;
+  gap: 14px;
+  padding: 14px 16px 17px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
   border-radius: 16px;
-  background: var(--panel);
+  background: var(--sidebar-bg, var(--panel-strong));
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--text) 5%, transparent),
     0 12px 30px color-mix(in srgb, var(--bg) 38%, transparent);
@@ -1855,14 +1855,14 @@ button.chat-reply-preview--message:disabled {
 @keyframes task-suggestion-swap-next {
   from {
     opacity: 0;
-    transform: translateX(12px);
+    transform: translateY(12px);
   }
 }
 
 @keyframes task-suggestion-swap-previous {
   from {
     opacity: 0;
-    transform: translateX(-12px);
+    transform: translateY(-12px);
   }
 }
 
@@ -1939,6 +1939,7 @@ button.chat-reply-preview--message:disabled {
 .task-suggestion__title {
   color: var(--text);
   font-weight: 650;
+  overflow-wrap: anywhere;
 }
 
 .task-suggestion__summary {
@@ -1954,6 +1955,7 @@ button.chat-reply-preview--message:disabled {
 
 .task-suggestion__instructions {
   margin-top: 14px;
+  overflow: visible;
   border: 0;
   background: transparent;
 }
@@ -2027,7 +2029,8 @@ button.chat-reply-preview--message:disabled {
 .task-suggestion__instruction-body code {
   position: relative;
   z-index: 0;
-  width: fit-content;
+  box-sizing: border-box;
+  width: 100%;
   max-width: 100%;
   padding: 7px 10px 14px;
   overflow-x: auto;
@@ -2056,7 +2059,7 @@ button.chat-reply-preview--message:disabled {
 .task-suggestion__split {
   display: inline-flex;
   align-items: stretch;
-  height: 40px;
+  height: 34px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
   border-radius: 13px;
@@ -2067,13 +2070,13 @@ button.chat-reply-preview--message:disabled {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 40px;
-  padding: 0 15px;
+  height: 34px;
+  padding: 0 12px;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: var(--bg);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
   white-space: nowrap;
 }
@@ -2093,14 +2096,14 @@ button.chat-reply-preview--message:disabled {
 
 .task-suggestion__menu-trigger {
   display: grid;
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
   padding: 0;
   place-items: center;
   border: 0;
   border-left: 1px solid color-mix(in srgb, var(--bg) 18%, transparent);
-  border-radius: 0;
+  border-radius: 0 !important;
   background: transparent;
   color: var(--bg);
 }

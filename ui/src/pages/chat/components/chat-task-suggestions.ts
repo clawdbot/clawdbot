@@ -163,8 +163,8 @@ function renderChatTaskSuggestions(props: {
             <div class="task-suggestion__body">
               <div class="task-suggestion__title">${title}</div>
               <div class="task-suggestion__summary">${tldr}</div>
-              <details class="chat-json-collapse task-suggestion__instructions">
-                <summary class="chat-json-summary">
+              <details class="task-suggestion__instructions">
+                <summary>
                   <span class="task-suggestion__instructions-chevron" aria-hidden="true"
                     >${icons.chevronRight}</span
                   >
