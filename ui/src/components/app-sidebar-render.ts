@@ -168,7 +168,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
-  const hasComposerDraft = !active && host.hasSessionDraft(mainKey);
+  const hasComposerDraft = host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active;
   // Home keeps its page/attention glyph leading and shares trailing activity with session rows.

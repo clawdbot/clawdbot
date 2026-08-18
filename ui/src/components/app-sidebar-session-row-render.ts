@@ -331,7 +331,7 @@ export function renderRecentSession(params: {
               ></openclaw-viewer-facepile>
               ${renderSessionRowBadges({
                 ...session,
-                hasComposerDraft: session.hasComposerDraft === true && !session.visuallyActive,
+                hasComposerDraft: session.hasComposerDraft === true,
                 pullRequest: session.pullRequest ?? display?.pullRequest,
                 hasApproval: sessionHasPendingApproval(
                   host.sessionData.approvalBadgeSnapshot(),
