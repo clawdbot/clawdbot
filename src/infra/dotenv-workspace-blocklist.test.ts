@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -137,7 +137,7 @@ describe("workspace .env blocklist completeness", () => {
 
           expect(process.env.RUNTIME_CLOUD_API_KEY).toBe("global-plugin-key");
         } finally {
-          clearCurrentPluginMetadataSnapshot();
+          clearPluginMetadataLifecycleCaches();
         }
       });
     });
@@ -199,7 +199,6 @@ describe("workspace .env blocklist completeness", () => {
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
           "BUZZ_RELAY_URL",
-          "SLACK_FORWARDER_URL",
           "SMS_ALLOWED_USERS",
           "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
           "SMS_PUBLIC_WEBHOOK_URL",

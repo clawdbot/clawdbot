@@ -7,6 +7,7 @@ function snapshot(params: {
   methods?: string[];
   scopes?: string[];
   includeAuth?: boolean;
+  includeScopes?: boolean;
 }): Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> {
   const connected = params.connected ?? true;
   return {
@@ -16,7 +17,14 @@ function snapshot(params: {
       features: { methods: params.methods ?? ["sessions.create"] },
       ...(params.includeAuth === false
         ? {}
-        : { auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] } }),
+        : {
+            auth: {
+              role: "operator",
+              ...(params.includeScopes === false
+                ? {}
+                : { scopes: params.scopes ?? ["operator.write"] }),
+            },
+          }),
     } as ApplicationGatewaySnapshot["hello"],
   };
 }
@@ -38,6 +46,26 @@ describe("readSessionMethodAccess", () => {
     });
     expect(access.allowed).toBe(false);
     expect(access).toMatchObject({
+      cause: "missing-scope",
+      requiredScope: "operator.admin",
+    });
+  });
+
+  it("keeps model and effort patch access independent", () => {
+    const writeOnly = snapshot({ methods: ["sessions.patch"], scopes: ["operator.write"] });
+    expect(
+      readSessionMethodAccess(writeOnly, {
+        method: "sessions.patch",
+        params: { key: "agent:main:main", model: null },
+      }),
+    ).toEqual({ allowed: true, requiredScope: "operator.write" });
+    expect(
+      readSessionMethodAccess(writeOnly, {
+        method: "sessions.patch",
+        params: { key: "agent:main:main", thinkingLevel: null },
+      }),
+    ).toMatchObject({
+      allowed: false,
       cause: "missing-scope",
       requiredScope: "operator.admin",
     });
@@ -76,13 +104,16 @@ describe("readSessionMethodAccess", () => {
     });
   });
 
-  it("preserves legacy snapshots without advertised auth scopes", () => {
+  it.each([
+    ["auth", { includeAuth: false }],
+    ["scopes", { includeScopes: false }],
+  ])("rejects snapshots without advertised %s", (_name, params) => {
     expect(
-      readSessionMethodAccess(snapshot({ includeAuth: false }), {
+      readSessionMethodAccess(snapshot(params), {
         method: "sessions.create",
         params: { agentId: "main" },
-      }).allowed,
-    ).toBe(true);
+      }),
+    ).toMatchObject({ allowed: false, cause: "missing-scope" });
   });
 
   it("rejects disconnected and unadvertised calls before scope checks", () => {
@@ -96,14 +127,14 @@ describe("readSessionMethodAccess", () => {
     ).toMatchObject({ allowed: false, cause: "method-unavailable" });
   });
 
-  it("allows legacy snapshots without method metadata", () => {
-    const legacy = snapshot({});
-    legacy.hello = { auth: legacy.hello?.auth } as ApplicationGatewaySnapshot["hello"];
+  it("rejects snapshots without method metadata", () => {
+    const incomplete = snapshot({});
+    incomplete.hello = { auth: incomplete.hello?.auth } as ApplicationGatewaySnapshot["hello"];
     expect(
-      readSessionMethodAccess(legacy, {
+      readSessionMethodAccess(incomplete, {
         method: "sessions.groups.put",
         requiredScope: "operator.write",
-      }).allowed,
-    ).toBe(true);
+      }),
+    ).toMatchObject({ allowed: false, cause: "method-unavailable" });
   });
 });

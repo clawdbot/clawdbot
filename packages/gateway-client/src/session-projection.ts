@@ -1,5 +1,8 @@
 /** Browser-safe identity and replay rules shared by Gateway conversation clients. */
 
+import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-event.js";
+
 export type SessionMessageEnvelope = {
   messageId?: unknown;
   messageSeq?: unknown;
@@ -117,12 +120,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "transportGap" }
     | { type: "reconnected" }
   );
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function readNonemptyString(value: unknown): string | null {
   return typeof value === "string" ? value.trim() || null : null;
@@ -298,6 +295,21 @@ function entryMatches(
   if (sameTranscriptIdentity(left.identity, right.identity)) {
     return true;
   }
+  const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
+  const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
+  if (
+    durableEntry?.live &&
+    provisionalEntry?.live &&
+    durableEntry.identity?.role === "assistant" &&
+    provisionalEntry.identity?.role === "assistant" &&
+    !durableEntry.identity.isImported &&
+    !provisionalEntry.identity.isImported &&
+    !provisionalEntry.identity.id &&
+    durableEntry.identity.runId &&
+    durableEntry.identity.runId === provisionalEntry.identity.runId
+  ) {
+    return true;
+  }
   const persisted = left.identity;
   const observed = right.identity;
   if (
@@ -331,11 +343,16 @@ function entryMatches(
   return Boolean(
     pending &&
     authoritative &&
-    pending.identity?.role === authoritative.identity?.role &&
-    !pending.identity?.isImported &&
-    !authoritative.identity?.isImported &&
+    pending.identity &&
+    authoritative.identity &&
+    pending.identity.role === authoritative.identity.role &&
+    !pending.identity.isImported &&
+    !authoritative.identity.isImported &&
     pending.pendingRunId &&
-    pending.pendingRunId === authoritative.identity?.runId,
+    pending.pendingRunId === authoritative.identity.runId &&
+    (pending.identity.sequence === null ||
+      authoritative.identity.sequence === null ||
+      pending.identity.sequence === authoritative.identity.sequence),
   );
 }
 
@@ -652,10 +669,26 @@ export function reduceSessionProjection(
       if (!pendingRunId || !incoming.identity) {
         return state;
       }
-      const index = state.entries.findIndex((entry) => entryMatches(entry, incoming));
-      return index < 0
-        ? withEntries(state, insertEntry(state.entries, incoming, state.runs))
-        : state;
+      const seed = state.entries.find((entry) => entry.message === event.message);
+      // Explicit send ownership may promote its same native seed. Durable and
+      // imported rows stay authoritative so send failure cannot remove them.
+      if (
+        seed &&
+        !seed.pending &&
+        incoming.identity.id === null &&
+        !incoming.identity.isImported &&
+        incoming.identity.runId === pendingRunId
+      ) {
+        return withEntries(
+          state,
+          state.entries.map((entry) =>
+            entry === seed ? { ...seed, pending: true, pendingRunId } : entry,
+          ),
+        );
+      }
+      return seed || state.entries.some((entry) => entryMatches(entry, incoming))
+        ? state
+        : withEntries(state, insertEntry(state.entries, incoming, state.runs));
     }
     case "sendAcknowledged": {
       const runId = normalizeSessionProjectionRunId(event.idempotencyKey ?? event.runId);
@@ -717,42 +750,5 @@ export function reduceSessionProjectionRunEvent(
   event: SessionProjectionGatewayRunEvent,
   scope: SessionProjectionScope = {},
 ): SessionProjectionRunTransition | null {
-  const runId = readNonemptyString(event.runId);
-  const eventState = event.state;
-  if (
-    !runId ||
-    typeof eventState !== "string" ||
-    !["delta", "final", "error", "aborted"].includes(eventState)
-  ) {
-    return null;
-  }
-  const message = event.message;
-  const stopReason =
-    readNonemptyString(event.stopReason) ?? readNonemptyString(readRecord(message)?.stopReason);
-  const errorKind = readNonemptyString(event.errorKind);
-  const base = { runId, ...(message === undefined ? {} : { message }), scope };
-  const action: SessionProjectionEvent =
-    eventState === "delta"
-      ? { type: "runDelta", ...base }
-      : {
-          type: "runTerminal",
-          ...base,
-          status:
-            eventState === "aborted"
-              ? "aborted"
-              : eventState === "error"
-                ? errorKind === "timeout"
-                  ? "timeout"
-                  : "error"
-                : event.yielded === true && stopReason === "end_turn"
-                  ? "yielded"
-                  : stopReason === "error"
-                    ? "error"
-                    : "completed",
-          ...(stopReason === null ? {} : { stopReason }),
-          ...(errorKind === null ? {} : { errorKind }),
-          ...(typeof event.errorMessage === "string" ? { errorMessage: event.errorMessage } : {}),
-        };
-  const next = reduceSessionProjection(projection, action);
-  return { projection: next, previousRun: projection.runs[runId], currentRun: next.runs[runId] };
+  return reduceSessionProjectionRunEventImpl(projection, event, scope);
 }

@@ -5,17 +5,24 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { FormatAbortReplyText, TryFastAbortFromMessage } from "./abort.runtime-types.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { InternalGetReplyFromConfig, InternalGetReplyOptions } from "./get-reply.types.js";
-import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type {
+  ReplyDispatchKind,
+  ReplyDispatchReceipt,
+  ReplyDispatcher,
+} from "./reply-dispatcher.types.js";
 
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
   failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
+  settledReceipt?: ReplyDispatchReceipt;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sendPolicyDenied?: boolean;
   observedReplyDelivery?: boolean;
+  deferredToActiveRun?: "steer" | "followup";
   noVisibleReplyFallbackEligible?: boolean;
   noVisibleReplyFallbackDelivered?: boolean;
+  deliberateSilentTerminalReply?: true;
   beforeAgentRunBlocked?: boolean;
   sessionMetadataChanges?: CommandSessionMetadataChange[];
 };

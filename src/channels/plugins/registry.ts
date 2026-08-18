@@ -1,8 +1,4 @@
-/**
- * Runtime channel plugin registry facade.
- *
- * Lists, resolves, and normalizes active channel plugins with bundled fallback.
- */
+/** Active channel plugin registry with bundled fallback. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getBundledChannelPlugin } from "./bundled.js";
@@ -14,12 +10,7 @@ import {
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-/**
- * Lists currently loaded channel plugins in registry order.
- */
-export function listChannelPlugins(): ChannelPlugin[] {
-  return listLoadedChannelPlugins() as ChannelPlugin[];
-}
+export const listChannelPlugins = () => listLoadedChannelPlugins() as ChannelPlugin[];
 
 /**
  * Returns a loaded channel plugin without falling back to bundled metadata.
@@ -38,9 +29,15 @@ export function getLoadedChannelPluginOrigin(id: ChannelId): string | undefined 
 /**
  * Resolves the active channel implementation together with host-owned provenance.
  */
-export function resolveChannelPluginRegistration(
-  id: ChannelId,
-): { plugin: ChannelPlugin; origin?: string } | undefined {
+export function resolveChannelPluginRegistration(id: ChannelId):
+  | {
+      plugin: ChannelPlugin;
+      origin?: string;
+      resolveChannelRuntime?: NonNullable<
+        ReturnType<typeof getLoadedChannelPluginEntryById>
+      >["resolveChannelRuntime"];
+    }
+  | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
@@ -52,6 +49,9 @@ export function resolveChannelPluginRegistration(
     const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
     return {
       plugin: loadedEntry.plugin as ChannelPlugin,
+      ...(loadedEntry.resolveChannelRuntime
+        ? { resolveChannelRuntime: loadedEntry.resolveChannelRuntime }
+        : {}),
       ...(origin ? { origin } : {}),
     };
   }

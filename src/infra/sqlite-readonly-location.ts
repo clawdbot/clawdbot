@@ -7,7 +7,10 @@ import {
   requireNodeSqlite,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
-import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import {
+  createPrivateSqliteTempDirectory,
+  createPrivateSqliteTempDirectorySync,
+} from "./sqlite-private-directory.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
@@ -31,7 +34,7 @@ type SourceSidecars = {
   wal: boolean;
 };
 
-type SourceJournalMode = "rollback" | "unknown" | "wal";
+type SourceJournalMode = "empty" | "rollback" | "unknown" | "wal";
 
 type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;
@@ -100,6 +103,9 @@ function readSourceJournalMode(pathname: string): SourceJournalMode {
       0,
     );
     assertPinnedIdentityUnchanged(source);
+    if (bytesRead === 0 && confirmedBytesRead === 0) {
+      return "empty";
+    }
     if (
       bytesRead !== header.length ||
       confirmedBytesRead !== confirmedHeader.length ||
@@ -297,14 +303,11 @@ function recoverPrivateRollbackCopy(snapshotPath: string): void {
   }
 }
 
-async function createStableReadOnlyCopy(
+function createStableReadOnlyCopyInTempDirectory(
   pathname: string,
   journalMode: Exclude<SourceJournalMode, "unknown">,
-): Promise<PreparedSqliteReadOnlyLocation> {
-  const tempDir = await createPrivateSqliteTempDirectory(
-    resolvePreferredOpenClawTmpDir(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
+  tempDir: string,
+): PreparedSqliteReadOnlyLocation {
   const snapshotPath = path.join(tempDir, "database.sqlite");
   const firstPath = path.join(tempDir, "first");
   const secondPath = path.join(tempDir, "second");
@@ -319,18 +322,7 @@ async function createStableReadOnlyCopy(
     if (sidecars.journal && sidecars.wal) {
       throw new SqliteSourceChangedError(`SQLite journal modes overlapped: ${pathname}`);
     }
-    if (journalMode === "rollback" && !sidecars.journal) {
-      throw new SqliteSourceChangedError(
-        `SQLite rollback journal disappeared before copying: ${pathname}`,
-      );
-    }
-
-    const sidecarSuffix =
-      journalMode === "rollback" || sidecars.journal
-        ? "-journal"
-        : sidecars.wal
-          ? "-wal"
-          : undefined;
+    const sidecarSuffix = sidecars.journal ? "-journal" : sidecars.wal ? "-wal" : undefined;
     if (sidecarSuffix) {
       copySourceFile(`${pathname}${sidecarSuffix}`, firstPath);
       copySourceFile(pathname, snapshotPath);
@@ -358,7 +350,7 @@ async function createStableReadOnlyCopy(
       throw new SqliteSourceChangedError(`SQLite journal mode changed while copying: ${pathname}`);
     }
     fs.rmSync(firstPath, { force: true });
-    if (journalMode === "rollback") {
+    if (sidecars.journal) {
       // Recover only the private pair. The source journal remains untouched so
       // a later writable open can perform SQLite's normal crash recovery.
       recoverPrivateRollbackCopy(snapshotPath);
@@ -381,6 +373,28 @@ async function createStableReadOnlyCopy(
     removeTempDirectory(tempDir);
     throw error;
   }
+}
+
+async function createStableReadOnlyCopy(
+  pathname: string,
+  journalMode: Exclude<SourceJournalMode, "unknown">,
+): Promise<PreparedSqliteReadOnlyLocation> {
+  const tempDir = await createPrivateSqliteTempDirectory(
+    resolvePreferredOpenClawTmpDir(),
+    `openclaw-sqlite-readonly-${process.pid}-`,
+  );
+  return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
+}
+
+function createStableReadOnlyCopySync(
+  pathname: string,
+  journalMode: Exclude<SourceJournalMode, "unknown">,
+): PreparedSqliteReadOnlyLocation {
+  const tempDir = createPrivateSqliteTempDirectorySync(
+    resolvePreferredOpenClawTmpDir(),
+    `openclaw-sqlite-readonly-${process.pid}-`,
+  );
+  return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
 }
 
 async function createOnlineReadOnlyBackup(
@@ -462,6 +476,17 @@ export async function prepareSqliteReadOnlyLocation(
       lastChange = error;
       continue;
     }
+    if (journalMode === "empty") {
+      try {
+        return await createStableReadOnlyCopy(canonicalPath, journalMode);
+      } catch (error) {
+        if (!(error instanceof SqliteSourceChangedError)) {
+          throw error;
+        }
+        lastChange = error;
+        continue;
+      }
+    }
     const sidecars = readSourceSidecars(canonicalPath);
     if (journalMode !== "wal" || (sidecars.wal && sidecars.shm)) {
       try {
@@ -503,6 +528,43 @@ export async function prepareSqliteReadOnlyLocation(
     }
     try {
       return await createStableReadOnlyCopy(canonicalPath, "wal");
+    } catch (error) {
+      if (!(error instanceof SqliteSourceChangedError)) {
+        throw error;
+      }
+      lastChange = error;
+    }
+  }
+  throw new Error(`SQLite source did not stabilize for read-only inspection: ${canonicalPath}`, {
+    cause: lastChange,
+  });
+}
+
+/** Synchronously prepares a stable private family for lock-free public inspection. */
+export function prepareSqliteReadOnlyLocationSync(
+  pathname: string,
+): PreparedSqliteReadOnlyLocation {
+  const canonicalPath = fs.realpathSync.native(pathname);
+  let lastChange: Error | undefined;
+  for (let attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
+    let journalMode: SourceJournalMode;
+    try {
+      journalMode = readSourceJournalMode(canonicalPath);
+    } catch (error) {
+      if (!(error instanceof SqliteSourceChangedError)) {
+        throw error;
+      }
+      lastChange = error;
+      continue;
+    }
+    if (journalMode === "unknown") {
+      lastChange = new SqliteSourceChangedError(
+        `SQLite journal mode is unavailable while copying: ${canonicalPath}`,
+      );
+      continue;
+    }
+    try {
+      return createStableReadOnlyCopySync(canonicalPath, journalMode);
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError)) {
         throw error;

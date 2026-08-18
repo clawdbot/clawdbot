@@ -1,6 +1,6 @@
 // Slack plugin module owns WebClient-scoped message and file delivery primitives.
 import type { MessageMetadata } from "@slack/types";
-import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import type { Block, ChatPostMessageResponse, KnownBlock, WebClient } from "@slack/web-api";
 import {
   extractErrorCode,
   PlatformMessageNotDispatchedError,
@@ -11,6 +11,7 @@ import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-r
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { formatSlackError } from "./errors.js";
 import {
   postSlackMessageWithIdentityFallback,
   type SlackPostMessageIdentity,
@@ -212,6 +213,21 @@ export async function withSlackDnsRequestRetry<T>(
   throw new Error("unreachable Slack DNS retry loop exit");
 }
 
+export function requireSlackPostMessageTimestamp(
+  response: Partial<Pick<ChatPostMessageResponse, "error" | "ok" | "ts">>,
+): string {
+  if (response.ok === false) {
+    throw new Error(
+      `Slack chat.postMessage failed: ${formatSlackError(response.error, "unknown error")}`,
+    );
+  }
+  const timestamp = response.ts?.trim();
+  if (!timestamp) {
+    throw new Error("Slack chat.postMessage returned no message timestamp");
+  }
+  return timestamp;
+}
+
 export async function postSlackMessageBestEffort(params: {
   client: WebClient;
   channelId: string;
@@ -230,11 +246,16 @@ export async function postSlackMessageBestEffort(params: {
     response: await withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(payload)),
     identity,
   });
-  return await postSlackMessageWithIdentityFallback({
+  const posted = await postSlackMessageWithIdentityFallback({
     basePayload,
     identity: params.identity,
     post,
   });
+  const timestamp = requireSlackPostMessageTimestamp(posted.response);
+  return {
+    ...posted,
+    response: { ...posted.response, ts: timestamp },
+  };
 }
 
 export async function uploadSlackFile(params: {
@@ -250,6 +271,7 @@ export async function uploadSlackFile(params: {
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  optimizeImages?: boolean;
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
@@ -261,6 +283,7 @@ export async function uploadSlackFile(params: {
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
+    ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
   });
   // Slack classifies previews by filename even when the upload body has a MIME type.
   const uploadFileName =

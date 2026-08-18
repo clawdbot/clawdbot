@@ -18,7 +18,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir, shortenHomeInString } from "../utils.js";
-import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
+import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
 import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
@@ -78,24 +78,27 @@ async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   }
   if (!loaded) {
     runtime.log(`Gateway service ${service.notLoadedText}.`);
-    return true;
   }
-  try {
-    await service.stop({ env: process.env, stdout: process.stdout });
-  } catch (err) {
-    runtime.error(
-      `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
-    );
+  let stopped = true;
+  if (loaded) {
+    try {
+      await service.stop({ env: process.env, stdout: process.stdout });
+    } catch (err) {
+      stopped = false;
+      runtime.error(
+        `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
+      );
+    }
   }
   try {
     await service.uninstall({ env: process.env, stdout: process.stdout });
-    return true;
   } catch (err) {
     runtime.error(
       `Gateway uninstall failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for the service state.`,
     );
     return false;
   }
+  return stopped;
 }
 
 async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean) {
@@ -178,22 +181,35 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
 
   const dryRun = Boolean(opts.dryRun);
   let stateRemoved = false;
-  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-    resolveCleanupPlanFromDisk();
+  const removesLocalData = scopes.has("state") || scopes.has("workspace");
 
-  if (scopes.has("state") || scopes.has("workspace")) {
+  if (removesLocalData) {
     logBackupRecommendation(runtime);
   }
 
   if (scopes.has("service")) {
     if (dryRun) {
       runtime.log("[dry-run] remove gateway service");
-    } else {
-      await stopAndUninstallService(runtime);
+    } else if (!(await stopAndUninstallService(runtime))) {
+      // Service removal may prevent relaunch even when runtime termination is
+      // uncertain; preserve mutable user data until teardown can be verified.
+      runtime.exit(1);
+      return;
     }
   }
 
-  if (scopes.has("state")) {
+  const cleanupPlan = removesLocalData
+    ? dryRun
+      ? await resolveCleanupPlanForDryRun()
+      : await resolveCleanupPlanForRemoval(runtime)
+    : undefined;
+  if (removesLocalData && !cleanupPlan) {
+    return;
+  }
+
+  if (scopes.has("state") && cleanupPlan) {
+    const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
+      cleanupPlan;
     if (!scopes.has("workspace")) {
       for (const workspaceDir of workspaceDirs) {
         const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
@@ -216,8 +232,8 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     );
   }
 
-  if (scopes.has("workspace")) {
-    await removeWorkspaceDirs(workspaceDirs, runtime, {
+  if (scopes.has("workspace") && cleanupPlan) {
+    await removeWorkspaceDirs(cleanupPlan.workspaceDirs, runtime, {
       dryRun,
       removeStateRows: !scopes.has("state") || !stateRemoved,
     });
@@ -229,9 +245,9 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
 
   runtime.log("CLI still installed. Remove via npm/pnpm if desired.");
 
-  if (scopes.has("state") && !scopes.has("workspace")) {
+  if (scopes.has("state") && !scopes.has("workspace") && cleanupPlan) {
     const home = resolveHomeDir();
-    if (home && workspaceDirs.some((dir) => dir.startsWith(path.resolve(home)))) {
+    if (home && cleanupPlan.workspaceDirs.some((dir) => dir.startsWith(path.resolve(home)))) {
       runtime.log("Tip: workspaces were preserved. Re-run with --workspace to remove them.");
     }
   }

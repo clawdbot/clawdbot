@@ -14,10 +14,11 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
-import type { ContextUsage } from "../usage.js";
+import type { NormalizedUsage } from "../usage.js";
 
 export type BlockReplyFlushContext =
   | {
@@ -35,12 +36,15 @@ export type BlockReplyFlushContext =
       attemptAccepted: boolean;
     };
 
+type EmbeddedAgentUsage = Omit<NormalizedUsage, "contextUsage">;
+
 export type EmbeddedAgentMeta = {
   sessionId: string;
   sessionFile?: string;
   provider: string;
   model: string;
   contextTokens?: number;
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   agentHarnessId?: string;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
@@ -58,14 +62,9 @@ export type EmbeddedAgentMeta = {
    * and completion tokens that are useful for billing but noisy as live context.
    */
   promptTokens?: number;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    reasoningTokens?: number;
-    total?: number;
-  };
+  usage?: EmbeddedAgentUsage;
+  /** Terminal cumulative usage reserved for turn-level diagnostics. */
+  diagnosticUsage?: EmbeddedAgentUsage;
   /**
    * Usage from the last individual API call (not accumulated across tool-use
    * loops or compaction retries). Used for context-window utilization display
@@ -73,15 +72,7 @@ export type EmbeddedAgentMeta = {
    * sums input tokens from every API call in the run, which overstates the
    * actual context size.
    */
-  lastCallUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    contextUsage?: ContextUsage;
-    reasoningTokens?: number;
-    total?: number;
-  };
+  lastCallUsage?: NormalizedUsage;
   contextBudgetStatus?: SessionContextBudgetStatus;
   /**
    * True when code mode owned the model tool surface for this run. Config
@@ -195,6 +186,8 @@ export type EmbeddedAgentRunMeta = {
   terminalReplyKind?: "silent-empty";
   terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
+  /** Explicit user-facing waiting status supplied to sessions_yield. */
+  yieldAcknowledgment?: string;
   error?: {
     kind:
       | "context_overflow"
@@ -229,6 +222,7 @@ export type EmbeddedAgentRunMeta = {
 
 export type EmbeddedAgentRunResult = {
   latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
   payloads?: Array<{
     text?: string;
     mediaUrl?: string;
@@ -270,6 +264,7 @@ export type EmbeddedAgentRunResult = {
 export type EmbeddedAgentCompactResult = {
   ok: boolean;
   compacted: boolean;
+  compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
   reason?: string;
   /** Structured failure metadata used by model fallback classification. */
   failure?: {
@@ -279,8 +274,11 @@ export type EmbeddedAgentCompactResult = {
     rawError?: string;
   };
   result?: {
-    summary: string;
-    firstKeptEntryId: string;
+    /** Identifies summaryless provider compaction in RPC and UI consumers. */
+    kind?: "server-endpoint";
+    /** Server-endpoint compaction has no transcript summary or first-kept entry. */
+    summary?: string;
+    firstKeptEntryId?: string;
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;

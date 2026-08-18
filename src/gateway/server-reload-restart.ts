@@ -69,8 +69,13 @@ type AcceptedRestartTargetState =
       target: AcceptedRestartTarget;
     };
 
+type GatewayRestartCoordinatorParams = Pick<
+  GatewayReloadHandlerParams,
+  "assertRestartReady" | "logReload" | "requestRecoveryRestart"
+>;
+
 type GatewayRestartCoordinatorOptions = {
-  params: GatewayReloadHandlerParams;
+  params: GatewayRestartCoordinatorParams;
   myGeneration: number;
   restartRecoveryAvailable: boolean;
   getActiveCounts: () => GatewayActiveCounts;
@@ -178,14 +183,8 @@ class GatewayRestartTransaction {
       acceptedConfig &&
       configDebt.restartOwnedPaths.every((path) =>
         isDeepStrictEqual(
-          getConfigValueAtPath(
-            configDebt.nextConfig as unknown as Record<string, unknown>,
-            path.split("."),
-          ),
-          getConfigValueAtPath(
-            acceptedConfig as unknown as Record<string, unknown>,
-            path.split("."),
-          ),
+          getConfigValueAtPath({ ...configDebt.nextConfig }, path.split(".")),
+          getConfigValueAtPath({ ...acceptedConfig }, path.split(".")),
         ),
       );
     if (!retainsConfigDebt) {
@@ -409,6 +408,10 @@ class GatewayRestartTransaction {
     let emissionPrepared = true;
     const prepareForEmit = async () => {
       try {
+        await params.assertRestartReady?.();
+        if (!this.isCurrentRequest(requestGeneration)) {
+          return false;
+        }
         const preparedConfig = options?.prepareRuntimeConfig
           ? await options.prepareRuntimeConfig()
           : nextConfig;
@@ -420,14 +423,14 @@ class GatewayRestartTransaction {
         return this.isCurrentRequest(requestGeneration);
       } catch (err) {
         emissionPrepared = false;
-        params.logReload.warn(`gateway restart secrets preflight failed: ${String(err)}`);
+        params.logReload.warn(`gateway restart preflight failed: ${String(err)}`);
         return false;
       }
     };
 
     const active = this.options.getActiveCounts();
 
-    if (active.totalActive > 0 || options?.prepareRuntimeConfig) {
+    if (active.totalActive > 0 || options?.prepareRuntimeConfig || params.assertRestartReady) {
       // Avoid spinning up duplicate polling loops from repeated config changes.
       if (this.restartPending) {
         params.logReload.info(

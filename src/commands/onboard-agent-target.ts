@@ -2,8 +2,9 @@
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  resolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
@@ -26,12 +27,19 @@ export function resolveOnboardingAgentTarget(
   config: OpenClawConfig,
   explicitAgentId?: string,
 ): OnboardingAgentTarget {
-  const agentId = normalizeAgentId(explicitAgentId ?? resolveDefaultAgentId(config));
+  const agentId = normalizeAgentId(
+    explicitAgentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveSoleAgentId(config),
+  );
   return {
     agentId,
     agentDir: resolveAgentDir(config, agentId),
     workspaceDir: resolveAgentWorkspaceDir(config, agentId),
   };
+}
+
+/** Resolve the configured System Agent as the owner of onboarding effects. */
+export function resolveSystemAgentOnboardingTarget(config: OpenClawConfig): OnboardingAgentTarget {
+  return resolveOnboardingAgentTarget(config, config.agents?.defaults?.systemAgent?.agentId);
 }
 
 export async function ensureOnboardingAgentWorkspace(
@@ -53,7 +61,10 @@ export function applyOnboardingPrimaryModel(
   target: OnboardingAgentTarget,
   model: string,
 ): OpenClawConfig {
-  const entry = config.agents?.entries?.[target.agentId];
+  const authoredEntryKey = Object.keys(config.agents?.entries ?? {}).find(
+    (key) => normalizeAgentId(key) === target.agentId,
+  );
+  const entry = authoredEntryKey ? config.agents?.entries?.[authoredEntryKey] : undefined;
   if (entry?.model === undefined) {
     return applyPrimaryModel(config, model);
   }
@@ -69,7 +80,7 @@ export function applyOnboardingPrimaryModel(
       ...config.agents,
       entries: {
         ...config.agents?.entries,
-        [target.agentId]: {
+        [authoredEntryKey ?? target.agentId]: {
           ...entry,
           model: {
             ...(fallbackValues.length > 0 ? { fallbacks: fallbackValues } : {}),

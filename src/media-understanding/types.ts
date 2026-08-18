@@ -1,6 +1,6 @@
 // Shared media-understanding types for attachments, provider hooks, request
 // auth, decisions, and structured extraction inputs.
-import type { MediaKind } from "@openclaw/media-core/constants";
+import type { MediaUnderstandingCapability } from "../../packages/media-understanding-common/src/types.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,36 +13,12 @@ type MediaPreparedModelRuntime = Readonly<{
   createStores: () => unknown;
 }>;
 
-type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
-
-export type MediaUnderstandingCapability = "image" | "audio" | "video";
-
-export type MediaUnderstandingCapabilityRegistry = Map<
-  string,
-  {
-    capabilities?: MediaUnderstandingCapability[];
-  }
->;
-
-export type MediaAttachment = {
-  path?: string;
-  url?: string;
-  mime?: string;
-  kind?: MediaKind;
-  workspaceDir?: string;
-  index: number;
-  alreadyTranscribed?: boolean;
-};
-
-export type MediaUnderstandingOutput = {
-  kind: MediaUnderstandingKind;
-  attachmentIndex: number;
-  text: string;
-  provider: string;
-  model?: string;
-  requestedBackend?: string;
-  observedBackend?: string;
-};
+export type {
+  MediaAttachment,
+  MediaUnderstandingCapability,
+  MediaUnderstandingCapabilityRegistry,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 
 type MediaUnderstandingDecisionOutcome =
   | "success"
@@ -68,10 +44,25 @@ type MediaUnderstandingAttachmentDecision = {
   chosen?: MediaUnderstandingModelDecision;
 };
 
+export type MediaAttachmentDisposition =
+  | { kind: "handled" }
+  | { kind: "handed-to-native-vision" }
+  | { kind: "not-selected" }
+  | { kind: "capability-disabled" }
+  | { kind: "no-model" }
+  | { kind: "scope-denied" }
+  | { kind: "failed"; reason?: string };
+
 export type MediaUnderstandingDecision = {
   capability: MediaUnderstandingCapability;
   outcome: MediaUnderstandingDecisionOutcome;
   attachments: MediaUnderstandingAttachmentDecision[];
+  // Optional on the shipped SDK contract: plugins pass FinalizedMsgContext into
+  // inbound-reply dispatch and may hold legacy decision literals. Core producers
+  // (runner, apply-capability, runtime) always populate it; absence renders no
+  // markers rather than breaking plugin compilation.
+  attachmentDispositions?: Record<number, MediaAttachmentDisposition>;
+  nativeVisionActive?: boolean;
 };
 
 type MediaUnderstandingProviderRequestAuthOverride =

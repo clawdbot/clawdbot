@@ -1,5 +1,6 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
@@ -15,7 +16,10 @@ import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-t
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
-import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  type ScheduledToolPolicyContext,
+} from "../agents/scheduled-tool-policy.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -26,7 +30,7 @@ import {
   collectExplicitDenylist,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
@@ -62,6 +66,7 @@ export function resolveGatewayScopedTools(params: {
   agentDir?: string;
   sessionKey: string;
   runtimePolicySessionKey?: string;
+  runtimePolicyAgentId?: string;
   agentId?: string;
   sessionId?: string;
   runId?: string;
@@ -69,11 +74,13 @@ export function resolveGatewayScopedTools(params: {
   cwd?: string;
   modelProvider?: string;
   modelId?: string;
-  onYield?: (message: string) => Promise<void> | void;
+  modelHasVision?: boolean;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   clientCaps?: string[];
   accountId?: string;
@@ -112,8 +119,23 @@ export function resolveGatewayScopedTools(params: {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 }) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
+  const sessionAgentId = resolveSessionAgentIds({
+    config: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  }).sessionAgentId;
+  const hasSeparateRuntimePolicyIdentity = Boolean(
+    params.runtimePolicySessionKey?.trim() || params.runtimePolicyAgentId?.trim(),
+  );
+  const runtimePolicyAgentId = hasSeparateRuntimePolicyIdentity
+    ? resolveSessionAgentIds({
+        config: params.cfg,
+        sessionKey: runtimePolicySessionKey,
+        agentId: params.runtimePolicyAgentId,
+      }).sessionAgentId
+    : sessionAgentId;
   const {
-    agentId,
+    agentId: resolvedPolicyAgentId,
     globalPolicy,
     globalProviderPolicy,
     agentPolicy,
@@ -125,16 +147,22 @@ export function resolveGatewayScopedTools(params: {
   } = resolveEffectiveToolPolicy({
     config: params.cfg,
     sessionKey: runtimePolicySessionKey,
-    agentId: params.agentId,
+    agentId: runtimePolicyAgentId,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const policyAgentId = resolvedPolicyAgentId ?? runtimePolicyAgentId;
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const surface = params.surface ?? "http";
   const nodeExecSurface = surface === "loopback" && params.includeNodeExecTool === true;
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
   const messageProvider = params.messageProvider?.trim().toLowerCase();
+  const gatewayCaller = resolveScheduledToolCallerContext({
+    scheduledToolPolicy: params.scheduledToolPolicy,
+    accountId: params.accountId,
+    channel: messageProvider,
+  });
   const sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
     params.sourceReplyDeliveryMode ??
     (params.inboundEventKind === "room_event" && messageProvider !== "webchat"
@@ -162,13 +190,13 @@ export function resolveGatewayScopedTools(params: {
     config: params.cfg,
     sessionKey: runtimePolicySessionKey,
     subagentSessionKey: runtimePolicySessionKey,
-    agentId,
+    agentId: policyAgentId,
     spawnedBy: params.spawnedBy,
     messageProvider: params.messageProvider,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.accountId ?? null,
+    accountId: gatewayCaller.accountId ?? null,
     senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
@@ -186,13 +214,17 @@ export function resolveGatewayScopedTools(params: {
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: runtimePolicySessionKey,
-    agentId,
+    sessionKey: params.sessionKey,
+    agentId: sessionAgentId,
+    classificationSessionKey: runtimePolicySessionKey,
+    classificationAgentId: policyAgentId,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const mediatedToolNames = new Set(
-    Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolName(name)).filter(Boolean),
+    Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
+      Boolean,
+    ),
   );
   const gatewayToolsCfg = params.cfg.gateway?.tools;
   const defaultGatewayDeny =
@@ -202,7 +234,7 @@ export function resolveGatewayScopedTools(params: {
           // normalize both sides so they still lift the matching default deny.
           (name) =>
             !gatewayToolsCfg?.allow?.some(
-              (allowed) => normalizeToolName(allowed) === normalizeToolName(name),
+              (allowed) => normalizeToolPolicyName(allowed) === normalizeToolPolicyName(name),
             ),
         )
       : [];
@@ -212,8 +244,7 @@ export function resolveGatewayScopedTools(params: {
       : [];
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir =
-    params.workspaceDir?.trim() ||
-    resolveAgentWorkspaceDir(params.cfg, agentId ?? resolveDefaultAgentId(params.cfg));
+    params.workspaceDir?.trim() || resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   const explicitDenylist = collectExplicitDenylist([
     profilePolicy,
     providerProfilePolicy,
@@ -252,9 +283,13 @@ export function resolveGatewayScopedTools(params: {
 
   const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
-    requesterAgentIdOverride: agentId,
+    runId: params.runId,
+    requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
+    gatewayCallerAccountId: gatewayCaller.accountId,
+    gatewayCallerChannel: gatewayCaller.channel,
+    gatewayCallerLocal: gatewayCaller.local,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
     sourceReplyOnly: params.sourceReplyOnly,
@@ -264,6 +299,7 @@ export function resolveGatewayScopedTools(params: {
     currentChannelId: params.currentChannelId ?? params.agentTo,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
+    replyToMode: params.replyToMode,
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
     onYield: params.onYield,
@@ -279,6 +315,7 @@ export function resolveGatewayScopedTools(params: {
     authProfileStore: params.authProfileStore,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    modelHasVision: params.modelHasVision,
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
@@ -307,7 +344,7 @@ export function resolveGatewayScopedTools(params: {
           cfg: params.cfg,
           sessionEntry: params.execSession,
           execOverrides: params.execOverrides,
-          agentId,
+          agentId: policyAgentId,
           sessionKey: runtimePolicySessionKey,
           sandboxAvailable: sandboxRuntime.sandboxed,
         })
@@ -316,7 +353,7 @@ export function resolveGatewayScopedTools(params: {
     nodeExecSurface && execDefaults?.canRequestNode === true ? execDefaults : undefined;
   const includeNodeExecTool = nodeExecDefaults !== undefined;
   const execConfig = includeNodeExecTool
-    ? resolveExecToolConfig({ cfg: params.cfg, agentId })
+    ? resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId })
     : undefined;
   const includeMediatedBaseCodingTools = ["read", "write", "edit"].some((name) =>
     mediatedToolNames.has(name),
@@ -328,7 +365,7 @@ export function resolveGatewayScopedTools(params: {
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
       ? createOpenClawCodingTools({
           config: params.cfg,
-          agentId,
+          agentId: policyAgentId,
           sessionKey: runtimePolicySessionKey,
           runSessionKey: params.sessionKey,
           sessionId: params.sessionId,
@@ -337,6 +374,7 @@ export function resolveGatewayScopedTools(params: {
           cwd: params.cwd?.trim() || workspaceDir,
           modelProvider: params.modelProvider,
           modelId: params.modelId,
+          modelHasVision: params.modelHasVision,
           messageProvider: params.messageProvider,
           messageChannel: params.messageProvider,
           clientCaps: params.clientCaps,
@@ -382,7 +420,6 @@ export function resolveGatewayScopedTools(params: {
           },
           // The MCP dispatcher is the shared hook and abort boundary for these tools.
           wrapBeforeToolCallHook: false,
-          toolPolicyAuditLogLevel: "debug",
         })
       : [];
   // CLI backends already own their local shell. This extra surface is deliberately
@@ -394,7 +431,7 @@ export function resolveGatewayScopedTools(params: {
     // Once a name is server-minted as mediated, only the canonical coding
     // factory may supply it. A policy-filtered tool must not fall back to a
     // coincidentally named Gateway/plugin implementation.
-    ...baseTools.filter((tool) => !mediatedToolNames.has(normalizeToolName(tool.name))),
+    ...baseTools.filter((tool) => !mediatedToolNames.has(normalizeToolPolicyName(tool.name))),
     ...mediatedCodingTools,
   ];
   const allTools = nodeExecDefaults
@@ -416,7 +453,7 @@ export function resolveGatewayScopedTools(params: {
             safeBinProfiles: execConfig?.safeBinProfiles,
             reviewer: execConfig?.reviewer,
             config: params.cfg,
-            agentId,
+            agentId: policyAgentId,
             elevated: params.bashElevated,
             cwd: workspaceDir,
             allowBackground: false,
@@ -473,7 +510,7 @@ export function resolveGatewayScopedTools(params: {
         agentProviderPolicy,
         groupPolicy,
         senderPolicy,
-        agentId,
+        agentId: policyAgentId,
       }),
       { policy: sandboxPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
@@ -492,7 +529,9 @@ export function resolveGatewayScopedTools(params: {
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
     ...excludedToolNames,
   ]);
-  const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  const tools = applyToolAvailabilityDescriptions(
+    policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name)),
+  );
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
   const inheritableTools = includeNodeExecTool
@@ -506,7 +545,7 @@ export function resolveGatewayScopedTools(params: {
   );
 
   return {
-    agentId,
+    agentId: sessionAgentId,
     tools,
     workspaceDir,
   };

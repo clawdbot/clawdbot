@@ -1,15 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
   getPlaybackTranscodePolicyForTest,
   resolvePlaybackModeForTest,
+  waitForPlaybackTranscodeJobsForTest,
 } from "./playback-transcode.test-support.js";
 
-const { probePlaybackMediaFileDescriptor, runFfmpeg } = vi.hoisted(() => ({
+const { playbackWarn, probePlaybackMediaFileDescriptor, runFfmpeg } = vi.hoisted(() => ({
+  playbackWarn: vi.fn(),
   probePlaybackMediaFileDescriptor: vi.fn(),
   runFfmpeg: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: (subsystem: string) => ({ subsystem, warn: playbackWarn }),
 }));
 
 vi.mock("./ffmpeg-exec.js", () => ({
@@ -40,6 +47,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  playbackWarn.mockReset();
   runFfmpeg.mockReset();
   probePlaybackMediaFileDescriptor.mockReset();
   probePlaybackMediaFileDescriptor.mockImplementation(async (_fd: number, kind: string) =>
@@ -757,6 +765,41 @@ describe("resolvePlaybackTranscode", () => {
     }
   });
 
+  it("warns once when the same transcode operation fails across cooldown retries", async () => {
+    const source = await createSource("warn-failed.caf", "caff-source");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000);
+    runFfmpeg.mockRejectedValue(new Error("ffmpeg unavailable"));
+    const params = {
+      ...source,
+      mimeType: "audio/x-caf",
+      kind: "audio" as const,
+    };
+
+    try {
+      await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+        kind: "preparing",
+      });
+      await vi.waitFor(() => expect(playbackWarn).toHaveBeenCalledOnce());
+      expect(playbackWarn).toHaveBeenCalledWith(
+        expect.stringContaining(`${source.sourcePath}: ffmpeg unavailable`),
+      );
+
+      nowSpy.mockReturnValue(61_001);
+      await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+        kind: "preparing",
+      });
+      await vi.waitFor(() => expect(runFfmpeg).toHaveBeenCalledTimes(2));
+      await vi.waitFor(async () => {
+        await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+          kind: "fallback",
+        });
+      });
+      expect(playbackWarn).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("keeps a saturated transcode pool retryable until capacity is available", async () => {
     const sources = await Promise.all([
       createSource("pool-first.mkv"),
@@ -764,9 +807,11 @@ describe("resolvePlaybackTranscode", () => {
       createSource("pool-third.mkv"),
     ]);
     const finishers: Array<() => Promise<void>> = [];
+    const starts = [createDeferred(), createDeferred(), createDeferred()];
     runFfmpeg.mockImplementation(
       async (args: string[]) =>
         await new Promise<string>((resolve) => {
+          starts[finishers.length]?.resolve();
           finishers.push(async () => {
             await fs.writeFile(args.at(-1) ?? "", "normalized-video");
             resolve("");
@@ -786,29 +831,31 @@ describe("resolvePlaybackTranscode", () => {
     await expect(playback.resolvePlaybackTranscode(params[1]!)).resolves.toEqual({
       kind: "preparing",
     });
-    await vi.waitFor(() => expect(runFfmpeg).toHaveBeenCalledTimes(2));
+    await Promise.all(starts.slice(0, 2).map(async ({ promise }) => await promise));
+    expect(runFfmpeg).toHaveBeenCalledTimes(2);
     await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
       kind: "preparing",
     });
     expect(runFfmpeg).toHaveBeenCalledTimes(2);
 
+    const capacityAvailable = waitForPlaybackTranscodeJobsForTest("next");
     await finishers[0]?.();
-    await vi.waitFor(async () => {
-      await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
-        kind: "preparing",
-      });
-      expect(runFfmpeg).toHaveBeenCalledTimes(3);
+    await expect(capacityAvailable).resolves.toBe(2);
+    await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
+      kind: "preparing",
     });
+    await starts[2]!.promise;
+    expect(runFfmpeg).toHaveBeenCalledTimes(3);
+    const remainingJobs = waitForPlaybackTranscodeJobsForTest("all");
     await Promise.all(finishers.slice(1).map(async (finish) => await finish()));
-    await vi.waitFor(async () => {
-      await expect(
-        Promise.all(params.map(async (param) => await playback.resolvePlaybackTranscode(param))),
-      ).resolves.toEqual([
-        expect.objectContaining({ kind: "transcoded" }),
-        expect.objectContaining({ kind: "transcoded" }),
-        expect.objectContaining({ kind: "transcoded" }),
-      ]);
-    });
+    await expect(remainingJobs).resolves.toBe(2);
+    await expect(
+      Promise.all(params.map(async (param) => await playback.resolvePlaybackTranscode(param))),
+    ).resolves.toEqual([
+      expect.objectContaining({ kind: "transcoded" }),
+      expect.objectContaining({ kind: "transcoded" }),
+      expect.objectContaining({ kind: "transcoded" }),
+    ]);
   });
 
   it("passes already portable media through without invoking ffmpeg", async () => {

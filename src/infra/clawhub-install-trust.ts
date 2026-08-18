@@ -5,14 +5,14 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { formatTerminalLink } from "../../packages/terminal-core/src/terminal-link.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import { fetchExactClawHubSkillSecurityVerdicts } from "./clawhub-skill-security.js";
+import { resolveClawHubBaseUrl } from "./clawhub-client.js";
 import {
   fetchClawHubPackageSecurity,
-  resolveClawHubBaseUrl,
   type ClawHubPackageSecurityResponse,
   type ClawHubPackageSecurityTrust,
-  type ClawHubSkillSecurityVerdictItem,
-} from "./clawhub.js";
+} from "./clawhub-packages.js";
+import { fetchExactClawHubSkillSecurityVerdicts } from "./clawhub-skill-security.js";
+import type { ClawHubSkillSecurityVerdictItem } from "./clawhub-skills.js";
 import { formatErrorMessage } from "./errors.js";
 
 export const CLAWHUB_TRUST_ERROR_CODE = {

@@ -12,7 +12,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
-import { formatEnvelopeTimestamp } from "../envelope.js";
+import { formatAgentEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
 import {
   formatContextJsonBlock,
@@ -501,7 +501,7 @@ function formatConversationTimestamp(
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
-  return formatEnvelopeTimestamp(value, envelope);
+  return formatAgentEnvelopeTimestamp(value, envelope);
 }
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {

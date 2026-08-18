@@ -25,7 +25,7 @@ import {
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
-import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis-core.js";
+import { getSubCliEntries, registerSubCliByNameCore } from "./program/register.subclis-core.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
@@ -164,7 +164,7 @@ async function registerSubcommandsForCompletion(program: Command): Promise<void>
       continue;
     }
     try {
-      await registerSubCliByName(program, entry.name, process.argv, { purpose: "completion" });
+      await registerSubCliByNameCore(program, entry.name, process.argv, { purpose: "completion" });
     } catch (error) {
       writeCompletionRegistrationWarning(
         `skipping subcommand \`${entry.name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
@@ -183,9 +183,10 @@ export function registerCompletionCli(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/completion", "docs.openclaw.ai/cli/completion")}\n`,
     )
     .addOption(
-      new Option("-s, --shell <shell>", "Shell to generate completion for (default: zsh)").choices(
-        COMPLETION_SHELLS,
-      ),
+      new Option(
+        "-s, --shell <shell>",
+        "Shell to generate completion for (default: detected)",
+      ).choices(COMPLETION_SHELLS),
     )
     .option("-i, --install", "Install completion script to shell profile")
     .option(
@@ -206,7 +207,7 @@ export function registerCompletionCli(program: Command) {
         return;
       }
 
-      const shell = options.shell ?? "zsh";
+      const shell = options.shell ?? resolveShellFromEnv();
 
       // Completion needs the full Commander command tree (including nested subcommands).
       // Our CLI defaults to lazy registration for perf; force-register core commands here.

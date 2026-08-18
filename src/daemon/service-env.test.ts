@@ -528,7 +528,7 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
     expect(env.OPENCLAW_SERVICE_KIND).toBe("gateway");
-    expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
+    expect(env).not.toHaveProperty("OPENCLAW_SERVICE_VERSION");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
     expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
     expect(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
@@ -772,6 +772,7 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.HOME).toBe("/home/user");
+    expect(env).not.toHaveProperty("OPENCLAW_SERVICE_VERSION");
   });
 
   it("sets the OpenClaw-owned launchd marker for macOS node services", () => {
@@ -795,6 +796,18 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user", OPENCLAW_GATEWAY_PASSWORD: " node-password " },
     });
     expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("node-password");
+  });
+
+  it("passes through the Cloudflare Access service-token pair for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        CF_ACCESS_CLIENT_ID: " cf-client-id ",
+        CF_ACCESS_CLIENT_SECRET: " cf-client-secret ",
+      },
+    });
+    expect(env.CF_ACCESS_CLIENT_ID).toBe("cf-client-id");
+    expect(env.CF_ACCESS_CLIENT_SECRET).toBe("cf-client-secret");
   });
 
   it("passes through OPENCLAW_ALLOW_INSECURE_PRIVATE_WS for node services", () => {

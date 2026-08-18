@@ -32,8 +32,8 @@ import {
   pageTargetInfo,
   retirePlaywrightBrowserConnectionExact,
   takeCachedPlaywrightBrowserConnection,
+  ensureContextState,
 } from "./pw-session-connection.js";
-import { ensureContextState } from "./pw-session-connection.js";
 import {
   cachedByCdpUrl,
   connectingByCdpUrl,
@@ -201,7 +201,7 @@ async function tryTerminateExecutionViaCdp(opts: {
     return;
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
-  await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
+  const wsPin = await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
     source: "discovered",
     configuredUrl: opts.cdpUrl,
   });
@@ -245,7 +245,7 @@ async function tryTerminateExecutionViaCdp(opts: {
         // Best-effort; ignore
       }
     },
-    { handshakeTimeoutMs: 2000 },
+    { handshakeTimeoutMs: 2000, ...(wsPin?.lookup ? { lookup: wsPin.lookup } : {}) },
   ).catch(() => {});
 }
 
@@ -449,7 +449,6 @@ export async function createPageViaPlaywright(
   const createdTargetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
   clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
 
-  // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
     const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
@@ -459,7 +458,7 @@ export async function createPageViaPlaywright(
       url: targetUrl,
       ...navigationPolicy,
     });
-    let response: Response | null = null;
+    let response: Response | null;
     try {
       response = await gotoPageWithNavigationGuard({
         cdpUrl: opts.cdpUrl,
@@ -471,9 +470,11 @@ export async function createPageViaPlaywright(
         targetId: createdTargetId ?? undefined,
       });
     } catch (err) {
-      if (isPolicyDenyNavigationError(err) || err instanceof BlockedBrowserTargetError) {
-        throw err;
+      if (!isPolicyDenyNavigationError(err) && !(err instanceof BlockedBrowserTargetError)) {
+        // This call owns the new page; best-effort cleanup must not replace its navigation error.
+        await page.close().catch(() => {});
       }
+      throw err;
     }
     // OpenClaw owns this newly-created tab: if the post-navigation safety
     // check trips, close the tab we just spawned.
@@ -498,7 +499,6 @@ export async function createPageViaPlaywright(
     }
   }
 
-  // Get the targetId for this page
   const tid = createdTargetId ?? (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
   if (!tid) {
     throw new Error("Failed to get targetId for new page");

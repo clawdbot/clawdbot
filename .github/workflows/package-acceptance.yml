@@ -425,7 +425,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
   PACKAGE_ARTIFACT_NAME: package-under-test-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
@@ -575,7 +575,7 @@ jobs:
             }
           fi
 
-          node scripts/resolve-openclaw-package-candidate.mjs \
+          node --import tsx scripts/resolve-openclaw-package-candidate.mts \
             --source "$SOURCE" \
             --package-ref "$PACKAGE_REF" \
             --package-spec "$PACKAGE_SPEC" \
@@ -707,7 +707,7 @@ jobs:
               --pre-date 2026-03-15T00:00:00Z
             )
           fi
-          node scripts/resolve-upgrade-survivor-baselines.mjs "${args[@]}" >/dev/null
+          node --import tsx scripts/resolve-upgrade-survivor-baselines.mts "${args[@]}" >/dev/null
           echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"
 
       - name: Upload package-under-test artifact
@@ -841,6 +841,13 @@ jobs:
       package_sha256: ${{ needs.resolve_package.outputs.package_sha256 }}
       package_source_sha: ${{ needs.resolve_package.outputs.package_source_sha }}
       package_version: ${{ needs.resolve_package.outputs.package_version }}
+      enable_prepublish_plugin_registry: ${{ contains(fromJSON('["artifact","ref"]'), inputs.source) }}
+      prepublish_plugin_registry_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+      prepublish_plugin_registry_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       include_live_suites: ${{ needs.resolve_package.outputs.include_live_suites == 'true' }}
       live_models_only: false
       shared_image_artifact_namespace: ${{ inputs.shared_image_artifact_namespace }}
@@ -930,7 +937,7 @@ jobs:
       package_source_sha: ${{ needs.resolve_package.outputs.package_source_sha }}
       package_version: ${{ needs.resolve_package.outputs.package_version }}
       package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
-      harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
+      harness_ref: ${{ inputs.workflow_ref }}
       provider_mode: ${{ needs.resolve_package.outputs.telegram_mode }}
       scenario: ${{ inputs.telegram_scenarios }}
     secrets:

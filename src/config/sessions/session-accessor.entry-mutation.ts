@@ -7,20 +7,21 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveAccessStorePath,
   loadSessionEntry,
-  listSessionEntries,
-  patchSessionEntry,
+  listSessionEntriesCore,
+  patchSessionEntryCore,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import {
-  appendSqliteTranscriptEvent,
-  forkSqliteSessionEntryFromParentTarget,
-  forkSqliteSessionTranscriptFromParent,
-  recordSqliteInboundSessionMeta,
-  updateSqliteSessionLastRoute,
-  patchSqliteSessionEntry,
-  resolveSqliteSessionParentForkDecision,
-} from "./session-accessor.sqlite.js";
+  recordInboundSessionMeta,
+  updateSessionLastRoute,
+} from "./session-accessor.sqlite-entry.js";
+import {
+  forkSessionEntryFromParentTarget,
+  forkSessionTranscriptFromParent,
+  resolveSessionParentForkDecision,
+} from "./session-accessor.sqlite-parent-session.js";
+import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -28,11 +29,8 @@ import type {
   SessionAbortTargetContext,
   SessionAbortTargetIdentity,
   SessionAbortTargetResult,
-  SessionParentForkDecision,
   ForkSessionFromParentTranscriptResult,
   ForkSessionFromParentTranscriptParams,
-  ForkSessionEntryFromParentTargetResult,
-  ForkSessionEntryFromParentTargetParams,
   SessionEntryCreateWithTranscriptContext,
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCreateWithTranscriptPrepareResult,
@@ -41,7 +39,7 @@ import type {
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import type { GroupKeyResolution, SessionEntry } from "./types.js";
+import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 
 function projectSessionEntryForPersistenceRevision(params: {
   storePath: string;
@@ -65,26 +63,15 @@ function projectSessionEntryForPersistenceRevision(params: {
 export async function forkSessionFromParentTranscript(
   params: ForkSessionFromParentTranscriptParams,
 ): Promise<ForkSessionFromParentTranscriptResult> {
-  return await forkSqliteSessionTranscriptFromParent(params);
+  return await forkSessionTranscriptFromParent(params);
 }
 
-/**
- * Forks parent transcript content and persists the child entry/alias cleanup in
- * one storage-owned operation.
- */
-export async function forkSessionEntryFromParentTarget(
-  params: ForkSessionEntryFromParentTargetParams,
-): Promise<ForkSessionEntryFromParentTargetResult> {
-  return await forkSqliteSessionEntryFromParentTarget(params);
-}
-
-/** Resolves whether a parent session is small enough to fork through the active store. */
-export async function resolveSessionParentForkDecision(params: {
-  parentEntry: SessionEntry;
-  storePath: string;
-}): Promise<SessionParentForkDecision> {
-  return await resolveSqliteSessionParentForkDecision(params);
-}
+export {
+  forkSessionEntryFromParentTarget,
+  recordInboundSessionMeta,
+  resolveSessionParentForkDecision,
+  updateSessionLastRoute,
+};
 
 /**
  * Creates or updates one session entry and initializes its transcript header as
@@ -103,7 +90,10 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const storePath = resolveAccessStorePath(scope);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   const store = Object.fromEntries(
-    listSessionEntries({ agentId, storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: scope.sessionKey });
   const created = await createEntry({
@@ -115,7 +105,8 @@ export async function createSessionEntryWithTranscript<TError = string>(
   }
 
   try {
-    await appendSqliteTranscriptEvent(
+    options.commitGuard?.();
+    await appendTranscriptEvent(
       {
         agentId,
         sessionId: created.entry.sessionId,
@@ -139,6 +130,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     removals: resolved.legacyKeys.map((sessionKey) => ({ sessionKey })),
     upserts: [{ sessionKey: resolved.normalizedKey, entry }],
     skipMaintenance: true,
+    ...(options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : {}),
   });
   return { ok: true, entry, sessionFile: resolved.normalizedKey };
 }
@@ -271,7 +263,7 @@ export async function updateSessionEntry(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryUpdateOptions = {},
 ): Promise<SessionEntry | null> {
-  return await patchSqliteSessionEntry(scope, update, options);
+  return await patchSessionEntryCore(scope, update, options);
 }
 
 export type RecordInboundSessionMetaParams = {
@@ -312,31 +304,6 @@ export type UpdateSessionLastRouteParams = {
   to?: string;
 };
 
-/**
- * Records stable conversation metadata derived from one inbound message as a
- * single storage-sized upsert (createIfMissing by default). Inbound metadata
- * must not refresh activity timestamps — idle reset relies on updatedAt from
- * real session turns — so existing rows merge with preserve-activity
- * semantics while legacy alias keys collapse onto the canonical row.
- */
-export async function recordInboundSessionMeta(
-  params: RecordInboundSessionMetaParams,
-): Promise<SessionEntry | null> {
-  return await recordSqliteInboundSessionMeta(params);
-}
-
-/**
- * Persists the last known delivery route for one session as a single
- * storage-sized patch. Route updates preserve activity timestamps (#49515)
- * and merge explicit route/delivery input over the persisted session
- * fallback before normalizing the derived last* fields.
- */
-export async function updateSessionLastRoute(
-  params: UpdateSessionLastRouteParams,
-): Promise<SessionEntry | null> {
-  return await updateSqliteSessionLastRoute(params);
-}
-
 /** Resolves one abort target identity without exposing the mutable store. */
 export function resolveSessionAbortTarget(
   scope: SessionAccessScope,
@@ -361,13 +328,13 @@ export async function markSessionAbortTarget(params: {
   scope: SessionAccessScope;
   now?: () => number;
 }): Promise<SessionAbortTargetResult | null> {
-  let resolvedTarget: SessionAbortTargetResult | null = null;
+  const resolution: { target: SessionAbortTargetResult | null } = { target: null };
   try {
     const sessionKey = normalizeStoreSessionKey(params.scope.sessionKey);
-    const updated = await patchSessionEntry(
+    const updated = await patchSessionEntryCore(
       params.scope,
       (currentEntry) => {
-        resolvedTarget = {
+        resolution.target = {
           entry: { ...currentEntry },
           persisted: false,
           sessionId: currentEntry.sessionId,
@@ -401,7 +368,7 @@ export async function markSessionAbortTarget(params: {
         }
       : null;
   } catch (error) {
-    const fallbackTarget = resolvedTarget as unknown as SessionAbortTargetResult | null;
+    const fallbackTarget = resolution.target;
     if (fallbackTarget) {
       return {
         entry: fallbackTarget.entry,

@@ -49,4 +49,4 @@ export const OAUTH_REFRESH_CALL_TIMEOUT_MS = 120_000;
 export const EXTERNAL_CLI_SYNC_TTL_MS = 15 * 60 * 1000;
 
 /** Auth profile subsystem logger. */
-export const log = createSubsystemLogger("agents/auth-profiles");
+export const authProfilesLog = createSubsystemLogger("agents/auth-profiles");

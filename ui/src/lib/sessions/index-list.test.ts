@@ -3,7 +3,15 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "./index.ts";
 
-type ListParams = { archived?: true | "all"; limit?: number; offset?: number };
+type ListParams = {
+  agentId?: string;
+  archived?: true | "all";
+  boardFace?: "chat" | "dashboard";
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+  limit?: number;
+  offset?: number;
+};
 
 function listResult(keys: string[] = [], totalCount = keys.length, offset = 0): SessionsListResult {
   const nextOffset = offset + keys.length;
@@ -90,6 +98,31 @@ describe("session list requests", () => {
     sessions.dispose();
   });
 
+  it("forwards the involving-me predicate", async () => {
+    const request = vi.fn(async () => listResult());
+    const { sessions } = sessionHarness(request);
+    await sessions.list({ involvingMe: true });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ involvingMe: true }),
+    );
+    sessions.dispose();
+  });
+
+  it("discards a list rejection from a retired same-client connection", async () => {
+    let rejectStale!: (error: Error) => void;
+    const staleRequest = new Promise<SessionsListResult>((_resolve, reject) => {
+      rejectStale = reject;
+    });
+    const request = vi.fn(async () => staleRequest);
+    const { sessions, reconnect } = sessionHarness(request);
+    const retiredRequest = sessions.list({ boardFace: "dashboard" });
+    reconnect();
+    rejectStale(new Error("retired connection"));
+    await expect(retiredRequest).resolves.toBeNull();
+    sessions.dispose();
+  });
+
   it("keeps filtered pages scoped without replacing the canonical active roster", async () => {
     const request = vi.fn(async (_method: string, params?: ListParams) => {
       const filter = params?.archived === true ? "archived" : params?.archived || "active";
@@ -98,8 +131,8 @@ describe("session list requests", () => {
       return listResult(keys.slice(offset, offset + (params?.limit ?? 50)), 4, offset);
     });
     const { sessions } = sessionHarness(request);
-    const archivedScope = { agentId: "main", archivedFilter: "archived" as const };
-    const allScope = { agentId: "main", archivedFilter: "all" as const };
+    const archivedScope = { agentId: "main", archivedFilter: "archived" as const, limit: 2 };
+    const allScope = { agentId: "main", archivedFilter: "all" as const, limit: 1 };
     const observeSnapshot = vi.fn();
     const unsubscribe = sessions.subscribeList(archivedScope, observeSnapshot);
     await sessions.refreshList({ agentId: "main", limit: 1, force: true });
@@ -117,6 +150,131 @@ describe("session list requests", () => {
     expect(sessions.state.result).toBe(activeResult);
     expect(sessions.canonicalListRevision).toBe(1);
     expect(observeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ loading: true }));
+    unsubscribe();
+    sessions.dispose();
+  });
+
+  it("keeps dashboard and sidebar queries distinct without inventing a dashboard agent", async () => {
+    const request = vi.fn(async (_method: string, params?: ListParams) =>
+      listResult([
+        params?.boardFace === "dashboard"
+          ? "agent:main:dashboard-result"
+          : "agent:main:sidebar-result",
+      ]),
+    );
+    const { sessions } = sessionHarness(request);
+    const dashboardQuery = {
+      limit: 50,
+      boardFace: "dashboard" as const,
+      archivedFilter: "all" as const,
+    };
+    const sidebarQuery = {
+      agentId: "main",
+      limit: 60,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      archivedFilter: "all" as const,
+    };
+    const stopDashboard = sessions.subscribeList(dashboardQuery, () => undefined);
+    const stopSidebar = sessions.subscribeList(sidebarQuery, () => undefined);
+
+    await sessions.refreshList({
+      ...dashboardQuery,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      includeDerivedTitles: false,
+      includeLastMessage: false,
+      force: true,
+    });
+    await sessions.refreshList({ ...sidebarQuery, force: true });
+
+    expect(sessions.listSnapshot(dashboardQuery).result?.sessions[0]?.key).toBe(
+      "agent:main:dashboard-result",
+    );
+    expect(sessions.listSnapshot(sidebarQuery).result?.sessions[0]?.key).toBe(
+      "agent:main:sidebar-result",
+    );
+    expect(request.mock.calls[0]?.[1]).toEqual({
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      limit: 50,
+      archived: "all",
+      boardFace: "dashboard",
+    });
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("agentId");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      agentId: "main",
+      archived: "all",
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      limit: 60,
+    });
+    stopDashboard();
+    stopSidebar();
+    sessions.dispose();
+  });
+
+  it("keeps explicit unenriched page queries independent from the primary roster", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(listResult(["agent:main:primary"]))
+      .mockResolvedValueOnce(listResult(["agent:main:page"]));
+    const { sessions } = sessionHarness(request);
+    const pageQuery = {
+      agentId: "main",
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      includeDerivedTitles: false,
+      includeLastMessage: false,
+    };
+    const unsubscribe = sessions.subscribeList(pageQuery, () => undefined);
+
+    await sessions.refreshList({ agentId: "main", limit: 50, force: true });
+    const primaryResult = sessions.state.result;
+    await sessions.refreshList({ ...pageQuery, force: true });
+
+    expect(sessions.state.result).toBe(primaryResult);
+    expect(sessions.listSnapshot(pageQuery).result?.sessions[0]?.key).toBe("agent:main:page");
+    expect(request.mock.calls[1]?.[1]).toEqual({
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+    });
+    unsubscribe();
+    sessions.dispose();
+  });
+
+  it("keeps involving-me queries independent from the primary roster", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(listResult(["agent:main:primary"]))
+      .mockResolvedValueOnce(listResult(["agent:main:involving-me"]));
+    const { sessions } = sessionHarness(request);
+    const involvingMeQuery = {
+      agentId: "main",
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      involvingMe: true,
+    };
+    const unsubscribe = sessions.subscribeList(involvingMeQuery, () => undefined);
+
+    await sessions.refreshList({ agentId: "main", limit: 50, force: true });
+    const primaryResult = sessions.state.result;
+    await sessions.refreshList({ ...involvingMeQuery, force: true });
+
+    expect(sessions.state.result).toBe(primaryResult);
+    expect(sessions.listSnapshot(involvingMeQuery).result?.sessions[0]?.key).toBe(
+      "agent:main:involving-me",
+    );
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ involvingMe: true });
     unsubscribe();
     sessions.dispose();
   });

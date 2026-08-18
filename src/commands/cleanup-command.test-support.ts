@@ -3,13 +3,22 @@ import { vi } from "vitest";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
-const resolveCleanupPlanFromDisk = vi.fn();
+const resolveCleanupPlanForDryRun = vi.fn();
+export const resolveCleanupPlanForRemoval = vi.fn();
 const removePath = vi.fn();
-const listAgentSessionDirs = vi.fn();
+export const listAgentSessionDirs = vi.fn();
 export const prepareLegacyWorkspaceStateReset = vi.fn();
 export const removeLegacyWorkspaceStateForReset = vi.fn();
 export const removeStateAndLinkedPaths = vi.fn();
 export const removeWorkspaceDirs = vi.fn();
+const gatewayServiceState = vi.hoisted(() => ({
+  notLoadedText: "is not installed",
+  isLoaded: vi.fn(),
+  stop: vi.fn(),
+  uninstall: vi.fn(),
+}));
+export const gatewayService = gatewayServiceState;
+const cleanupConfigState = vi.hoisted(() => ({ isNixMode: false }));
 
 vi.mock("../agents/workspace-legacy-state.js", () => ({
   prepareLegacyWorkspaceStateReset,
@@ -17,11 +26,19 @@ vi.mock("../agents/workspace-legacy-state.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  isNixMode: false,
+  get isNixMode() {
+    return cleanupConfigState.isNixMode;
+  },
+  resolveConfigPath: () => "/tmp/.openclaw/openclaw.json",
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => gatewayService,
 }));
 
 vi.mock("./cleanup-plan.js", () => ({
-  resolveCleanupPlanFromDisk,
+  resolveCleanupPlanForDryRun,
+  resolveCleanupPlanForRemoval,
 }));
 
 vi.mock("./cleanup-utils.js", () => ({
@@ -37,20 +54,30 @@ export function createCleanupCommandRuntime() {
 
 export function resetCleanupCommandMocks() {
   vi.clearAllMocks();
-  resolveCleanupPlanFromDisk.mockReturnValue({
+  const cleanupPlan = {
     stateDir: "/tmp/.openclaw",
     configPath: "/tmp/.openclaw/openclaw.json",
     oauthDir: "/tmp/.openclaw/credentials",
     configInsideState: true,
     oauthInsideState: true,
     workspaceDirs: ["/tmp/.openclaw/workspace"],
-  });
+  };
+  resolveCleanupPlanForDryRun.mockResolvedValue(cleanupPlan);
+  resolveCleanupPlanForRemoval.mockResolvedValue(cleanupPlan);
   removePath.mockResolvedValue({ ok: true });
   listAgentSessionDirs.mockResolvedValue(["/tmp/.openclaw/agents/main/sessions"]);
   prepareLegacyWorkspaceStateReset.mockImplementation((workspaceDir: string) => ({ workspaceDir }));
   removeLegacyWorkspaceStateForReset.mockResolvedValue({ removedPaths: [], warnings: [] });
   removeStateAndLinkedPaths.mockResolvedValue(true);
   removeWorkspaceDirs.mockResolvedValue(undefined);
+  gatewayService.isLoaded.mockReset().mockResolvedValue(true);
+  gatewayService.stop.mockReset().mockResolvedValue(undefined);
+  gatewayService.uninstall.mockReset().mockResolvedValue(undefined);
+  cleanupConfigState.isNixMode = false;
+}
+
+export function setCleanupNixMode(value: boolean) {
+  cleanupConfigState.isNixMode = value;
 }
 
 export function silenceCleanupCommandRuntime(runtime: RuntimeEnv) {

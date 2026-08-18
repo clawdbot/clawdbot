@@ -2,7 +2,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { normalizeToolName } from "../agents/tool-policy.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -39,7 +39,7 @@ type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> &
   grantToken?: string;
   senderIsOwner: boolean | undefined;
   yieldContextCacheKey?: string;
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
 };
 
 type LoopbackToolsAllowMode = "exact" | "policy";
@@ -51,13 +51,13 @@ function resolveMediatedNativeTools(
   if (mode === "exact") {
     return new Set(
       (toolsAllow ?? [])
-        .map((name) => normalizeToolName(name))
+        .map((name) => normalizeToolPolicyName(name))
         .filter((name) => NATIVE_TOOL_EXCLUDE.has(name)),
     );
   }
   if (
     toolsAllow === undefined ||
-    toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
+    toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
   ) {
     return new Set();
   }
@@ -143,10 +143,10 @@ function applyGrantToolsAllow(
   if (!toolsAllow) {
     return tools;
   }
-  const allowed = new Set(toolsAllow.map((name) => normalizeToolName(name)).filter(Boolean));
+  const allowed = new Set(toolsAllow.map((name) => normalizeToolPolicyName(name)).filter(Boolean));
   return tools.filter((tool) => {
     const name = readMcpLoopbackToolName(tool);
-    return name !== undefined && allowed.has(normalizeToolName(name));
+    return name !== undefined && allowed.has(normalizeToolPolicyName(name));
   });
 }
 
@@ -181,6 +181,7 @@ export class McpLoopbackToolCache {
       params.grantToken ?? "",
       params.sessionKey,
       params.runtimePolicySessionKey ?? "",
+      params.runtimePolicyAgentId ?? "",
       params.agentId ?? "",
       params.sessionId ?? "",
       params.runId ?? "",
@@ -188,12 +189,14 @@ export class McpLoopbackToolCache {
       params.cwd ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
+      params.modelHasVision === true ? "vision" : "text-only",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       clientCapsCacheKey,
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId ?? "",
+      params.replyToMode ?? "",
       params.currentInboundAudio === true ? "audio" : "no-audio",
       params.accountId ?? "",
       params.inboundEventKind ?? "",

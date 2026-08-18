@@ -29,7 +29,7 @@ function failureGuidance(status: string): string {
     auth: t("modelSetup.failureGuidance.auth"),
     rate_limit: t("modelSetup.failureGuidance.rateLimit"),
     billing: t("modelSetup.failureGuidance.billing"),
-    timeout: t("modelSetup.failureGuidance.unavailable"),
+    timeout: t("modelSetup.failureGuidance.timeout"),
     format: t("modelSetup.failureGuidance.format"),
     unavailable: t("modelSetup.failureGuidance.unavailable"),
     unknown: t("modelSetup.failureGuidance.unknown"),
@@ -86,6 +86,7 @@ export function renderConfiguredModel(props: {
   canVerify: boolean;
   actionsDisabled: boolean;
   onVerify: () => void;
+  onContinue?: () => void;
 }): TemplateResult {
   const configuredRef = props.result.configuredModel!;
   // A successful verify reports the model that actually answered; prefer it over
@@ -123,7 +124,7 @@ export function renderConfiguredModel(props: {
                         })}
                   </div>`
                 : props.verify.phase === "failed"
-                  ? props.verify.status === "unavailable" || props.verify.status === "timeout"
+                  ? props.verify.status === "unavailable"
                     ? html`<div class="model-setup__failure" role="alert">
                         <span class="model-setup__failure-icon" aria-hidden="true">
                           ${icons.alertTriangle}
@@ -136,16 +137,23 @@ export function renderConfiguredModel(props: {
                   : nothing}
           </div>
         </div>
-        ${props.canVerify
-          ? html`<button
-              type="button"
-              class="btn"
-              ?disabled=${props.actionsDisabled}
-              @click=${props.onVerify}
-            >
-              ${verificationButtonLabel(props.verify)}
-            </button>`
-          : nothing}
+        <div class="model-setup__row-actions">
+          ${props.canVerify
+            ? html`<button
+                type="button"
+                class="btn"
+                ?disabled=${props.actionsDisabled}
+                @click=${props.onVerify}
+              >
+                ${verificationButtonLabel(props.verify)}
+              </button>`
+            : nothing}
+          ${props.onContinue
+            ? html`<button type="button" class="btn primary" @click=${props.onContinue}>
+                ${icons.messageSquare} ${t("modelSetup.success.continueSetup")}
+              </button>`
+            : nothing}
+        </div>
       </div>
     </section>
   `;

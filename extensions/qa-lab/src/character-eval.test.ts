@@ -533,31 +533,57 @@ describe("runQaCharacterEval", () => {
     await resultPromise;
   });
 
-  it("marks raw provider error transcripts as failed output", async () => {
+  it.each([
+    {
+      title: "marks raw provider error transcripts as failed output",
+      transcript:
+        "USER Alice: Are you awake?\n\nASSISTANT OpenClaw QA: 400 model `qwen3.6-plus` is not supported.",
+      model: "qwen/qwen3.6-plus",
+      expectedReason: "model unsupported error leaked into transcript",
+    },
+    {
+      title: "marks generic channel fallback transcripts as failed output",
+      transcript:
+        "ASSISTANT OpenClaw QA: ⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
+      model: "qa/generic-fallback-model",
+      expectedReason: "generic request failure leaked into transcript",
+    },
+    {
+      title: "marks idle-timeout fallback transcripts as failed output",
+      transcript:
+        "ASSISTANT OpenClaw QA: The model did not produce a response before the LLM idle timeout. Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config.",
+      model: "google/gemini-test",
+      expectedReason: "LLM timeout leaked into transcript",
+    },
+    {
+      title: "marks leaked harness coordination transcripts as failed output",
+      transcript:
+        "ASSISTANT OpenClaw QA: checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
+      model: "codex/gpt-5.6-luna",
+      expectedReason: "internal harness/meta text leaked into transcript",
+    },
+  ])("$title", async ({ transcript, model, expectedReason }) => {
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
       makeSuiteResult({
         outputDir: params.outputDir,
         model: params.primaryModel,
-        transcript:
-          "USER Alice: Are you awake?\n\nASSISTANT OpenClaw QA: 400 model `qwen3.6-plus` is not supported.",
+        transcript,
       }),
     );
-    const runJudge = makeRunJudge([
-      { model: "qwen/qwen3.6-plus", rank: 1, score: 0.5, summary: "failed" },
-    ]);
+    const runJudge = makeRunJudge([{ model, rank: 1, score: 0.5, summary: "failed" }]);
 
     const result = await runQaCharacterEval({
       repoRoot: tempRoot,
       outputDir: path.join(tempRoot, "character"),
-      models: ["qwen/qwen3.6-plus"],
+      models: [model],
       judgeModels: ["openai/gpt-5.6-luna"],
       runSuite,
       runJudge,
     });
 
     expectFirstRunFailure(result, {
-      model: "qwen/qwen3.6-plus",
-      error: "model unsupported error leaked into transcript",
+      model,
+      error: expectedReason,
     });
   });
 
@@ -644,90 +670,6 @@ describe("runQaCharacterEval", () => {
     expectFirstRunFailure(result, {
       model: "qwen/qwen3.5-plus",
       error: "tool failure leaked into transcript",
-    });
-  });
-
-  it("marks generic channel fallback transcripts as failed output", async () => {
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript:
-          "ASSISTANT OpenClaw QA: ⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
-      }),
-    );
-    const runJudge = makeRunJudge([
-      { model: "qa/generic-fallback-model", rank: 1, score: 0.5, summary: "failed" },
-    ]);
-
-    const result = await runQaCharacterEval({
-      repoRoot: tempRoot,
-      outputDir: path.join(tempRoot, "character"),
-      models: ["qa/generic-fallback-model"],
-      judgeModels: ["openai/gpt-5.6-luna"],
-      runSuite,
-      runJudge,
-    });
-
-    expectFirstRunFailure(result, {
-      model: "qa/generic-fallback-model",
-      error: "generic request failure leaked into transcript",
-    });
-  });
-
-  it("marks idle-timeout fallback transcripts as failed output", async () => {
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript:
-          "ASSISTANT OpenClaw QA: The model did not produce a response before the LLM idle timeout. Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config.",
-      }),
-    );
-    const runJudge = makeRunJudge([
-      { model: "google/gemini-test", rank: 1, score: 0.5, summary: "failed" },
-    ]);
-
-    const result = await runQaCharacterEval({
-      repoRoot: tempRoot,
-      outputDir: path.join(tempRoot, "character"),
-      models: ["google/gemini-test"],
-      judgeModels: ["openai/gpt-5.6-luna"],
-      runSuite,
-      runJudge,
-    });
-
-    expectFirstRunFailure(result, {
-      model: "google/gemini-test",
-      error: "LLM timeout leaked into transcript",
-    });
-  });
-
-  it("marks leaked harness coordination transcripts as failed output", async () => {
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript:
-          "ASSISTANT OpenClaw QA: checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
-      }),
-    );
-    const runJudge = makeRunJudge([
-      { model: "codex/gpt-5.6-luna", rank: 1, score: 0.5, summary: "failed" },
-    ]);
-
-    const result = await runQaCharacterEval({
-      repoRoot: tempRoot,
-      outputDir: path.join(tempRoot, "character"),
-      models: ["codex/gpt-5.6-luna"],
-      judgeModels: ["openai/gpt-5.6-luna"],
-      runSuite,
-      runJudge,
-    });
-
-    expectFirstRunFailure(result, {
-      model: "codex/gpt-5.6-luna",
-      error: "internal harness/meta text leaked into transcript",
     });
   });
 

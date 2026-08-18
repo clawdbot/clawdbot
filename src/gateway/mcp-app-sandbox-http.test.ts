@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
@@ -10,6 +11,25 @@ function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
   server.emit("request", { url, method } as IncomingMessage, res);
   server.removeAllListeners();
   return { res, end, setHeader };
+}
+
+async function withSandboxHost(run: (origin: string) => Promise<void>): Promise<void> {
+  const server = createSandboxHostHttpServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  try {
+    await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 }
 
 describe("MCP App sandbox HTTP origin", () => {
@@ -80,4 +100,50 @@ describe("MCP App sandbox HTTP origin", () => {
       expect.stringContaining("connect-src https://xn--bcher-kva.example"),
     );
   });
+
+  it.each([
+    {
+      label: "sandbox HTML",
+      path: buildMcpAppSandboxPath(),
+      statusCode: 200,
+    },
+    {
+      label: "missing path",
+      path: "/missing",
+      statusCode: 404,
+    },
+    {
+      label: "malformed policy",
+      path: `${buildMcpAppSandboxPath()}?csp=not-json`,
+      statusCode: 400,
+    },
+  ])(
+    "keeps GET and HEAD representation metadata aligned for $label",
+    async ({ path, statusCode }) => {
+      await withSandboxHost(async (origin) => {
+        const get = await fetch(`${origin}${path}`);
+        const head = await fetch(`${origin}${path}`, { method: "HEAD" });
+        const getBody = await get.text();
+
+        expect(get.status).toBe(statusCode);
+        expect(head.status).toBe(statusCode);
+        expect(getBody).not.toBe("");
+        expect(await head.text()).toBe("");
+        expect(get.headers.get("content-length")).toBe(String(Buffer.byteLength(getBody)));
+        for (const header of [
+          "content-type",
+          "content-length",
+          "cache-control",
+          "content-security-policy",
+          "permissions-policy",
+          "cross-origin-resource-policy",
+          "origin-agent-cluster",
+          "referrer-policy",
+          "x-content-type-options",
+        ]) {
+          expect(head.headers.get(header), header).toBe(get.headers.get(header));
+        }
+      });
+    },
+  );
 });

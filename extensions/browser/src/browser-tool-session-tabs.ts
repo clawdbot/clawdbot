@@ -1,6 +1,7 @@
 /**
  * Session tracking for tabs created through the browser tool.
  */
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserTabOwnership } from "./browser/client.types.js";
 
 type SessionTabParams = {
@@ -19,10 +20,6 @@ type SessionTabRegistry = {
   untrackSessionBrowserTab: (params: SessionTabParams) => void;
 };
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readOpenedTab(result: unknown): {
   targetId?: string;
   aliases: string[];
@@ -33,14 +30,14 @@ function readOpenedTab(result: unknown): {
     return { aliases: [] };
   }
   const opened = result as Record<string, unknown>;
-  const targetId = readString(opened.targetId);
+  const targetId = normalizeOptionalString(opened.targetId);
   const aliases = [
     targetId,
-    readString(opened.tabId),
-    readString(opened.label),
-    readString(opened.suggestedTargetId),
+    normalizeOptionalString(opened.tabId),
+    normalizeOptionalString(opened.label),
+    normalizeOptionalString(opened.suggestedTargetId),
   ].filter((alias): alias is string => Boolean(alias));
-  const profile = readString(opened.resolvedProfile);
+  const profile = normalizeOptionalString(opened.resolvedProfile);
   const rawOwnership =
     opened.ownership && typeof opened.ownership === "object"
       ? (opened.ownership as BrowserTabOwnership)

@@ -26,7 +26,7 @@ import {
   warnIfConfigFromFuture,
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.js";
+import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -55,7 +55,15 @@ export function loadConfigFromContext(
           timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
         });
       }
-      return migratePersistedImplicitMainRoster({}).config as OpenClawConfig;
+      // A missing config is the fresh-install default path: materialize the
+      // same runtime defaults an empty {} config gets, or out-of-box behavior
+      // (compaction safeguard, session/cron defaults) silently diverges.
+      return materializeConfigForLoad(
+        context,
+        coerceConfig(migratePersistedImplicitMainRoster({}).config),
+        {},
+        undefined,
+      );
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = deps.json5.parse(raw);
@@ -64,7 +72,10 @@ export function loadConfigFromContext(
       deps.env,
       deps.lowerPrecedenceEnv,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
+    const contextBudgetMigration = migrateLegacyContextBudgetConfig(
+      readResolution.resolvedConfigRaw,
+    );
+    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
     const effectiveConfigRaw = rosterMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;
@@ -75,35 +86,25 @@ export function loadConfigFromContext(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
     }
-    for (const diagnostic of rosterMigration.diagnostics) {
+    for (const diagnostic of [
+      ...contextBudgetMigration.changes.map(({ message }) => message),
+      ...contextBudgetMigration.warnings.map(({ message }) => message),
+      ...rosterMigration.diagnostics,
+    ]) {
       deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }
     warnOnConfigMiskeys(validationConfigRaw, deps.logger);
-    if (typeof validationConfigRaw !== "object" || validationConfigRaw === null) {
-      loggedConfigWarningFingerprints.delete(configPath);
-      context.observeLoadConfigSnapshot(
-        createConfigFileSnapshot({
-          path: configPath,
-          exists: true,
-          raw: snapshotRaw,
-          parsed: snapshotParsed,
-          sourceConfig: {},
-          valid: true,
-          runtimeConfig: {},
-          hash,
-          issues: [],
-          warnings: [],
-          legacyIssues: [],
-        }),
-      );
-      return {};
-    }
-    const duplicates = findDuplicateAgentDirs(validationConfigRaw as OpenClawConfig, {
-      env: deps.env,
-      homedir: deps.homedir,
-    });
-    if (duplicates.length > 0) {
-      throw new DuplicateAgentDirError(duplicates);
+    // A scalar/null root (truncated or clobbered file) must fail validation
+    // below like any invalid config — never load as an empty config marked
+    // valid, which would run with defaults and poison lastKnownGood.
+    if (typeof validationConfigRaw === "object" && validationConfigRaw !== null) {
+      const duplicates = findDuplicateAgentDirs(validationConfigRaw as OpenClawConfig, {
+        env: deps.env,
+        homedir: deps.homedir,
+      });
+      if (duplicates.length > 0) {
+        throw new DuplicateAgentDirError(duplicates);
+      }
     }
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
       effectiveConfigRaw,
@@ -129,6 +130,7 @@ export function loadConfigFromContext(
           hash,
           issues: validated.issues,
           warnings: validated.warnings,
+          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues: [],
         }),
       );
@@ -155,8 +157,7 @@ export function loadConfigFromContext(
         configPath,
         raw,
         parsed,
-        validateBackupSync: (backup) =>
-          context.resolveSuspiciousRecoveryBackupCandidate(backup.parsed) !== null,
+        prepareBackup: context.prepareRecoveryBackupCandidate,
       });
       if (recovery.raw !== raw) {
         restoreEnvChangesIfUnchanged({
@@ -171,7 +172,7 @@ export function loadConfigFromContext(
       context,
       validated.config,
       effectiveConfigRaw,
-      pluginMetadata.getSnapshot(),
+      pluginMetadata.getManifestRegistry(),
     );
     context.observeLoadConfigSnapshot(
       createConfigFileSnapshot({
@@ -185,6 +186,7 @@ export function loadConfigFromContext(
         hash,
         issues: [],
         warnings: validated.warnings,
+        resolutionFacts: readResolution.resolutionFacts,
         legacyIssues: [],
       }),
     );

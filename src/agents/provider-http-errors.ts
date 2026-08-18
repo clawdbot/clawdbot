@@ -4,8 +4,8 @@
  * Transport adapters use this module to turn provider-specific response bodies,
  * request ids, and binary payload guardrails into stable OpenClaw error shapes.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   readResponseTextPrefix,
@@ -13,6 +13,7 @@ import {
   type ReadResponseTextPrefixOptions,
 } from "../infra/http-body.js";
 import { redactSensitiveText } from "../logging/redact.js";
+export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 
@@ -24,6 +25,7 @@ const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 /** Shared timeout and byte-limit options for provider response consumption. */
 type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   maxBytes?: number;
+  onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
 };
 
 /** Options for bounded provider error-body normalization. */
@@ -43,13 +45,6 @@ class ProviderErrorBodyTimeout extends Error {
     this.name = "ProviderErrorBodyTimeout";
     this.timeoutError = timeoutError;
   }
-}
-
-/** Returns a plain object view for provider JSON payloads when one exists. */
-export function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
@@ -106,9 +101,9 @@ export async function readProviderTextResponse(
 
 /** Formats common provider JSON error payload shapes into one readable detail string. */
 export function formatProviderErrorPayload(payload: unknown): string | undefined {
-  const root = asObject(payload);
-  const detailObject = asObject(root?.detail);
-  const subject = asObject(root?.error) ?? detailObject ?? root;
+  const root = asOptionalRecord(payload);
+  const detailObject = asOptionalRecord(root?.detail);
+  const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
   if (!subject) {
     return undefined;
   }
@@ -146,9 +141,9 @@ type ProviderErrorPayloadMetadata = {
 };
 
 function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
-  const root = asObject(payload);
-  const detailObject = asObject(root?.detail);
-  const subject = asObject(root?.error) ?? detailObject ?? root;
+  const root = asOptionalRecord(payload);
+  const detailObject = asOptionalRecord(root?.detail);
+  const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
   if (!subject) {
     return {};
   }
@@ -375,7 +370,7 @@ export async function readProviderJsonObjectResponse(
   opts?: ProviderResponseReadOptions,
 ): Promise<Record<string, unknown>> {
   const payload = await readProviderJsonResponse<unknown>(response, label, opts);
-  const object = asObject(payload);
+  const object = asOptionalRecord(payload);
   if (!object) {
     throw new Error(`${label}: malformed JSON response`);
   }
@@ -428,12 +423,21 @@ export async function readProviderBinaryResponse(
   kind = "binary",
   opts?: ProviderResponseReadOptions,
 ): Promise<Uint8Array> {
-  assertProviderBinaryResponseContent(response, label, kind);
+  try {
+    assertProviderBinaryResponseContent(response, label, kind);
+  } catch (error) {
+    // A captured response may be teed; do not await cancellation before its
+    // rejected branch and dispatcher can be released.
+    void response.body?.cancel().catch(() => undefined);
+    throw error;
+  }
   const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
     ...opts,
-    onOverflow: ({ maxBytes: maxBytesLocal }) =>
-      new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`),
+    onOverflow:
+      opts?.onOverflow ??
+      (({ maxBytes: maxBytesLocal }) =>
+        new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`)),
   });
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);

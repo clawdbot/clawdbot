@@ -9,7 +9,6 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
-  formatDiagnosticTraceparentForPropagation,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
@@ -23,6 +22,7 @@ import {
   type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
+import { isCoreSemanticRunProgressDiagnosticMetadata } from "./diagnostic-semantic-run-progress.js";
 import {
   createDiagnosticTraceContext,
   formatDiagnosticTraceparent,
@@ -245,38 +245,6 @@ describe("diagnostic-events", () => {
     expect(isInternalDiagnosticEventMetadata({ trusted: false })).toBe(false);
   });
 
-  it("formats traceparent for propagation only from dispatcher-trusted metadata", () => {
-    const trace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-      traceFlags: "01",
-    });
-    const traceparents: Array<string | undefined> = [];
-    onInternalDiagnosticEvent((event, metadata) => {
-      traceparents.push(formatDiagnosticTraceparentForPropagation(event, metadata));
-    });
-
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "plugin",
-      trace,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      usage: { total: 1 },
-      trace,
-    });
-
-    expect(traceparents).toEqual([undefined, `00-${trace.traceId}-${trace.spanId}-01`]);
-    expect(formatDiagnosticTraceparentForPropagation({ trace }, { trusted: true })).toBeUndefined();
-    expect(
-      formatDiagnosticTraceparentForPropagation(
-        { trace },
-        { trusted: false, trustedTraceContext: true },
-      ),
-    ).toBeUndefined();
-  });
-
   it("prepares trusted events synchronously without cloning private data", async () => {
     const diagnosticTrace = createDiagnosticTraceContext({
       traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
@@ -363,22 +331,27 @@ describe("diagnostic-events", () => {
     expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBeUndefined();
   });
 
-  it("shares diagnostic state across duplicate module instances", async () => {
-    const events: string[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event.type);
+  it("shares semantic provenance across duplicate module instances", async () => {
+    const events: Array<{ coreSemantic: boolean; type: string }> = [];
+    onInternalDiagnosticEvent((event, metadata) => {
+      events.push({
+        coreSemantic: isCoreSemanticRunProgressDiagnosticMetadata(metadata),
+        type: event.type,
+      });
     });
 
     vi.resetModules();
-    const duplicateModule = (await import(
-      /* @vite-ignore */ new URL("./diagnostic-events.ts?duplicate", import.meta.url).href
-    )) as typeof import("./diagnostic-events.js");
-    duplicateModule.emitDiagnosticEvent({
-      type: "message.queued",
-      source: "plugin",
+    const duplicateSemanticProgress = await import(
+      /* @vite-ignore */ new URL("./diagnostic-semantic-run-progress.ts?duplicate", import.meta.url)
+        .href
+    );
+    duplicateSemanticProgress.emitCoreSemanticRunProgressDiagnosticEvent({
+      runId: "duplicate-semantic-run",
+      reason: "model_call:semantic_result",
     });
+    await waitForDiagnosticEventsDrained();
 
-    expect(events).toEqual(["message.queued"]);
+    expect(events).toEqual([{ coreSemantic: true, type: "run.progress" }]);
   });
 
   it("does not expose mutable diagnostic state on the obsolete global symbol", async () => {

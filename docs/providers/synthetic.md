@@ -53,7 +53,7 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
 
 ```json5
 {
-  env: { SYNTHETIC_API_KEY: "sk-..." },
+  env: { vars: { SYNTHETIC_API_KEY: "sk-..." } },
   agents: {
     defaults: {
       model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },

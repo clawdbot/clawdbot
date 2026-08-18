@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { root as openSafeFilesystemRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
@@ -421,15 +421,18 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   config: EmbeddedRunAttemptParams["config"] | undefined;
   contextEngineActive?: boolean;
   projectedTurnTokens?: number;
-}): Promise<CodexAppServerThreadBinding | undefined> {
+}): Promise<{
+  binding: CodexAppServerThreadBinding | undefined;
+  startupContextTokens?: number;
+}> {
   const binding = params.binding;
   if (!binding?.threadId) {
-    return binding;
+    return { binding };
   }
   // Native Codex owns compaction for supervised threads. Clearing this private
   // scope marker would silently move the next turn back to the agent runtime.
   if (binding.connectionScope === "supervision") {
-    return binding;
+    return { binding };
   }
   const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
@@ -474,7 +477,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         kind: "clear",
         threadId: binding.threadId,
       });
-      return undefined;
+      return { binding: undefined };
     }
   }
   const nativeTokenSnapshots = await Promise.all(
@@ -495,13 +498,18 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
       ? Math.floor(sessionRecord.contextTokens)
       : undefined;
   const reserveTokens = resolveCodexAppServerNativeThreadReserveTokens(params.config);
+  const rotationContextTokens = minFiniteNumber([
+    nativeModelContextWindow,
+    sessionModelContextWindow,
+  ]);
   const maxTokens = resolveCodexAppServerNativeThreadTokenFuse({
-    modelContextWindow: minFiniteNumber([nativeModelContextWindow, sessionModelContextWindow]),
+    modelContextWindow: rotationContextTokens,
     reserveTokens,
     projectedTurnTokens: params.projectedTurnTokens,
   });
   const sessionTokens =
-    sessionRecord?.totalTokensFresh !== false &&
+    sessionRecord?.totalTokensFresh === true &&
+    sessionRecord.totalTokensVersion === 1 &&
     typeof sessionRecord?.totalTokens === "number" &&
     Number.isFinite(sessionRecord.totalTokens)
       ? sessionRecord.totalTokens
@@ -526,7 +534,13 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
       kind: "clear",
       threadId: binding.threadId,
     });
-    return undefined;
+    return { binding: undefined };
   }
-  return binding;
+  // Session metadata has no source provenance and may contain a catalog fallback.
+  // Prefer the native rollout for result seeding; keep the minimum only for rotation safety.
+  const startupContextTokens = nativeModelContextWindow ?? sessionModelContextWindow;
+  return {
+    binding,
+    ...(startupContextTokens ? { startupContextTokens } : {}),
+  };
 }

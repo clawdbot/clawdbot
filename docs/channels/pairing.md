@@ -139,7 +139,7 @@ creates a device pairing request that must be approved.
 Use an already connected Control UI session with `operator.admin` access:
 
 1. Open the Control UI and go to **Settings → Devices**.
-2. On the **Devices** page, click **Pair mobile device**.
+2. On the **Devices** page, click **Pair device**.
 3. Keep **Full access (recommended)**, or select **Limited access** to omit
    administrative Gateway controls.
 4. Click **Create setup code**.
@@ -203,12 +203,14 @@ emulator host. Non-loopback plaintext routes receive limited access. Tailnet
 CGNAT addresses, `.ts.net` names, and public hosts still fail closed before
 QR/setup-code issuance.
 
-For `gateway.bind=lan` setup URLs, OpenClaw detects persistent Tailscale Serve
-HTTPS roots that proxy the active Gateway's loopback port and advertises them
-alongside the LAN route. The setup command adds this fallback only
-for `lan`; `custom` and `tailnet` keep their explicitly advertised routes. The
-iOS app probes the advertised routes in order and saves the first reachable
-endpoint.
+OpenClaw advertises Tailscale setup URLs only when it owns the route through
+`gateway.tailscale.mode=serve|funnel`. Legacy external Serve routes that proxy a
+`gateway.bind=lan` listener are not advertised because the ordinary listener
+rejects Tailscale-shaped proxy ingress. Run `openclaw doctor` to preview the
+safe default-route migration, then `openclaw doctor --fix` and restart the
+Gateway. Custom Serve ports and Tailscale Services require manual migration.
+For a retired `gateway.tailscale.serviceName` config, Doctor disables managed
+ingress and prints the command needed to clear the retained Service route.
 
 ### Approve a node device
 

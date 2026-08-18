@@ -18,8 +18,16 @@ import type {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
+import {
+  createModelGenerationFixture,
+  publishCurrentModelGeneration,
+  resetModelGenerationFixtureState,
+} from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
+import {
+  createContainerWorkspaceSandboxFsBridge,
+  createHostSandboxFsBridge,
+} from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
@@ -647,6 +655,7 @@ function installImageUnderstandingProviderDeps(
     resolveModelAsync?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["resolveModelAsync"];
+    useDefaultResolveModelAsync?: boolean;
   },
 ) {
   imageProviderHarness.setProviders(providers);
@@ -680,7 +689,9 @@ function installImageUnderstandingProviderDeps(
         providerId,
         imageProviderHarness.buildProviderRegistry(),
       ),
-    resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest,
+    ...(options?.useDefaultResolveModelAsync
+      ? {}
+      : { resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest }),
     ...(options?.resolveImageCompressionPolicy
       ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
       : {}),
@@ -759,13 +770,13 @@ function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelD
 
 async function expectImageToolExecOk(
   tool: {
-    execute: (toolCallId: string, input: { prompt: string; image: string }) => Promise<unknown>;
+    execute: (toolCallId: string, input: { prompt: string; path: string }) => Promise<unknown>;
   },
-  image: string,
+  imagePath: string,
 ) {
   const result = await tool.execute("t1", {
     prompt: "Describe the image.",
-    image,
+    path: imagePath,
   });
   expectToolText(result, "ok");
 }
@@ -1216,7 +1227,7 @@ describe("image tool implicit imageModel config", () => {
 
       const result = await tool.execute("t1", {
         prompt: "Describe this image.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         model: "opencode-go/mimo-v2.5",
       });
 
@@ -1249,7 +1260,7 @@ describe("image tool implicit imageModel config", () => {
 
       await tool.execute("t1", {
         prompt: "Describe this image.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
 
       expect(firstImageRequest(describeImage).authStore).toBe(authProfileStore);
@@ -1752,7 +1763,7 @@ describe("image tool implicit imageModel config", () => {
       const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
       const result = await tool.execute("t1", {
         prompt: "Describe this image in one word.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
 
       const request = firstImageRequest(describeImage);
@@ -1842,13 +1853,15 @@ describe("image tool implicit imageModel config", () => {
       testing.setProviderDepsForTest({ describeImageWithModel, describeImagesWithModel });
 
       const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision: true });
+      expect(tool.name).toBe("view_image");
       expect(tool.label).toBe("View Image");
       expect(tool.catalogMode).toBe("direct-only");
-      expect(tool.description).toContain("direct visual inspection");
+      expect(tool.description).toContain("private model context");
+      expect(tool.description).toContain("Does not display, attach, or send");
 
       const result = await tool.execute("native-image", {
         prompt: "Read the screenshot error.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
       const content = (
         result as {
@@ -1858,11 +1871,15 @@ describe("image tool implicit imageModel config", () => {
       ).content;
 
       expect(content).toEqual([
-        { type: "text", text: "Loaded 1 image for direct visual inspection." },
+        {
+          type: "text",
+          text: "Loaded 1 image into private model context for inspection; not displayed, attached, or sent to the user.",
+        },
         expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
       ]);
       expect((result as { details?: Record<string, unknown> }).details).toMatchObject({
         transport: "native",
+        media: { outbound: false },
       });
       expect(describeImageWithModel).not.toHaveBeenCalled();
       expect(describeImagesWithModel).not.toHaveBeenCalled();
@@ -1895,7 +1912,7 @@ describe("image tool implicit imageModel config", () => {
       const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
       const result = await tool.execute("t1", {
         prompt: "Describe this image in one word.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
 
       expect(fetch).toHaveBeenCalledTimes(1);
@@ -1955,7 +1972,7 @@ describe("image tool implicit imageModel config", () => {
       const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
       const result = await tool.execute("t1", {
         prompt: "Describe the image.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
 
       expect(fetch).toHaveBeenCalledTimes(1);
@@ -1988,7 +2005,7 @@ describe("image tool implicit imageModel config", () => {
       const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
       const result = await tool.execute("t1", {
         prompt: "Describe the images.",
-        images: [
+        paths: [
           `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
           `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         ],
@@ -2046,15 +2063,17 @@ describe("image tool implicit imageModel config", () => {
       const schema = tool.parameters as {
         properties?: Record<string, unknown>;
       };
-      const imageSchema = schema.properties?.image as { type?: unknown } | undefined;
-      const imagesSchema = schema.properties?.images as
+      const pathSchema = schema.properties?.path as { type?: unknown } | undefined;
+      const pathsSchema = schema.properties?.paths as
         | { type?: unknown; items?: unknown }
         | undefined;
-      const imageItems = imagesSchema?.items as { type?: unknown } | undefined;
+      const pathItems = pathsSchema?.items as { type?: unknown } | undefined;
 
-      expect(imageSchema?.type).toBe("string");
-      expect(imagesSchema?.type).toBe("array");
-      expect(imageItems?.type).toBe("string");
+      expect(pathSchema?.type).toBe("string");
+      expect(pathsSchema?.type).toBe("array");
+      expect(pathItems?.type).toBe("string");
+      expect(schema.properties).not.toHaveProperty("image");
+      expect(schema.properties).not.toHaveProperty("images");
     });
   });
 
@@ -2064,15 +2083,40 @@ describe("image tool implicit imageModel config", () => {
         type: "object",
         properties: {
           prompt: { type: "string" },
-          image: { description: "One image path/URL.", type: "string" },
-          images: {
-            description: "Image paths/URLs; maxImages default 20.",
+          path: { description: "One local image path or permitted URL.", type: "string" },
+          paths: {
+            description: "Local image paths or permitted URLs; maxImages default 20.",
             type: "array",
             items: { type: "string" },
           },
           model: { type: "string" },
           maxBytesMb: { type: "number", exclusiveMinimum: 0 },
           maxImages: { type: "integer", minimum: 1 },
+        },
+      });
+    });
+  });
+
+  it.each([
+    { name: "image", input: { image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}` } },
+    { name: "images", input: { images: [`data:image/png;base64,${ONE_PIXEL_PNG_B64}`] } },
+  ])("does not accept the legacy $name argument", async ({ input }) => {
+    await withMinimaxImageToolFromTempAgentDir(async (tool) => {
+      await expect(tool.execute("legacy-image-arg", input)).rejects.toThrow("path required");
+    });
+  });
+
+  it("preserves the unsupported image reference result contract", async () => {
+    await withMinimaxImageToolFromTempAgentDir(async (tool) => {
+      const result = await tool.execute("unsupported-image-reference", {
+        path: "ftp://example.test/image.png",
+      });
+
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: expect.stringContaining("Unsupported image reference") }],
+        details: {
+          error: "unsupported_image_reference",
+          path: "ftp://example.test/image.png",
         },
       });
     });
@@ -2086,7 +2130,7 @@ describe("image tool implicit imageModel config", () => {
 
         const withoutWorkspace = createRequiredImageTool({ config: cfg, agentDir });
         await expect(
-          withoutWorkspace.execute("t1", { prompt: "Describe.", image: imagePath }),
+          withoutWorkspace.execute("t1", { prompt: "Describe.", path: imagePath }),
         ).rejects.toThrow(/not under an allowed directory/i);
 
         const withWorkspace = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
@@ -2121,7 +2165,7 @@ describe("image tool implicit imageModel config", () => {
         await fs.writeFile(outsideImage, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
         try {
           await expect(
-            tool.execute("t2", { prompt: "Describe.", image: outsideImage }),
+            tool.execute("t2", { prompt: "Describe.", path: outsideImage }),
           ).rejects.toThrow(/not under an allowed directory/i);
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
@@ -2145,7 +2189,7 @@ describe("image tool implicit imageModel config", () => {
         });
 
         await expect(
-          tool.execute("t1", { prompt: "Describe.", image: outsideImage }),
+          tool.execute("t1", { prompt: "Describe.", path: outsideImage }),
         ).rejects.toThrow(/not under an allowed directory/i);
         expect(fetch).not.toHaveBeenCalled();
       } finally {
@@ -2205,7 +2249,7 @@ describe("image tool implicit imageModel config", () => {
 
         const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
         await expect(
-          withoutChannel.execute("t1", { prompt: "Describe.", image: imagePath }),
+          withoutChannel.execute("t1", { prompt: "Describe.", path: imagePath }),
         ).rejects.toThrow(/not under an allowed directory/i);
 
         const withImessage = createRequiredImageTool({
@@ -2382,15 +2426,38 @@ describe("image tool implicit imageModel config", () => {
       };
       const tool = createRequiredImageTool({ config: cfg, agentDir, sandbox });
 
-      await expect(tool.execute("t1", { image: "https://example.com/a.png" })).rejects.toThrow(
-        /Sandboxed image tool does not allow remote URLs/i,
+      await expect(tool.execute("t1", { path: "https://example.com/a.png" })).rejects.toThrow(
+        /Sandboxed view_image does not allow remote URLs/i,
       );
 
-      await expect(tool.execute("t2", { image: "../escape.png" })).rejects.toThrow(
+      await expect(tool.execute("t2", { path: "../escape.png" })).rejects.toThrow(
         /escapes sandbox root/i,
       );
     });
   });
+
+  it.each(["file:///workspace/img.png", "FILE:/workspace/img.png"])(
+    "reads a mounted image from %s",
+    async (image) => {
+      await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+        await fs.writeFile(
+          path.join(sandboxRoot, "img.png"),
+          Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+        );
+        const bridge = createContainerWorkspaceSandboxFsBridge(sandboxRoot);
+        stubMinimaxOkFetch();
+        const tool = createRequiredImageTool({
+          config: createMinimaxImageConfig(),
+          agentDir,
+          workspaceDir: sandboxRoot,
+          sandbox: { root: sandboxRoot, bridge },
+          fsPolicy: { workspaceOnly: true },
+        });
+
+        await expectImageToolExecOk(tool, image);
+      });
+    },
+  );
 
   it("applies workspace-only policy to image paths in sandbox mode", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
@@ -2414,7 +2481,7 @@ describe("image tool implicit imageModel config", () => {
       await expect(
         imageTool.execute("t1", {
           prompt: "Describe the image.",
-          image: "/agent/secret.png",
+          path: "/agent/secret.png",
         }),
       ).rejects.toThrow(/Path escapes sandbox root/i);
       expect(fetch).not.toHaveBeenCalled();
@@ -2446,7 +2513,7 @@ describe("image tool implicit imageModel config", () => {
 
       const res = await tool.execute("t1", {
         prompt: "Describe the image.",
-        image: "@/Users/steipete/.openclaw/media/inbound/photo.png",
+        path: "@/Users/steipete/.openclaw/media/inbound/photo.png",
       });
 
       expect(fetch).toHaveBeenCalledTimes(1);
@@ -2517,7 +2584,7 @@ describe("image tool data URL support", () => {
       await expect(
         tool.execute("t1", {
           prompt: "Describe this image.",
-          image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+          path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         }),
       ).rejects.toThrow(/could not be reduced below/i);
     });
@@ -2653,12 +2720,12 @@ describe("image tool MiniMax VLM routing", () => {
     return { fetch: fetchMock, tool };
   }
 
-  it("accepts image for single-image requests and calls minimaxUnderstandImage", async () => {
+  it("accepts path for single-image requests and calls minimaxUnderstandImage", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
 
     const res = await tool.execute("t1", {
       prompt: "Describe the image.",
-      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
     });
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -2677,13 +2744,13 @@ describe("image tool MiniMax VLM routing", () => {
     expect(text).toBe("ok");
   });
 
-  it("accepts images[] for multi-image requests", async () => {
+  it("accepts paths[] for multi-image requests", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
     const secondPngB64 = createLargeColorBlockPng(2).toString("base64");
 
     const res = await tool.execute("t1", {
       prompt: "Compare these images.",
-      images: [
+      paths: [
         `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         `data:image/png;base64,${secondPngB64}`,
       ],
@@ -2698,14 +2765,14 @@ describe("image tool MiniMax VLM routing", () => {
     expect(details?.images).toHaveLength(2);
   });
 
-  it("combines image + images with dedupe and enforces maxImages", async () => {
+  it("combines path + paths with dedupe and enforces maxImages", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
     const secondPngB64 = createLargeColorBlockPng(2).toString("base64");
 
     const deduped = await tool.execute("t1", {
       prompt: "Compare these images.",
-      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-      images: [
+      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      paths: [
         `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         `data:image/png;base64,${secondPngB64}`,
         `data:image/png;base64,${secondPngB64}`,
@@ -2722,8 +2789,8 @@ describe("image tool MiniMax VLM routing", () => {
 
     const tooMany = await tool.execute("t2", {
       prompt: "Compare these images.",
-      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-      images: [`data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
+      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      paths: [`data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
       maxImages: 1,
     });
 
@@ -2746,7 +2813,7 @@ describe("image tool MiniMax VLM routing", () => {
     await expect(
       tool.execute("t1", {
         prompt: "Compare these images.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         maxImages: 1.5,
       }),
     ).rejects.toThrow("maxImages must be a positive integer");
@@ -2754,7 +2821,7 @@ describe("image tool MiniMax VLM routing", () => {
     await expect(
       tool.execute("t2", {
         prompt: "Compare these images.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         maxBytesMb: 0,
       }),
     ).rejects.toThrow("maxBytesMb must be greater than 0");
@@ -2766,7 +2833,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     await tool.execute("t1", {
       prompt: "Describe this image.",
-      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       maxImages: "1",
       maxBytesMb: "1",
     });
@@ -2780,7 +2847,7 @@ describe("image tool MiniMax VLM routing", () => {
     await expect(
       tool.execute("t1", {
         prompt: "Describe the image.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       }),
     ).rejects.toThrow(/MiniMax VLM API error/i);
   });
@@ -3119,6 +3186,70 @@ describe("image compression policy", () => {
     testing.setProviderDepsForTest();
   });
 
+  it("keeps runtime augmentation pinned to the prepared plugin generation", async () => {
+    const provider = "prepared-image-provider";
+    const model = "prepared-image-model";
+    const cfg = {} satisfies OpenClawConfig;
+    const generationA = createModelGenerationFixture({
+      config: cfg,
+      label: "image-a",
+      provider,
+      requestProvider: provider,
+      modelId: model,
+      runtimeAugment: true,
+      staticImagePolicy: {
+        maxBytes: 1_000_000,
+        preferredSidePx: 1_280,
+        tokenMode: "detail",
+      },
+      runtimeImagePolicy: { maxSidePx: 1_440 },
+    });
+    const generationB = createModelGenerationFixture({
+      config: cfg,
+      label: "image-b",
+      provider,
+      requestProvider: provider,
+      modelId: model,
+      runtimeAugment: true,
+      staticImagePolicy: {
+        maxBytes: 2_000_000,
+        preferredSidePx: 2_560,
+        tokenMode: "provider",
+      },
+      runtimeImagePolicy: { maxSidePx: 2_880 },
+    });
+    installImageUnderstandingProviderDeps([], {
+      useDefaultResolveModelAsync: true,
+    });
+    publishCurrentModelGeneration(generationB);
+
+    try {
+      await expect(
+        testing.resolveImageCompressionPolicy({
+          cfg,
+          imageModelConfig: { primary: `${provider}/${model}` },
+          imageCount: 1,
+          preparedModelRuntime: generationA.preparedModelRuntime,
+          workspaceDir: generationA.preparedModelRuntime.workspaceDir,
+        }),
+      ).resolves.toEqual({
+        imageCount: 1,
+        models: [
+          {
+            maxSidePx: 1_440,
+            maxBytes: 1_000_000,
+            preferredSidePx: 1_280,
+            tokenMode: "detail",
+          },
+        ],
+      });
+      expect(generationA.resolveDynamicModel).toHaveBeenCalled();
+      expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
+    } finally {
+      resetModelGenerationFixtureState();
+    }
+  });
+
   it("derives model metadata, quality preference, and image count from config", async () => {
     const cfg = {
       ...cfgWithImageModelMetadata,
@@ -3159,6 +3290,7 @@ describe("image compression policy", () => {
   });
 
   it("uses bundled Anthropic media limits without runtime provider hooks", async () => {
+    installImageUnderstandingProviderDeps([], { useDefaultResolveModelAsync: true });
     await expect(
       testing.resolveImageCompressionPolicy({
         cfg: {},
@@ -3363,7 +3495,7 @@ describe("image tool run abort", () => {
         "t1",
         {
           prompt: "Describe the images.",
-          images: ["https://example.test/a.png", "https://example.test/b.png"],
+          paths: ["https://example.test/a.png", "https://example.test/b.png"],
         },
         controller.signal,
       );
@@ -3394,7 +3526,7 @@ describe("image tool run abort", () => {
           "t1",
           {
             prompt: "Describe the images.",
-            images: ["https://example.test/a.png", "https://example.test/b.png"],
+            paths: ["https://example.test/a.png", "https://example.test/b.png"],
           },
           controller.signal,
         ),
@@ -3436,7 +3568,7 @@ describe("image tool run abort", () => {
         "t1",
         {
           prompt: "Describe the images.",
-          images: [
+          paths: [
             "https://example.test/a.png",
             "https://example.test/b.png",
             "https://example.test/c.png",

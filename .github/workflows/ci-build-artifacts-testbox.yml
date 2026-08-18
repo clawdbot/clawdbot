@@ -8,6 +8,7 @@ on:
         description: "Testbox session ID"
         required: true
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
     paths:
       - ".github/workflows/**"
 
@@ -27,10 +28,15 @@ jobs:
     permissions:
       contents: read
     name: "build-artifacts"
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    # Pull requests only validate the artifact build; real Testbox leases
+    # arrive via dispatch. Hosted PR runs keep this landing gate satisfiable
+    # during Blacksmith outages (mirrors ci-check-testbox.yml).
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 35
     steps:
+      # Testbox lifecycle actions require Blacksmith VM metadata; PRs validate the build only.
       - name: Begin Testbox
+        if: github.event_name == 'workflow_dispatch'
         uses: useblacksmith/begin-testbox@233448af4bfdc6fca509a7f0974411ac6d8a8043
         with:
           testbox_id: ${{ inputs.testbox_id }}
@@ -112,7 +118,9 @@ jobs:
       - name: Build dist on cache miss
         if: steps.dist-cache.outputs.cache-hit != 'true'
         env:
-          NODE_OPTIONS: --max-old-space-size=16384
+          # Hosted PR runners have 16GB total; the 16GB heap fits only the
+          # dispatch-time 16vcpu Blacksmith box.
+          NODE_OPTIONS: ${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}
         run: pnpm build:ci-artifacts
 
       - name: Build Control UI on cache miss
@@ -209,6 +217,6 @@ jobs:
 
       - name: Run Testbox
         uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d
-        if: always()
+        if: github.event_name == 'workflow_dispatch' && always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

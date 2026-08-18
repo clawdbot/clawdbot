@@ -24,7 +24,8 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -36,6 +37,7 @@ import {
   resolveUiKnownSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import { showToast } from "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
@@ -44,6 +46,7 @@ import { selectShellRouteState, type ShellRouteState } from "./app-host-route-st
 import { OpenClawApp } from "./app-root.ts";
 import {
   isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
   ShellChromeOwner,
   type ShellChromeHost,
 } from "./app-shell-chrome.ts";
@@ -62,6 +65,7 @@ import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
   CUSTODIAN_PANEL_ELEMENT,
+  DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   preloadOptionalElement,
   TERMINAL_PANEL_ELEMENT,
@@ -130,11 +134,12 @@ class OpenClawShell
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
   @query("openclaw-exec-approval")
-  approvalOverlay: (HTMLElement & { show(): void }) | undefined;
+  approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
   navDrawerTrigger: HTMLElement | null = null;
   // Desktop and modal navigation are two slots for the same live sidebar.
@@ -162,8 +167,11 @@ class OpenClawShell
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
   private outboxStoreUnsubscribe: (() => void) | null = null;
+  private lastDeletedSessions: ApplicationContext["sessions"]["state"]["deletedSessions"] | null =
+    null;
   readonly outboxStoreImport = createIdleImport(
-    () => import("../lib/chat/outbox-store.ts").then((module): OutboxStoreRuntime => module),
+    () =>
+      import("../lib/chat/outbox-store-projection.ts").then((module): OutboxStoreRuntime => module),
     (runtime) => this.installOutboxStoreRuntime(runtime),
   );
   private lastNativeNavState: NativeNavState | undefined;
@@ -175,6 +183,33 @@ class OpenClawShell
   criticalNoticeRuntime: Promise<
     typeof import("../pages/chat/critical-observer-notice.runtime.ts")
   > | null = null;
+  // Lazy for the same reason: the pairing modal is opened from Settings, not at
+  // boot, so its template, icons, and strings stay off the startup chunk.
+  @state() devicePairSetupRenderer:
+    | typeof import("../pages/devices/view-pairing.runtime.ts").renderDevicePairSetup
+    | null = null;
+  // A rejected chunk must stay visible: the overlay is already open, so the
+  // shell renders a recoverable failure instead of an empty dialog frame.
+  @state() devicePairSetupLoadFailed = false;
+  private devicePairSetupRuntime: Promise<unknown> | null = null;
+
+  loadDevicePairSetupRenderer(): void {
+    this.devicePairSetupRuntime ??= import("../pages/devices/view-pairing.runtime.ts")
+      .then((module) => {
+        this.devicePairSetupRenderer = module.renderDevicePairSetup;
+        this.devicePairSetupLoadFailed = false;
+      })
+      .catch(() => {
+        // Clearing the promise is what makes the retry below able to refetch.
+        this.devicePairSetupLoadFailed = true;
+        this.devicePairSetupRuntime = null;
+      });
+  }
+
+  retryDevicePairSetupRenderer(): void {
+    this.devicePairSetupLoadFailed = false;
+    this.loadDevicePairSetupRenderer();
+  }
   private readonly subscriptions = new SubscriptionsController(this);
   private readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellWorkboard = new ShellWorkboardOwner(this);
@@ -239,6 +274,10 @@ class OpenClawShell
         (navigation, notify) => navigation.subscribe(notify),
       )
       .watch(
+        () => this.context?.agentSelection,
+        (selection, notify) => selection.subscribe(notify),
+      )
+      .watch(
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeGateway(gateway.snapshot),
@@ -283,7 +322,10 @@ class OpenClawShell
       .watch(
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
-        (sessions) => this.recoverDeletedActiveSession(sessions.state),
+        (sessions) => {
+          this.observeDeletedSessions(sessions.state);
+          this.recoverDeletedActiveSession(sessions.state);
+        },
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -376,6 +418,7 @@ class OpenClawShell
     this.activeSessionKey = "";
     this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
+    this.lastDeletedSessions = null;
     this.shellGateway.reset();
     this.disposeSidebarWorkboard();
     for (const timer of this.settingsPreloadTimers.values()) {
@@ -388,6 +431,12 @@ class OpenClawShell
     this.shellNavigation.selectChatSession(sessionKey, agentId);
   }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
+    if (event.event === "config.changed") {
+      const client = this.context?.gateway?.snapshot.client;
+      if (client) {
+        invalidateChatMetadataStore(client);
+      }
+    }
     this.shellGateway.handleGatewayEvent(event);
   };
 
@@ -424,11 +473,27 @@ class OpenClawShell
   }
 
   replaceChatWithCurrentSession() {
-    this.shellNavigation.replaceChatWithCurrentSession();
+    return this.shellNavigation.replaceChatWithCurrentSession();
   }
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
     this.shellNavigation.recoverDeletedActiveSession(sessionState);
+  }
+
+  observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void {
+    const context = this.context;
+    const deletedSessions = sessionState.deletedSessions;
+    if (!context || Object.is(deletedSessions, this.lastDeletedSessions)) {
+      return;
+    }
+    this.lastDeletedSessions = deletedSessions;
+    if (deletedSessions.length === 0) {
+      return;
+    }
+    void import("../lib/chat/composer-draft-retirement.runtime.ts").then(
+      ({ retireDeletedComposerDrafts }) => retireDeletedComposerDrafts(context, deletedSessions),
+      () => showToast({ message: t("sessionsView.draftCleanupFailed") }),
+    );
   }
 
   exitSettings() {
@@ -520,13 +585,28 @@ class OpenClawShell
     }
     const gatewaySnapshot = context.gateway?.snapshot;
     if (gatewaySnapshot) {
+      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+      // Scope-aware: openclaw.chat is operator.admin; advertisement alone would
+      // show read-scoped clients a control the store then refuses to use.
+      const custodianAvailable = canCallGatewayMethod(
+        gatewaySnapshot,
+        "openclaw.chat",
+        "operator.admin",
+      );
+      if (this.commandPalette) {
+        this.commandPalette.desktopAvailable = desktopAvailable;
+        this.commandPalette.custodianAvailable = custodianAvailable;
+      }
       if (isTerminalAvailable(gatewaySnapshot, context.config?.current.terminalEnabled ?? false)) {
         preloadOptionalElement(this, this.terminalPanelElement);
       }
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
         preloadOptionalElement(this, this.browserPanelElement);
       }
-      if (isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true) {
+      if (desktopAvailable) {
+        preloadOptionalElement(this, this.desktopPanelElement);
+      }
+      if (custodianAvailable) {
         preloadOptionalElement(this, this.custodianPanelElement);
       }
     }
@@ -549,6 +629,13 @@ class OpenClawShell
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    if (this.previousGatewayPhase !== "connected" && snapshot.phase === "connected") {
+      // A reconnect can retain the browser client, so object identity alone
+      // cannot keep metadata from crossing logical Gateway connections.
+      if (snapshot.client) {
+        invalidateChatMetadataStore(snapshot.client);
+      }
+    }
     this.shellGateway.synchronizeGateway(snapshot);
   }
 
@@ -573,9 +660,9 @@ class OpenClawShell
       : ROUTE_IDS_WITHOUT_WORKBOARD;
   }
 
-  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
-  draftSessionAgentId(): string {
-    return this.shellNavigation.draftSessionAgentId();
+  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
+  newSessionRouteAgentId(): string {
+    return this.shellNavigation.newSessionRouteAgentId();
   }
 
   ensureAgentsList(

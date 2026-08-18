@@ -18,6 +18,18 @@ type PlatformClaimParams = {
 
 export const PLATFORM_SEND_OWNER_LEASE_MS = 30_000;
 
+/** Creates the owner published atomically with an immediate live delivery. */
+export function createInitialDeliveryProducerClaim(now = Date.now()) {
+  return {
+    requiresProducerClaim: true,
+    availableAt: now + PLATFORM_SEND_OWNER_LEASE_MS,
+    producerClaimId: generateSecureUuid(),
+    recoveryState: "producer_claimed",
+  } as const;
+}
+
+export type InitialDeliveryProducerClaim = ReturnType<typeof createInitialDeliveryProducerClaim>;
+
 /** Runs an existing queue mutation only while its exact platform owner survives. */
 export function transitionOwnedDeliveryQueueEntry(
   params: {
@@ -56,9 +68,9 @@ export function transitionOwnedDeliveryQueueEntry(
   );
 }
 
-function transitionUnsentDeliveryQueueEntry(
+function transitionDeliveryQueueEntryPlatformSend(
   params: PlatformClaimParams,
-  operation: "claim" | "promote",
+  operation: "claim" | "promote" | "dispatch",
   transition: (entry: DeliveryQueueEntryState, now: number) => DeliveryQueueEntryState | undefined,
 ): boolean {
   // State-database opens reuse the canonical path-owned connection, so both
@@ -70,13 +82,16 @@ function transitionUnsentDeliveryQueueEntry(
     database.db,
     () => {
       const current = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+      if (!current) {
+        return false;
+      }
       if (
-        !current ||
-        (current.platformSendStartedAt !== undefined &&
-          (operation !== "claim" ||
-            current.platformSendStartedAt !== params.reconciledPlatformSendStartedAt ||
-            current.platformSendAttemptId !== params.reconciledPlatformSendAttemptId ||
-            typeof current.platformSendAttemptId !== "string"))
+        current.platformSendStartedAt !== undefined &&
+        (operation === "promote" ||
+          (operation === "claim" &&
+            (current.platformSendStartedAt !== params.reconciledPlatformSendStartedAt ||
+              current.platformSendAttemptId !== params.reconciledPlatformSendAttemptId ||
+              typeof current.platformSendAttemptId !== "string")))
       ) {
         return false;
       }
@@ -102,7 +117,7 @@ export function claimDeliveryQueueEntryPlatformSend(
   params: PlatformClaimParams,
 ): string | undefined {
   const claimId = generateSecureUuid();
-  return transitionUnsentDeliveryQueueEntry(params, "claim", (entry, now) => {
+  return transitionDeliveryQueueEntryPlatformSend(params, "claim", (entry, now) => {
     const reconciledNotSent =
       entry.recoveryState === "send_attempt_started" &&
       typeof params.reconciledPlatformSendStartedAt === "number" &&
@@ -132,7 +147,7 @@ export function claimDeliveryQueueEntryPlatformSend(
     : undefined;
 }
 
-/** Renew only the exact unexpired reusable producer that already owns the row. */
+/** Renew only the exact unexpired producer that already owns the row. */
 export function renewDeliveryQueueEntryPlatformSendLease(
   params: Pick<PlatformClaimParams, "queueName" | "id" | "stateDir"> & {
     claimId: string;
@@ -185,14 +200,14 @@ export function promoteDeliveryQueueEntryPlatformSend(
     route?: { replyToId?: string | null };
   },
 ): boolean {
-  return transitionUnsentDeliveryQueueEntry(params, "promote", (entry, now) =>
+  return transitionDeliveryQueueEntryPlatformSend(params, "promote", (entry, now) =>
     entry.recoveryState === "producer_claimed" &&
     entry.producerClaimId === params.claimId &&
     typeof entry.availableAt === "number" &&
     entry.availableAt > now
       ? {
           ...entry,
-          // Only an explicitly reusable owner keeps its cross-process fence;
+          // Only an explicitly leased owner keeps its cross-process fence;
           // legacy recovery must remain immediately eligible after a crash.
           availableAt:
             entry.requiresProducerClaim === true ? now + PLATFORM_SEND_OWNER_LEASE_MS : undefined,
@@ -206,4 +221,50 @@ export function promoteDeliveryQueueEntryPlatformSend(
         }
       : undefined,
   );
+}
+
+/** Atomically authorize dispatch, promoting a producer claim into the active attempt. */
+export function dispatchDeliveryQueueEntryPlatformSend(
+  params: PlatformClaimParams & {
+    claimId: string;
+    route?: { replyToId?: string | null };
+  },
+): boolean {
+  return transitionDeliveryQueueEntryPlatformSend(params, "dispatch", (entry, now) => {
+    const producerOwned =
+      entry.recoveryState === "producer_claimed" &&
+      entry.producerClaimId === params.claimId &&
+      typeof entry.availableAt === "number" &&
+      entry.availableAt > now;
+    const attemptOwned =
+      (entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send") &&
+      entry.platformSendAttemptId === params.claimId &&
+      (entry.requiresProducerClaim !== true ||
+        (typeof entry.availableAt === "number" && entry.availableAt > now));
+    if (!producerOwned && !attemptOwned) {
+      return undefined;
+    }
+    return {
+      ...entry,
+      // Exact reconciliation can skip pre-send promotion, so publish attempt identity
+      // atomically; later batch dispatches retain stronger unknown-after-send evidence.
+      availableAt:
+        entry.requiresProducerClaim === true
+          ? producerOwned
+            ? now + PLATFORM_SEND_OWNER_LEASE_MS
+            : entry.availableAt
+          : undefined,
+      producerClaimId: undefined,
+      platformSendAttemptId: params.claimId,
+      platformSendStartedAt: now,
+      ...(params.route && "replyToId" in params.route
+        ? { effectiveReplyToId: params.route.replyToId ?? null }
+        : {}),
+      recoveryState:
+        entry.recoveryState === "unknown_after_send"
+          ? "unknown_after_send"
+          : "send_attempt_started",
+    };
+  });
 }

@@ -7,20 +7,25 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryLifecycleMutation,
-  cleanupSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
+  replaceSessionEntrySync,
+  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
-import { planSqliteSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-state.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
+import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-state.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void>) | undefined,
   afterMaterialize: undefined as (() => void) | undefined,
+}));
+const archivePublicationHook = vi.hoisted(() => ({
+  failNext: undefined as Error | undefined,
 }));
 
 // Place test mutations after the real Worker finishes but before cleanup opens
@@ -29,13 +34,31 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    materializeSqliteSessionStateDeletePlans: async (
-      ...args: Parameters<typeof actual.materializeSqliteSessionStateDeletePlans>
+    materializeSessionStateDeletePlans: async (
+      ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
     ) => {
       await archiveMaterializationHook.beforeMaterialize?.();
-      const result = await actual.materializeSqliteSessionStateDeletePlans(...args);
+      const result = await actual.materializeSessionStateDeletePlans(...args);
       archiveMaterializationHook.afterMaterialize?.();
       return result;
+    },
+  };
+});
+
+vi.mock("./session-accessor.sqlite-archive-store.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-archive-store.js")>();
+  return {
+    ...actual,
+    publishSessionStateArchives: async (
+      ...args: Parameters<typeof actual.publishSessionStateArchives>
+    ) => {
+      const error = archivePublicationHook.failNext;
+      archivePublicationHook.failNext = undefined;
+      if (error) {
+        throw error;
+      }
+      return await actual.publishSessionStateArchives(...args);
     },
   };
 });
@@ -54,6 +77,7 @@ describe("SQLite lifecycle cleanup races", () => {
   afterEach(() => {
     archiveMaterializationHook.beforeMaterialize = undefined;
     archiveMaterializationHook.afterMaterialize = undefined;
+    archivePublicationHook.failNext = undefined;
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -71,7 +95,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         sessionKeySegmentPrefix: "cleanup-race-",
         transcriptContentMarker: "cleanup-race-marker",
@@ -91,7 +115,7 @@ describe("SQLite lifecycle cleanup races", () => {
     const sessionKey = "agent:main:cleanup-race-reused";
     const sessionId = "reused-active-session";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: now });
-    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
       {
         runId: "cleanup-race-marker-reused",
         timestamp: new Date(now - 600_000).toISOString(),
@@ -100,7 +124,7 @@ describe("SQLite lifecycle cleanup races", () => {
     ]);
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         sessionKeySegmentPrefix: "cleanup-race-",
         transcriptContentMarker: "cleanup-race-marker",
@@ -132,7 +156,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         pluginOwnerId: "memory-core",
         sessionKeySegmentPrefix: "cleanup-race-",
@@ -175,7 +199,7 @@ describe("SQLite lifecycle cleanup races", () => {
       timestamp: new Date(staleUpdatedAt).toISOString(),
       type: "metadata",
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "researcher",
         sessionKey: researcherHistoryKey,
@@ -190,7 +214,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         agentId: "main",
         storePath: sharedStorePath,
         pluginOwnerId: "memory-core",
@@ -235,7 +259,7 @@ describe("SQLite lifecycle cleanup races", () => {
       timestamp: new Date(staleUpdatedAt).toISOString(),
       runId: "cleanup-race-marker-foreign",
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { sessionKey: foreignKey, sessionId: foreignHistoryId, storePath },
       [foreignEvent],
     );
@@ -245,7 +269,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         pluginOwnerId: "memory-core",
         sessionKeySegmentPrefix: "cleanup-race-",
@@ -273,7 +297,7 @@ describe("SQLite lifecycle cleanup races", () => {
       timestamp: new Date(now - 600_000).toISOString(),
       type: "metadata",
     };
-    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [event]);
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [event]);
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: "main",
     }).path;
@@ -283,7 +307,7 @@ describe("SQLite lifecycle cleanup races", () => {
       .run("{}", -1, sessionKey);
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         pluginOwnerId: "memory-core",
         sessionKeySegmentPrefix: "cleanup-race-",
@@ -315,7 +339,7 @@ describe("SQLite lifecycle cleanup races", () => {
         pluginOwnerId: "other-plugin",
       },
     );
-    await replaceSqliteTranscriptEvents({ sessionKey, sessionId: foreignSessionId, storePath }, [
+    await replaceTranscriptEvents({ sessionKey, sessionId: foreignSessionId, storePath }, [
       {
         runId: "cleanup-race-marker-mixed-foreign",
         timestamp: new Date(now - 600_000).toISOString(),
@@ -333,7 +357,7 @@ describe("SQLite lifecycle cleanup races", () => {
     );
 
     await expect(
-      cleanupSessionLifecycleArtifacts({
+      cleanupSessionLifecycleArtifactsCore({
         storePath,
         pluginOwnerId: "memory-core",
         sessionKeySegmentPrefix: "cleanup-race-",
@@ -359,7 +383,7 @@ describe("SQLite lifecycle cleanup races", () => {
       content: "cleanup-race-marker transcript",
     } as const;
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: now });
-    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [event]);
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [event]);
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: "main",
     }).path;
@@ -368,7 +392,7 @@ describe("SQLite lifecycle cleanup races", () => {
     }
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const cleanupNow = Date.now() + 60_000;
-    const planned = planSqliteSessionLifecycleArtifactCleanup(database, {
+    const planned = planSessionLifecycleArtifactCleanup(database, {
       archiveRemovedEntryTranscripts: true,
       archiveDirectory: path.dirname(storePath),
       sessionKeySegmentPrefix: "cleanup-race",
@@ -390,7 +414,7 @@ describe("SQLite lifecycle cleanup races", () => {
 
     try {
       await expect(
-        cleanupSessionLifecycleArtifacts({
+        cleanupSessionLifecycleArtifactsCore({
           storePath,
           sessionKeySegmentPrefix: "cleanup-race",
           transcriptContentMarker: "cleanup-race-marker",
@@ -417,7 +441,7 @@ describe("SQLite lifecycle cleanup races", () => {
       { sessionKey: deletedKey, storePath },
       { sessionId: deletedSessionId, updatedAt: Date.now() },
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { sessionKey: deletedKey, sessionId: deletedSessionId, storePath },
       [
         {
@@ -477,11 +501,11 @@ describe("SQLite lifecycle cleanup races", () => {
       { sessionKey: deletedKey, storePath },
       { sessionId: currentSessionId, updatedAt: Date.now() },
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { sessionKey: deletedKey, sessionId: currentSessionId, storePath },
       [{ type: "session", id: currentSessionId, content: "current transcript" }],
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { sessionKey: deletedKey, sessionId: historicalSessionId, storePath },
       [{ type: "session", id: historicalSessionId, content: "historical transcript" }],
     );
@@ -530,6 +554,93 @@ describe("SQLite lifecycle cleanup races", () => {
     expect(progressedDuringMaterialization).toBe(true);
   });
 
+  it("reports a transcript guard mismatch after publishing earlier history", async () => {
+    const sessionKey = "agent:main:historical-guard-race";
+    const sessionIds = ["historical-guard-first", "historical-guard-second", "guard-current"];
+    const events = sessionIds.map((sessionId) => ({
+      type: "session" as const,
+      id: sessionId,
+      content: `${sessionId} transcript`,
+    }));
+    for (const [index, sessionId] of sessionIds.entries()) {
+      await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: index + 1 });
+      await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [events[index]!]);
+    }
+    const currentEntry = loadSessionEntry({ sessionKey, storePath });
+    if (!currentEntry) {
+      throw new Error("expected current guarded entry");
+    }
+    let materializations = 0;
+    archiveMaterializationHook.afterMaterialize = () => {
+      materializations += 1;
+      if (materializations === 2) {
+        replaceTranscriptEventsSync({ sessionKey, sessionId: sessionIds[2]!, storePath }, [
+          { ...events[2]!, content: "concurrent transcript" },
+        ]);
+      }
+    };
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      expectedEntry: currentEntry,
+      expectedTranscript: {
+        eventJson: [JSON.stringify(events[2])],
+        sessionId: sessionIds[2]!,
+      },
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
+    expect(result.archivedTranscripts).toHaveLength(1);
+    expect(materializations).toBe(2);
+    expect(loadSessionEntry({ sessionKey, storePath })).toEqual(currentEntry);
+    const archivedSessionId = result.archivedTranscripts[0]?.sessionId;
+    expect(sessionIds.slice(0, 2)).toContain(archivedSessionId);
+    for (const [index, historicalSessionId] of sessionIds.slice(0, 2).entries()) {
+      await expect(
+        loadTranscriptEvents({ sessionKey, sessionId: historicalSessionId, storePath }),
+      ).resolves.toEqual(historicalSessionId === archivedSessionId ? [] : [events[index]!]);
+    }
+    await expect(
+      loadTranscriptEvents({ sessionKey, sessionId: sessionIds[2]!, storePath }),
+    ).resolves.toEqual([{ ...events[2]!, content: "concurrent transcript" }]);
+  });
+
+  it("reports an entry replacement during final transcript materialization", async () => {
+    const sessionKey = "agent:main:entry-materialization-race";
+    const sessionId = "entry-materialization-run";
+    const events = [{ type: "session" as const, id: sessionId, content: "original transcript" }];
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: 1 });
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
+    const currentEntry = loadSessionEntry({ sessionKey, storePath });
+    if (!currentEntry) {
+      throw new Error("expected current guarded entry");
+    }
+    const replacementEntry = { ...currentEntry, label: "concurrent replacement" };
+    archiveMaterializationHook.afterMaterialize = () => {
+      replaceSessionEntrySync({ sessionKey, storePath }, replacementEntry);
+    };
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      expectedEntry: currentEntry,
+      expectedTranscript: { eventJson: [JSON.stringify(events[0])], sessionId },
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    expect(result).toEqual({
+      archivedTranscripts: [],
+      deleted: false,
+      expectedEntryMismatch: true,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toEqual(replacementEntry);
+    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
+      events,
+    );
+  });
+
   it("releases the store writer while lifecycle cleanup archives a transcript", async () => {
     const now = Date.now();
     const deletedKey = "agent:main:cleanup-race-archived";
@@ -539,7 +650,7 @@ describe("SQLite lifecycle cleanup races", () => {
       { sessionKey: deletedKey, storePath },
       { sessionId: deletedSessionId, updatedAt: now - 600_000 },
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { sessionKey: deletedKey, sessionId: deletedSessionId, storePath },
       [
         {
@@ -567,7 +678,7 @@ describe("SQLite lifecycle cleanup races", () => {
       await materializationGate;
     };
 
-    const cleanup = cleanupSessionLifecycleArtifacts({
+    const cleanup = cleanupSessionLifecycleArtifactsCore({
       storePath,
       sessionKeySegmentPrefix: "cleanup-race-",
       transcriptContentMarker: "cleanup-race-marker",
@@ -611,7 +722,7 @@ describe("SQLite lifecycle cleanup races", () => {
     if (!persistedRemovedEntry) {
       throw new Error("expected persisted lifecycle removal entry");
     }
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { sessionKey: removedKey, sessionId: removedEntry.sessionId, storePath },
       [
         {
@@ -675,6 +786,70 @@ describe("SQLite lifecycle cleanup races", () => {
     expect(progressedDuringMaterialization).toBe(true);
   });
 
+  it("reports zero maintenance removals when final compare-and-delete does not commit", async () => {
+    const sessionKey = "agent:main:maintenance-compare-failed";
+    const entry = { sessionId: "maintenance-compare-failed", updatedAt: 1 };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    if (!databasePath) {
+      throw new Error("expected maintenance race database path");
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    let materializations = 0;
+    archiveMaterializationHook.afterMaterialize = () => {
+      materializations += 1;
+      if (materializations !== 1) {
+        return;
+      }
+      const changedEntry = { ...entry, label: "changed", updatedAt: 2 };
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
+        .run(JSON.stringify(changedEntry), changedEntry.updatedAt, sessionKey);
+    };
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
+    });
+
+    expect(result).toMatchObject({
+      beforeCount: 1,
+      afterCount: 1,
+      removedEntries: 0,
+      removedSessionKeys: [],
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+    });
+    expect(materializations).toBe(1);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ label: "changed" });
+  });
+
+  it("retains committed maintenance counts when archive publication fails", async () => {
+    const sessionKey = "agent:main:maintenance-publication-failed";
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "maintenance-publication-failed", updatedAt: 1 },
+    );
+    archivePublicationHook.failNext = new Error("injected archive publication failure");
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
+    });
+
+    expect(result).toMatchObject({
+      beforeCount: 1,
+      afterCount: 0,
+      modelRunPruned: 0,
+      pruned: 1,
+      capped: 0,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
+
   it("retains unplanned historical windows behind a placeholder node", async () => {
     const sessionKey = "agent:main:unplanned-history";
     const currentEntry: SessionEntry = {
@@ -693,11 +868,10 @@ describe("SQLite lifecycle cleanup races", () => {
       content: "retained historical transcript",
     } as const;
     await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
-    await replaceSqliteTranscriptEvents(
-      { sessionKey, sessionId: "current-planned-session", storePath },
-      [currentEvent],
-    );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents({ sessionKey, sessionId: "current-planned-session", storePath }, [
+      currentEvent,
+    ]);
+    await replaceTranscriptEvents(
       { sessionKey, sessionId: "unplanned-historical-session", storePath },
       [historicalEvent],
     );
@@ -754,7 +928,7 @@ describe("SQLite lifecycle cleanup races", () => {
       { sessionKey: "agent:main:window-owner", storePath },
       { sessionId: retainedSessionId, updatedAt: now },
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { sessionKey: "agent:main:window-owner", sessionId: retainedSessionId, storePath },
       [retainedEvent],
     );

@@ -1,8 +1,7 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { SkillWorkshopHistoryScanResult, SkillWorkshopHistoryScanState } from "./state.ts";
 
@@ -69,7 +68,7 @@ export async function loadSkillWorkshopHistoryScanStatus(
             );
             current.state.loaded = true;
           } catch (error) {
-            current.state.error = formatErrorMessage(error, { redact: redactToolDetail });
+            current.state.error = formatUiError(error);
             // Loaded means this scope attempted a read. A scan action can still
             // force a retry because the result remains absent.
             current.state.loaded = true;
@@ -144,7 +143,7 @@ export async function runSkillWorkshopHistoryScan(params: {
     params.state.loaded = true;
     return true;
   } catch (error) {
-    const scanError = formatErrorMessage(error, { redact: redactToolDetail });
+    const scanError = formatUiError(error);
     try {
       params.state.result = await client.request<SkillWorkshopHistoryScanResult>(
         "skills.proposals.historyStatus",

@@ -81,6 +81,7 @@ describe("createQaScenarioRuntimeApi", () => {
       waitForTransportReady: vi.fn(),
       waitForAgentHistoryReply: vi.fn(),
       browserRequest: vi.fn(),
+      normalizeModelRef: vi.fn(),
     };
 
     const api = createQaScenarioRuntimeApi({

@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
@@ -35,7 +34,7 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
 });
 
 import { resolveExternalAuthProfilesWithPlugins } from "./provider-runtime.js";
-import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
+import { isPluginProvidersLoadInFlight, resolvePluginProvidersCore } from "./providers.runtime.js";
 
 const WORKSPACE = "/workspace/a";
 
@@ -118,14 +117,12 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     clearPluginMetadataLifecycleCaches();
-    clearCurrentPluginMetadataSnapshot();
     loadPluginRegistrySnapshotWithMetadata.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry());
   });
 
   afterEach(() => {
-    clearCurrentPluginMetadataSnapshot();
     clearPluginMetadataLifecycleCaches();
     resetPluginRuntimeStateForTest();
   });
@@ -176,14 +173,14 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     });
   });
 
-  describe("resolvePluginProviders", () => {
+  describe("resolvePluginProvidersCore", () => {
     it("reuses a compatible current snapshot without a direct disk load", () => {
       const config: OpenClawConfig = {};
       registerCurrentSnapshot(config);
 
       // onlyPluginIds:[] short-circuits provider materialization after the
       // snapshot is resolved, isolating the consult-first routing.
-      const providers = resolvePluginProviders({
+      const providers = resolvePluginProvidersCore({
         config,
         env: {},
         workspaceDir: WORKSPACE,
@@ -199,7 +196,7 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     it("falls back to a direct disk load when no current snapshot is registered", () => {
       armFallbackLoad();
 
-      resolvePluginProviders({
+      resolvePluginProvidersCore({
         config: {},
         env: {},
         workspaceDir: WORKSPACE,

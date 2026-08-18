@@ -31,9 +31,11 @@ import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sid
 import type { SessionDataController } from "./session-data-controller.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuWork } from "./session-menu.ts";
-import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SessionOrganizerControllerHost } from "./session-organizer-operations.runtime.ts";
-import type { SessionCreatorOption } from "./session-owner-chip.ts";
+import type {
+  SessionOrganizerController,
+  SessionOrganizerControllerHost,
+} from "./session-organizer-controller.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -65,7 +67,7 @@ type SidebarMenusRenderer = {
   renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
 };
 
-export interface SidebarMenusControllerHost
+interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
   readonly activeWorkboardBoardId: string;
@@ -89,19 +91,33 @@ export interface SidebarMenusControllerHost
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      "approvalBadgeSnapshot" | "presenceInstanceId" | "presencePayload" | "sessionsLoading"
+      | "approvalBadgeSnapshot"
+      | "presenceInstanceId"
+      | "presencePayload"
+      | "sessionResultsByAgent"
+      | "sessionsLoading"
+      | "sessionsResult"
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
-  readonly sessionCreatorFilterActive: boolean;
-  sessionCreatorFilterId: string | null;
-  readonly sessionCreatorOptions: readonly SessionCreatorOption[];
+  readonly sessionOwnerFilterActive: boolean;
+  sessionOwnerFilterId: string | null;
+  sessionInvolvingMeFilterActive: boolean;
+  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
+  readSessionMutationAccess(request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  }): import("../lib/session-method-access.ts").SessionMethodAccess;
   readonly sidebarEntries: readonly string[];
   readonly catalogProjectGrouping: CatalogProjectGrouping;
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;
   hideSessionCatalog(catalogId: string): void;
   sessionSortMode: SidebarSessionSortMode;
+  effectiveSessionSortMode(): SidebarSessionSortMode;
+  sessionPeopleSortAvailable(): boolean;
+  setSessionSortMode(mode: SidebarSessionSortMode): void;
   readonly terminalAvailable: boolean;
   readonly themeMode: ThemeMode;
   readonly workboardBoards: readonly SidebarWorkboardBoard[];

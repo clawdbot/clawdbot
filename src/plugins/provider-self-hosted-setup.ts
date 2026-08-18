@@ -2,6 +2,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -15,7 +16,6 @@ import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-l
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import {
-  asObject,
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
 } from "../agents/provider-http-errors.js";
@@ -27,6 +27,7 @@ import {
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 // Builds setup metadata for self-hosted provider plugins.
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -117,12 +118,6 @@ async function readSelfHostedDiscoveryJson<T>(response: Response, label: string)
   return await readProviderJsonResponse<T>(response, `${label} discovery`, {
     maxBytes: SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES,
   });
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 function resolveLlamaCppPropsUrl(baseUrl: string, modelId?: string): string {
@@ -227,7 +222,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
       }
 
       const discoveredModels = models.flatMap((rawModel) => {
-        const model = asObject(rawModel);
+        const model = asOptionalRecord(rawModel);
         const modelId = normalizeOptionalString(model?.id);
         if (!modelId) {
           return [];
@@ -235,7 +230,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         return [
           {
             id: modelId,
-            meta: asObject(model?.meta),
+            meta: asOptionalRecord(model?.meta),
             advertisedContextWindow: readOpenAICompatibleContextWindow(model),
           },
         ];

@@ -52,6 +52,7 @@ cairo-rs = { version = "0.18.5", features = ["png"] }
 libc = "0.2.189"
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "d20b4ff0e0e327e49fee80903478f825eac5a71a" }
 webkit2gtk = "2.0.2"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "d20b4ff0e0e327e49fee80903478f825eac5a71a", default-features = false }

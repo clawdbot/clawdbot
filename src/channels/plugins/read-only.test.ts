@@ -5,7 +5,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
 } from "../../plugins/loader.test-fixtures.js";
@@ -102,7 +102,7 @@ function writeExternalSetupChannelPlugin(
   } = {},
 ) {
   useNoBundledPlugins();
-  const pluginDir = options.pluginDir ?? makeTempDir();
+  const pluginDir = options.pluginDir ?? makePluginLoaderTempDir();
   const pluginId = options.pluginId ?? "external-chat";
   const channelId = options.channelId ?? "external-chat";
   const manifestChannelIds = options.manifestChannelIds ?? [channelId];
@@ -274,7 +274,7 @@ function writeBundledSetupChannelPlugin(
     envVar?: string;
   } = {},
 ) {
-  const bundledRoot = makeTempDir();
+  const bundledRoot = makePluginLoaderTempDir();
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
   const pluginId = options.pluginId ?? "bundled-chat";
   const channelId = options.channelId ?? pluginId;
@@ -1108,7 +1108,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
   });
 
   it("discovers trusted external channel plugins from the default agent workspace", () => {
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "external-chat-plugin");
     fs.mkdirSync(pluginDir, { recursive: true });
     const { fullMarker, setupMarker } = writeExternalSetupChannelPlugin({

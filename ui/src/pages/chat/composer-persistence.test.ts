@@ -16,7 +16,9 @@ import {
   updateStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
 
-type ComposerState = Parameters<typeof persistChatComposerState>[0];
+type ComposerState = Parameters<typeof persistChatComposerState>[0] & {
+  selectedChatSessionIncognito: boolean;
+};
 
 const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
@@ -39,6 +41,7 @@ function createState(overrides: Partial<ComposerState> = {}): ComposerState {
     sessionKey: "agent:lily:main",
     chatMessage: "",
     chatQueue: [],
+    selectedChatSessionIncognito: false,
     ...overrides,
   };
 }
@@ -63,7 +66,26 @@ afterEach(() => {
 });
 
 describe("chat composer persistence", () => {
-  it("notifies durable outbox subscribers on writes until they unsubscribe", () => {
+  it("round-trips only the immutable steer run identity", () => {
+    const state = createState();
+    const steer: ChatQueueItem = {
+      id: "steer-reload",
+      text: "keep the target",
+      createdAt: 1,
+      kind: "steered",
+      sendRunId: "steer-request",
+      sendState: "unconfirmed",
+      steerTargetRunId: "active-run",
+    };
+
+    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, steer)).toBe(true);
+
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue[0]).toMatchObject({
+      steerTargetRunId: "active-run",
+    });
+  });
+
+  it("notifies stored outbox subscribers on draft presence transitions and queue writes", () => {
     const state = createState();
     const original = reconnectItem("notify", 1);
     const updated = { ...original, text: "updated message" };
@@ -72,9 +94,15 @@ describe("chat composer persistence", () => {
 
     try {
       expect(persistChatComposerState({ ...state, chatMessage: "draft only" })).toBe(true);
-      expect(listener).not.toHaveBeenCalled();
-      expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
       expect(listener).toHaveBeenCalledTimes(1);
+      // Content-only re-persists stay silent so projection subscribers cannot
+      // react by re-persisting a stale pane over the newer draft.
+      expect(persistChatComposerState({ ...state, chatMessage: "draft only, edited" })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(persistChatComposerState({ ...state, chatMessage: "" })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(3);
       expect(
         updateStoredChatComposerQueueItem(
           state,
@@ -84,7 +112,7 @@ describe("chat composer persistence", () => {
           original.agentId,
         ),
       ).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(2);
+      expect(listener).toHaveBeenCalledTimes(4);
     } finally {
       unsubscribe();
     }
@@ -98,7 +126,7 @@ describe("chat composer persistence", () => {
         updated.agentId,
       ),
     ).toBe(true);
-    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(4);
   });
 
   it("flushes a debounced draft before its owner releases state", () => {

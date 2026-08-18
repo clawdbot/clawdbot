@@ -2,6 +2,7 @@
 # Usage: powershell -c "irm https://openclaw.ai/install.ps1 | iex"
 #        powershell -c "& ([scriptblock]::Create((irm https://openclaw.ai/install.ps1))) -Tag beta -NoOnboard -DryRun"
 
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Tag = "latest",
     [ValidateSet("npm", "git")]
@@ -9,10 +10,29 @@ param(
     [string]$GitDir,
     [switch]$NoOnboard,
     [switch]$NoGitUpdate,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Help) {
+    @"
+Usage:
+  powershell -File install.ps1 [options]
+  & ([scriptblock]::Create((irm https://openclaw.ai/install.ps1))) [options]
+
+Options:
+  -InstallMethod npm|git  Install method (default: npm)
+  -Tag <tag|version>      OpenClaw version or dist-tag (default: latest)
+  -GitDir <path>          Git checkout directory
+  -NoOnboard              Skip onboarding
+  -NoGitUpdate            Skip git pull
+  -DryRun                 Print actions only
+  -Help                   Show this help
+"@ | Write-Output
+    return
+}
 
 $script:InstallExitCode = 0
 
@@ -20,7 +40,6 @@ function Fail-Install {
     param([int]$Code = 1)
 
     $script:InstallExitCode = $Code
-    return $false
 }
 
 function Test-BooleanSuccessResult {
@@ -91,9 +110,7 @@ function Resolve-NodeOptionsWithMinOldSpace {
 }
 
 function Complete-Install {
-    param([bool]$Succeeded)
-
-    if ($Succeeded) {
+    if ($script:InstallExitCode -eq 0) {
         return
     }
 
@@ -180,20 +197,13 @@ function Initialize-InstallerTempDirectory {
     $env:TMP = $tempDirectory
 }
 
-Initialize-InstallerTempDirectory
-
-Write-Host ""
-Write-Host "  OpenClaw Installer" -ForegroundColor Cyan
-Write-Host ""
-
 # Check if running in PowerShell
 if ($PSVersionTable.PSVersion.Major -lt 5) {
     Write-Host "Error: PowerShell 5+ required" -ForegroundColor Red
-    Complete-Install -Succeeded:$false
+    Fail-Install
+    Complete-Install
     return
 }
-
-Write-Host "[OK] Windows detected" -ForegroundColor Green
 
 if (-not $PSBoundParameters.ContainsKey("InstallMethod")) {
     if (-not [string]::IsNullOrWhiteSpace($env:OPENCLAW_INSTALL_METHOD)) {
@@ -226,17 +236,43 @@ if ([string]::IsNullOrWhiteSpace($GitDir)) {
     $GitDir = (Join-Path $userHome "openclaw")
 }
 
+Initialize-InstallerTempDirectory
+
+Write-Host ""
+Write-Host "  OpenClaw Installer" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "[OK] Windows detected" -ForegroundColor Green
+
 # Check for Node.js
 function Test-NodeVersionSupported {
     param([string]$Version)
 
-    $versionMatch = [regex]::Match($Version, '^v?(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)')
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return $false
+    }
+    # This standalone installer runs before OpenClaw exists on disk. Mirror the
+    # release grammar in node-version.mjs; parity cases guard this boundary.
+    $versionMatch = [regex]::Match(
+        $Version,
+        '^\s*v?(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\s*$'
+    )
     if (-not $versionMatch.Success) {
         return $false
     }
-    $major = [int]$versionMatch.Groups["major"].Value
-    $minor = [int]$versionMatch.Groups["minor"].Value
-    $patch = [int]$versionMatch.Groups["patch"].Value
+    $major = 0L
+    $minor = 0L
+    $patch = 0L
+    $maxSafeInteger = 9007199254740991L
+    if (
+        -not [long]::TryParse($versionMatch.Groups["major"].Value, [ref]$major) -or
+        -not [long]::TryParse($versionMatch.Groups["minor"].Value, [ref]$minor) -or
+        -not [long]::TryParse($versionMatch.Groups["patch"].Value, [ref]$patch) -or
+        $major -gt $maxSafeInteger -or
+        $minor -gt $maxSafeInteger -or
+        $patch -gt $maxSafeInteger
+    ) {
+        return $false
+    }
     if ($major -eq 22) {
         return ($minor -gt 22 -or ($minor -eq 22 -and $patch -ge 3))
     }
@@ -882,6 +918,10 @@ function Invoke-OpenClawCommand {
     }
 
     & $commandPath @Arguments
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "openclaw $($Arguments -join ' ') failed with exit code $exitCode."
+    }
 }
 
 function Invoke-InteractiveOpenClawCommand {
@@ -1411,14 +1451,12 @@ function Install-OpenClaw {
     $prevUpdateNotifier = $env:NPM_CONFIG_UPDATE_NOTIFIER
     $prevFund = $env:NPM_CONFIG_FUND
     $prevAudit = $env:NPM_CONFIG_AUDIT
-    $prevNodeLlamaSkipDownload = $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD
     $prevBefore = $env:NPM_CONFIG_BEFORE
     $prevMinReleaseAge = $env:NPM_CONFIG_MIN_RELEASE_AGE
     $env:NPM_CONFIG_LOGLEVEL = "error"
     $env:NPM_CONFIG_UPDATE_NOTIFIER = "false"
     $env:NPM_CONFIG_FUND = "false"
     $env:NPM_CONFIG_AUDIT = "false"
-    $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"
     Remove-Item Env:NPM_CONFIG_BEFORE -ErrorAction SilentlyContinue
     Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE -ErrorAction SilentlyContinue
     try {
@@ -1450,7 +1488,6 @@ function Install-OpenClaw {
         $env:NPM_CONFIG_UPDATE_NOTIFIER = $prevUpdateNotifier
         $env:NPM_CONFIG_FUND = $prevFund
         $env:NPM_CONFIG_AUDIT = $prevAudit
-        $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload
         $env:NPM_CONFIG_BEFORE = $prevBefore
         $env:NPM_CONFIG_MIN_RELEASE_AGE = $prevMinReleaseAge
     }
@@ -1477,6 +1514,94 @@ function Assert-GitCheckoutHasCommit {
     }
 }
 
+function Resolve-PhysicalDirectoryPath {
+    param([string]$Path)
+
+    $resolved = & node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' $Path
+    if ($LASTEXITCODE -ne 0 -or -not $resolved) {
+        throw "Could not resolve directory path: $Path"
+    }
+    return [string]$resolved
+}
+
+function Resolve-GitCheckoutPath {
+    param([string]$RepoDir)
+
+    $parentDir = Split-Path -Parent $RepoDir
+    if (-not $parentDir) {
+        $parentDir = (Get-Location).Path
+    }
+    New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+    $parentDir = Resolve-PhysicalDirectoryPath -Path $parentDir
+    $repoEntry = Get-Item -LiteralPath $RepoDir -Force -ErrorAction SilentlyContinue
+    if ($repoEntry -and $repoEntry.PSIsContainer) {
+        return (Resolve-PhysicalDirectoryPath -Path $RepoDir)
+    }
+    return (Join-Path $parentDir (Split-Path -Leaf $RepoDir))
+}
+
+function New-TransactionalGitCheckout {
+    param(
+        [string]$RepoUrl,
+        [string]$RepoDir
+    )
+
+    $RepoDir = Resolve-GitCheckoutPath -RepoDir $RepoDir
+    $parentDir = Split-Path -Parent $RepoDir
+    $preserveRepoDir = (Test-Path -LiteralPath $RepoDir -PathType Container) -and
+        @(Get-ChildItem -LiteralPath $RepoDir -Force).Count -eq 0
+    $stagingParent = if ($preserveRepoDir) { $RepoDir } else { $parentDir }
+    $stagingDir = Join-Path $stagingParent (".openclaw-clone-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stagingDir | Out-Null
+    $retainStaging = $false
+
+    try {
+        git clone $RepoUrl $stagingDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "git clone failed with exit code $LASTEXITCODE"
+        }
+        $destinationEntry = Get-Item -LiteralPath $RepoDir -Force -ErrorAction SilentlyContinue
+        if (-not $preserveRepoDir -and $destinationEntry) {
+            throw "Git install dir appeared while cloning: $RepoDir. The existing path was left unchanged; move it or choose another -GitDir, then retry."
+        }
+        if (-not $preserveRepoDir) {
+            [System.IO.Directory]::Move($stagingDir, $RepoDir)
+        } else {
+            $destinationEntries = @(Get-ChildItem -LiteralPath $RepoDir -Force)
+            if ($destinationEntries.Count -ne 1 -or $destinationEntries[0].Name -ne (Split-Path -Leaf $stagingDir)) {
+                throw "Git install dir changed while cloning: $RepoDir. The existing path was left unchanged; move it or choose another -GitDir, then retry."
+            }
+            $entries = @(Get-ChildItem -LiteralPath $stagingDir -Force | Sort-Object { if ($_.Name -eq ".git") { 1 } else { 0 } })
+            $moved = [System.Collections.Generic.List[System.IO.FileSystemInfo]]::new()
+            try {
+                foreach ($entry in $entries) {
+                    Move-Item -LiteralPath $entry.FullName -Destination $RepoDir -ErrorAction Stop
+                    $moved.Add($entry)
+                }
+            } catch {
+                $publicationError = $_.Exception
+                $rollbackErrors = [System.Collections.Generic.List[System.Exception]]::new()
+                for ($i = $moved.Count - 1; $i -ge 0; $i--) {
+                    try {
+                        Move-Item -LiteralPath (Join-Path $RepoDir $moved[$i].Name) -Destination $stagingDir -ErrorAction Stop
+                    } catch {
+                        $rollbackErrors.Add($_.Exception)
+                    }
+                }
+                if ($rollbackErrors.Count -gt 0) {
+                    $retainStaging = $true
+                    throw "Could not publish or fully roll back the cloned checkout at $RepoDir; recovery files remain at $stagingDir. $($publicationError.Message)"
+                }
+                throw $publicationError
+            }
+        }
+    } finally {
+        if (-not $retainStaging -and (Test-Path -LiteralPath $stagingDir)) {
+            Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Install-OpenClawFromGit {
     param(
         [string]$RepoDir,
@@ -1486,12 +1611,13 @@ function Install-OpenClawFromGit {
         return $false
     }
 
+    $RepoDir = Resolve-GitCheckoutPath -RepoDir $RepoDir
     $repoUrl = "https://github.com/openclaw/openclaw.git"
     Write-Host "[*] Installing OpenClaw from GitHub ($repoUrl)..." -ForegroundColor Yellow
 
     Assert-GitCheckoutHasCommit -RepoDir $RepoDir
-    if (-not (Test-Path $RepoDir)) {
-        git clone $repoUrl $RepoDir
+    if (-not (Test-Path $RepoDir) -or @(Get-ChildItem -LiteralPath $RepoDir -Force).Count -eq 0) {
+        New-TransactionalGitCheckout -RepoUrl $repoUrl -RepoDir $RepoDir
     }
 
     if (-not $SkipUpdate) {
@@ -1517,7 +1643,6 @@ function Install-OpenClawFromGit {
     $prevPnpmWorkspaceConcurrency = $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY
     $prevPnpmVerifyDepsBeforeRun = $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN
     $prevPnpmSideEffectsCache = $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE
-    $prevNodeLlamaPostinstall = $env:NODE_LLAMA_CPP_POSTINSTALL
     $prevNodeOptions = $env:NODE_OPTIONS
     $pnpmCommand = Get-PnpmCommandPath
     if (-not $pnpmCommand) {
@@ -1528,7 +1653,6 @@ function Install-OpenClawFromGit {
     $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"
     $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
     $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"
-    $env:NODE_LLAMA_CPP_POSTINSTALL = "skip"
     $pushedRepoLocation = $false
     try {
         Push-Location -LiteralPath $RepoDir
@@ -1576,7 +1700,6 @@ function Install-OpenClawFromGit {
         $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency
         $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = $prevPnpmVerifyDepsBeforeRun
         $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = $prevPnpmSideEffectsCache
-        $env:NODE_LLAMA_CPP_POSTINSTALL = $prevNodeLlamaPostinstall
         $env:NODE_OPTIONS = $prevNodeOptions
     }
 
@@ -1608,10 +1731,10 @@ function Run-Doctor {
     Write-Host "[*] Running doctor to migrate settings..." -ForegroundColor Yellow
     try {
         Invoke-OpenClawCommand doctor --non-interactive
+        Write-Host "[OK] Migration complete" -ForegroundColor Green
     } catch {
-        # Ignore errors from doctor
+        Write-Host "[!] Migration failed; continuing. Run: openclaw doctor --non-interactive" -ForegroundColor Yellow
     }
-    Write-Host "[OK] Migration complete" -ForegroundColor Green
 }
 
 function Test-GatewayServiceLoaded {
@@ -1681,7 +1804,8 @@ function Remove-LegacySubmodule {
 function Main {
     if ($InstallMethod -ne "npm" -and $InstallMethod -ne "git") {
         Write-Host "Error: invalid -InstallMethod (use npm or git)." -ForegroundColor Red
-        return (Fail-Install -Code 2)
+        Fail-Install -Code 2
+        return
     }
 
     if ($DryRun) {
@@ -1707,7 +1831,8 @@ function Main {
     # Step 1: Node.js
     if (-not (Check-Node)) {
         if (-not (Install-Node)) {
-            return (Fail-Install)
+            Fail-Install
+            return
         }
 
         # Verify installation
@@ -1715,7 +1840,8 @@ function Main {
             Write-Host ""
             Write-Host "Error: Node.js installation may require a terminal restart" -ForegroundColor Red
             Write-Host "Please close this terminal, open a new one, and run this installer again." -ForegroundColor Yellow
-            return (Fail-Install)
+            Fail-Install
+            return
         }
     }
 
@@ -1733,7 +1859,8 @@ function Main {
         $finalGitDir = $GitDir
         $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
         if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
-            return (Fail-Install)
+            Fail-Install
+            return
         }
     } else {
         $gitWrapper = Join-Path (Join-Path $env:USERPROFILE ".local\\bin") "openclaw.cmd"
@@ -1743,7 +1870,8 @@ function Main {
         }
         $npmInstallResults = @(Install-OpenClaw)
         if (-not (Test-BooleanSuccessResult -Results $npmInstallResults)) {
-            return (Fail-Install)
+            Fail-Install
+            return
         }
     }
 
@@ -1851,6 +1979,5 @@ function Main {
     return $true
 }
 
-$mainResults = @(Main)
-$installSucceeded = Test-BooleanSuccessResult -Results $mainResults
-Complete-Install -Succeeded:$installSucceeded
+$null = Main
+Complete-Install

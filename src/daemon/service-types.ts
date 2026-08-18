@@ -105,7 +105,7 @@ export type GatewayServiceState = {
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "port-mismatch" | "temporary-program" | "version-mismatch";
+  code: "missing-program" | "port-mismatch" | "temporary-program";
   message: string;
 };
 

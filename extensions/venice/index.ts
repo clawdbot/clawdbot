@@ -9,7 +9,7 @@ import { VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import { applyVeniceConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildStaticVeniceProvider } from "./provider-catalog.js";
-import { createVeniceDeepSeekV4Wrapper } from "./stream.js";
+import { createVeniceStreamWrapper } from "./stream.js";
 import { fetchVeniceUsage } from "./usage.js";
 
 const PROVIDER_ID = "venice";
@@ -57,7 +57,7 @@ export default defineSingleProviderPluginEntry({
     },
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
-    wrapStreamFn: (ctx) => createVeniceDeepSeekV4Wrapper(ctx.streamFn, ctx.thinkingLevel),
+    wrapStreamFn: (ctx) => createVeniceStreamWrapper(ctx.streamFn, ctx.thinkingLevel),
     resolveUsageAuth: async (ctx) => {
       const apiKey = ctx.resolveApiKeyFromConfigAndStore({
         envDirect: [ctx.env.VENICE_API_KEY],

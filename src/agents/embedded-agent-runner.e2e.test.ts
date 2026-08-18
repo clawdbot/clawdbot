@@ -2,6 +2,8 @@
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import { resolveEmbeddedAuthCooldownProbePolicy as resolveEmbeddedAuthCooldownProbePolicyActual } from "./embedded-agent-runner/run/auth-controller.js";
 import {
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
@@ -115,7 +117,7 @@ const installRunEmbeddedMocks = () => {
       await vi.importActual<typeof import("./command/session.js")>("./command/session.js");
     return {
       ...actual,
-      resolveSessionKeyForRequest: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
+      resolveSessionKeyForRequestCore: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
       resolveStoredSessionKeyForSessionId: (opts: unknown) =>
         resolveStoredSessionKeyForSessionIdMock(opts),
     };
@@ -157,6 +159,7 @@ const installRunEmbeddedMocks = () => {
       }),
       stopRuntimeAuthRefreshTimer: vi.fn(),
     }),
+    resolveEmbeddedAuthCooldownProbePolicy: resolveEmbeddedAuthCooldownProbePolicyActual,
   }));
   vi.doMock("./models-config.js", async () => {
     const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
@@ -168,10 +171,14 @@ const installRunEmbeddedMocks = () => {
   });
 };
 
-let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type TestRunEmbeddedAgent = (
+  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
+) => ReturnType<ProductionRunEmbeddedAgent>;
+let runEmbeddedAgent: TestRunEmbeddedAgent;
 let SessionManager: typeof import("openclaw/plugin-sdk/agent-sessions").SessionManager;
 let loadTranscriptEvents: typeof import("../config/sessions/session-accessor.js").loadTranscriptEvents;
-let upsertSessionEntry: typeof import("../config/sessions/session-accessor.js").upsertSessionEntry;
+let upsertSessionEntryCore: typeof import("../config/sessions/session-accessor.js").upsertSessionEntryCore;
 let resolveAgentRunSessionTarget: typeof import("./run-session-target.js").resolveAgentRunSessionTarget;
 let e2eWorkspace: EmbeddedAgentRunnerTestWorkspace | undefined;
 let agentDir: string;
@@ -180,10 +187,14 @@ let sessionStorePath: string;
 let sessionCounter = 0;
 let runCounter = 0;
 
-const createEmbeddedAgentRunnerOpenAiConfig = (modelIds: string[]) => ({
-  ...createBaseEmbeddedAgentRunnerOpenAiConfig(modelIds),
-  session: { store: sessionStorePath },
-});
+const createEmbeddedAgentRunnerOpenAiConfig = (modelIds: string[]) => {
+  const config = createBaseEmbeddedAgentRunnerOpenAiConfig(modelIds);
+  const mainAgent = config.agents?.list?.find((entry) => entry.id === "main");
+  if (mainAgent) {
+    mainAgent.default = true;
+  }
+  return { ...config, session: { store: sessionStorePath } };
+};
 
 beforeAll(async () => {
   vi.useRealTimers();
@@ -191,9 +202,11 @@ beforeAll(async () => {
   installRunEmbeddedMocks();
   ({ getReplyPayloadMetadata } = await import("../auto-reply/reply-payload.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
-  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
+  runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
+    (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
+  );
   ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
-  ({ loadTranscriptEvents, upsertSessionEntry } =
+  ({ loadTranscriptEvents, upsertSessionEntryCore } =
     await import("../config/sessions/session-accessor.js"));
   ({ resolveAgentRunSessionTarget } = await import("./run-session-target.js"));
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
@@ -240,6 +253,7 @@ const resolveTestSessionTarget = async (params: {
 }) =>
   await resolveAgentRunSessionTarget({
     config: params.config,
+    missingSessionKey: "create",
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
@@ -250,7 +264,7 @@ const createPersistedTestSessionManager = async (params: {
   sessionKey: string;
 }) => {
   const target = await resolveTestSessionTarget(params);
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath },
     { sessionId: target.sessionId, updatedAt: Date.now() },
   );
@@ -692,7 +706,8 @@ describe("runEmbeddedAgent", () => {
     };
     resolveModelAsyncMock.mockImplementation(async (provider: string, modelId: string) => {
       if (provider === "openai" && modelId === "gpt-5.5") {
-        return createResolvedEmbeddedRunnerModel(provider, modelId);
+        const resolved = createResolvedEmbeddedRunnerModel(provider, modelId);
+        return { ...resolved, model: { ...resolved.model, contextWindow: 272_000 } };
       }
       return {
         error: `Unknown model: ${provider}/${modelId}`,
@@ -708,10 +723,11 @@ describe("runEmbeddedAgent", () => {
         lastAssistant: buildEmbeddedRunnerAssistant({
           content: [{ type: "text", text: "ok" }],
         }),
+        contextTokens: 1_050_000,
       }),
     );
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       sessionId: "codex-runtime-model",
       sessionFile,
       workspaceDir,
@@ -739,6 +755,7 @@ describe("runEmbeddedAgent", () => {
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai");
+    expect(result.meta.agentMeta?.contextTokens).toBe(1_050_000);
   });
 
   it("resolves a transport-owned Codex model from the bundled static catalog in one resolver pass", async () => {

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -79,13 +80,11 @@ export function readCronJobScratchState(
   return readScratchStateFromDatabase(db, cronStoreKey(storePath), jobId);
 }
 
-/** Resolves the current heartbeat monitor and its scratch with one narrow SQLite query. */
-export function readHeartbeatMonitorScratch(
+function readHeartbeatMonitorScratchFromDatabase(
+  db: DatabaseSync,
   storePath: string,
   agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
 ): { jobId: string; state: CronJobScratchState } | undefined {
-  const { db } = openOpenClawStateDatabase(options);
   const storeKey = cronStoreKey(storePath);
   const cronDb = getCronStoreKysely(db);
   const row = executeSqliteQuerySync(
@@ -123,6 +122,28 @@ export function readHeartbeatMonitorScratch(
       updated_at_ms: row.updated_at_ms,
     }),
   };
+}
+
+/** Resolves the current heartbeat monitor and its scratch with one narrow SQLite query. */
+export function readHeartbeatMonitorScratch(
+  storePath: string,
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): { jobId: string; state: CronJobScratchState } | undefined {
+  const { db } = openOpenClawStateDatabase(options);
+  return readHeartbeatMonitorScratchFromDatabase(db, storePath, agentId);
+}
+
+/** Reads heartbeat scratch from existing shared state without creating or migrating it. */
+export function readHeartbeatMonitorScratchReadOnly(
+  storePath: string,
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): { jobId: string; state: CronJobScratchState } | undefined {
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => readHeartbeatMonitorScratchFromDatabase(db, storePath, agentId),
+    options,
+  );
 }
 
 /** Writes, clears, or compare-and-swaps one scratch row. */
@@ -208,8 +229,8 @@ export function writeCronJobScratch(params: {
 
 /**
  * Deletes scratch when its owning job is removed, or — with expectedRevision —
- * atomically reverts a migration write back to the no-row state. Orphans remain
- * harmless on partial failure. Returns false when the guarded revision moved.
+ * atomically reverts a migration write back to the no-row state. Returns false
+ * when the guarded revision moved.
  */
 export function deleteCronJobScratch(
   storePath: string,

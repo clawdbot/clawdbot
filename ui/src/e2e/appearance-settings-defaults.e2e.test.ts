@@ -475,7 +475,7 @@ suite.define(() => {
   });
 
   it("keeps every read-only preference surface browser-local across reload", async () => {
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
@@ -489,7 +489,7 @@ suite.define(() => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await waitForControlUiSettingsTakeover(page);
       await gateway.waitForRequest("config.get");
@@ -533,14 +533,17 @@ suite.define(() => {
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      await page.goto(`${server.baseUrl}chat`);
-      const viewMenuTrigger = page.locator(".chat-view-menu-trigger");
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const viewMenuTrigger = page.locator(".chat-header-session-menu__trigger");
       await viewMenuTrigger.click();
-      const viewMenu = page.locator("wa-dropdown.chat-view-menu");
+      const viewMenu = page.locator("wa-dropdown.chat-header-session-menu");
       await expect
-        .poll(() => viewMenu.locator(".chat-view-menu__provenance").textContent())
+        .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
+      const viewItem = viewMenu.getByRole("menuitem", { name: "View", exact: true });
+      await viewItem.hover();
       const reasoning = viewMenu.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      await expect.poll(() => reasoning.isVisible()).toBe(true);
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
@@ -565,8 +568,9 @@ suite.define(() => {
       await page.reload();
       await viewMenuTrigger.click();
       await expect
-        .poll(() => viewMenu.locator(".chat-view-menu__provenance").textContent())
+        .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
+      await viewItem.hover();
       await expect
         .poll(() =>
           viewMenu

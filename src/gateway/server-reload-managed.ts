@@ -1,6 +1,8 @@
+import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { getActiveSecretsRuntimeSnapshotRevision } from "../secrets/runtime-state.js";
+import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import { resetSkillSnapshotConfigFingerprintCache } from "../skills/runtime/snapshot-config-fingerprint.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import {
   startGatewayConfigReloader,
@@ -53,11 +55,17 @@ export function startManagedGatewayConfigReloader(
     ownership?: GatewayConfigReloadTransactionOwnership,
   ): OpenClawConfig => {
     const canonicalConfig = restoreCanonicalSecretRefs(runtimeConfig, sourceConfig);
+    copyConfigResolutionFacts(sourceConfig, canonicalConfig);
     const candidateConfig = ownership?.reapplyRuntimeOverlays(canonicalConfig) ?? canonicalConfig;
-    return params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
+    const prepared = params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
+    copyConfigResolutionFacts(candidateConfig, prepared);
+    return prepared;
   };
-  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig =>
-    params.applyRuntimeConfigOverrides?.(config) ?? config;
+  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig => {
+    const applied = params.applyRuntimeConfigOverrides?.(config) ?? config;
+    copyConfigResolutionFacts(config, applied);
+    return applied;
+  };
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 
@@ -70,26 +78,26 @@ export function startManagedGatewayConfigReloader(
     if (!transactionOwnership.isCurrent()) {
       throw new GatewayConfigReloadSupersededError();
     }
-    const expectedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const expectedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     try {
       const snapshot = await params.activateRuntimeSecrets(config, {
         ...activationParams,
         activate: false,
         canPublishFailureAsDegraded: () =>
           transactionOwnership.isCurrent() &&
-          getActiveSecretsRuntimeSnapshotRevision() === expectedRevision,
+          getActiveSecretsRuntimeSnapshotRevisionState() === expectedRevision,
       });
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
-      return getActiveSecretsRuntimeSnapshotRevision() === expectedRevision
+      return getActiveSecretsRuntimeSnapshotRevisionState() === expectedRevision
         ? { snapshot, expectedRevision }
         : null;
     } catch (error) {
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
-      if (getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision) {
+      if (getActiveSecretsRuntimeSnapshotRevisionState() !== expectedRevision) {
         return null;
       }
       throw error;
@@ -147,6 +155,11 @@ export function startManagedGatewayConfigReloader(
     ...(params.requestRecoveryRestart
       ? { requestRecoveryRestart: params.requestRecoveryRestart }
       : {}),
+    assertRestartReady: () =>
+      import("../state/openclaw-database-preflight.js").then(
+        ({ assertOpenClawDatabasesReadyForRestart }) =>
+          assertOpenClawDatabasesReadyForRestart({ env: process.env }),
+      ),
     restartRecoveryAvailable,
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
@@ -437,7 +450,12 @@ export function startManagedGatewayConfigReloader(
         throw error;
       }
     },
-    onConfigApplied: (_plan, nextConfig) => params.commitTerminalConfig(nextConfig),
+    onConfigApplied: (_plan, nextConfig) => {
+      // Applied runtime identity owns config-derived process memos; accepted
+      // source-only changes must not evict caches for the still-active config.
+      resetSkillSnapshotConfigFingerprintCache();
+      params.commitTerminalConfig(nextConfig);
+    },
     onConfigRevisionApplied: publishAppliedConfigHash,
     onEffectiveConfigUnchanged,
     onNoopConfigCommit,

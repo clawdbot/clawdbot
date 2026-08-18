@@ -8,34 +8,38 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
+import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import {
+  approveNodePairing,
+  requestNodePairing,
+  updatePairedNodeBins,
+} from "./device-pairing-node.js";
 import {
   loadDevicePairingStoreState,
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
 } from "./device-pairing-store.js";
 import {
-  approveBootstrapDevicePairing,
-  approveControlUiDeviceAuthMigrationPairing,
-  approveDevicePairing,
   ensureDeviceToken,
+  revokeDeviceToken,
+  rotateDeviceToken,
+  verifyDeviceToken,
+} from "./device-pairing-tokens.js";
+import {
   getPairedDevice,
+  hasPairedCardRenderer,
   hasEffectivePairedDeviceRole,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
-  onEffectiveOperatorDevicePaired,
   removePairedDevice,
   requestDevicePairing,
   rejectDevicePairing,
   resolveNodePairingGeneration,
-  revokeDeviceToken,
-  rotateDeviceToken,
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
-  verifyDeviceToken,
   withPairedDeviceRecords,
   type PairedDevice,
 } from "./device-pairing.js";
-import { approveNodePairing, requestNodePairing, updatePairedNodeBins } from "./node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "./push-apns.js";
 
 type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
@@ -199,107 +203,6 @@ async function makeDevicePairingDir(): Promise<string> {
 }
 
 describe("device pairing tokens", () => {
-  test("notifies effective-operator listeners for owner and bootstrap approvals", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const pairedDevices: Array<{ deviceId: string; publicKey: string; scopes: string[] }> = [];
-    const unsubscribe = onEffectiveOperatorDevicePaired((device) => {
-      pairedDevices.push(device);
-    });
-    try {
-      const nodeRequest = await requestDevicePairing(
-        {
-          deviceId: "listener-node",
-          publicKey: "listener-node-key",
-          role: "node",
-          scopes: [],
-        },
-        baseDir,
-      );
-      await approveDevicePairing(nodeRequest.request.requestId, { callerScopes: [] }, baseDir);
-
-      const ownerRequest = await requestDevicePairing(
-        {
-          deviceId: "listener-owner",
-          publicKey: "listener-owner-key",
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-        baseDir,
-      );
-      await approveDevicePairing(
-        ownerRequest.request.requestId,
-        { callerScopes: ["operator.read"] },
-        baseDir,
-      );
-
-      const bootstrapRequest = await requestDevicePairing(
-        {
-          deviceId: "listener-bootstrap",
-          publicKey: "listener-bootstrap-key",
-          role: "operator",
-          scopes: ["operator.read"],
-          silent: true,
-        },
-        baseDir,
-      );
-      await approveBootstrapDevicePairing(
-        bootstrapRequest.request.requestId,
-        FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        baseDir,
-      );
-
-      expect(pairedDevices).toEqual([
-        {
-          deviceId: "listener-owner",
-          publicKey: "listener-owner-key",
-          scopes: ["operator.read"],
-        },
-        {
-          deviceId: "listener-bootstrap",
-          publicKey: "listener-bootstrap-key",
-          scopes: ["operator.read"],
-        },
-      ]);
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  test("allows migration approval when existing operators cannot manage pairings", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const readOnlyRequest = await requestDevicePairing(
-      {
-        deviceId: "read-only-owner",
-        publicKey: "read-only-owner-key",
-        role: "operator",
-        scopes: ["operator.read"],
-      },
-      baseDir,
-    );
-    await approveDevicePairing(
-      readOnlyRequest.request.requestId,
-      { callerScopes: ["operator.read"] },
-      baseDir,
-    );
-    const migrationRequest = await requestDevicePairing(
-      {
-        deviceId: "migration-owner",
-        publicKey: "migration-owner-key",
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      baseDir,
-    );
-
-    await expect(
-      approveControlUiDeviceAuthMigrationPairing(
-        migrationRequest.request.requestId,
-        { callerScopes: ["operator.pairing"] },
-        baseDir,
-      ),
-    ).resolves.toMatchObject({ status: "approved" });
-  });
-
   beforeAll(async () => {
     suiteBaseDir = await suiteRootTracker.setup();
   });
@@ -2307,6 +2210,50 @@ describe("device pairing tokens", () => {
     await expect(loadApnsRegistration("device-1", baseDir)).resolves.toBeNull();
 
     await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
+  test.each([
+    { clientId: "openclaw-control-ui", platform: undefined, expected: true },
+    { clientId: "webchat-ui", platform: undefined, expected: true },
+    { clientId: "openclaw-ios", platform: undefined, expected: true },
+    { clientId: "openclaw-android", platform: undefined, expected: true },
+    { clientId: "openclaw-macos", platform: undefined, expected: true },
+    { clientId: "cli", platform: "web", expected: true },
+    { clientId: "cli", platform: "ios", expected: true },
+    { clientId: "cli", platform: "android", expected: true },
+    { clientId: "cli", platform: "macos", expected: true },
+    { clientId: "cli", platform: "darwin", expected: true },
+    { clientId: "cli", platform: "linux", expected: false },
+  ])(
+    "detects paired card renderer client=$clientId platform=$platform",
+    async ({ clientId, platform, expected }) => {
+      const baseDir = await suiteRootTracker.make("renderer-case");
+      await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
+      const request = await requestDevicePairing(
+        {
+          deviceId: "renderer-device",
+          publicKey: "renderer-public-key",
+          clientId,
+          platform,
+          role: "operator",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+
+      await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(expected);
+    },
+  );
+
+  test("invalidates the card renderer cache when removing a paired device", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedBrowserOperatorDevice(baseDir);
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(true);
+
+    await removePairedDevice("browser-device-1", baseDir);
+
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
   });
 
   test("clears APNs only when a node reapproval changes installation identity", async () => {

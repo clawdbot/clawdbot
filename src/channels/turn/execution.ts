@@ -9,10 +9,11 @@ import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
-  hasVisibleChannelTurnDispatch,
+  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
   type ChannelTurnDispatchResultLike,
   type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
+import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 import type {
   ChannelTurnAdmission,
   ChannelTurnHistoryFinalizeOptions,
@@ -94,6 +95,9 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     return;
   }
   const dispatchResult = params.dispatchResult as ChannelTurnDispatchResultLike;
+  if (dispatchResult?.deferredToActiveRun) {
+    return;
+  }
   // The canonical visible signal includes observed delivery paths with zero queued counts.
   if (hasVisibleChannelTurnDispatch(dispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
     return;
@@ -279,6 +283,7 @@ async function runPreparedChannelTurnCoreInTrace<
       },
     });
     await params.afterRecord?.();
+    await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
   } catch (err) {
     emit({
       ...params,
@@ -360,10 +365,8 @@ async function runPreparedChannelTurnCoreInTrace<
   };
 }
 
-async function runPreparedChannelTurn<
+export async function runPreparedChannelTurn<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runPreparedChannelTurnCore(params, { suppressObserveOnlyDispatch: true });
 }
-
-export const runPreparedInboundReply = runPreparedChannelTurn;

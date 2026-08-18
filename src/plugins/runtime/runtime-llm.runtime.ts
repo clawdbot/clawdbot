@@ -4,7 +4,7 @@ import {
   normalizeBuiltInProviderModelId,
   stripSelfProviderModelPrefix,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef } from "../../agents/model-ref-shared.js";
@@ -212,7 +212,7 @@ function buildMessages(params: {
 }
 
 function readFiniteNonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asFiniteNumberInRange(value, { min: 0 });
 }
 
 function readExplicitCostUsd(raw: unknown): number | undefined {
@@ -321,10 +321,6 @@ function finalizeCompletion(params: {
     );
   }
   return { ...params.result, usage };
-}
-
-function finiteOption(value: number | undefined): number | undefined {
-  return asFiniteNumber(value);
 }
 
 function normalizeAllowedModelRef(raw: string): string | null {
@@ -716,8 +712,8 @@ export function createRuntimeLlm(
         cfg,
         context,
         options: {
-          maxTokens: finiteOption(params.maxTokens),
-          temperature: finiteOption(params.temperature),
+          maxTokens: asFiniteNumber(params.maxTokens),
+          temperature: asFiniteNumber(params.temperature),
           ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
           signal: params.signal,
         },

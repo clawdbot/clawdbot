@@ -8,6 +8,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -63,6 +64,14 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 type AsyncMessageCallback<T extends AgentMessage> = (message: T) => void | Promise<void>;
+type UserMessagePersistedCallback = (
+  message: UserAgentMessage,
+  context: {
+    anchor?: TranscriptEntryAnchor;
+    entryId: string;
+    sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
+  },
+) => void | Promise<void>;
 type CompactionAppendValidator = (entryId: string, appendedText: string) => boolean;
 type AppendMessageOptions = Parameters<SessionManager["appendMessage"]>[1];
 
@@ -615,7 +624,7 @@ export function installSessionToolResultGuard(
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
-    onUserMessagePersisted?: AsyncMessageCallback<UserAgentMessage>;
+    onUserMessagePersisted?: UserMessagePersistedCallback;
     onUserMessagePersistenceSuppressed?: AsyncMessageCallback<UserAgentMessage>;
     onUserMessageBlocked?: (message: UserAgentMessage) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
@@ -632,6 +641,8 @@ export function installSessionToolResultGuard(
   getPendingIds: () => string[];
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
+  const originalAppendWithTranscriptAnchor =
+    sessionManager.appendMessageWithTranscriptAnchor.bind(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
   const pendingState = createPendingToolCallState();
   const persistMessage = (message: AgentMessage) => {
@@ -660,23 +671,25 @@ export function installSessionToolResultGuard(
     message: AgentMessage,
     options?: AppendMessageOptions,
   ): {
+    anchor?: TranscriptEntryAnchor;
     entryId: string;
     messageSeq?: number;
     sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
   } => {
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
-    const entryId = originalAppend(message as never, options);
+    const { entryId, anchor } = originalAppendWithTranscriptAnchor(message as never, options);
     if (sessionManager.getAppendParentId() === appendParentEntryId) {
-      return { entryId };
+      return { entryId, ...(anchor ? { anchor } : {}) };
     }
     void opts?.onMessagePersisted?.(message);
     const sessionTarget = sessionManager.getSessionTarget();
     if (!sessionTarget) {
-      return { entryId };
+      return { entryId, ...(anchor ? { anchor } : {}) };
     }
     return {
       entryId,
+      ...(anchor ? { anchor } : {}),
       sessionTarget,
       messageSeq: resolveAppendedMessageSeq({
         sessionManager,
@@ -887,6 +900,7 @@ export function installSessionToolResultGuard(
       return undefined;
     }
     const {
+      anchor,
       entryId: result,
       messageSeq,
       sessionTarget,
@@ -906,7 +920,11 @@ export function installSessionToolResultGuard(
       pendingState.trackToolCalls(toolCalls);
     }
     if (isUserAgentMessage(finalMessage)) {
-      void opts?.onUserMessagePersisted?.(finalMessage);
+      void opts?.onUserMessagePersisted?.(finalMessage, {
+        ...(anchor ? { anchor } : {}),
+        entryId: result,
+        ...(sessionTarget ? { sessionTarget } : {}),
+      });
     }
     if (
       finalRole === "assistant" &&

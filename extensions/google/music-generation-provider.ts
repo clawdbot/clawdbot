@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleGenerativeAiApiOrigin } from "./api.js";
+import { toStandardGoogleProviderBase64 } from "./base64.js";
 import {
   createGoogleMusicGenerationProviderMetadata,
   DEFAULT_GOOGLE_MUSIC_MODEL,
@@ -95,9 +96,13 @@ function extractTracks(params: { payload: GoogleGenerateMusicResponse; model: st
         normalizeOptionalString(inline?.mimeType) ||
         normalizeOptionalString(inline?.mime_type) ||
         "audio/mpeg";
+      const standardAudio = toStandardGoogleProviderBase64(data);
+      if (!standardAudio) {
+        throw new Error("Generated music asset contains malformed base64 audio data");
+      }
       tracks.push(
         generatedMusicAssetFromBase64({
-          base64: data,
+          base64: standardAudio,
           mimeType,
           fileName: resolveTrackFileName({
             index: tracks.length,

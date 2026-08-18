@@ -8,6 +8,26 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionEventHandler = (evt: unknown) => void;
 
+function completedCompactionEnd(willRetry = true, tokensBefore = 100, tokensAfter = 50) {
+  return {
+    type: "compaction_end",
+    reason: willRetry ? "overflow" : "threshold",
+    outcome: {
+      status: "completed",
+      tokensBefore,
+      tokensAfter,
+      willRetry,
+    },
+  } as const;
+}
+
+const skippedCompactionEnd = () =>
+  ({
+    type: "compaction_end",
+    reason: "threshold",
+    outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
+  }) as const;
+
 describe("fenced output and compaction retries", () => {
   it("waits for auto-compaction retry and clears buffered text", async () => {
     // A retrying compaction invalidates any assistant text buffered from the
@@ -42,10 +62,7 @@ describe("fenced output and compaction retries", () => {
     expect(subscription.assistantTexts.length).toBe(1);
 
     for (const listener of listeners) {
-      listener({
-        type: "compaction_end",
-        willRetry: true,
-      });
+      listener(completedCompactionEnd());
     }
 
     expect(subscription.isCompacting()).toBe(true);
@@ -100,7 +117,7 @@ describe("fenced output and compaction retries", () => {
     });
 
     for (const listener of listeners) {
-      listener({ type: "compaction_end", willRetry: true });
+      listener(completedCompactionEnd());
     }
     expect(subscription.getLastAssistantUsage()).toBeUndefined();
   });
@@ -133,7 +150,7 @@ describe("fenced output and compaction retries", () => {
     expect(resolved).toBe(false);
 
     for (const listener of listeners) {
-      listener({ type: "compaction_end", willRetry: false });
+      listener(skippedCompactionEnd());
     }
 
     await waitPromise;
@@ -141,9 +158,10 @@ describe("fenced output and compaction retries", () => {
     expect(subscription.isCompacting()).toBe(false);
   });
 
-  it("resets assistant usage to a zero snapshot after compaction without retry", () => {
-    // When compaction ends the active assistant message is synthetic, so usage
-    // should reset to a zero snapshot instead of carrying stale token totals.
+  it("resets assistant usage to a zero snapshot after a completed compaction without retry", () => {
+    // A completed compaction rewrites history, so the surviving assistant usage
+    // refers to the old context and must reset to a zero snapshot. Only a
+    // completed end does this; a failed/aborted end keeps live usage intact.
     const listeners: SessionEventHandler[] = [];
     const session = {
       messages: [
@@ -172,7 +190,7 @@ describe("fenced output and compaction retries", () => {
     });
 
     for (const listener of listeners) {
-      listener({ type: "compaction_end", willRetry: false });
+      listener(completedCompactionEnd(false));
     }
 
     const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;
@@ -265,6 +283,27 @@ function toolResultPayloadAt(
 }
 
 describe("subscribeEmbeddedAgentSession", () => {
+  it("forwards max-attempt failure text to the observable compaction event", () => {
+    const onCompactionEvent = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run-compaction-failure",
+      onAgentEvent: onCompactionEvent,
+    });
+    const failure =
+      "Context overflow recovery failed after 3 compact-and-retry attempts. Try reducing context or switching to a larger-context model.";
+
+    emit({
+      type: "compaction_end",
+      reason: "overflow",
+      outcome: { status: "failed", reason: failure },
+    });
+
+    expect(onCompactionEvent).toHaveBeenCalledWith({
+      stream: "compaction",
+      data: expect.objectContaining({ phase: "end", completed: false, reason: failure }),
+    });
+  });
+
   it("waits for multiple compaction retries before resolving", async () => {
     // Each retrying compaction requires a matching agent_end before waiters are
     // released, preventing early continuation during repeated overflow repairs.
@@ -272,8 +311,8 @@ describe("subscribeEmbeddedAgentSession", () => {
       runId: "run-3",
     });
 
-    emit({ type: "compaction_end", willRetry: true });
-    emit({ type: "compaction_end", willRetry: true });
+    emit(completedCompactionEnd());
+    emit(completedCompactionEnd());
 
     let resolved = false;
     const waitPromise = subscription.waitForCompactionRetry().then(() => {
@@ -303,20 +342,12 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getCompactionCount()).toBe(0);
 
     // willRetry with result — counter IS incremented (overflow compaction succeeded)
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "s", tokensAfter: 12_345 },
-    });
+    emit(completedCompactionEnd(true, 20_000, 12_345));
     expect(subscription.getCompactionCount()).toBe(1);
     expect(subscription.getLastCompactionTokensAfter()).toBe(12_345);
 
     // willRetry=false with result — counter incremented again
-    emit({
-      type: "compaction_end",
-      willRetry: false,
-      result: { summary: "s2", tokensAfter: 6_789 },
-    });
+    emit(completedCompactionEnd(false, 12_345, 6_789));
     expect(subscription.getCompactionCount()).toBe(2);
     expect(subscription.getLastCompactionTokensAfter()).toBe(6_789);
   });
@@ -334,7 +365,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getCurrentAttemptAssistant()).toEqual(assistant);
     expect(subscription.assistantTexts).toEqual(["Reply before compaction"]);
 
-    emit({ type: "compaction_end", willRetry: true });
+    emit(completedCompactionEnd());
     expect(subscription.getCurrentAttemptAssistant()).toBeUndefined();
     expect(subscription.assistantTexts).toEqual([]);
   });
@@ -345,10 +376,14 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
 
     // No result (e.g. aborted or cancelled) — counter stays at 0
-    emit({ type: "compaction_end", willRetry: false, result: undefined });
+    emit(skippedCompactionEnd());
     expect(subscription.getCompactionCount()).toBe(0);
 
-    emit({ type: "compaction_end", willRetry: false, aborted: true });
+    emit({
+      type: "compaction_end",
+      reason: "threshold",
+      outcome: { status: "aborted" },
+    });
     expect(subscription.getCompactionCount()).toBe(0);
   });
 
@@ -372,8 +407,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
 
     emit({ type: "compaction_start" });
-    emit({ type: "compaction_end", willRetry: true });
-    emit({ type: "compaction_end", willRetry: false });
+    emit(completedCompactionEnd());
+    emit(skippedCompactionEnd());
 
     stop();
 
@@ -439,6 +474,32 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["exec", "server.exec"])(
+    "hides command metadata for %s unless full verbose mode is enabled",
+    async (toolName) => {
+      const onToolResult = vi.fn();
+      const toolHarness = createSubscribedSessionHarness({
+        runId: "run-exec-on",
+        verboseLevel: "on",
+        onToolResult,
+      });
+
+      toolHarness.emit({
+        type: "tool_execution_start",
+        toolName,
+        toolCallId: "tool-exec-on",
+        args: { command: "echo private-sentinel" },
+      });
+
+      await Promise.resolve();
+
+      const payload = toolResultPayloadAt(onToolResult, 0);
+      expect(payload?.text).toContain(toolName === "exec" ? "Exec" : "Server.exec");
+      expect(payload?.text).not.toContain("private-sentinel");
+    },
+  );
+
   it("includes browser action metadata in tool summaries", async () => {
     const onToolResult = vi.fn();
 

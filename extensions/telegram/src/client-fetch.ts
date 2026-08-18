@@ -3,7 +3,11 @@ import type { ApiClientOptions } from "grammy";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramTransport } from "./fetch.js";
-import { isTelegramMisdirectedRequestError, tagTelegramNetworkError } from "./network-errors.js";
+import {
+  isTelegramMisdirectedRequestError,
+  tagTelegramNetworkError,
+  TelegramRequestNotStartedError,
+} from "./network-errors.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 
 type TelegramFetchInput = Parameters<NonNullable<ApiClientOptions["fetch"]>>[0];
@@ -142,7 +146,7 @@ export function createTelegramClientFetch(params: {
       !requestSignal?.aborted &&
       params.transport?.forceFallback?.(reason) === true;
 
-    const runFetch = async () => {
+    const runFetch = async (allowMisdirectedFallback = false): Promise<Response> => {
       const controller = new AbortController();
       const abortWith = (signal: Pick<TelegramAbortSignalLike, "reason">) =>
         controller.abort(signal.reason);
@@ -195,6 +199,18 @@ export function createTelegramClientFetch(params: {
           ...init,
           signal: controller.signal,
         });
+        if (response.status === 421) {
+          const retry =
+            allowMisdirectedFallback && canForceTransportFallback("misdirected-request");
+          // HTTP 421 permits retrying a non-idempotent request;
+          // arbitrary thrown 421 shapes do not own that fact.
+          await response.body?.cancel().catch(() => undefined);
+          if (retry) {
+            await releaseRequest();
+            return runFetch();
+          }
+          throw new TelegramRequestNotStartedError();
+        }
         // grammY consumes JSON after fetch resolves; keep its deadline and
         // cancellation linked until the response body settles.
         return responseWithRelease(response, releaseRequest);
@@ -208,12 +224,7 @@ export function createTelegramClientFetch(params: {
     };
 
     try {
-      const response = await runFetch();
-      if (response.status === 421 && canForceTransportFallback("misdirected-request")) {
-        await response.body?.cancel().catch(() => undefined);
-        return await runFetch();
-      }
-      return response;
+      return await runFetch(true);
     } catch (err) {
       if (
         requestTimeoutMs &&

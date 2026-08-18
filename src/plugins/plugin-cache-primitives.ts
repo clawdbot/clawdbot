@@ -7,29 +7,15 @@ type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
 
 /** Small process-local LRU cache used for stable plugin metadata and loader artifacts. */
 export class PluginLruCache<T> {
-  readonly #defaultMaxEntries: number;
-  #maxEntries: number;
+  readonly #maxEntries: number;
   readonly #entries = new Map<string, T>();
 
-  constructor(defaultMaxEntries: number) {
-    this.#defaultMaxEntries = normalizeMaxEntries(defaultMaxEntries, 1);
-    this.#maxEntries = this.#defaultMaxEntries;
-  }
-
-  get maxEntries(): number {
-    return this.#maxEntries;
+  constructor(maxEntries: number) {
+    this.#maxEntries = normalizeMaxEntries(maxEntries, 1);
   }
 
   get size(): number {
     return this.#entries.size;
-  }
-
-  setMaxEntriesForTest(value?: number): void {
-    this.#maxEntries =
-      typeof value === "number"
-        ? normalizeMaxEntries(value, this.#defaultMaxEntries)
-        : this.#defaultMaxEntries;
-    pruneMapToMaxSize(this.#entries, this.#maxEntries);
   }
 
   clear(): void {

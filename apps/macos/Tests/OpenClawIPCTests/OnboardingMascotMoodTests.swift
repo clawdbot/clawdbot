@@ -43,13 +43,7 @@ struct OnboardingMascotMoodTests {
             "a live connection outranks stale failures")
     }
 
-    @Test func `permissions page warms up when everything is granted`() {
-        #expect(self.mood(.init(page: .permissions)) == .curious)
-        #expect(self.mood(.init(page: .permissions, allPermissionsGranted: true)) == .happy)
-    }
-
-    @Test func `chat and ready pages`() {
-        #expect(self.mood(.init(page: .chat)) == .attentive)
+    @Test func `ready page celebrates`() {
         #expect(self.mood(.init(page: .ready)) == .celebrating)
     }
 
@@ -63,7 +57,5 @@ struct OnboardingMascotMoodTests {
         #expect(self.accessory(.connection) == .none)
         #expect(self.accessory(.cli) == .none)
         #expect(self.accessory(.ai) == .none)
-        #expect(self.accessory(.permissions) == .none)
-        #expect(self.accessory(.chat) == .none)
     }
 }

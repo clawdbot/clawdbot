@@ -4,7 +4,7 @@
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
+import { resolvePluginSetupProviderCore } from "../plugins/setup-registry.js";
 import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -193,7 +193,7 @@ export function resolveEnvApiKey(
     return null;
   }
 
-  const setupProvider = resolvePluginSetupProvider({
+  const setupProvider = resolvePluginSetupProviderCore({
     provider: normalized,
     config: options.config,
     workspaceDir: options.workspaceDir,

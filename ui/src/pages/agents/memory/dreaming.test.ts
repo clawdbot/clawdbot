@@ -1,9 +1,11 @@
 // Control UI tests cover dreaming behavior.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
-import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,
@@ -44,7 +46,7 @@ beforeAll(() => {
         dedupeRemovedManyAndKept: "Removed {removed} duplicate dream entries and kept {kept}.",
         dedupeRemovedOne: "Removed {removed} duplicate dream entry.",
         dedupeRemovedMany: "Removed {removed} duplicate dream entries.",
-        repairArchivedThreadCorpus: "archived thread corpus",
+        repairArchivedThreadCorpus: "archived session corpus",
         repairArchivedIngestionState: "archived ingestion state",
         repairArchivedDreamDiary: "archived dream diary",
         repairNoChanges: "Dream cache repair finished with no changes.",
@@ -98,19 +100,6 @@ function createConfig(state: DreamingState): DreamingConfigCapability {
     lookupSchemaPath: vi.fn(async () => null),
     patch: vi.fn(async () => true),
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred promise callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<string, unknown> {
@@ -379,12 +368,7 @@ describe("dreaming controller", () => {
       const firstAgentA = createDeferred<unknown>();
       const agentB = createDeferred<unknown>();
       const secondAgentA = createDeferred<unknown>();
-      state.hello = {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-        features: { methods: [method] },
-      };
+      state.hello = gatewayHelloForMethods([method], []);
       request
         .mockImplementationOnce(async () => firstAgentA.promise)
         .mockImplementationOnce(async () => agentB.promise)
@@ -417,12 +401,7 @@ describe("dreaming controller", () => {
     async ({ key, method, load, payload }) => {
       const { state, request } = createState();
       const deferred = createDeferred<unknown>();
-      state.hello = {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-        features: { methods: [method] },
-      };
+      state.hello = gatewayHelloForMethods([method], []);
       request.mockImplementationOnce(async () => deferred.promise);
 
       const stale = load(state);
@@ -441,12 +420,7 @@ describe("dreaming controller", () => {
 
   it("loads authoritative wiki import insights", async () => {
     const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.importInsights"] },
-    };
+    state.hello = gatewayHelloForMethods(["wiki.importInsights"], []);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -513,12 +487,7 @@ describe("dreaming controller", () => {
   it("loads wiki import insights for the selected agent", async () => {
     const { state, request } = createState();
     state.selectedAgentId = "support";
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.importInsights"] },
-    };
+    state.hello = gatewayHelloForMethods(["wiki.importInsights"], []);
     request.mockResolvedValue({ sourceType: "chatgpt", totalItems: 1, clusters: [] });
 
     await loadWikiImportInsights(state);
@@ -530,12 +499,7 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     const agentA = createDeferred<unknown>();
     const agentB = createDeferred<unknown>();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.importInsights"] },
-    };
+    state.hello = gatewayHelloForMethods(["wiki.importInsights"], []);
     request.mockImplementation(async (_method: string, payload?: unknown) => {
       const agentId =
         typeof payload === "object" && payload !== null && "agentId" in payload
@@ -617,12 +581,7 @@ describe("dreaming controller", () => {
 
   it("skips wiki import insights when the gateway does not advertise the method", async () => {
     const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["doctor.memory.status"] },
-    };
+    state.hello = gatewayHelloForMethods(["doctor.memory.status"], []);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -653,12 +612,7 @@ describe("dreaming controller", () => {
 
   it("loads and normalizes the wiki wiki overview", async () => {
     const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.overview"] },
-    };
+    state.hello = gatewayHelloForMethods(["wiki.overview"], []);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -731,12 +685,7 @@ describe("dreaming controller", () => {
   it("loads the wiki wiki overview for the selected agent", async () => {
     const { state, request } = createState();
     state.selectedAgentId = "marketing";
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.overview"] },
-    };
+    state.hello = gatewayHelloForMethods(["wiki.overview"], []);
     request.mockResolvedValue({ totalItems: 1, clusters: [] });
 
     await loadWikiOverview(state);
@@ -748,12 +697,7 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     const agentA = createDeferred<unknown>();
     const agentB = createDeferred<unknown>();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.overview"] },
-    };
+    state.hello = gatewayHelloForMethods(["wiki.overview"], []);
     request.mockImplementation(async (_method: string, payload?: unknown) => {
       const agentId =
         typeof payload === "object" && payload !== null && "agentId" in payload
@@ -855,12 +799,7 @@ describe("dreaming controller", () => {
 
   it("skips wiki wiki overview when the gateway does not advertise the method", async () => {
     const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["doctor.memory.status"] },
-    };
+    state.hello = gatewayHelloForMethods(["doctor.memory.status"], []);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -900,6 +839,7 @@ describe("dreaming controller", () => {
 
   it("patches config to update global dreaming enablement", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["config.patch"]);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -968,6 +908,7 @@ describe("dreaming controller", () => {
 
   it("falls back to memory-core when selected memory slot is blank", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["config.patch"]);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -1246,12 +1187,13 @@ describe("dreaming controller", () => {
 
     await loadDreamDiary(state);
 
-    expect(state.dreamDiaryError).toBe("Error: dream diary read failed");
+    expect(state.dreamDiaryError).toBe("dream diary read failed");
     expect(state.dreamDiaryLoading).toBe(false);
   });
 
   it("backfills and reloads dream diary state", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["doctor.memory.backfillDreamDiary"], ["operator.write"]);
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.backfillDreamDiary") {
         return { action: "backfill", written: 79, replaced: 79 };
@@ -1320,12 +1262,7 @@ describe("dreaming controller", () => {
 
   it("does not run a write action with read-only operator access", async () => {
     const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["doctor.memory.backfillDreamDiary"] },
-    };
+    state.hello = gatewayHelloForMethods(["doctor.memory.backfillDreamDiary"], ["operator.read"]);
 
     await expect(backfillDreamDiary(state)).resolves.toBe(false);
     expect(request).not.toHaveBeenCalled();
@@ -1333,6 +1270,7 @@ describe("dreaming controller", () => {
 
   it("runs dream diary actions and reloads state for the selected agent", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["doctor.memory.backfillDreamDiary"], ["operator.write"]);
     state.selectedAgentId = "fishing-bot";
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.backfillDreamDiary") {
@@ -1363,6 +1301,7 @@ describe("dreaming controller", () => {
 
   it("resets and reloads dream diary state", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["doctor.memory.resetDreamDiary"], ["operator.write"]);
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.resetDreamDiary") {
         return { action: "reset", removedEntries: 79 };
@@ -1388,6 +1327,10 @@ describe("dreaming controller", () => {
 
   it("clears grounded staged entries and reloads only dreaming status", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(
+      ["doctor.memory.resetGroundedShortTerm"],
+      ["operator.write"],
+    );
     state.dreamDiaryContent = "keep existing diary";
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.resetGroundedShortTerm") {
@@ -1411,6 +1354,10 @@ describe("dreaming controller", () => {
 
   it("repairs dreaming artifacts and reloads only dreaming status", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(
+      ["doctor.memory.repairDreamingArtifacts"],
+      ["operator.write"],
+    );
     state.dreamDiaryContent = "keep existing diary";
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.repairDreamingArtifacts") {
@@ -1437,7 +1384,7 @@ describe("dreaming controller", () => {
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
-      text: "Dream cache repair complete: archived thread corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+      text: "Dream cache repair complete: archived session corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
     });
     expect(state.dreamDiaryActionArchivePath).toBe(
       "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
@@ -1447,6 +1394,7 @@ describe("dreaming controller", () => {
 
   it("dedupes dream diary entries and reloads diary plus status", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["doctor.memory.dedupeDreamDiary"], ["operator.write"]);
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.dedupeDreamDiary") {
         return {

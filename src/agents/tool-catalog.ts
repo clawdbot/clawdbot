@@ -19,9 +19,8 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
-  SPAWN_TASK_TOOL_DISPLAY_SUMMARY,
+  SUGGEST_TASK_TOOL_DISPLAY_SUMMARY,
   DISMISS_TASK_TOOL_DISPLAY_SUMMARY,
-  UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
@@ -263,9 +262,9 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "spawn_task",
-    label: "spawn_task",
-    description: SPAWN_TASK_TOOL_DISPLAY_SUMMARY,
+    id: "suggest_task",
+    label: "suggest_task",
+    description: SUGGEST_TASK_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -311,6 +310,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "portal",
+    label: "portal",
+    description: "Expose local web apps through the gateway",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "canvas",
     label: "canvas",
     description: "Control node Canvas surfaces when the Canvas plugin is enabled",
@@ -336,7 +343,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "heartbeat_respond",
     label: "heartbeat_respond",
-    description: "Record heartbeat outcomes",
+    description: "Accept heartbeat outcomes for post-turn handling",
     sectionId: "automation",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -414,9 +421,9 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "update_plan",
-    label: "update_plan",
-    description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
+    id: "progress_card",
+    label: "progress_card",
+    description: "Maintain the session progress card",
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -439,8 +446,8 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "image",
-    label: "image",
+    id: "view_image",
+    label: "view_image",
     description: "Image understanding",
     sectionId: "media",
     profiles: ["coding"],

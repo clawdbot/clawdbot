@@ -177,6 +177,7 @@ struct RootTabsPresentationTests {
             .instances,
             .files,
             .dreaming,
+            .desktop,
             .terminal,
             .docs,
         ])
@@ -193,6 +194,7 @@ struct RootTabsPresentationTests {
             "dreaming",
             "usage",
             "cron",
+            "desktop",
             "terminal",
             "docs",
             "settings",
@@ -508,6 +510,21 @@ struct RootTabsPresentationTests {
         #expect(!RootTabs.preferredSidebarVisibility(layoutMode: mode))
     }
 
+    @Test func `keyboard contracted content uses portrait window for sidebar layout`() {
+        let size = RootTabs.sidebarLayoutContainerSize(
+            contentSize: CGSize(width: 1032, height: 973),
+            windowSize: CGSize(width: 1032, height: 1376))
+
+        #expect(size == CGSize(width: 1032, height: 1376))
+        #expect(RootTabs.sidebarLayoutMode(containerSize: size) == .drawer)
+    }
+
+    @Test func `sidebar layout container falls back to content size without a window`() {
+        let contentSize = CGSize(width: 900, height: 600)
+
+        #expect(RootTabs.sidebarLayoutContainerSize(contentSize: contentSize, windowSize: nil) == contentSize)
+    }
+
     @Test func `i pad wide landscape uses visible split sidebar`() {
         let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1366, height: 1024))
 
@@ -520,25 +537,6 @@ struct RootTabsPresentationTests {
 
         #expect(width >= RootTabs.sidebarSplitIdealWidth)
         #expect(width <= RootTabs.sidebarSplitMaximumWidth)
-    }
-
-    @Test func `i pad collapsed split sidebar uses header reveal without reserved rail`() {
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .split))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .split))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .drawer))
-        #expect(
-            !RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .drawer))
     }
 
     @Test func `initial sidebar visibility parses launch argument`() {
@@ -952,19 +950,6 @@ struct RootTabsPresentationTests {
 
         #expect(mode == .drawer)
         #expect(!RootTabs.preferredSidebarVisibility(layoutMode: mode))
-    }
-
-    @Test func `drawer selection collapses sidebar but split selection does not`() {
-        #expect(RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .drawer))
-        #expect(!RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .split))
-    }
-
-    @Test func `hidden sidebar shows reveal control`() {
-        #expect(RootTabs.shouldShowSidebarRevealControl(isSidebarVisible: false))
-    }
-
-    @Test func `sidebar reveal controls hide when sidebar is visible`() {
-        #expect(!RootTabs.shouldShowSidebarRevealControl(isSidebarVisible: true))
     }
 
     @Test func `i pad split prefers integrated visible sidebar`() {

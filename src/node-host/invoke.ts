@@ -1,12 +1,10 @@
 /** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
 import fs from "node:fs";
 import path from "node:path";
-import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { mcpContentBlockToAgentContent } from "../agents/mcp-content.js";
 import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
@@ -15,6 +13,7 @@ import {
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
   resolveAllowAlwaysPatternCoverage,
+  resolveExecApprovalsFromFile,
   updateExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -36,6 +35,7 @@ import {
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
@@ -43,8 +43,10 @@ import {
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
+import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
@@ -66,6 +68,10 @@ import type {
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
+import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
+import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
+import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
@@ -81,6 +87,12 @@ const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
 const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
+  workerBundleInstaller?: NodeWorkerBundleInstallerControl;
+  workerSupervisor?: NodeWorkerSupervisorControl;
+  workerWorkspace?: NodeWorkerWorkspaceRuntime;
+};
 
 const execHostEnforced =
   normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
@@ -572,7 +584,7 @@ export async function handleInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
-  runtime: NodeHostInvokeRuntime = {},
+  runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const invocationClient = createNodeHostInvocationClient(client, runtime.signal);
   try {
@@ -600,9 +612,33 @@ async function dispatchInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
-  runtime: NodeHostInvokeRuntime = {},
+  runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
+  const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
+    command,
+    paramsJSON: frame.paramsJSON,
+    bundleInstaller: runtime.workerBundleInstaller,
+    supervisor: runtime.workerSupervisor,
+    workspace: runtime.workerWorkspace,
+    gatewayUrl: runtime.gatewayUrl,
+    gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+    gatewayCloudflareAccess: runtime.gatewayCloudflareAccess,
+    signal: runtime.signal,
+  });
+  if (workerSupervisorResult.handled) {
+    if (workerSupervisorResult.ok) {
+      await sendJsonPayloadResult(client, frame, workerSupervisorResult.payload);
+    } else {
+      await sendErrorResult(
+        client,
+        frame,
+        workerSupervisorResult.code,
+        workerSupervisorResult.message,
+      );
+    }
+    return;
+  }
   if (command === NODE_DEVICE_APPS_COMMAND) {
     const result = await invokeDeviceApps({
       paramsJSON: frame.paramsJSON,
@@ -617,14 +653,55 @@ async function dispatchInvoke(
     }
     return;
   }
+  if (command === NODE_DESKTOP_STREAM_COMMAND) {
+    try {
+      await invokeNodeDesktopStream({
+        paramsJSON: frame.paramsJSON,
+        gatewayUrl: runtime.gatewayUrl,
+        gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+        config: runtime.desktopHostConfig,
+        signal: runtime.signal,
+        emitStatus: runtime.emitProgress,
+      });
+      await sendJsonPayloadResult(client, frame, { status: "closed" });
+    } catch (error) {
+      await sendErrorResult(
+        client,
+        frame,
+        "UNAVAILABLE",
+        error instanceof Error ? error.message : "desktop stream unavailable",
+      );
+    }
+    return;
+  }
   if (command === "system.execApprovals.get") {
+    let includeResolvedDefaults = false;
+    try {
+      if (frame.paramsJSON != null) {
+        const params = decodeParams<unknown>(frame.paramsJSON);
+        if (
+          !isRecord(params) ||
+          (params.includeResolvedDefaults !== undefined &&
+            typeof params.includeResolvedDefaults !== "boolean")
+        ) {
+          throw new Error("INVALID_REQUEST: includeResolvedDefaults must be boolean");
+        }
+        includeResolvedDefaults = params.includeResolvedDefaults === true;
+      }
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+      return;
+    }
     try {
       const snapshot = await ensureExecApprovalsSnapshot();
-      const payload: ExecApprovalsSnapshot = {
+      const payload = {
         path: snapshot.path,
         exists: snapshot.exists,
         hash: snapshot.hash,
         file: redactExecApprovals(snapshot.file),
+        ...(includeResolvedDefaults
+          ? { resolvedDefaults: resolveExecApprovalsFromFile({ file: snapshot.file }).defaults }
+          : {}),
       };
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
@@ -897,35 +974,23 @@ function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
   };
 }
 
-type McpInvokeContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
-
-function normalizeMcpContentBlock(block: unknown): McpInvokeContentBlock | null {
-  if (!isRecord(block)) {
-    return null;
-  }
-  return mcpContentBlockToAgentContent(block as ContentBlock);
-}
-
-function serializedJsonBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value));
-}
+type McpInvokeContentBlock = Record<string, unknown>;
 
 /** Keeps MCP text/image content while bounding text sent through node.invoke. */
 function boundMcpToolResultPayload(result: {
   content: readonly unknown[];
   structuredContent?: Record<string, unknown>;
-}): { content: McpInvokeContentBlock[]; structuredContent?: Record<string, unknown> } {
-  const normalizedBlocks = result.content
-    .map(normalizeMcpContentBlock)
-    .filter((block): block is McpInvokeContentBlock => block !== null);
+  isError?: boolean;
+}): {
+  content: McpInvokeContentBlock[];
+  structuredContent?: Record<string, unknown>;
+  isError?: true;
+} {
+  const normalizedBlocks = result.content.filter(isRecord);
   const totalTextBytes = normalizedBlocks.reduce<number>(
     (total, block) =>
       total +
-      (isRecord(block) && block.type === "text" && typeof block.text === "string"
-        ? Buffer.byteLength(block.text)
-        : 0),
+      (block.type === "text" && typeof block.text === "string" ? Buffer.byteLength(block.text) : 0),
     0,
   );
   let remainingTextBytes =
@@ -935,15 +1000,8 @@ function boundMcpToolResultPayload(result: {
   let markedTruncated = false;
   const textBoundedContent: McpInvokeContentBlock[] = [];
   for (const block of normalizedBlocks) {
-    if (
-      block.type === "image" &&
-      typeof block.data === "string" &&
-      typeof block.mimeType === "string"
-    ) {
-      textBoundedContent.push(block);
-      continue;
-    }
     if (block.type !== "text" || typeof block.text !== "string") {
+      textBoundedContent.push(block);
       continue;
     }
     if (totalTextBytes <= MCP_TEXT_CONTENT_MAX_BYTES) {
@@ -970,12 +1028,13 @@ function boundMcpToolResultPayload(result: {
     }
   }
   const payloadMarker = { type: "text" as const, text: MCP_PAYLOAD_TRUNCATION_MARKER };
-  const reservedMarkerBytes = serializedJsonBytes(payloadMarker) + 1;
-  let usedBytes = Buffer.byteLength('{"content":[]}');
+  const reservedMarkerBytes = jsonUtf8Bytes(payloadMarker) + 1;
+  const isError = result.isError === true;
+  let usedBytes = jsonUtf8Bytes({ content: [], ...(isError ? { isError } : {}) });
   let payloadTruncated = false;
   const content: McpInvokeContentBlock[] = [];
   for (const block of textBoundedContent) {
-    const blockBytes = serializedJsonBytes(block) + (content.length > 0 ? 1 : 0);
+    const blockBytes = jsonUtf8Bytes(block) + (content.length > 0 ? 1 : 0);
     if (usedBytes + blockBytes + reservedMarkerBytes > MCP_INVOKE_PAYLOAD_MAX_BYTES) {
       payloadTruncated = true;
       continue;
@@ -986,7 +1045,7 @@ function boundMcpToolResultPayload(result: {
   let structuredContent: Record<string, unknown> | undefined;
   if (result.structuredContent) {
     const structuredBytes =
-      Buffer.byteLength(',"structuredContent":') + serializedJsonBytes(result.structuredContent);
+      Buffer.byteLength(',"structuredContent":') + jsonUtf8Bytes(result.structuredContent);
     if (usedBytes + structuredBytes + reservedMarkerBytes <= MCP_INVOKE_PAYLOAD_MAX_BYTES) {
       structuredContent = result.structuredContent;
     } else {
@@ -996,19 +1055,11 @@ function boundMcpToolResultPayload(result: {
   if (payloadTruncated) {
     content.push(payloadMarker);
   }
-  return { content, ...(structuredContent ? { structuredContent } : {}) };
-}
-
-function mcpToolErrorMessage(result: { content: readonly unknown[] }): string {
-  const text = result.content
-    .filter(
-      (block): block is { type: "text"; text: string } =>
-        isRecord(block) && block.type === "text" && typeof block.text === "string",
-    )
-    .map((block) => block.text.trim())
-    .filter(Boolean)
-    .join("\n");
-  return truncateUtf16Safe(text || "MCP tool returned an error", 1_024);
+  return {
+    content,
+    ...(structuredContent ? { structuredContent } : {}),
+    ...(isError ? { isError } : {}),
+  };
 }
 
 async function handleMcpToolsCall(
@@ -1034,10 +1085,6 @@ async function handleMcpToolsCall(
       timeoutMs: frame.timeoutMs ?? undefined,
       ...(signal ? { signal } : {}),
     });
-    if (result.isError) {
-      await sendErrorResult(client, frame, "MCP_TOOL_ERROR", mcpToolErrorMessage(result));
-      return;
-    }
     await sendMcpPayloadResult(client, frame, boundMcpToolResultPayload(result));
   } catch (error) {
     if (error instanceof NodeHostMcpError) {

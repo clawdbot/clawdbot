@@ -1,7 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { pathExists, requireGitRaw } from "./git.js";
+import { requireGitBuffer, requireGitRaw, worktreePathExists } from "./git.js";
 import {
   clearRegistryWorktreeProvisionedChunks,
   getRegistryWorktreeProvisionedChunk,
@@ -96,7 +96,7 @@ export async function provisionIncludedFiles(
   worktreePath: string,
 ): Promise<string[]> {
   const includePath = path.join(repoRoot, ".worktreeinclude");
-  if (!(await pathExists(includePath))) {
+  if (!(await worktreePathExists(includePath))) {
     return [];
   }
   const candidatesRaw = await requireGitRaw(repoRoot, [
@@ -257,7 +257,8 @@ export async function snapshotProvisionedFiles(
     (await requireGitRaw(worktreePath, ["ls-files", "--cached", "-z"])).split("\0").filter(Boolean),
   );
   const trackedAtHead = new Set(
-    (await requireGitRaw(worktreePath, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]))
+    (await requireGitBuffer(worktreePath, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]))
+      .toString("utf8")
       .split("\0")
       .filter(Boolean),
   );

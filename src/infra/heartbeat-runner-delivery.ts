@@ -2,20 +2,19 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
-import { sendDurableMessageBatch } from "../channels/message/runtime.js";
-import { markCommitmentsStatus } from "../commitments/store.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   normalizeHeartbeatReply,
   normalizeHeartbeatToolNotification,
-  stripTrailingHeartbeatNotifyFalse,
 } from "./heartbeat-delivery-normalization.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+import { handleHeartbeatFailureNotice } from "./heartbeat-failure-notice.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
 import { heartbeatLog, resolveHeartbeatChannelPlugin } from "./heartbeat-runner-config.js";
 import type {
@@ -26,7 +25,6 @@ import type {
 } from "./heartbeat-runner-execution.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
-import { handleHeartbeatTerminalToolFailure } from "./heartbeat-terminal-tool-failure.js";
 import type { HeartbeatRunResult } from "./heartbeat-wake.js";
 import type { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import type { buildOutboundSessionContext } from "./outbound/session-context.js";
@@ -41,6 +39,9 @@ const log = heartbeatLog;
 const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
   pendingFinalDelivery: undefined,
 } as const;
+
+const FIRST_HEARTBEAT_ALERT_PREAMBLE =
+  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
 
 // Clear pending-final only when this run produced it: the agent run stamps
 // createdAt during the run, so createdAt >= run start means we own it. An older
@@ -60,8 +61,19 @@ export function classifyHeartbeatAgentOutcome(params: {
   responsePrefix: string | undefined;
   ackMaxChars: number;
 }) {
-  const { heartbeatToolResponse, heartbeatTerminalToolFailure, replyPayload } = params.agentRun;
-  if (heartbeatToolResponse && !heartbeatToolResponse.notify && !heartbeatTerminalToolFailure) {
+  const { agentRunFailed, heartbeatToolResponse, heartbeatTerminalToolFailure, replyPayload } =
+    params.agentRun;
+  const replyMetadata = replyPayload ? getReplyPayloadMetadata(replyPayload) : undefined;
+  const hasExplicitFailure = Boolean(heartbeatTerminalToolFailure || agentRunFailed);
+  const shouldSuppressSourceReply =
+    params.suppressUnmarkedSourceReplies &&
+    !params.hasRelayableExecCompletion &&
+    replyPayload &&
+    replyPayload.isError !== true &&
+    replyMetadata?.deliverDespiteSourceReplySuppression !== true &&
+    ((!hasExplicitFailure && !heartbeatToolResponse) ||
+      (agentRunFailed && !heartbeatTerminalToolFailure));
+  if (heartbeatToolResponse && !heartbeatToolResponse.notify && !hasExplicitFailure) {
     return {
       kind: "ack",
       eventStatus: "ok-token",
@@ -69,65 +81,48 @@ export function classifyHeartbeatAgentOutcome(params: {
       response: heartbeatToolResponse,
     } as const;
   }
-  if (
-    params.suppressUnmarkedSourceReplies &&
-    !params.hasRelayableExecCompletion &&
-    !heartbeatToolResponse &&
-    !heartbeatTerminalToolFailure &&
-    replyPayload &&
-    replyPayload.isError !== true &&
-    getReplyPayloadMetadata(replyPayload)?.deliverDespiteSourceReplySuppression !== true
-  ) {
+  if (shouldSuppressSourceReply && !hasExplicitFailure) {
     // Message-tool privacy never makes an ordinary assistant final outbound;
     // marked operator notices and terminal failures keep their visible paths.
     return { kind: "ack", eventStatus: "ok-token", silent: true } as const;
   }
-  if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
+  if (
+    !heartbeatToolResponse &&
+    !hasExplicitFailure &&
+    (!replyPayload || !hasOutboundReplyContent(replyPayload))
+  ) {
     return { kind: "ack", eventStatus: "ok-empty" } as const;
   }
-  const normalized =
-    heartbeatTerminalToolFailure && replyPayload
-      ? normalizeHeartbeatReply(replyPayload, params.responsePrefix, params.ackMaxChars)
+  const mode = params.hasRelayableExecCompletion ? "message" : "heartbeat";
+  const normalized = shouldSuppressSourceReply
+    ? {
+        shouldSkip: true,
+        text: "",
+        hasMedia: false,
+        isInternalPlaceholderOnly: false,
+      }
+    : hasExplicitFailure && replyPayload
+      ? normalizeHeartbeatReply(replyPayload, params.responsePrefix, params.ackMaxChars, mode)
       : heartbeatToolResponse
         ? normalizeHeartbeatToolNotification(heartbeatToolResponse, params.responsePrefix)
         : replyPayload
-          ? normalizeHeartbeatReply(replyPayload, params.responsePrefix, params.ackMaxChars)
+          ? normalizeHeartbeatReply(replyPayload, params.responsePrefix, params.ackMaxChars, mode)
           : {
               shouldSkip: true,
               text: "",
               hasMedia: false,
               isInternalPlaceholderOnly: false,
             };
-  // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
-  // The model should be responding with exec results, not ack tokens.
-  // Also, if normalized.text is empty due to token stripping but we have exec completion,
-  // fall back to the original reply text.
-  const execFallbackText =
-    !heartbeatToolResponse &&
-    params.hasRelayableExecCompletion &&
-    !normalized.text.trim() &&
-    !normalized.isInternalPlaceholderOnly &&
-    replyPayload?.text?.trim()
-      ? replyPayload.text.trim()
-      : null;
-  if (execFallbackText) {
-    const execNotifyFalse = stripTrailingHeartbeatNotifyFalse(execFallbackText);
-    normalized.text = execNotifyFalse.text;
-    normalized.shouldSkip = !normalized.hasMedia && !normalized.text.trim();
-    if (execNotifyFalse.silent) {
-      normalized.silent = true;
+  if (agentRunFailed) {
+    const replacement = replaceGenericExternalRunFailureText(normalized.text);
+    if (replacement.replaced) {
+      normalized.text = replacement.text;
+      normalized.shouldSkip = false;
     }
   }
-  const replacement = !heartbeatToolResponse
-    ? replaceGenericExternalRunFailureText(normalized.text)
-    : { text: normalized.text, replaced: false };
-  const deliveredAgentRunFailure = replacement.replaced;
-  if (deliveredAgentRunFailure) {
-    normalized.text = replacement.text;
-    normalized.shouldSkip = false;
-  }
   const hasStructuredReplyContent =
-    !heartbeatToolResponse &&
+    !shouldSuppressSourceReply &&
+    (!heartbeatToolResponse || agentRunFailed) &&
     replyPayload !== undefined &&
     hasOutboundReplyContent({
       ...replyPayload,
@@ -138,14 +133,17 @@ export function classifyHeartbeatAgentOutcome(params: {
   const shouldSkipMain =
     normalized.shouldSkip &&
     !normalized.hasMedia &&
-    (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly) &&
-    (!params.hasRelayableExecCompletion || normalized.isInternalPlaceholderOnly);
-  if (heartbeatTerminalToolFailure) {
+    (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly);
+  if (hasExplicitFailure) {
     return {
-      kind: "terminal-failure",
-      failure: heartbeatTerminalToolFailure,
-      heartbeatToolResponse,
-      replyPayload,
+      kind: "failure",
+      reason: heartbeatTerminalToolFailure ? "agent-tool-failure" : "agent-runner-failure",
+      ...(heartbeatTerminalToolFailure
+        ? {
+            previewText: heartbeatToolResponse?.summary || heartbeatTerminalToolFailure.toolName,
+          }
+        : {}),
+      replyPayload: shouldSuppressSourceReply ? undefined : replyPayload,
       normalized,
       shouldSkipMain,
     } as const;
@@ -156,7 +154,6 @@ export function classifyHeartbeatAgentOutcome(params: {
   return {
     kind: "delivery",
     normalized,
-    deliveredAgentRunFailure,
     hasStructuredReplyContent,
     replyPayload: heartbeatToolResponse ? undefined : replyPayload,
     mediaUrls:
@@ -178,23 +175,19 @@ export async function finalizeHeartbeatOutcome(params: {
   outboundIdentity: ReturnType<typeof resolveAgentOutboundIdentity>;
 }): Promise<HeartbeatRunResult> {
   const { cfg, agentId, scheduledTasks, startedAt, wakeSource } = params.wake;
-  const { delivery, dueCommitmentIds, entry, previousUpdatedAt } = params.prepared;
+  const { delivery, entry, previousUpdatedAt } = params.prepared;
   const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
-  const markDueCommitments = (status: "dismissed" | "sent") =>
-    markCommitmentsStatus({ ids: dueCommitmentIds, status, nowMs: startedAt });
   const outcome = params.outcome;
-  if (outcome.kind === "terminal-failure") {
+  if (outcome.kind === "failure") {
+    const failureReplyPayload = outcome.replyPayload;
     const failureChannel = delivery.channel;
     const failureTarget = delivery.to;
-    const terminalPendingFinalText = outcome.replyPayload
-      ? buildRecoverablePendingFinalDeliveryText([outcome.replyPayload])
-      : undefined;
     const heartbeatPlugin =
       failureChannel !== "none" ? resolveHeartbeatChannelPlugin(failureChannel) : undefined;
     const checkReady = heartbeatPlugin?.heartbeat?.checkReady;
-    return await handleHeartbeatTerminalToolFailure({
-      failure: outcome.failure,
-      ...(outcome.heartbeatToolResponse ? { response: outcome.heartbeatToolResponse } : {}),
+    return await handleHeartbeatFailureNotice({
+      reason: outcome.reason,
+      ...(outcome.previewText ? { previewText: outcome.previewText } : {}),
       normalized: outcome.normalized,
       shouldSkipMain: outcome.shouldSkipMain,
       delivery,
@@ -218,7 +211,7 @@ export async function finalizeHeartbeatOutcome(params: {
       ...(failureChannel !== "none" && failureTarget
         ? {
             deliver: async () => {
-              const send = await sendDurableMessageBatch({
+              const send = await sendDurableMessageBatchCore({
                 cfg,
                 channel: failureChannel,
                 to: failureTarget,
@@ -227,8 +220,8 @@ export async function finalizeHeartbeatOutcome(params: {
                 identity: params.outboundIdentity,
                 threadId: delivery.threadId,
                 payloads: [
-                  copyReplyPayloadMetadata(outcome.replyPayload ?? {}, {
-                    ...outcome.replyPayload,
+                  copyReplyPayloadMetadata(failureReplyPayload ?? {}, {
+                    ...failureReplyPayload,
                     text: outcome.normalized.text || undefined,
                   }),
                 ],
@@ -242,25 +235,31 @@ export async function finalizeHeartbeatOutcome(params: {
             },
           }
         : {}),
-      ...(terminalPendingFinalText
+      ...(failureReplyPayload
         ? {
             clearSatisfiedPendingFinalDelivery: async () => {
+              const pendingFinalText = buildRecoverablePendingFinalDeliveryText([
+                failureReplyPayload,
+              ]);
+              if (!pendingFinalText) {
+                return;
+              }
               await clearSatisfiedPendingFinalDelivery(
                 params.wake,
                 params.prepared,
-                terminalPendingFinalText,
+                pendingFinalText,
               );
             },
           }
         : {}),
       onChannelNotReady: (reason) => {
-        log.info("heartbeat: channel not ready for terminal tool failure", {
+        log.info("heartbeat: channel not ready for failure notice", {
           channel: failureChannel,
           reason,
         });
       },
       onDeliveryError: (error) => {
-        log.warn("heartbeat: terminal tool failure alert delivery failed", {
+        log.warn("heartbeat: failure notice delivery failed", {
           channel: failureChannel,
           error: formatErrorMessage(error),
         });
@@ -296,17 +295,10 @@ export async function finalizeHeartbeatOutcome(params: {
         ? resolveIndicatorType(outcome.eventStatus)
         : undefined,
     });
-    await markDueCommitments("dismissed");
     consumeInspectedSystemEvents(params.wake, params.prepared);
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
-  const {
-    deliveredAgentRunFailure,
-    hasStructuredReplyContent,
-    mediaUrls,
-    normalized,
-    replyPayload,
-  } = outcome;
+  const { hasStructuredReplyContent, mediaUrls, normalized, replyPayload } = outcome;
   // Suppress duplicate heartbeats (same payload) within a short window.
   // This prevents "nagging" when nothing changed but the model repeats the same items.
   const prevHeartbeatText =
@@ -335,12 +327,15 @@ export async function finalizeHeartbeatOutcome(params: {
       channel: delivery.channel !== "none" ? delivery.channel : undefined,
       accountId: delivery.accountId,
     });
-    await markDueCommitments("dismissed");
     consumeInspectedSystemEvents(params.wake, params.prepared);
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
 
-  const previewText = normalized.text;
+  const deliveryText =
+    delivery.implicitDefaultRoute && prevHeartbeatAt === undefined
+      ? `${FIRST_HEARTBEAT_ALERT_PREAMBLE}\n${normalized.text}`
+      : normalized.text;
+  const previewText = deliveryText;
   if (delivery.channel === "none" || !delivery.to) {
     emitHeartbeatEvent({
       status: "skipped",
@@ -395,7 +390,7 @@ export async function finalizeHeartbeatOutcome(params: {
     }
   }
 
-  const send = await sendDurableMessageBatch({
+  const send = await sendDurableMessageBatchCore({
     cfg,
     channel: delivery.channel,
     to: delivery.to,
@@ -406,7 +401,7 @@ export async function finalizeHeartbeatOutcome(params: {
     payloads: [
       copyReplyPayloadMetadata(replyPayload ?? {}, {
         ...replyPayload,
-        text: normalized.text,
+        text: deliveryText,
         mediaUrls,
       }),
     ],
@@ -417,12 +412,9 @@ export async function finalizeHeartbeatOutcome(params: {
     throw send.error;
   }
   const visibleSendSucceeded = send.status === "sent";
-  // Suppressed durable sends committed no visible channel message. Keep due
-  // commitments and heartbeat dedupe state active so a later heartbeat can retry.
   if (visibleSendSucceeded) {
-    await markDueCommitments("sent");
-    const hasHeartbeatText = Boolean(normalized.text.trim());
-    await patchSessionEntry(
+    const hasHeartbeatText = Boolean(deliveryText.trim());
+    await patchSessionEntryCore(
       { storePath, sessionKey },
       (current, context) => {
         if (!context.existingEntry) {
@@ -445,16 +437,11 @@ export async function finalizeHeartbeatOutcome(params: {
     );
   }
 
-  const eventStatus = deliveredAgentRunFailure
-    ? "failed"
-    : visibleSendSucceeded
-      ? "sent"
-      : "skipped";
+  const eventStatus = visibleSendSucceeded ? "sent" : "skipped";
   emitHeartbeatEvent({
     status: eventStatus,
     to: delivery.to,
-    ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
-    ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
+    ...(!visibleSendSucceeded ? { reason: send.reason } : {}),
     preview: truncateHeartbeatPreview(previewText),
     durationMs: Date.now() - startedAt,
     hasMedia: mediaUrls.length > 0,
@@ -484,7 +471,7 @@ async function clearSatisfiedPendingFinalDelivery(
   prepared: PreparedHeartbeatRun,
   expectedText?: string,
 ) {
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath: prepared.storePath, sessionKey: prepared.sessionKey },
     (current, context) => {
       if (!context.existingEntry) {

@@ -556,23 +556,6 @@ import Testing
         #expect(controller.pendingTrustPrompt == nil)
     }
 
-    @Test @MainActor func `clear all TLS fingerprints removes stored pins`() {
-        let stableID1 = "test|\(UUID().uuidString)"
-        let stableID2 = "test|\(UUID().uuidString)"
-        defer { GatewayTLSStore.clearAllFingerprints() }
-
-        GatewayTLSStore.saveFingerprint("11", stableID: stableID1)
-        GatewayTLSStore.saveFingerprint("22", stableID: stableID2)
-
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == "11")
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == "22")
-
-        GatewayTLSStore.clearAllFingerprints()
-
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == nil)
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == nil)
-    }
-
     @Test func `TLS fingerprints preserve exact unicode gateway owners`() {
         let suffix = UUID().uuidString
         let composedOwner = "gateway-\u{00E9}-\(suffix)"

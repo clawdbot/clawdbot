@@ -5,7 +5,7 @@ import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { generateBranchSummary, prepareBranchEntries } from "./branch-summarization.js";
 
-function createModel(contextWindow: number, maxTokens = 8000): Model {
+function createModel(contextWindow: number, maxTokens = 8000): Model & { contextWindow: number } {
   return {
     id: "branch-summary-model",
     name: "Branch Summary Model",
@@ -196,6 +196,56 @@ src/write.ts
     const preparation = prepareBranchEntries(entries);
 
     expect(preparation.messages.map((message) => message.role)).toEqual(["user", "toolResult"]);
+  });
+
+  it("preserves earlier branch context while excluding private shell output", async () => {
+    const model = createModel(8192);
+    const capture = createCapturingStream(model);
+    const shellMessage: AgentMessage = {
+      role: "bashExecution",
+      command: "private command",
+      output: `private output marker ${"x".repeat(80_000)}`,
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: 2,
+      excludeFromContext: true,
+    };
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "important original request", timestamp: 1 }, 0),
+      createMessageEntry(shellMessage, 1),
+      createMessageEntry({ role: "user", content: "continue branch", timestamp: 3 }, 2),
+    ];
+
+    const preparation = prepareBranchEntries(entries, 100);
+    expect(preparation.messages).toMatchObject([
+      { role: "user", content: "important original request" },
+      { role: "user", content: "continue branch" },
+    ]);
+    expect(preparation.totalTokens).toBeLessThan(100);
+
+    const visibleEntries = entries.map((entry, index) =>
+      index === 1
+        ? createMessageEntry({ ...shellMessage, excludeFromContext: false }, index)
+        : entry,
+    );
+    expect(prepareBranchEntries(visibleEntries, 100).messages).toMatchObject([
+      { role: "user", content: "continue branch" },
+    ]);
+
+    const result = await generateBranchSummary(entries, {
+      model,
+      apiKey: "test-key",
+      signal: new AbortController().signal,
+      streamFn: capture.streamFn,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(capture.readCapture().prompt).toContain("important original request");
+    expect(capture.readCapture().prompt).toContain("continue branch");
+    expect(capture.readCapture().prompt).not.toContain("private command");
+    expect(capture.readCapture().prompt).not.toContain("private output marker");
+    expect(JSON.stringify(entries)).toContain("private output marker");
   });
 
   it("summarizes tool failures without exposing private result details", async () => {

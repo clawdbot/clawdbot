@@ -12,7 +12,7 @@ import {
   KNIP_MAX_BUFFER_BYTES,
   parseKnipCompactUnusedFiles,
   runKnipUnusedFiles,
-} from "../../scripts/check-deadcode-unused-files.mjs";
+} from "../../scripts/check-deadcode-unused-files.mts";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -39,7 +39,7 @@ function finishFakeProcess(
 describe("check-deadcode-unused-files", () => {
   it("has no checked-in unused-file allowlist", () => {
     expect(existsSync(path.resolve("scripts/deadcode-unused-files.allowlist.mjs"))).toBe(false);
-    const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mjs"), "utf8");
+    const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mts"), "utf8");
     expect(script).not.toContain("allowlist");
     expect(script).toContain("production and full-tree unused-file checks passed with 0 entries");
     expect(script).toContain('"config/knip.all-exports.config.ts"');
@@ -75,9 +75,9 @@ left-pad: package.json
   it("keeps dot-directory and root entry files", () => {
     expect(
       parseKnipCompactUnusedFiles(
-        ".agents/skills/example/scripts/check.mjs: .agents/skills/example/scripts/check.mjs\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
+        ".agents/skills/example/scripts/check.mts: .agents/skills/example/scripts/check.mts\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
       ),
-    ).toEqual([".agents/skills/example/scripts/check.mjs", "tsdown.ai.config.ts"]);
+    ).toEqual([".agents/skills/example/scripts/check.mts", "tsdown.ai.config.ts"]);
   });
 
   it("ignores pnpm dlx progress lines in files-only compact output", () => {
@@ -330,7 +330,7 @@ Delete the files or model their real entrypoints in Knip.`,
       const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-parent-signal-"));
       const childPidPath = path.join(root, "child.pid");
       const readyPath = path.join(root, "child.ready");
-      const scriptUrl = pathToFileURL(path.resolve("scripts/check-deadcode-unused-files.mjs")).href;
+      const scriptUrl = pathToFileURL(path.resolve("scripts/check-deadcode-unused-files.mts")).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
 

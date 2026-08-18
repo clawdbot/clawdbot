@@ -12,12 +12,17 @@ import {
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ConfigMutationConflictError } from "../config/config.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
+import {
+  SetupMigrationFreshnessError,
+  SetupMigrationTargetChangedError,
+} from "./setup.migration-snapshot.js";
 
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
@@ -33,6 +38,8 @@ type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuth
 type VerifySetupInferenceConfig =
   typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
 type ConfigureGatewayForSetup = typeof import("./setup.gateway-config.js").configureGatewayForSetup;
+type ListSetupMigrationOptions =
+  typeof import("./setup.migration-import.js").listSetupMigrationOptions;
 type RunSetupMigrationImport = typeof import("./setup.migration-import.js").runSetupMigrationImport;
 type RunSearchSetupFlow = typeof import("../flows/search-setup.js").runSearchSetupFlow;
 
@@ -74,7 +81,6 @@ const configureGatewayForSetup = vi.hoisted(() =>
       authMode: "token",
       gatewayToken: "test-token",
       tailscaleMode: "off",
-      tailscaleResetOnExit: false,
     },
   })),
 );
@@ -128,7 +134,9 @@ const enableDefaultOnboardingInternalHooks = vi.hoisted(() =>
   })),
 );
 const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
-const listSetupMigrationOptions = vi.hoisted(() => vi.fn(async () => []));
+const listSetupMigrationOptions = vi.hoisted(() =>
+  vi.fn<ListSetupMigrationOptions>(async () => []),
+);
 const runSetupMigrationImport = vi.hoisted(() =>
   vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
 );
@@ -168,8 +176,21 @@ function providerPluginStub(
 }
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
+const ensureOnboardingConfig = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+    config,
+    agentId: "main",
+    bootstrapPending: true,
+  })),
+);
 const replaceConfigFile = vi.hoisted(() =>
-  vi.fn(async (params: { nextConfig: OpenClawConfig }) => ({ config: params.nextConfig })),
+  vi.fn(
+    async (params: {
+      nextConfig: OpenClawConfig;
+      snapshot?: { hash?: string };
+      baseHash?: string;
+    }) => ({ config: params.nextConfig }),
+  ),
 );
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
@@ -321,7 +342,8 @@ function expectMockCallArgNotNull(
   }
 }
 
-vi.mock("../commands/onboard-channels.js", () => ({
+vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
   setupChannels,
 }));
 
@@ -364,7 +386,7 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore: resolvePluginSetupProvider,
 }));
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
@@ -404,21 +426,67 @@ vi.mock("../system-agent/setup-inference.js", () => ({
   verifySetupInferenceConfig,
 }));
 
-vi.mock("../config/config.js", () => ({
-  DEFAULT_GATEWAY_PORT: 18789,
-  createConfigIO,
-  readConfigFileSnapshot,
-  resolveGatewayPort,
-  replaceConfigFile,
-}));
-vi.mock("../commands/onboard-agent.js", async () => {
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope-config.js");
+vi.mock("../config/config.js", async (importActual) => {
+  const actual = await importActual<typeof import("../config/config.js")>();
   return {
-    ensureOnboardingConfig: async (config: OpenClawConfig) => ({
-      config,
-      agentId: resolveDefaultAgentId(config),
-      bootstrapPending: true,
-    }),
+    DEFAULT_GATEWAY_PORT: 18789,
+    ConfigMutationConflictError: actual.ConfigMutationConflictError,
+    createConfigIO,
+    readConfigFileSnapshot,
+    resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
+    resolveGatewayPort,
+    replaceConfigFile,
+    transformConfigFileWithRetry: async (params: {
+      base?: "runtime" | "source";
+      maxAttempts?: number;
+      writeOptions?: Record<string, unknown>;
+      transform: (
+        config: OpenClawConfig,
+        context: {
+          snapshot: Record<string, unknown>;
+          previousHash: string | null;
+          attempt: number;
+        },
+      ) => Promise<{ nextConfig: OpenClawConfig }> | { nextConfig: OpenClawConfig };
+      commit: (params: Record<string, unknown>) => Promise<{ config: OpenClawConfig }>;
+    }) => {
+      const maxAttempts = params.maxAttempts ?? 5;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const snapshot = (await readConfigFileSnapshot()) as ConfigFileSnapshot;
+        const previousHash = snapshot.hash ?? null;
+        const config =
+          params.base === "runtime"
+            ? (snapshot.runtimeConfig ?? snapshot.config)
+            : (snapshot.sourceConfig ?? snapshot.config);
+        try {
+          const transformed = await params.transform(config, { snapshot, previousHash, attempt });
+          const committed = await params.commit({
+            nextConfig: transformed.nextConfig,
+            snapshot,
+            ...(previousHash ? { baseHash: previousHash } : {}),
+            writeOptions: params.writeOptions,
+            afterWrite: { mode: "auto" },
+          });
+          return { nextConfig: committed.config };
+        } catch (error) {
+          if (
+            !(error instanceof actual.ConfigMutationConflictError) ||
+            !error.retryable ||
+            attempt === maxAttempts - 1
+          ) {
+            throw error;
+          }
+        }
+      }
+      throw new Error("unreachable");
+    },
+  };
+});
+vi.mock("../commands/onboard-agent.js", async () => {
+  return {
+    ensureOnboardingAgent: ensureOnboardingConfig,
+    validateFirstOnboardingAgentName: (value: string | undefined) =>
+      value?.trim() ? undefined : "Agent name is required.",
   };
 });
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -582,13 +650,20 @@ describe("runSetupWizard", () => {
         authMode: "token",
         gatewayToken: "test-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
     }));
+    let authoredConfig: OpenClawConfig | undefined;
     readConfigFileSnapshot.mockReset();
-    readConfigFileSnapshot.mockResolvedValue(
-      configSnapshot({}, false, { agents: { entries: { main: { default: true } } } }),
+    readConfigFileSnapshot.mockImplementation(async () =>
+      authoredConfig
+        ? configSnapshot(authoredConfig)
+        : configSnapshot({}, false, { agents: { entries: { main: { default: true } } } }),
     );
+    replaceConfigFile.mockReset();
+    replaceConfigFile.mockImplementation(async (params) => {
+      authoredConfig = structuredClone(params.nextConfig);
+      return { config: params.nextConfig };
+    });
     probeGatewayReachable.mockReset();
     probeGatewayReachable.mockResolvedValue({ ok: false });
     resolvePreferredProviderForAuthChoice.mockReset();
@@ -617,6 +692,53 @@ describe("runSetupWizard", () => {
     });
     runSetupMemoryImportStep.mockReset();
     runSetupMemoryImportStep.mockResolvedValue(undefined);
+    ensureOnboardingConfig.mockClear();
+  });
+
+  it("prompts for and stages the named first agent on a fresh install", async () => {
+    const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
+    ensureOnboardingConfig.mockImplementationOnce(async ({ config }) => ({
+      config,
+      agentId: "robby",
+      bootstrapPending: true,
+      createdAgent: true,
+      sessionMigrationWarnings: ["Run `openclaw doctor --fix` and retry setup."],
+    }));
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: "/tmp/openclaw-workspace",
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "What should we call your first agent?",
+        initialValue: "main",
+      }),
+    );
+    expect(ensureOnboardingConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/openclaw-workspace",
+        preserveCandidateRoster: false,
+        firstAgent: { name: "robby" },
+      }),
+    );
+    expect(prompter.note).toHaveBeenCalledWith(
+      "Run `openclaw doctor --fix` and retry setup.",
+      "Session history migration",
+    );
   });
 
   it("exits successfully after the auto-launched TUI returns", async () => {
@@ -801,6 +923,97 @@ describe("runSetupWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
+  it("preserves an unrelated config edit made during classic onboarding", async () => {
+    const initialConfig: OpenClawConfig = { ui: { seamColor: "blue" } };
+    let diskConfig = structuredClone(initialConfig);
+    let diskHash = "hash-1";
+    const snapshotFromDisk = () => ({
+      ...configSnapshot(diskConfig),
+      hash: diskHash,
+    });
+    readConfigFileSnapshot.mockImplementation(async () => snapshotFromDisk());
+    replaceConfigFile.mockImplementation(async (params) => {
+      expect(params.snapshot?.hash).toBe(diskHash);
+      expect(params.baseHash).toBe(diskHash);
+      diskConfig = structuredClone(params.nextConfig);
+      diskHash = `hash-${Number(diskHash.slice(5)) + 1}`;
+      return { config: diskConfig };
+    });
+    setupChannels.mockImplementationOnce(async (config) => {
+      diskConfig = {
+        ...diskConfig,
+        ui: { ...diskConfig.ui, seamColor: "green" },
+      };
+      diskHash = "external-edit";
+      return config;
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: "/tmp/concurrent-onboarding-workspace",
+      },
+      createRuntime(),
+      buildWizardPrompter(),
+    );
+
+    expect(diskConfig.ui?.seamColor).toBe("green");
+    expect(diskConfig.agents?.defaults?.workspace).toBe("/tmp/concurrent-onboarding-workspace");
+    expect(diskConfig.hooks?.internal?.entries?.["session-memory"]?.enabled).toBe(true);
+  });
+
+  it("re-reads and merges the latest config after a write conflict", async () => {
+    let diskConfig: OpenClawConfig = { ui: { seamColor: "blue" } };
+    let diskHash = "hash-1";
+    let writeAttempts = 0;
+    readConfigFileSnapshot.mockImplementation(async () => ({
+      ...configSnapshot(diskConfig),
+      hash: diskHash,
+    }));
+    replaceConfigFile.mockImplementation(async (params) => {
+      expect(params.snapshot?.hash).toBe(diskHash);
+      expect(params.baseHash).toBe(diskHash);
+      writeAttempts += 1;
+      if (writeAttempts === 1) {
+        diskConfig = { ...diskConfig, ui: { ...diskConfig.ui, seamColor: "green" } };
+        diskHash = "external-edit";
+        throw new ConfigMutationConflictError("config changed since last load");
+      }
+      diskConfig = structuredClone(params.nextConfig);
+      diskHash = `committed-${writeAttempts}`;
+      return { config: diskConfig, persistedHash: diskHash };
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: "/tmp/conflicting-onboarding-workspace",
+      },
+      createRuntime(),
+      buildWizardPrompter(),
+    );
+
+    expect(writeAttempts).toBe(4);
+    expect(diskConfig.ui?.seamColor).toBe("green");
+    expect(diskConfig.agents?.defaults?.workspace).toBe("/tmp/conflicting-onboarding-workspace");
+  });
+
   it("seeds interactive remote setup from command flags", async () => {
     const remoteToken = "REDACTED";
     readConfigFileSnapshot.mockResolvedValueOnce({
@@ -854,9 +1067,132 @@ describe("runSetupWizard", () => {
         }),
       }),
       expect.any(Object),
-      { secretInputMode: undefined },
+      {
+        secretInputMode: undefined,
+        edgeAuthOriginUrl: "wss://stored.example.com:18789",
+      },
     );
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
+  });
+
+  it("uses the configured remote password for the setup reachability probe", async () => {
+    const remotePassword = "remote-password"; // pragma: allowlist secret
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+            password: remotePassword,
+          },
+        },
+      }),
+    );
+
+    await runSetupWizard(
+      { acceptRisk: true, flow: "advanced", mode: "remote" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: undefined,
+      password: remotePassword,
+    });
+  });
+
+  it("passes configured remote edge auth to the setup reachability probe", async () => {
+    const config: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example.test",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
+
+    await runSetupWizard(
+      { acceptRisk: true, flow: "advanced", mode: "remote" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      config: expect.objectContaining({
+        gateway: config.gateway,
+      }),
+      token: undefined,
+    });
+  });
+
+  it("keeps a configured remote token authoritative over an environment password", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+            token: { source: "env", provider: "default", id: "REMOTE_SECRET_TOKEN" },
+          },
+        },
+        secrets: { providers: { default: { source: "env" } } },
+      }),
+    );
+    vi.stubEnv("REMOTE_SECRET_TOKEN", "resolved-remote-token");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-password"); // pragma: allowlist secret
+
+    try {
+      await runSetupWizard(
+        { acceptRisk: true, flow: "advanced", mode: "remote" },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: "resolved-remote-token",
+    });
+  });
+
+  it("uses an ambient gateway token as the shared remote fallback", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+          },
+        },
+      }),
+    );
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "ambient-token"; // pragma: allowlist secret
+
+    try {
+      await runSetupWizard(
+        { acceptRisk: true, flow: "advanced", mode: "remote" },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: "ambient-token",
+    });
   });
 
   it("does not reuse stored remote credentials for an overridden URL", async () => {
@@ -874,6 +1210,7 @@ describe("runSetupWizard", () => {
             url: "wss://stored.example.com:18789",
             token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
             password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
           },
         },
       },
@@ -881,20 +1218,33 @@ describe("runSetupWizard", () => {
       warnings: [],
       legacyIssues: [],
     });
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "ambient-password"); // pragma: allowlist secret
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "advanced",
-        mode: "remote",
-        remoteUrl: "wss://flag.example.com:18789",
-      },
-      createRuntime(),
-      buildWizardPrompter({}),
-    );
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "advanced",
+          mode: "remote",
+          remoteUrl: "wss://flag.example.com:18789",
+        },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://flag.example.com:18789",
+      config: expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: expect.objectContaining({
+            url: "wss://stored.example.com:18789",
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
+          }),
+        }),
+      }),
       token: undefined,
     });
     expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
@@ -904,11 +1254,15 @@ describe("runSetupWizard", () => {
             url: "wss://flag.example.com:18789",
             token: undefined,
             password: undefined,
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
           },
         }),
       }),
       expect.any(Object),
-      { secretInputMode: undefined },
+      {
+        secretInputMode: undefined,
+        edgeAuthOriginUrl: "wss://stored.example.com:18789",
+      },
     );
   });
 
@@ -1205,6 +1559,59 @@ describe("runSetupWizard", () => {
     expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "freshness rejection",
+      error: new SetupMigrationFreshnessError(
+        "Migration import during onboarding requires a fresh OpenClaw setup.\nExisting setup:\n- state agents/ exists",
+      ),
+      detail: "state agents/ exists",
+    },
+    {
+      label: "target change",
+      error: new SetupMigrationTargetChangedError(
+        "Migration target changed before promotion. Review it and retry.",
+      ),
+      detail: "Migration target changed before promotion",
+    },
+  ])("returns to setup mode after an interactive import $label", async ({ error, detail }) => {
+    const workspaceDir = await makeCaseDir("import-retry-");
+    listSetupMigrationOptions.mockResolvedValueOnce([{ providerId: "hermes", label: "Hermes" }]);
+    runSetupMigrationImport.mockRejectedValueOnce(error);
+    const setupChoices: Array<"import:hermes" | "quickstart"> = ["import:hermes", "quickstart"];
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
+      if (message === "Setup mode") {
+        return setupChoices.shift();
+      }
+      return "__skip__";
+    });
+    const prompter = buildWizardPrompter({ select: select as unknown as WizardPrompter["select"] });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(select.mock.calls.filter(([params]) => params.message === "Setup mode")).toHaveLength(2);
+    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining(detail),
+      "Existing config detected",
+    );
+    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
+  });
+
   it("continues onboarding after a recovered promotion", async () => {
     const workspaceDir = await makeCaseDir("resumed-import-flow-");
     const acknowledgePromotion = vi.fn(async () => {});
@@ -1233,6 +1640,45 @@ describe("runSetupWizard", () => {
 
     expect(finalizeSetupWizard).toHaveBeenCalledOnce();
     expect(acknowledgePromotion).toHaveBeenCalledOnce();
+  });
+
+  it("reports an explicit agent name that conflicts with an imported roster", async () => {
+    const importedConfig: OpenClawConfig = {
+      agents: { entries: { imported: { name: "Imported" } } },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot({}, false)).mockResolvedValue({
+      ...configSnapshot(importedConfig),
+      sourceConfigBeforeMigrations: {},
+    });
+    const runtime = createRuntime();
+    const prompter = buildWizardPrompter();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        importFrom: "hermes",
+        agentName: "robby",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(prompter.text).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "What should we call your first agent?" }),
+    );
+    expect(ensureOnboardingConfig).not.toHaveBeenCalled();
   });
 
   it("consumes a verified imported model without testing it twice", async () => {
@@ -1321,13 +1767,9 @@ describe("runSetupWizard", () => {
 
   it("keeps verification optional when provider setup supplies the post-import model", async () => {
     const workspaceDir = await makeCaseDir("provider-after-import-");
-    readConfigFileSnapshot
-      .mockResolvedValueOnce(
-        configSnapshot({}, false, { agents: { entries: { main: { default: true } } } }),
-      )
-      .mockResolvedValue(
-        configSnapshot({}, true, { agents: { entries: { main: { default: true } } } }),
-      );
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({}, false, { agents: { entries: { main: { default: true } } } }),
+    );
     applyAuthChoice.mockImplementation(async (args) => ({
       config: {
         ...args.config,
@@ -1445,9 +1887,8 @@ describe("runSetupWizard", () => {
     expect(prompter.select).not.toHaveBeenCalled();
   });
 
-  it("allows size-drop writes for pending plugin install record migration", async () => {
-    replaceConfigFile.mockClear();
-    readConfigFileSnapshot.mockResolvedValueOnce({
+  it("preserves concurrent edits while migrating pending plugin install records", async () => {
+    const pendingInstallSnapshot = {
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
       raw: "{}",
@@ -1466,6 +1907,38 @@ describe("runSetupWizard", () => {
       issues: [],
       warnings: [],
       legacyIssues: [],
+    };
+    let diskConfig = structuredClone(pendingInstallSnapshot.config) as OpenClawConfig;
+    let diskHash = "pending-1";
+    let snapshotReads = 0;
+    let writeAttempts = 0;
+    readConfigFileSnapshot.mockImplementation(async () => {
+      snapshotReads += 1;
+      if (snapshotReads === 2) {
+        diskConfig = { ...diskConfig, ui: { seamColor: "red" } };
+        diskHash = "external-before-migration";
+      }
+      return {
+        ...pendingInstallSnapshot,
+        config: diskConfig,
+        sourceConfig: diskConfig,
+        parsed: diskConfig,
+        resolved: diskConfig,
+        sourceConfigBeforeMigrations: diskConfig,
+        hash: diskHash,
+      };
+    });
+    replaceConfigFile.mockImplementation(async (params) => {
+      expect(params.snapshot?.hash ?? params.baseHash).toBe(diskHash);
+      writeAttempts += 1;
+      if (writeAttempts === 2) {
+        diskConfig = { ...diskConfig, ui: { seamColor: "green" } };
+        diskHash = "external-pending-edit";
+        throw new ConfigMutationConflictError("config changed since last load");
+      }
+      diskConfig = structuredClone(params.nextConfig);
+      diskHash = `pending-${writeAttempts + 1}`;
+      return { config: diskConfig, persistedHash: diskHash };
     });
 
     const workspaceDir = await makeCaseDir("plugin-install-migration-");
@@ -1503,7 +1976,7 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    // Migration write + pre-channels persist + post-channels write + final write.
+    // Initial commit (including migration) + conflicted persist + retry + final write.
     expect(replaceConfigFile).toHaveBeenCalledTimes(4);
     const migrationParams = requireRecord(
       getMockCallArg(replaceConfigFile, 0, 0, "migration config replacement"),
@@ -1512,9 +1985,12 @@ describe("runSetupWizard", () => {
     expect(
       requireRecord(migrationParams.nextConfig, "migration next config").plugins,
     ).toBeUndefined();
+    expect(requireRecord(migrationParams.nextConfig, "migration next config").ui).toEqual({
+      seamColor: "red",
+    });
     const migrationWriteOptions = expectRecordFields(
       migrationParams.writeOptions,
-      { allowConfigSizeDrop: true },
+      { allowConfigSizeDrop: false },
       "migration config replacement write options",
     );
     expect(migrationWriteOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
@@ -1524,6 +2000,9 @@ describe("runSetupWizard", () => {
       "config replacement params",
     );
     expect(requireRecord(replaceParams.nextConfig, "next config").plugins).toBeUndefined();
+    expect(requireRecord(replaceParams.nextConfig, "next config").ui).toEqual({
+      seamColor: "green",
+    });
     expectRecordFields(
       replaceParams.writeOptions,
       { allowConfigSizeDrop: false },
@@ -1559,7 +2038,7 @@ describe("runSetupWizard", () => {
     applyAuthChoice.mockClear();
     promptDefaultModel.mockClear();
     replaceConfigFile.mockClear();
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
       raw: "{}",
@@ -1854,6 +2333,56 @@ describe("runSetupWizard", () => {
         quickstartDefaults: true,
       },
       "channel setup options",
+    );
+  });
+
+  it("persists classic channel setup before hooks and Gateway finalization", async () => {
+    const beforeConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
+    const configured = {
+      ...beforeConfig,
+      channels: { matrix: { accounts: { ops: { enabled: true } } } },
+    } satisfies OpenClawConfig;
+    const hook = vi.fn();
+    const isConfiguredWrite = (value: OpenClawConfig) =>
+      value.channels?.matrix?.accounts?.ops?.enabled === true;
+    setupChannels.mockImplementationOnce(async (_cfg, _runtime, _prompter, options) => {
+      const setupOptions = options as {
+        onPostWriteHook?: (value: {
+          channel: "matrix";
+          accountId: string;
+          run: typeof hook;
+        }) => void;
+      };
+      setupOptions.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run: hook });
+      return configured;
+    });
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(beforeConfig));
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    const configuredWriteIndex = replaceConfigFile.mock.calls.findIndex(([params]) =>
+      isConfiguredWrite(params.nextConfig),
+    );
+    expect(configuredWriteIndex).toBeGreaterThanOrEqual(0);
+    expect(replaceConfigFile.mock.invocationCallOrder[configuredWriteIndex]).toBeLessThan(
+      hook.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(hook).toHaveBeenCalledWith({ cfg: configured, runtime: expect.any(Object) });
+    expect(hook.mock.invocationCallOrder[0]).toBeLessThan(
+      finalizeSetupWizard.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 
@@ -2254,6 +2783,76 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it.each([
+    {
+      label: "explicit CLI gateway values",
+      gatewayOptions: {
+        gatewayPort: 19511,
+        gatewayBind: "lan" as const,
+        gatewayAuth: "password" as const,
+        gatewayToken: "manual-gateway-token-placeholder",
+        gatewayPassword: "manual-gateway-password-placeholder",
+        tailscale: "off" as const,
+      },
+      expectedPort: 19511,
+      expectedProbeAuth: {
+        token: "manual-gateway-token-placeholder",
+        password: "manual-gateway-password-placeholder",
+      },
+    },
+    {
+      label: "derived port when gateway values are omitted",
+      gatewayOptions: {},
+      expectedPort: 18789,
+      expectedProbeAuth: {},
+    },
+  ])(
+    "uses the $label for the manual probe and port prompt",
+    async ({ gatewayOptions, expectedPort, expectedProbeAuth }) => {
+      const prompter = buildWizardPrompter({});
+      const runtime = createRuntime();
+
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "advanced",
+          mode: "local",
+          authChoice: "skip",
+          ...gatewayOptions,
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+
+      expectRecordFields(
+        getMockCallArg(probeGatewayReachable, 0, 0, "gateway probe"),
+        { url: `ws://127.0.0.1:${expectedPort}`, ...expectedProbeAuth },
+        "gateway probe params",
+      );
+      const gatewaySetup = expectRecordFields(
+        getMockCallArg(configureGatewayForSetup, 0, 0, "gateway setup"),
+        { localPort: expectedPort },
+        "gateway setup params",
+      );
+      if (gatewayOptions.gatewayPort !== undefined) {
+        expect(gatewaySetup.quickstartGateway).toMatchObject({
+          port: 19511,
+          bind: "lan",
+          authMode: "password",
+          token: "manual-gateway-token-placeholder",
+          password: "manual-gateway-password-placeholder",
+          tailscaleMode: "off",
+        });
+      }
+    },
+  );
+
   it("passes secretInputMode through to local gateway config step", async () => {
     configureGatewayForSetup.mockClear();
     const prompter = buildWizardPrompter({});
@@ -2298,7 +2897,7 @@ describe("runSetupWizard", () => {
           port: 19111,
           bind: "loopback",
           auth: { mode: "token", token: "stored-token" },
-          tailscale: { mode: "off", resetOnExit: false },
+          tailscale: { mode: "off" },
         },
       }),
     );
@@ -2318,7 +2917,6 @@ describe("runSetupWizard", () => {
           tailscale: {
             ...args.nextConfig.gateway?.tailscale,
             mode: args.quickstartGateway.tailscaleMode,
-            resetOnExit: args.quickstartGateway.tailscaleResetOnExit,
           },
         },
       },
@@ -2328,7 +2926,6 @@ describe("runSetupWizard", () => {
         authMode: args.quickstartGateway.authMode,
         gatewayToken: undefined,
         tailscaleMode: args.quickstartGateway.tailscaleMode,
-        tailscaleResetOnExit: args.quickstartGateway.tailscaleResetOnExit,
       },
     }));
 

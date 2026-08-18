@@ -105,6 +105,7 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 

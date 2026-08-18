@@ -1,6 +1,6 @@
 // Tests for CLI message text formatting helpers (renderMessageList, formatMessageCliText).
 import { describe, expect, it, vi } from "vitest";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import { formatMessageCliText } from "./message-format.js";
 
 const getChannelPluginMock = vi.hoisted(() =>
@@ -236,11 +236,11 @@ describe("formatMessageCliText poll results", () => {
         via: "direct",
         result: {
           messageId: "p1",
-          conversationId: "conv-1",
+          target: { kind: "conversation", id: "conv-1" },
           pollId: "poll-1",
         },
       },
-    } satisfies MessageActionRunResult;
+    } satisfies MessageActionResult;
 
     expect(formatMessageCliText(result)).toEqual([
       "✅ Poll sent via Direct Chat. Message ID: p1 (conversation conv-1)",

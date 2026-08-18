@@ -7,7 +7,10 @@ enum GatewayLaunchAgentManager {
     }
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
-    private static let disableLaunchAgentMarker = ".openclaw/disable-launchagent"
+    private static let disableLaunchAgentMarker = "disable-launchagent"
+    /// A first-run daemon command may wait behind state integrity checks and the shared startup-
+    /// migration lease. Keep the app from killing healthy migration work before it can finish.
+    static let startupMigrationTolerance: TimeInterval = 120
 
     private static var disableLaunchAgentMarkerURL: URL {
         #if DEBUG
@@ -15,13 +18,76 @@ enum GatewayLaunchAgentManager {
             return testingDisableLaunchAgentMarkerURL
         }
         #endif
-        return FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(self.disableLaunchAgentMarker)
+        return self.disableLaunchAgentMarkerURL(in: OpenClawPaths.stateDirURL)
+    }
+
+    static func disableLaunchAgentMarkerURL(in stateDirectoryURL: URL) -> URL {
+        stateDirectoryURL.appendingPathComponent(self.disableLaunchAgentMarker)
     }
 
     private static var plistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
+        self.plistURL(
+            homeDirectory: FileManager().homeDirectoryForCurrentUser,
+            profile: .current)
+    }
+
+    static func plistURL(homeDirectory: URL, profile: AppProfile) -> URL {
+        homeDirectory.appendingPathComponent(
+            "Library/LaunchAgents/\(profile.gatewayLaunchAgentLabel).plist")
+    }
+
+    static func conflictingProfileClaimOwner(
+        port: Int,
+        excludingLabel: String,
+        homeDirectory: URL) -> String?
+    {
+        let directory = homeDirectory.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return nil }
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil)
+        else {
+            return "installed profile Gateway claims cannot be inspected"
+        }
+        for url in entries {
+            guard url.pathExtension == "plist" else { continue }
+            let label = url.deletingPathExtension().lastPathComponent
+            guard label != excludingLabel,
+                  let profile = self.profile(forLaunchAgentLabel: label)
+            else { continue }
+            let owner = profile.name ?? "default"
+            let artifacts = self.generatedEnvironmentArtifacts(
+                directory: profile.stateDirectoryURL(homeDirectory: homeDirectory)
+                    .appendingPathComponent("service-env", isDirectory: true),
+                profile: profile)
+            guard let snapshot = LaunchAgentPlist.snapshot(
+                url: url,
+                generatedEnvironmentFileURL: artifacts.environment,
+                generatedEnvironmentWrapperURL: artifacts.wrapper),
+                self.isCanonicalGatewayClaim(snapshot)
+            else { continue }
+            guard let claimedPort = snapshot.port else {
+                return "profile \"\(owner)\" has an unreadable Gateway reservation"
+            }
+            if claimedPort == port { return "profile \"\(owner)\" already reserves it" }
+        }
+        return nil
+    }
+
+    private static func profile(forLaunchAgentLabel label: String) -> AppProfile? {
+        let base = AppProfile(environment: [:])
+        if label == base.gatewayLaunchAgentLabel { return base }
+        let prefix = "ai.openclaw."
+        guard label.hasPrefix(prefix) else { return nil }
+        let name = String(label.dropFirst(prefix.count))
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": name])
+        return profile.name == name && profile.gatewayLaunchAgentLabel == label ? profile : nil
+    }
+
+    private static func isCanonicalGatewayClaim(_ snapshot: LaunchAgentPlistSnapshot) -> Bool {
+        snapshot.environment["OPENCLAW_SERVICE_MARKER"] == "openclaw" &&
+            snapshot.environment["OPENCLAW_SERVICE_KIND"] == "gateway" &&
+            snapshot.programArguments.contains("gateway")
     }
 
     private static var generatedEnvironmentDirectoryURL: URL {
@@ -130,16 +196,25 @@ enum GatewayLaunchAgentManager {
             self.logger.info("launchd restart skipped (disable marker set)")
             return nil
         }
-        return await self.runDaemonCommand(["restart"], timeout: 20)
+        return await self.runDaemonCommand(["restart"])
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
         let directory = self.generatedEnvironmentDirectoryURL
+        let artifacts = self.generatedEnvironmentArtifacts(directory: directory, profile: .current)
         return LaunchAgentPlist.snapshot(
             url: self.plistURL,
-            generatedEnvironmentFileURL: directory.appendingPathComponent("\(gatewayLaunchdLabel).env"),
-            generatedEnvironmentWrapperURL: directory.appendingPathComponent(
-                "\(gatewayLaunchdLabel)-env-wrapper.sh"))
+            generatedEnvironmentFileURL: artifacts.environment,
+            generatedEnvironmentWrapperURL: artifacts.wrapper)
+    }
+
+    static func generatedEnvironmentArtifacts(
+        directory: URL,
+        profile: AppProfile) -> (environment: URL, wrapper: URL)
+    {
+        (
+            directory.appendingPathComponent("\(profile.gatewayLaunchAgentLabel).env"),
+            directory.appendingPathComponent("\(profile.gatewayLaunchAgentLabel)-env-wrapper.sh"))
     }
 
     /// Empty means no Gateway LaunchAgent. Nil preserves an unreadable
@@ -234,7 +309,7 @@ extension GatewayLaunchAgentManager {
 
     private static func runDaemonCommand(
         _ args: [String],
-        timeout: Double = 15,
+        timeout: Double = Self.startupMigrationTolerance,
         quiet: Bool = false) async -> String?
     {
         let result = await self.runDaemonCommandResult(args, timeout: timeout, quiet: quiet)

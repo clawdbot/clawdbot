@@ -1,10 +1,10 @@
 // Control UI controller manages skill workshop gateway state.
-import { formatErrorMessage } from "@openclaw/normalization-core";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   normalizeAgentId,
@@ -28,7 +28,7 @@ export {
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
 
 type SkillProposalStatus = SkillWorkshopProposalStatus;
-type SkillProposalKind = "create" | "update";
+type SkillProposalKind = SkillWorkshopProposal["kind"];
 type SkillProposalScanState = "pending" | "clean" | "failed" | "quarantined";
 
 type SkillProposalManifestEntry = {
@@ -143,11 +143,7 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
 }
 
 function parseDateMs(value: string | undefined): number {
-  if (!value) {
-    return Date.now();
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Date.now();
+  return parseDateStringTimestampMs(value) ?? Date.now();
 }
 
 function startOfLocalDay(ms: number): number {
@@ -223,6 +219,7 @@ function proposalFromManifest(
   const previousIsCurrent = previous?.updatedAt === updatedAt;
   return {
     key: entry.id,
+    kind: entry.kind,
     slug: entry.skillKey,
     name: entry.title || entry.skillName,
     oneLine: entry.description,
@@ -257,6 +254,7 @@ function proposalFromInspect(
         : undefined;
   return {
     key: record.id,
+    kind: record.kind,
     slug: record.target.skillKey,
     name: record.title || record.target.skillName,
     oneLine: record.description,
@@ -284,6 +282,7 @@ function proposalFromEvaluation(
   const createdAt = parseDateMs(record.createdAt);
   return {
     key: record.id,
+    kind: record.kind,
     slug: record.target.skillKey,
     name: record.title || record.target.skillName,
     oneLine: record.description,
@@ -352,14 +351,23 @@ function showActionNotice(
 export function countSkillWorkshopProposals(
   proposals: SkillWorkshopProposal[],
 ): Record<"all" | SkillProposalStatus, number> {
-  return proposals.reduce(
-    (counts, proposal) => {
-      counts.all += 1;
-      counts[proposal.status] += 1;
-      return counts;
+  // Applied renders one row per skill, so its tab count is grouped skills;
+  // every other status stays a per-proposal count.
+  const appliedSkills = new Set<string>();
+  const counts = proposals.reduce(
+    (accumulated, proposal) => {
+      accumulated.all += 1;
+      if (proposal.status === "applied") {
+        appliedSkills.add(proposal.slug);
+      } else {
+        accumulated[proposal.status] += 1;
+      }
+      return accumulated;
     },
     { all: 0, pending: 0, applied: 0, rejected: 0, quarantined: 0, stale: 0 },
   );
+  counts.applied = appliedSkills.size;
+  return counts;
 }
 
 export async function loadSkillWorkshopProposals(
@@ -406,7 +414,7 @@ export async function loadSkillWorkshopProposals(
       await loadSkillWorkshopProposalDetail(state, context, state.skillWorkshopSelectedKey);
     }
   } catch (err) {
-    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillWorkshopError = formatUiError(err);
   } finally {
     state.skillWorkshopLoading = false;
     if (skillWorkshopAgentParams(context).agentId !== requestAgentId) {
@@ -456,7 +464,7 @@ async function loadSkillWorkshopProposalDetail(
     return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
-      state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+      state.skillWorkshopError = formatUiError(err);
     }
     return false;
   } finally {
@@ -524,7 +532,7 @@ export async function runSkillWorkshopLifecycleAction(
       t(action === "apply" ? "skillWorkshop.notices.applied" : "skillWorkshop.notices.rejected"),
     );
   } catch (err) {
-    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillWorkshopError = formatUiError(err);
   } finally {
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&
@@ -599,7 +607,7 @@ export async function runSkillWorkshopEvaluation(
     return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
-      state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+      state.skillWorkshopError = formatUiError(err);
     }
     return false;
   } finally {
@@ -668,7 +676,7 @@ export async function requestSkillWorkshopRevision(
     showActionNotice(state, proposal, t("skillWorkshop.notices.revisionRequested"));
     return true;
   } catch (err) {
-    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillWorkshopError = formatUiError(err);
     return false;
   } finally {
     if (

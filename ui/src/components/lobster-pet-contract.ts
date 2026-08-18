@@ -1,3 +1,6 @@
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterRunOutcome = "ok" | "error" | "aborted";
@@ -125,7 +128,7 @@ export function lobsterPetSeed(sessionKey: string): number {
 export function resolveLobsterRunOutcome(
   sessions:
     | ReadonlyArray<{
-        status?: "running" | "done" | "failed" | "killed" | "timeout";
+        status?: SessionRunStatus;
         endedAt?: number | null;
         lastActivityAt?: number | null;
         updatedAt?: number | null;
@@ -163,4 +166,3 @@ export function resolveLobsterPetMode(
   }
   return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
 }
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";

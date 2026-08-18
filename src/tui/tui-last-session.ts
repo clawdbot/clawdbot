@@ -1,17 +1,16 @@
 // Stores and resolves the last TUI session per workspace.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
+import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { TuiSessionList } from "./tui-backend.js";
 import type { SessionScope } from "./tui-types.js";
 
@@ -35,10 +34,6 @@ export function buildTuiLastSessionScopeKey(params: {
     .update(`${params.sessionScope}\n${agentId}\n${connectionUrl}`)
     .digest("hex")
     .slice(0, 32);
-}
-
-function normalizeMarker(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function isHeartbeatSessionKey(sessionKey: string): boolean {
@@ -68,24 +63,23 @@ export async function readTuiLastSessionKey(params: {
   stateDir?: string;
 }): Promise<string | null> {
   const options = stateDatabaseOptions(params.stateDir);
-  if (!fs.existsSync(resolveOpenClawStateSqlitePath(options.env))) {
-    return null;
-  }
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return withOpenClawStateDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "tui_last_sessions")) {
-      return null;
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getNodeSqliteKysely<TuiLastSessionDatabase>(db)
-        .selectFrom("tui_last_sessions")
-        .select("session_key")
-        .where("scope_key", "=", params.scopeKey),
-    );
-    const sessionKey = row?.session_key.trim() ?? "";
-    return sessionKey && !isHeartbeatSessionKey(sessionKey) ? sessionKey : null;
-  }, options);
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "tui_last_sessions")) {
+        return null;
+      }
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<TuiLastSessionDatabase>(db)
+          .selectFrom("tui_last_sessions")
+          .select("session_key")
+          .where("scope_key", "=", params.scopeKey),
+      );
+      const sessionKey = row?.session_key.trim() ?? "";
+      return sessionKey && !isHeartbeatSessionKey(sessionKey) ? sessionKey : null;
+    }, options) ?? null
+  );
 }
 
 /** Writes the remembered session key unless it is empty, unknown, or heartbeat-owned. */
@@ -118,6 +112,35 @@ export async function writeTuiLastSessionKey(params: {
         ),
     );
   }, stateDatabaseOptions(params.stateDir));
+}
+
+/**
+ * Wraps writeTuiLastSessionKey for fire-and-forget callers: a failing state DB
+ * means the next launch silently loses session restore, so the first failure
+ * is reported once instead of spamming every session switch.
+ */
+export function createRememberSessionKeyWriter(params: {
+  buildScopeKey: (sessionKey: string) => string;
+  reportFailure: (message: string) => void;
+  write: typeof writeTuiLastSessionKey;
+}): (sessionKey: string) => void {
+  const write = params.write;
+  let failureReported = false;
+  return (sessionKey: string) => {
+    const trimmed = sessionKey.trim();
+    if (!trimmed || trimmed === "unknown") {
+      return;
+    }
+    void write({ scopeKey: params.buildScopeKey(trimmed), sessionKey: trimmed }).catch(
+      (err: unknown) => {
+        if (failureReported) {
+          return;
+        }
+        failureReported = true;
+        params.reportFailure(err instanceof Error ? err.message : String(err));
+      },
+    );
+  };
 }
 
 /** Removes restore pointers that target sessions retired by doctor repair. */

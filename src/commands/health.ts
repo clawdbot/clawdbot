@@ -6,7 +6,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -37,8 +37,11 @@ import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routi
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
+  buildRateLimitedHealthDiagnostic,
+  gatewayConnectErrorWasRateLimited,
   GATEWAY_HEALTH_REACHABLE_LINE,
   gatewayProbeResultSawGateway,
+  gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
@@ -69,16 +72,30 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   timeoutMs?: number;
   token?: string;
   password?: string;
+  ignoreEnvUrlOverride?: boolean;
   localPortOverride?: number;
   json?: boolean;
 }): Promise<boolean> {
-  if (!isGatewayHealthAuthUnavailableError(params.error)) {
+  const directRateLimit = gatewayConnectErrorWasRateLimited(params.error);
+  if (!directRateLimit && !isGatewayHealthAuthUnavailableError(params.error)) {
     return false;
+  }
+  if (directRateLimit) {
+    const diagnostic = buildRateLimitedHealthDiagnostic(params.error);
+    if (params.json) {
+      writeRuntimeJson(params.runtime, diagnostic);
+    } else {
+      params.runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+      params.runtime.log(diagnostic.error.message);
+    }
+    params.runtime.exit(1);
+    return true;
   }
   const details = await buildGatewayProbeConnectionDetails({
     config: params.config,
     token: params.token,
     password: params.password,
+    ignoreEnvUrlOverride: params.ignoreEnvUrlOverride,
     localPortOverride: params.localPortOverride,
   });
   const probe = await probeGatewayStatus({
@@ -94,7 +111,9 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   if (!gatewayProbeResultSawGateway(probe)) {
     return false;
   }
-  const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+  const diagnostic = gatewayProbeResultWasRateLimited(probe)
+    ? buildRateLimitedHealthDiagnostic()
+    : buildCredentialsRequiredHealthDiagnostic();
   if (params.json) {
     writeRuntimeJson(params.runtime, diagnostic);
     params.runtime.exit(1);
@@ -165,17 +184,16 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
 }
 
-/** Formats dead-lettered delivery queue entries for text health output. */
+/** Formats dead-lettered and pressured delivery queue entries for text health output. */
 export function formatDeliveryQueueHealthLine(
   summary: HealthSummary,
   now = Date.now(),
 ): string | null {
   const failed = summary.deliveryQueues?.failed ?? [];
   const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
-  if (failed.length === 0 && ingressFailed.length === 0) {
-    return null;
-  }
-  const counts = [
+  const ingressPressure = summary.deliveryQueues?.ingressPressure ?? [];
+  const warnings: string[] = [];
+  const deadLetterCounts = [
     ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
     ...ingressFailed.map(
       (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
@@ -186,7 +204,24 @@ export function formatDeliveryQueueHealthLine(
     .filter((value): value is number => typeof value === "number");
   const oldestNote =
     oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
-  return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
+  if (deadLetterCounts) {
+    warnings.push(`dead-lettered entries — ${deadLetterCounts}${oldestNote}`);
+  }
+  if (ingressPressure.length > 0) {
+    const pressureCounts = ingressPressure
+      .map(
+        (queue) =>
+          `inbound ${queue.channelId}/${queue.accountId}: ${queue.laneCount} pressured ${
+            queue.laneCount === 1 ? "lane" : "lanes"
+          }, ${queue.pendingCount} pending, ${queue.claimedCount} claimed, ${queue.blockedCount} blocked`,
+      )
+      .join(", ");
+    const oldestPressure = Math.min(...ingressPressure.map((queue) => queue.oldestReceivedAt));
+    warnings.push(
+      `ingress pressure — ${pressureCounts}; oldest ${formatDurationHuman(now - oldestPressure)} ago`,
+    );
+  }
+  return warnings.length > 0 ? `Delivery queue: warning (${warnings.join("; ")})` : null;
 }
 
 /** Formats config hot-reload watcher degradation for text health output. */
@@ -209,11 +244,12 @@ export async function healthCommand(
     config?: OpenClawConfig;
     token?: string;
     password?: string;
+    ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
   },
   runtime: RuntimeEnv,
 ) {
-  const cfg = opts.config ?? (await readBestEffortHealthConfig());
+  const cfg = opts.config ?? (await readNonObservingHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
   let summary: HealthSummary;
   try {
@@ -231,6 +267,8 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          sharedStateMode: "read-only",
+          ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
         }),
     );
@@ -243,6 +281,7 @@ export async function healthCommand(
         timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
+        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
         localPortOverride: opts.localPortOverride,
         json: opts.json,
       })
@@ -262,9 +301,6 @@ export async function healthCommand(
     }
     throw error;
   }
-  // Gateway reachability defines success; channel issues are reported but not fatal here.
-  const fatal = false;
-
   if (opts.json) {
     writeRuntimeJson(runtime, summary);
   } else {
@@ -273,6 +309,7 @@ export async function healthCommand(
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({
         config: cfg,
+        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
         localPortOverride: opts.localPortOverride,
       });
       logGatewayConnectionDetails({
@@ -289,7 +326,9 @@ export async function healthCommand(
         ? agents
         : await Promise.all(
             localAgents.ordered.map(async (entry) => {
-              const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+              const storePath = resolveSessionStorePathCore(cfg.session?.store, {
+                agentId: entry.id,
+              });
               return {
                 agentId: entry.id,
                 name: entry.name,
@@ -299,9 +338,10 @@ export async function healthCommand(
               } satisfies AgentHealthSummary;
             }),
           );
-    const displayAgents = opts.verbose
-      ? resolvedAgents
-      : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
+    const displayAgents =
+      opts.verbose || !defaultAgentId
+        ? resolvedAgents
+        : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,
@@ -365,7 +405,9 @@ export async function healthCommand(
         const preferred = resolvePreferredAccountId({
           accountIds,
           defaultAccountId,
-          boundAccounts: channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [],
+          boundAccounts: defaultAgentId
+            ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+            : [],
         });
         return [plugin.id, [preferred] as string[]] as const;
       }),
@@ -430,7 +472,9 @@ export async function healthCommand(
       if (!plugin.status?.logSelfId) {
         continue;
       }
-      const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+      const boundAccounts = defaultAgentId
+        ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+        : [];
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,
@@ -517,13 +561,13 @@ export async function healthCommand(
       }
     }
   }
-
-  if (fatal) {
-    runtime.exit(1);
-  }
 }
 
-async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
-  const { readBestEffortConfig } = await loadConfigRuntime();
-  return await readBestEffortConfig();
+export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
+  const { readConfigFileSnapshot } = await loadConfigRuntime();
+  const snapshot = await readConfigFileSnapshot({
+    observe: false,
+    pluginValidation: "core-only",
+  });
+  return snapshot.runtimeConfig ?? snapshot.config;
 }

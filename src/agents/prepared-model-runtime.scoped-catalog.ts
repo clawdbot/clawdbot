@@ -15,7 +15,7 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
   catalogMode: PreparedModelRuntimeCatalogMode,
 ): Promise<ModelCatalogSnapshot> {
   const scopedInput = input.readOnly ? input : { ...input, readOnly: true };
-  const { agentFacts, workspaceFacts } = await prepareWorkspaceBuildGroup(
+  const { agentFacts, pluginGeneration } = await prepareWorkspaceBuildGroup(
     [scopedInput],
     catalogMode,
     { providerDiscoveryProviderIds },
@@ -26,13 +26,13 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
   }
   const catalogSource = await prepareAgentCatalogSource(
     agentFactsForInput,
-    workspaceFacts,
+    pluginGeneration,
     catalogMode,
     false,
     catalogMode === "live" ? { providerDiscoveryProviderIds } : {},
   );
   return (
-    await prepareFullCatalogFacts(agentFactsForInput, workspaceFacts, catalogMode, catalogSource)
+    await prepareFullCatalogFacts(agentFactsForInput, pluginGeneration, catalogMode, catalogSource)
   ).modelCatalog;
 }
 

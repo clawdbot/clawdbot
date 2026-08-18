@@ -1,4 +1,6 @@
 /** Persists usage, cost, model, and CLI session metadata after reply runs. */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearCliSession,
   setCliSessionBinding,
@@ -12,13 +14,13 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   resolveSessionGoalDisplayState,
+  SESSION_TOTAL_TOKENS_VERSION,
   type SessionSystemPromptReport,
   type SessionEntry,
 } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 function applyCliSessionIdToSessionPatch(
@@ -69,12 +71,13 @@ function applyCliSessionIdToSessionPatch(
 }
 
 function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
-  const resolved = resolveNonNegativeNumber(value);
+  const resolved = asNonNegativeFiniteNumber(value);
   return resolved === undefined ? undefined : Math.floor(resolved);
 }
 
 function estimateSessionRunCostUsd(params: {
   cfg: OpenClawConfig;
+  agentDir?: string;
   usage?: NormalizedUsage;
   providerUsed?: string;
   modelUsed?: string;
@@ -86,8 +89,9 @@ function estimateSessionRunCostUsd(params: {
     provider: params.providerUsed,
     model: params.modelUsed,
     config: params.cfg,
+    agentDir: params.agentDir,
   });
-  return resolveNonNegativeNumber(estimateUsageCost({ usage: params.usage, cost }));
+  return asNonNegativeFiniteNumber(estimateUsageCost({ usage: params.usage, cost }));
 }
 
 /** Persists usage accounting and selected runtime metadata to the session store. */
@@ -95,6 +99,7 @@ export async function persistSessionUsageUpdate(params: {
   storePath?: string;
   sessionKey?: string;
   cfg?: OpenClawConfig;
+  agentDir?: string;
   usage?: NormalizedUsage;
   /**
    * Usage from the last individual API call (not accumulated). When provided,
@@ -105,9 +110,10 @@ export async function persistSessionUsageUpdate(params: {
   lastCallUsage?: NormalizedUsage;
   modelUsed?: string;
   providerUsed?: string;
+  agentHarnessId?: string;
   contextTokensUsed?: number;
+  contextTokensSource?: SessionEntry["contextTokensSource"];
   promptTokens?: number;
-  usageIsContextSnapshot?: boolean;
   isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
@@ -126,6 +132,7 @@ export async function persistSessionUsageUpdate(params: {
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
   const cfg = params.cfg ?? getRuntimeConfig();
+  const agentHarnessId = normalizeOptionalString(params.agentHarnessId);
   const hasUsage = hasNonzeroUsage(params.usage);
   const hasPromptTokens =
     typeof params.promptTokens === "number" &&
@@ -133,10 +140,7 @@ export async function persistSessionUsageUpdate(params: {
     params.promptTokens > 0;
   const hasUsableLastCallUsage =
     Boolean(params.lastCallUsage) && params.lastCallUsage?.contextUsage?.state !== "unavailable";
-  const hasUsableUsageContextSnapshot =
-    params.usageIsContextSnapshot === true && params.usage?.contextUsage?.state !== "unavailable";
-  const hasFreshContextSnapshot =
-    hasUsableLastCallUsage || hasPromptTokens || hasUsableUsageContextSnapshot;
+  const hasFreshContextSnapshot = hasUsableLastCallUsage || hasPromptTokens;
   const compactionTokensAfter = resolveNonNegativeTokenCount(params.compactionTokensAfter);
   const hasCompactionSnapshot = compactionTokensAfter !== undefined;
 
@@ -161,13 +165,10 @@ export async function persistSessionUsageUpdate(params: {
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
           // `lastCallUsage` reflects only the final API call — the true context.
-          const usageForContext =
-            params.lastCallUsage ??
-            (params.usageIsContextSnapshot === true ? params.usage : undefined);
           const usageTotalTokens =
             hasFreshContextSnapshot && !preserveUserFacingRunState
               ? deriveSessionTotalTokens({
-                  usage: usageForContext,
+                  lastCallUsage: params.lastCallUsage,
                   contextTokens: resolvedContextTokens,
                   promptTokens: params.promptTokens,
                 })
@@ -185,6 +186,7 @@ export async function persistSessionUsageUpdate(params: {
             ? undefined
             : estimateSessionRunCostUsd({
                 cfg,
+                agentDir: params.agentDir,
                 usage: params.usage,
                 providerUsed: params.providerUsed ?? entry.modelProvider,
                 modelUsed: params.modelUsed ?? entry.model,
@@ -194,6 +196,9 @@ export async function persistSessionUsageUpdate(params: {
               ? entry.modelProvider
               : (params.providerUsed ?? entry.modelProvider),
             model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+            ...(!preserveSessionModelState
+              ? { agentHarnessId, contextTokensSource: params.contextTokensSource }
+              : {}),
             ...(resolvedContextTokens !== undefined
               ? { contextTokens: resolvedContextTokens }
               : {}),
@@ -224,9 +229,10 @@ export async function persistSessionUsageUpdate(params: {
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
-          if ((hasFreshContextSnapshot || hasCompactionSnapshot) && !preserveUserFacingRunState) {
+          if ((hasPositiveUsageTotal || hasCompactionSnapshot) && !preserveUserFacingRunState) {
             patch.totalTokens = totalTokens;
             patch.totalTokensFresh = true;
+            patch.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
             const accountedGoal = resolveSessionGoalDisplayState({ ...entry, ...patch }, updatedAt);
             if (accountedGoal) {
               patch.goal = accountedGoal;
@@ -237,6 +243,7 @@ export async function persistSessionUsageUpdate(params: {
               entry.totalTokensFresh !== true)
           ) {
             patch.totalTokensFresh = false;
+            patch.totalTokensVersion = undefined;
           }
           return preserveUserFacingRunState
             ? patch
@@ -274,6 +281,9 @@ export async function persistSessionUsageUpdate(params: {
               ? entry.modelProvider
               : (params.providerUsed ?? entry.modelProvider),
             model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+            ...(!preserveSessionModelState
+              ? { agentHarnessId, contextTokensSource: params.contextTokensSource }
+              : {}),
             ...(contextTokens !== undefined ? { contextTokens } : {}),
             systemPromptReport: preserveUserFacingRunState
               ? entry.systemPromptReport
@@ -288,6 +298,7 @@ export async function persistSessionUsageUpdate(params: {
             // A completed run without a context snapshot invalidates any fresh
             // zero persisted for the previously empty session.
             patch.totalTokensFresh = false;
+            patch.totalTokensVersion = undefined;
           }
           return preserveUserFacingRunState
             ? patch

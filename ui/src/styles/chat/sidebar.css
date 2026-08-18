@@ -2,138 +2,20 @@
 .chat-workbench {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
-/* A collapsed rail renders nothing at all — the whole width goes back to the
-   thread. Reopen via the pane header or ⇧⌘B. */
-.chat-workbench--workspace-collapsed {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* Bottom dock mirrors the terminal panel: the rail becomes a strip under the
-   thread instead of a column beside it. */
-.chat-workbench--dock-bottom {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
-}
-
-.chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.chat-workbench--dock-bottom .chat-workspace-rail {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  border-left: none;
-  border-top: 1px solid var(--border);
-}
-
-/* Background-tasks rail: always right-docked, taking the last grid track. It
-   composes with the workspace rail (three columns when both are open) and
-   with a bottom-docked workspace strip (the strip spans under it). These
-   rules sit after the collapse/dock modifiers so the extra column wins at
-   equal specificity. */
-.chat-workbench--tasks-open {
-  grid-template-columns: minmax(0, 1fr) minmax(270px, 330px);
-}
-
-.chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-  .chat-workbench--dock-bottom
-) {
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(270px, 330px);
-}
-
-/* Compact icon button shared by the pane header actions. Sizing only — chrome
-   stays ghost; .btn--icon's 36px min-width/height would win otherwise. */
+/* Compact icon button shared by the pane header actions. */
 .chat-icon-btn {
   width: 28px;
   min-width: 28px;
   height: 28px;
   min-height: 28px;
   padding: 5px;
-}
-
-/* Both rails adapt to the pane width (side column on wide panes, bottom strip
-   on narrow ones — chat-pane measures and flips the presentation), so their
-   toggles stay available at every width. */
-
-/* Positioning context for the badge on both the pane-header and floating
-   variants (the floating buttons are static children of the toggle row). */
-.chat-workspace-toggle,
-.chat-tasks-toggle {
-  position: relative;
-}
-
-.chat-workspace-toggle__badge,
-.chat-tasks-toggle__badge {
-  position: absolute;
-  top: 0;
-  right: -2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-full);
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 14px;
-  text-align: center;
-}
-
-/* Drop zones shown while dragging the rail's grip; the hovered edge wins. */
-.chat-workbench__dock-zones {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
-  pointer-events: none;
-}
-
-.chat-workbench__dock-zone {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 550;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.chat-workbench__dock-zone--right {
-  top: 8px;
-  right: 8px;
-  bottom: 8px;
-  width: 26%;
-}
-
-.chat-workbench__dock-zone--bottom {
-  right: 8px;
-  bottom: 8px;
-  left: 8px;
-  height: 28%;
-}
-
-.chat-workbench__dock-zone--active {
-  border-style: solid;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--text-strong);
-}
-
-/* The bottom zone paints over the right zone's lower corner; keep the active
-   one on top so its label stays readable. */
-.chat-workbench__dock-zone--active {
-  z-index: 1;
 }
 
 /* The workspace rail docks flush to the window edge like the terminal panel:
@@ -144,6 +26,10 @@
   .content--chat:has(.chat-workbench) {
     padding-left: 0;
     padding-right: 0;
+  }
+
+  .content--chat:has(.chat-workbench) .scope-upgrade-chip-row {
+    padding: 8px 20px 0;
   }
 
   .content--chat:has(.chat-workbench) .chat {
@@ -173,6 +59,15 @@
   flex: 1 1 0;
 }
 
+.chat-main__conversation-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .chat-main__conversation {
   position: relative;
   display: flex;
@@ -183,16 +78,19 @@
   overflow: hidden;
 }
 
-.chat-main--rail-docked {
-  flex-direction: row;
-}
-
-.chat-main--rail-docked > openclaw-chat-session-rail {
-  display: block;
-  width: 400px;
-  min-width: 400px;
-  min-height: 0;
-  flex: 0 0 400px;
+/* Header-to-transcript blend. It stops one thread gutter short of both pane
+   edges: the transcript's scrollbar lives in that strip, and a full-width
+   overlay paints over the thumb's top (it vanishes under the fade while
+   scrolling). Transcript content never enters the gutter, so nothing escapes
+   the blend. Both edges stay symmetric so RTL keeps the same clearance. */
+.chat-main__conversation::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 0 var(--chat-thread-gutter) auto;
+  height: 24px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, var(--chat-surface), transparent);
 }
 
 openclaw-chat-sidebar-region,
@@ -219,151 +117,141 @@ openclaw-chat-sidebar-region,
   overflow: hidden;
 }
 
+.sidebar-region--bottom {
+  flex-direction: column;
+}
+
+.sidebar-region--bottom .sidebar-region__primary {
+  width: 100%;
+  min-height: 200px;
+}
+
+.sidebar-region--bottom .sidebar-column__divider {
+  width: 100%;
+}
+
 .sidebar-column {
   display: flex;
   flex: 0 0 auto;
   min-width: 260px;
   min-height: 0;
   overflow: hidden;
-  background: var(--panel);
+  background: transparent;
   flex-direction: column;
   animation: chat-sidebar-fade-in 160ms ease-out;
 }
 
-.sidebar-column__header {
+/* Canonical rail header contract. The header owns geometry; actions are bare
+   glyphs with an invisible hit area so generic button chrome cannot leak in. */
+.rail-header {
+  box-sizing: border-box;
   display: flex;
+  height: var(--rail-header-height);
+  min-height: var(--rail-header-height);
   flex: 0 0 auto;
   align-items: center;
-  min-width: 0;
-  min-height: 42px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel-strong) 90%, transparent);
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 var(--rail-header-padding-end) 0 var(--rail-header-padding-start);
+  border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
+  background: var(--rail-header-background);
 }
 
-.sidebar-column__tabs {
-  --track-width: 0;
-  display: block;
-  flex: 1 1 auto;
-  align-self: stretch;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.sidebar-column__tabs::part(body) {
-  display: none;
-}
-
-.sidebar-column__tabs::part(nav) {
+.rail-header__copy {
   display: flex;
-  height: 100%;
-}
-
-.sidebar-column__tab {
-  flex: 0 1 auto;
   min-width: 0;
-  cursor: grab;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--rail-header-copy-gap);
 }
 
-.sidebar-column__tab::part(base) {
-  position: relative;
-  height: 100%;
-  padding: 0 12px;
+.rail-header__eyebrow {
+  overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--rail-header-eyebrow-size);
+  letter-spacing: var(--rail-header-eyebrow-letter-spacing);
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
-.sidebar-column__tab[active]::part(base) {
+.rail-header__title {
+  overflow: hidden;
   color: var(--text);
+  font-size: var(--rail-header-title-size);
+  font-weight: var(--rail-header-title-weight);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.sidebar-column__tab[active]::part(base)::after {
-  position: absolute;
-  right: 10px;
-  bottom: 0;
-  left: 10px;
-  height: 2px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  content: "";
-}
-
-.sidebar-column__actions {
+.rail-header__actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 2px;
-  padding-right: 5px;
+  gap: var(--rail-header-action-gap);
 }
 
-.sidebar-column__actions .btn {
-  width: 30px;
-  height: 30px;
-  min-height: 30px;
-  padding: 6px;
+.rail-header__action {
+  display: inline-flex;
+  width: var(--rail-header-action-size);
+  min-width: var(--rail-header-action-size);
+  height: var(--rail-header-action-size);
+  min-height: var(--rail-header-action-size);
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: none;
+  color: var(--rail-header-action-color);
+  font: inherit;
+  opacity: 1;
+  transform: none;
 }
 
-.sidebar-column__body,
-.sidebar-column__panel,
-.sidebar-column__panel > :is(.chat, openclaw-chat-detail-panel, openclaw-session-discussion) {
-  display: flex;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
+.rail-header__action:hover,
+.rail-header__action:focus-visible {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--rail-header-action-hover-color);
+  transform: none;
 }
 
-.sidebar-column__panel[hidden] {
-  display: none;
+.rail-header__action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
 }
 
-.sidebar-column__panel--wide {
-  position: absolute;
-  z-index: 1;
-  top: 42px;
-  bottom: 0;
+.rail-header__action.is-active,
+.rail-header__action[aria-pressed="true"] {
+  background: transparent;
+  color: var(--rail-header-action-active-color);
 }
 
-.sidebar-column__panel > openclaw-chat-detail-panel {
-  flex-direction: column;
+.rail-header__action:disabled,
+.rail-header__action[aria-disabled="true"] {
+  opacity: var(--rail-header-action-disabled-opacity);
+}
+
+.rail-header__action svg,
+.rail-header__action .nav-collapse-toggle__icon,
+.rail-header__action .nav-collapse-toggle__icon svg {
+  display: block;
+  width: var(--rail-header-action-glyph-size);
+  height: var(--rail-header-action-glyph-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-column__divider {
   z-index: 2;
-}
-
-.sidebar-empty-side-drop-zone {
-  position: absolute;
-  z-index: 3;
-  top: 0;
-  bottom: 0;
-  width: 48px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
-}
-
-.sidebar-empty-side-drop-zone--left {
-  left: 0;
-}
-
-.sidebar-empty-side-drop-zone--right {
-  right: 0;
-}
-
-.sidebar-empty-side-drop-zone__boundary {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-}
-
-.sidebar-empty-side-drop-zone--left .sidebar-empty-side-drop-zone__boundary {
-  right: 0;
-}
-
-.sidebar-empty-side-drop-zone--right .sidebar-empty-side-drop-zone__boundary {
-  left: 0;
 }
 
 .sidebar-region--narrow {
@@ -379,131 +267,542 @@ openclaw-chat-sidebar-region,
   min-height: 200px;
 }
 
-.sidebar-column__panel--narrow {
-  z-index: 1;
-  grid-column: 1;
-  grid-row: 2;
-  min-height: 0;
-  margin-top: 42px;
+/* One chat-side panel owns all lateral tools. Tabs change content without
+   changing the panel geometry, so resize and focus survive tab switches. */
+.side-panel {
+  position: relative;
+  flex: 0 0 auto;
+  background: var(--bg);
 }
 
-.sidebar-column--collapsed {
-  z-index: 0;
-  grid-column: 1;
-  grid-row: 2;
+:root[data-theme-mode="dark"] .side-panel {
+  --rail-header-background: var(--bg-accent);
+  background: var(--bg-accent);
+}
+
+:root[data-theme-mode="dark"] .sidebar-column__divider {
+  --rail-divider-color: var(--border-strong);
+}
+
+.side-panel--bottom {
   width: 100%;
   min-width: 0;
-  min-height: 160px;
-  flex: 1 1 0;
 }
 
-.chat-workspace-rail {
-  grid-column: 2;
-  grid-row: 1;
+.side-panel__header {
+  --rail-header-action-glyph-size: 15px;
+  margin-bottom: 0;
+  padding-left: 0;
+  border-bottom: 0;
+}
+
+/* Width model: the tabs region takes the free space, but the strip itself sizes
+   to its tabs and is the only thing that clips. The new-tab control sits outside
+   that clip, so it hugs the last tab when everything fits and stays pinned at
+   the visible edge once the tabs overflow. */
+.side-panel__header-tabs {
   display: flex;
-  flex-direction: column;
   min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel) 84%, transparent);
-}
-
-.chat-workspace-rail__header {
-  display: flex;
+  flex: 1 1 auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
-.chat-workspace-rail__title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.side-panel__header-tabs .side-panel-type-menu {
+  flex: 0 0 auto;
+}
+
+.side-panel__header .tabstrip {
+  --track-width: 0;
+  display: block;
   min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
 }
 
-.chat-workspace-rail__eyebrow {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+/* Overflow indicator: the edge that still hides tabs fades out, so a partially
+   scrolled pill reads as "more tabs this way" instead of a hard cut or a tab
+   that lost its label. The classes are physical because the masks are: the ref
+   measures client rects so they stay correct under RTL. */
+.side-panel__header .tabstrip.has-scroll-right {
+  mask-image: linear-gradient(to right, black calc(100% - 30px), transparent 100%);
 }
 
-.chat-workspace-rail__title strong {
-  color: var(--text);
-  font-size: var(--control-ui-text-md);
-  line-height: 1.2;
+.side-panel__header .tabstrip.has-scroll-left {
+  mask-image: linear-gradient(to right, transparent 0, black 30px);
 }
 
-.chat-workspace-rail__actions {
-  display: inline-flex;
+.side-panel__header .tabstrip.has-scroll-left.has-scroll-right {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 30px,
+    black calc(100% - 30px),
+    transparent 100%
+  );
+}
+
+.side-panel__header .tabstrip::part(nav) {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
   align-items: center;
-  gap: 6px;
 }
 
-.chat-workspace-rail__terminal,
-.chat-workspace-rail__refresh,
-.chat-workspace-rail__dock,
-.chat-workspace-rail__collapse-toggle {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  padding: 0;
-}
-
-/* Grab affordance for drag-to-dock. */
-.chat-workspace-rail__grip {
-  cursor: grab;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
-}
-
-.chat-workspace-rail__grip:active {
-  cursor: grabbing;
-}
-
-.chat-workspace-rail__terminal {
-  display: inline-flex;
+/* Third regime: once every tab is at its floor the row must scroll, not clip.
+   Clipping cuts a tab mid-pill, which reads as an icon-only tab and as a hard
+   label cut past the fade mask that lives inside the pill. */
+.side-panel__header .tabstrip::part(tabs) {
+  width: 100%;
+  min-width: 0;
   align-items: center;
-  justify-content: center;
-  /* Chromeless at rest like the sibling ghost buttons; chrome on hover only. */
-  border: 1px solid transparent;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-inline-start: 6px;
+  scrollbar-width: none;
+  scroll-snap-type: inline proximity;
+  scroll-padding-inline: 6px;
+}
+
+.side-panel__header .tabstrip::part(body) {
+  display: none;
+}
+
+.side-panel__header .tabstrip-tab {
+  position: relative;
+  width: max-content;
+  min-width: 63px;
+  max-width: 160px;
+  flex: 0 1 auto;
+  scroll-margin-inline-end: 16px;
+  scroll-snap-align: start;
+}
+
+.side-panel__header .tabstrip-tab:not(:first-of-type) {
+  margin-left: 0;
+}
+
+.side-panel__header .tabstrip-tab__close:has(~ .tabstrip-tab) {
+  margin-right: 0;
+}
+
+.side-panel__header .tabstrip-separator {
+  width: 1px;
+  height: 12px;
+  margin: 0 3px;
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  transition: opacity 120ms ease;
+}
+
+/* Hide, never unmount: the separators bracketing the active pill keep their
+   width, otherwise switching tabs shifts every neighbour horizontally. */
+.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close + .tabstrip-separator,
+.side-panel__header .tabstrip-separator:has(+ .tabstrip-tab[active]) {
+  opacity: 0;
+}
+
+.side-panel__header .tabstrip-tab:is(.is-drop-before, .is-drop-after)::after {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--text);
+  content: "";
+}
+
+.side-panel__header .tabstrip-tab.is-drop-before::after {
+  inset-inline-start: 0;
+}
+
+.side-panel__header .tabstrip-tab.is-drop-after::after {
+  inset-inline-end: 0;
+}
+
+.side-panel__header .tabstrip-tab::part(base) {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  padding-block: 0;
+  padding-inline: 8px 0;
+  border: 0;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
-.chat-workspace-rail__terminal:hover,
-.chat-workspace-rail__terminal:focus-visible {
+.side-panel__header
+  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base),
+.side-panel__header .tabstrip-tab[active]::part(base) {
+  border-start-start-radius: var(--radius-md);
+  border-end-start-radius: var(--radius-md);
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.side-panel__header
+  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base) {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-/* Overrides the shared .nav-collapse-toggle chrome (border, elevated
-   background, inset highlight): rail header buttons only show chrome on
-   hover. */
-.chat-workspace-rail__collapse-toggle {
-  flex: 0 0 auto;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-
-.chat-workspace-rail__collapse-toggle:hover {
-  border-color: transparent;
+.side-panel__header .tabstrip-tab[active]::part(base) {
   background: var(--bg-hover);
-  transform: none;
+  color: var(--text);
 }
 
-.chat-workspace-rail__terminal svg,
-.chat-workspace-rail__refresh svg,
-.chat-workspace-rail__dock svg,
-.chat-workspace-rail__collapse-toggle svg,
+.side-panel__header .tabstrip-tab__icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.side-panel__header .tabstrip-tab[active] .tabstrip-tab__icon {
+  color: var(--text);
+}
+
+.side-panel__header .tabstrip-tab__icon svg,
+.side-panel-type-option__icon svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.6px;
+}
+
+.side-panel__header .tabstrip-tab__label {
+  min-width: 24px;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.side-panel__header .tabstrip-tab__tooltip-trigger {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  height: 100%;
+  min-width: 24px;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.side-panel__header .tabstrip-tab__tooltip-trigger.has-label-overflow {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 11px), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 11px), transparent 100%);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+.side-panel__header .tabstrip-tab__label-tooltip {
+  display: inline-flex !important;
+  width: max-content;
+  max-width: 100%;
+  min-width: 24px;
+  align-self: center;
+  align-items: center;
+  flex: 1 1 auto;
+}
+
+.side-panel__header .tabstrip-tab__close {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-self: center;
+  margin: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  border-start-end-radius: var(--radius-md);
+  border-end-end-radius: var(--radius-md);
+  opacity: 0;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab:hover + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab__close:hover,
+.side-panel__header .tabstrip-tab__close:focus-visible {
+  opacity: 1;
+}
+
+.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+}
+
+.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close {
+  background: var(--bg-hover);
+}
+
+.side-panel__header .tabstrip-tab__close-box {
+  width: 12px;
+  height: 12px;
+  opacity: 0.72;
+}
+
+.side-panel__header .tabstrip-tab__close svg {
+  width: 11px;
+  height: 11px;
+}
+
+.side-panel__header .tabstrip-tab__close:hover .tabstrip-tab__close-box,
+.side-panel__header .tabstrip-tab__close:focus-visible .tabstrip-tab__close-box {
+  opacity: 1;
+}
+
+.side-panel__header .tabstrip-tab__close-box,
+.side-panel__header .tabstrip-new-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.side-panel__header .tabstrip-new-control {
+  flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-panel__header .tabstrip-tab::part(base),
+  .side-panel__header .tabstrip-tab__close,
+  .side-panel__header .tabstrip-separator {
+    transition: none;
+  }
+}
+
+.side-panel__actions {
+  gap: 6px;
+  padding-right: 4px;
+}
+
+.side-panel__action-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--rail-header-action-gap);
+}
+
+.side-panel__action-group--close {
+  padding-left: 5px;
+  border-left: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
+}
+
+.side-panel__body,
+.side-panel__panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+}
+
+.side-panel__panel[hidden] {
+  display: none;
+}
+
+.side-panel__panel
+  > :is(
+    .chat,
+    .chat-workspace-rail,
+    .chat-tasks-rail,
+    openclaw-chat-detail-panel,
+    openclaw-chat-session-rail,
+    openclaw-session-discussion,
+    openclaw-terminal-panel,
+    openclaw-browser-panel,
+    openclaw-desktop-panel
+  ) {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+}
+
+.side-panel__empty-header-title {
+  padding-left: var(--rail-header-padding-start);
+  color: var(--text);
+  font-size: var(--rail-header-title-size);
+}
+
+.side-panel-type-menu::part(menu) {
+  width: max-content;
+  min-width: 0;
+  max-width: min(208px, calc(100vw - 24px));
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+
+.side-panel-type-menu__item {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  white-space: nowrap;
+}
+
+.side-panel-type-menu__item::part(base) {
+  min-height: var(--menu-item-height);
+  padding: 9px 8px;
+  border-radius: var(--menu-item-radius);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.side-panel-type-menu__item:hover::part(base),
+.side-panel-type-menu__item:focus-visible::part(base) {
+  background: var(--bg-hover);
+}
+
+.side-panel-type-menu__item + .side-panel-type-menu__item {
+  margin-top: 1px;
+}
+
+.side-panel-type-option__icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  color: var(--muted);
+}
+
+.side-panel-type-option__label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-panel-type-option__shortcut {
+  display: inline-flex;
+  min-width: 42px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--muted);
+  font: 500 calc(10px * var(--control-ui-text-scale)) / 1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.side-panel-empty {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 28px;
+  text-align: center;
+}
+
+.side-panel-empty__title {
+  margin-top: 14px;
+  color: var(--text);
+  font-size: var(--control-ui-text-md);
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.side-panel-empty__description {
+  max-width: 40ch;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+.side-panel-empty--selector .side-panel-empty__title {
+  margin-top: 0;
+  font-size: var(--control-ui-text-md);
+}
+
+.side-panel-empty--selector {
+  transform: translateY(-18px);
+}
+
+.side-panel-empty--selector .side-panel-empty__description {
+  max-width: none;
+  margin-top: 4px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.side-panel-empty__types {
+  display: grid;
+  width: min(100%, 320px);
+  margin-top: 16px;
+  gap: 6px;
+}
+
+.side-panel-empty__type {
+  display: grid;
+  min-height: var(--menu-item-height);
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  text-align: left;
+}
+
+.side-panel-empty__type:hover,
+.side-panel-empty__type:focus-visible {
+  background: var(--bg-hover);
+}
+
+.sidebar-region--expanded .sidebar-region__primary {
+  display: none;
+}
+
+.sidebar-region--expanded .side-panel {
+  flex: 1 1 0;
+}
+
+.side-panel--narrow {
+  grid-column: 1;
+  grid-row: 2;
+  width: 100% !important;
+  min-width: 0;
+}
+
+.chat-workspace-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+}
+
 .chat-workspace-rail__file-icon svg {
   width: 15px;
   height: 15px;
@@ -515,7 +814,6 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-workspace-rail__path {
-  /* Fixed rows: only the scroll area gives way when the bottom dock is short. */
   flex-shrink: 0;
   padding: 9px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
@@ -565,32 +863,6 @@ openclaw-chat-sidebar-region,
   min-height: 0;
   overflow-y: auto;
   padding-top: 8px;
-}
-
-/* Bottom dock is short and wide: sections sit side by side as their own
-   scroll columns instead of compressing into clipped slivers. */
-.chat-workbench--dock-bottom .chat-workspace-rail__scroll {
-  flex-direction: row;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__section {
-  flex: 1 0 260px;
-  min-width: 0;
-}
-
-.chat-workbench--dock-bottom
-  .chat-workspace-rail__scroll
-  > .chat-workspace-rail__section
-  + .chat-workspace-rail__section {
-  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
-}
-
-/* The empty-state notice can sit in the row too; keep it readable. */
-.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__state {
-  flex: 0 0 auto;
-  align-self: flex-start;
 }
 
 .chat-workspace-rail__section-title {
@@ -700,7 +972,7 @@ openclaw-chat-sidebar-region,
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
-  font-size: 12px; /* was 10px */
+  font-size: var(--control-ui-text-sm); /* was 10px */
   line-height: 1.2;
 }
 
@@ -797,94 +1069,26 @@ openclaw-chat-sidebar-region,
 
 .chat-workspace-rail__browser-caption {
   color: var(--muted);
-}
-
-.chat-workspace-rail__browser-caption {
   padding: 0 12px 6px;
   font-size: var(--control-ui-text-xs);
   line-height: 1.2;
 }
 
-/* Background-tasks rail: independent element classes on purpose — the
-   workspace rail's dock-bottom modifiers re-lay-out its descendants, and the
-   tasks rail must not inherit that when the workspace strip moves. */
 .chat-tasks-rail {
-  grid-column: -2;
-  grid-row: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
-.chat-tasks-rail__header {
+.chat-pane-primary-column {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-}
-
-.chat-tasks-rail__title {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 2px;
   min-width: 0;
-}
-
-.chat-tasks-rail__eyebrow {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.1;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
   overflow: hidden;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.chat-tasks-rail__title strong {
-  overflow: hidden;
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-tasks-rail__back {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  padding: 0;
-  place-items: center;
-}
-
-.chat-tasks-rail__back svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8px;
-}
-
-.chat-tasks-rail__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.chat-tasks-rail__refresh svg,
-.chat-tasks-rail__collapse-toggle svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
 }
 
 .chat-tasks-rail__state {
@@ -904,6 +1108,10 @@ openclaw-chat-sidebar-region,
   flex-direction: column;
   min-height: 0;
   overflow: auto;
+}
+
+.chat-tasks-rail__scroll[hidden] {
+  display: none;
 }
 
 /* List mode splits scrolling per section: running work owns the rail and the
@@ -982,12 +1190,17 @@ openclaw-chat-sidebar-region,
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 62%, transparent);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-tasks-rail__task:hover,
 .chat-tasks-rail__task:focus-within {
   border-color: color-mix(in srgb, var(--border-strong) 45%, transparent);
+}
+
+.chat-tasks-rail__task--open {
+  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
 }
 
 .chat-tasks-rail__task-head {
@@ -997,7 +1210,7 @@ openclaw-chat-sidebar-region,
   min-width: 0;
 }
 
-.chat-tasks-rail__task-disclosure {
+.chat-tasks-rail__task-open {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
@@ -1009,24 +1222,7 @@ openclaw-chat-sidebar-region,
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
-}
-
-.chat-tasks-rail__task-chevron {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  color: var(--muted);
-}
-
-.chat-tasks-rail__task-chevron svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8px;
+  cursor: var(--cursor-action);
 }
 
 /* openclaw-tooltip is display:contents, so the title span itself is the flex
@@ -1097,8 +1293,8 @@ openclaw-chat-sidebar-region,
   stroke-width: 1.8px;
 }
 
-/* One quiet text line replaces the status/runtime pill chips: colored status
-   word, runtime, relative time, trailing transcript link. */
+/* One quiet text line replaces the status/runtime pill chips: colored status,
+   runtime, timing, and tool activity. */
 .chat-tasks-rail__task-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1151,78 +1347,6 @@ openclaw-chat-sidebar-region,
   overflow-wrap: anywhere;
 }
 
-.chat-tasks-rail__detail {
-  display: flex;
-  flex: 1 0 auto;
-  flex-direction: column;
-  gap: 14px;
-  min-width: 0;
-  padding: 14px 12px 18px;
-}
-
-.chat-tasks-rail__detail-summary {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.chat-tasks-rail__detail-status-line {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: baseline;
-  gap: 7px;
-  min-width: 0;
-}
-
-.chat-tasks-rail__detail-status-line .chat-tasks-rail__task-meta {
-  flex: 1 1 auto;
-}
-
-.chat-tasks-rail__detail-stop {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  padding: 0;
-  place-items: center;
-  color: var(--danger);
-}
-
-.chat-tasks-rail__detail-stop svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8px;
-}
-
-.chat-tasks-rail__detail-activity {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--warn) 24%, var(--border));
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--warn) 6%, transparent);
-}
-
-.chat-tasks-rail__detail-activity span {
-  color: var(--warn);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-}
-
-.chat-tasks-rail__detail-activity strong {
-  color: var(--text);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 550;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
 .chat-tasks-rail__detail-blocks {
   display: grid;
   gap: 12px;
@@ -1269,31 +1393,30 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-tasks-rail__task-inspector-state--error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
   color: var(--danger);
 }
 
-/* Quiet by default so a column of rows is not a column of accent links;
-   pushed right to end the meta line like a row action. */
-.chat-tasks-rail__task-transcript {
-  margin-left: auto;
-  padding: 0;
-  border: 0;
+.chat-tasks-rail__task-inspector-retry {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-radius: var(--radius-md);
   background: transparent;
-  color: var(--muted);
+  color: var(--text);
   font: inherit;
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.3;
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
-  text-underline-offset: 2px;
 }
 
-.chat-tasks-rail__task-transcript:hover,
-.chat-tasks-rail__task-transcript:focus-visible {
-  color: var(--accent);
-  text-decoration-color: currentColor;
+.chat-tasks-rail__task-inspector-retry:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.chat-tasks-rail__task-inspector-retry:disabled {
+  opacity: 0.55;
 }
 
 @keyframes chat-sidebar-fade-in {
@@ -1329,7 +1452,7 @@ openclaw-chat-sidebar-region,
 /* Smaller close button for sidebar */
 .sidebar-header .btn {
   padding: 4px 8px;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   min-width: auto;
   line-height: 1;
 }
@@ -1350,6 +1473,77 @@ openclaw-chat-sidebar-region,
   min-height: 0;
   overflow: auto;
   padding: 16px;
+}
+
+.chat-task-detail {
+  min-height: 0;
+}
+
+.chat-task-detail__header {
+  gap: 10px;
+}
+
+.chat-task-detail__heading {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.chat-task-detail__heading .sidebar-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-task-detail__meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.chat-task-detail__tool {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-task-detail__content {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-task-detail__transcript {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-task-detail__transcript > .chat-thread {
+  padding: 12px 0 6px;
+  border-radius: 0;
+}
+
+.chat-task-detail__transcript .chat-thread-inner {
+  width: calc(100% - 16px);
+}
+
+.chat-task-detail__state {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.chat-task-detail__state--error {
+  color: var(--danger);
+}
+
+.chat-task-detail__fallback .chat-tasks-rail__detail-blocks {
+  gap: 12px;
 }
 
 /* Full-height panel kinds need a bounded wrapper so their inner content can
@@ -1432,7 +1626,7 @@ openclaw-session-discussion {
   flex: 1;
   overflow: hidden;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1484,7 +1678,7 @@ openclaw-session-discussion {
 
 .sidebar-file-view__editor-item {
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
 }
 
@@ -1500,6 +1694,8 @@ openclaw-session-discussion {
 }
 
 .file-view__search input {
+  --control-ui-touch-input-size: var(--control-ui-text-sm);
+
   min-width: 0;
   flex: 1;
   height: 28px;
@@ -1510,7 +1706,7 @@ openclaw-session-discussion {
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .file-view__search input:focus-visible {
@@ -1522,7 +1718,7 @@ openclaw-session-discussion {
   min-width: 4.5ch;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-align: right;
 }
 
@@ -1560,7 +1756,7 @@ openclaw-session-discussion {
   background: transparent;
   color: var(--text);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.6;
 }
 
@@ -1608,37 +1804,35 @@ openclaw-session-discussion {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-/* Code syntax palette (dark below, light overrides further down): deliberate
-   literal hexes tuned for code legibility, not theme tokens — the UI palette
-   has no per-token-kind roles and retinting per theme family is not wanted. */
+/* Code syntax palette is shared with highlighted message code via base tokens. */
 .file-view .tok-comment {
   color: var(--muted);
   font-style: italic;
 }
 
 .file-view .tok-keyword {
-  color: #ff8a80;
+  color: var(--hljs-keyword);
 }
 
 .file-view
   :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
-  color: #79c0ff;
+  color: var(--hljs-number);
 }
 
 .file-view :where(.tok-string, .tok-string2) {
-  color: #a5d6ff;
+  color: var(--hljs-string);
 }
 
 .file-view :where(.tok-heading, .tok-definition) {
-  color: #d2a8ff;
+  color: var(--hljs-title);
 }
 
 .file-view :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
-  color: #ffa657;
+  color: var(--hljs-type);
 }
 
 .file-view :where(.tok-propertyName, .tok-labelName) {
-  color: #7ee787;
+  color: var(--hljs-attribute);
 }
 
 .file-view :where(.tok-link, .tok-url) {
@@ -1646,16 +1840,16 @@ openclaw-session-discussion {
 }
 
 .file-view .tok-meta {
-  color: #c9d1d9;
+  color: var(--hljs-meta);
 }
 
 .file-view .tok-deleted {
-  color: #ffa198;
+  color: var(--hljs-deletion);
   background: rgba(248, 81, 73, 0.12);
 }
 
 .file-view .tok-inserted {
-  color: #7ee787;
+  color: var(--hljs-addition);
   background: rgba(46, 160, 67, 0.12);
 }
 
@@ -1665,38 +1859,6 @@ openclaw-session-discussion {
 
 .file-view .tok-strong {
   font-weight: 600;
-}
-
-:root[data-theme-mode="light"] .file-view .tok-keyword {
-  color: #cf222e;
-}
-
-:root[data-theme-mode="light"]
-  .file-view
-  :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
-  color: #0550ae;
-}
-
-:root[data-theme-mode="light"] .file-view :where(.tok-string, .tok-string2) {
-  color: #0a3069;
-}
-
-:root[data-theme-mode="light"] .file-view :where(.tok-heading, .tok-definition) {
-  color: #8250df;
-}
-
-:root[data-theme-mode="light"]
-  .file-view
-  :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
-  color: #953800;
-}
-
-:root[data-theme-mode="light"] .file-view :where(.tok-propertyName, .tok-labelName) {
-  color: #116329;
-}
-
-:root[data-theme-mode="light"] .file-view .tok-meta {
-  color: #57606a;
 }
 
 .file-view__loading {
@@ -1714,7 +1876,7 @@ openclaw-session-discussion {
   border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
   background: color-mix(in srgb, var(--warn) 10%, var(--panel));
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .file-view__save-notice-actions {
@@ -1757,7 +1919,7 @@ openclaw-session-discussion {
   gap: 8px;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm); /* was 11px */
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -1840,7 +2002,7 @@ openclaw-session-discussion {
   margin-bottom: 0.95em;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .sidebar-markdown-shell__toolbar {
     flex-direction: column;
     align-items: stretch;
@@ -1857,72 +2019,29 @@ openclaw-session-discussion {
   }
 }
 
-/* Narrow pane: the tasks rail mirrors the workspace rail's bottom strip.
-   chat-view only sets --tasks-open for the side column, so the column
-   templates never fire here; these rules add the strip row instead. */
-.chat-workbench--tasks-dock-bottom {
-  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
-}
-
-/* Both strips open: workspace row 2, tasks row 3. */
-.chat-workbench--tasks-dock-bottom.chat-workbench--dock-bottom {
-  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px) minmax(160px, 236px);
-}
-
-/* A collapsed workspace rail renders nothing, so its strip row must not stay
-   reserved under the tasks strip. */
-.chat-workbench--tasks-dock-bottom.chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
-  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
-}
-
-/* -2 is the second-from-last grid line, so the strip always lands in the last
-   row whether or not the workspace strip sits above it. */
-.chat-workbench--tasks-dock-bottom .chat-tasks-rail {
-  grid-column: 1 / -1;
-  grid-row: -2;
-  border-left: none;
-  border-top: 1px solid var(--border);
-}
-
-/* Bottom strip is short and wide: sections sit side by side as their own
-   scroll columns, matching the workspace rail's bottom dock. */
-.chat-workbench--tasks-dock-bottom .chat-tasks-rail__scroll {
-  flex-direction: row;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.chat-workbench--tasks-dock-bottom .chat-tasks-rail__scroll > .chat-tasks-rail__section {
-  flex: 1 0 260px;
-  min-width: 0;
-  overflow-y: auto;
-  /* Undo the vertical split's bottom-pin cap: strip sections are full-height
-     columns and separate with border-left instead. */
-  max-height: none;
-  border-top: none;
-}
-
-.chat-workbench--tasks-dock-bottom
-  .chat-tasks-rail__scroll
-  > .chat-tasks-rail__section
-  + .chat-tasks-rail__section {
-  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
-}
-
 /* Mobile: Full-screen modal */
 /* ── Session diff panel (sessions.diff sidebar content) ── */
 
 .session-diff {
   display: flex;
+  min-height: 100%;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
+  margin: -8px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .session-diff__summary {
+  position: sticky;
+  top: -16px;
+  z-index: 3;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-bottom: 2px;
+  gap: 6px;
+  min-height: 38px;
+  padding: 4px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--panel);
 }
 
 .session-diff__branch {
@@ -1930,7 +2049,7 @@ openclaw-session-discussion {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-weight: 600;
+  font-weight: 550;
   font-size: var(--control-ui-text-sm);
 }
 
@@ -1942,35 +2061,111 @@ openclaw-session-discussion {
 }
 
 .session-diff__branch-label {
+  max-width: 170px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--mono);
 }
 
+.session-diff__summary-spacer {
+  flex: 1;
+}
+
+.session-diff__toolbar-button,
+.session-diff__toolbar-icon,
 .session-diff__refresh {
-  margin-left: auto;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 4px;
+}
+
+.session-diff__toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-inline: 7px;
+}
+
+.session-diff__toolbar-button svg,
+.session-diff__toolbar-icon svg,
+.session-diff__refresh svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff__section-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 11px 8px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: var(--cursor-action);
+}
+
+.session-diff__section-title:hover,
+.session-diff__section-title:focus-visible {
+  color: var(--text);
+}
+
+.session-diff__section-title svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-diff__files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
 }
 
 .session-diff__file {
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-sm);
+  border-block: 1px solid transparent;
   overflow: hidden;
+}
+
+.session-diff__file:focus-within,
+.session-diff__file:hover {
+  border-color: color-mix(in srgb, var(--border) 68%, transparent);
+  background: color-mix(in srgb, var(--secondary) 42%, transparent);
 }
 
 .session-diff__file-header {
   display: flex;
   align-items: center;
-  gap: 8px;
   width: 100%;
-  padding: 6px 10px;
-  border: 0;
-  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  min-height: 34px;
+}
+
+.session-diff__file-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  padding: 6px 4px 6px 8px;
+  border: none;
+  background: transparent;
   color: var(--text);
   font: inherit;
   font-size: var(--control-ui-text-sm);
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
+}
+
+.session-diff__file-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .session-diff__chevron {
@@ -1990,38 +2185,71 @@ openclaw-session-discussion {
 }
 
 .session-diff__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--muted);
+  width: 18px;
+  height: 18px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .session-diff__status--added {
-  background: var(--ok);
+  color: var(--ok);
 }
 
 .session-diff__status--deleted {
-  background: var(--destructive);
+  color: var(--destructive);
 }
 
 .session-diff__status--renamed {
-  background: var(--accent);
+  color: var(--accent);
 }
 
 .session-diff__status--modified {
-  background: var(--warn);
+  color: var(--warn);
 }
 
 .session-diff__path {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   flex: 1;
   min-width: 0;
-  overflow-wrap: anywhere;
   font-family: var(--mono);
+  white-space: nowrap;
 }
 
 .session-diff__old-path {
+  overflow: hidden;
+  max-width: 110px;
+  flex-shrink: 1;
+  text-overflow: ellipsis;
   color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff__filename {
+  overflow: hidden;
+  flex-shrink: 0;
+  max-width: 48%;
+  text-overflow: ellipsis;
+  color: var(--text-strong);
+  font-weight: 550;
+}
+
+.session-diff__directory {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
 }
 
 .session-diff__badge {
@@ -2033,14 +2261,327 @@ openclaw-session-discussion {
   font-size: calc(var(--control-ui-text-sm) - 2px);
 }
 
+.session-diff .chat-diffstat {
+  gap: 5px;
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff .chat-diffstat__mod {
+  color: var(--warn);
+}
+
+.session-diff__file-menu {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  margin-right: 4px;
+  padding: 4px;
+  opacity: 0;
+}
+
+.session-diff__file:focus-within .session-diff__file-menu,
+.session-diff__file:hover .session-diff__file-menu {
+  opacity: 1;
+}
+
+.session-diff__file-menu svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff__file-body {
+  content-visibility: auto;
+}
+
 .session-diff__file .chat-diff {
   margin-top: 0;
   border-radius: 0;
   max-height: none;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: color-mix(in srgb, var(--secondary) 45%, transparent);
+  line-height: 1.45;
+}
+
+.session-diff__file .chat-diff__row {
+  padding-right: 8px;
+}
+
+/* Skip rows carry 18px expander buttons; the shared baseline row alignment
+   derives the strip's baseline from an icon-only button and shears the text
+   upward, so center these rows instead (tool cards keep baseline rows). */
+.session-diff__file .chat-diff__row--skip {
+  align-items: center;
+}
+
+.session-diff__file .chat-diff__row--skip .chat-diff__text {
+  display: inline-flex;
+  align-items: center;
+}
+
+.session-diff__gap-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Grid, not flex: Chromium's flex layout on <button> pins the label's line box
+   to the button's vertical center, painting the count text into the row above. */
+.session-diff__gap-controls button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: var(--cursor-action);
+}
+
+.session-diff__gap-controls button:hover,
+.session-diff__gap-controls button:focus-visible {
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  color: var(--text);
+}
+
+.session-diff__gap-controls button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-diff__gap-controls .session-diff__gap-count {
+  padding-inline: 5px;
+}
+
+.session-diff--wrap .chat-diff__row {
+  min-width: 0;
+}
+
+.session-diff--wrap .chat-diff__text,
+.session-diff--wrap .session-diff-split__text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .session-diff__note {
-  padding: 2px 2px 4px;
+  padding: 10px;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
+}
+
+.session-diff__footer {
+  position: sticky;
+  bottom: -16px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  margin-top: auto;
+  padding: 7px 10px;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+
+.session-diff__footer:hover,
+.session-diff__footer:focus-visible {
+  background: color-mix(in srgb, var(--secondary) 62%, var(--panel));
+  color: var(--text);
+}
+
+.session-diff__footer svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff-split {
+  overflow: auto;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: color-mix(in srgb, var(--secondary) 45%, transparent);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.session-diff-split__row--pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-width: 640px;
+}
+
+.session-diff-split__side,
+.session-diff-split__row--context {
+  display: grid;
+  grid-template-columns: 42px 16px minmax(max-content, 1fr);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.session-diff-split__side--left {
+  border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.session-diff-split__side--left.session-diff-split__side--filled {
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+}
+
+.session-diff-split__side--right.session-diff-split__side--filled {
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
+}
+
+.session-diff-split__row--context {
+  min-width: max-content;
+}
+
+.session-diff-split__row--skip {
+  display: flex;
+  align-items: center;
+  padding-left: 58px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.session-diff-split__gutter {
+  padding-right: 8px;
+  text-align: right;
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+  user-select: none;
+}
+
+.session-diff-split__sign {
+  text-align: center;
+  font-weight: 600;
+  user-select: none;
+}
+
+.session-diff-split__side--left .session-diff-split__sign {
+  color: var(--destructive);
+}
+
+.session-diff-split__side--right .session-diff-split__sign {
+  color: var(--ok);
+}
+
+.session-diff-split__text {
+  padding-right: 8px;
+  color: var(--text);
+  white-space: pre;
+  tab-size: 4;
+}
+
+openclaw-session-diff-menu[popover] {
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+wa-dropdown.session-diff-menu::part(menu) {
+  width: min(var(--session-diff-menu-width), calc(100vw - 16px));
+  min-width: min(var(--session-diff-menu-width), calc(100vw - 16px));
+  max-width: min(var(--session-diff-menu-width), calc(100vw - 16px));
+}
+
+.session-diff-menu__scope-item .session-menu__text {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.session-diff-menu__sha {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff-menu__subject {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-diff-menu__head {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.session-diff-menu__merge-base {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 7px;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff-menu__sync {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.session-diff-menu__sync p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.session-diff-menu__copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-diff-menu__copy-label {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff-menu__copy-row code {
+  overflow: hidden;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-diff-menu__copy-row.is-command code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-diff-menu__copy-row .chat-copy-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 5px;
 }

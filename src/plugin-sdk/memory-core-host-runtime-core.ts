@@ -7,7 +7,7 @@ export {
   jsonResult,
   readFiniteNumberParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../agents/tools/common.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
@@ -22,6 +22,7 @@ export { parseNonNegativeByteSize } from "../config/byte-size.js";
 export { getRuntimeConfig } from "../config/config.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
+export { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 export type { MemoryCitationsMode } from "../config/types.memory.js";
 

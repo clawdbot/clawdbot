@@ -1,11 +1,19 @@
 import path from "node:path";
+import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type {
+  ModelInputContent,
+  ProviderContext,
+} from "../../../../packages/ai/src/provider-types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
-import type { ImageContent } from "../../../llm/types.js";
+import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
+import { redactSensitiveText } from "../../../logging/redact.js";
 import {
   attachRuntimePromptMediaFacts,
   isImageMediaFact,
+  isVideoMediaFact,
   normalizeMediaFacts,
   readRuntimePromptImageOrder,
   readRuntimePromptMediaFacts,
@@ -15,7 +23,7 @@ import {
 import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
-import { loadWebMedia } from "../../../media/web-media.js";
+import { loadWebMedia, type WebMediaResult } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -27,19 +35,17 @@ import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
 import { log } from "../logger.js";
 import {
-  collectIdentitylessMediaImageFactIndexes,
   collectMediaImageRefs,
   isOpenClawCliImageCachePath,
-  selectMediaImageRefs,
+  resolveMediaFactLocalRef,
+  type MediaFileRef,
   type MediaImageRef,
 } from "./images.media-refs.js";
 import {
   type ImageFactIndex,
   type MediaImageLayout,
-  countMissingLayoutInlineSlots,
   readPersistedImageBlockFactIndexes,
   readPersistedMediaImageLayout,
-  resolveLayoutInlineFactIndexes,
 } from "./prompt-image-metadata.js";
 
 export { hasHydratableMediaImages } from "./images.media-refs.js";
@@ -72,12 +78,6 @@ const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
 const LEGACY_ATTACHMENT_MARKER_PATTERN =
   /\[(?:media attached(?:\s+\d+\/\d+)?:|Image:\s*source:)\s*[^\]]+\]/gi;
 
-interface DetectedImageRef {
-  raw: string;
-  type: "path" | "media-uri";
-  resolved: string;
-}
-
 function isImageExtension(filePath: string): boolean {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return IMAGE_EXTENSIONS.has(ext);
@@ -95,77 +95,6 @@ type PromptImageEntry = {
   image: ImageContent;
   factIndex: ImageFactIndex;
 };
-
-function mergePromptAttachmentImages(params: {
-  imageOrder?: PromptImageOrderEntry[];
-  mediaImageLayout?: MediaImageLayout;
-  existingImages?: ImageContent[];
-  existingImageFactIndexes?: readonly ImageFactIndex[];
-  offloadedImages?: Array<PromptImageEntry | null>;
-  promptRefImages?: ImageContent[];
-}): PromptImageEntry[] {
-  const existingImages = (params.existingImages ?? []).map((image, index) => ({
-    image,
-    factIndex: params.existingImageFactIndexes?.[index] ?? null,
-  }));
-  const offloadedImages = params.offloadedImages ?? [];
-  const promptRefImages = (params.promptRefImages ?? []).map((image) => ({
-    image,
-    factIndex: null,
-  }));
-  const slots: MediaImageLayout["slots"] =
-    params.mediaImageLayout?.slots ?? params.imageOrder?.map((kind) => ({ kind })) ?? [];
-  if (slots.length === 0) {
-    const factOwned = [...offloadedImages, ...existingImages]
-      .filter((entry): entry is PromptImageEntry => entry !== null && entry.factIndex !== null)
-      .toSorted((left, right) => (left.factIndex ?? 0) - (right.factIndex ?? 0));
-    return [
-      ...factOwned,
-      ...existingImages.filter((entry) => entry.factIndex === null),
-      ...promptRefImages,
-    ];
-  }
-
-  const unusedExisting = [...existingImages];
-  const takeExisting = (factIndex: number | null | undefined): PromptImageEntry | undefined => {
-    const matchIndex =
-      factIndex === undefined
-        ? 0
-        : unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
-    if (matchIndex < 0) {
-      return undefined;
-    }
-    return unusedExisting.splice(matchIndex, 1)[0];
-  };
-  let offloadedIndex = 0;
-  const ordered = slots.flatMap((slot) => {
-    const offloaded = slot.kind === "offloaded" ? offloadedImages[offloadedIndex++] : undefined;
-    const exactExisting =
-      slot.factIndex !== undefined
-        ? takeExisting(slot.factIndex)
-        : slot.kind === "inline"
-          ? takeExisting(undefined)
-          : undefined;
-    const existing =
-      exactExisting ??
-      (slot.kind === "inline" && slot.factIndex !== undefined ? takeExisting(null) : undefined);
-    if (existing) {
-      return [existing];
-    }
-    if (slot.kind === "inline") {
-      return [];
-    }
-    return offloaded ? [offloaded] : [];
-  });
-  return [
-    ...ordered,
-    ...unusedExisting,
-    ...offloadedImages
-      .slice(offloadedIndex)
-      .filter((entry): entry is PromptImageEntry => entry !== null),
-    ...promptRefImages,
-  ];
-}
 
 async function sanitizeImageEntriesWithLog(
   entries: PromptImageEntry[],
@@ -193,8 +122,8 @@ async function sanitizeImageEntriesWithLog(
 }
 
 /** Detects explicit local image paths and file URLs in user prompt text. */
-export function detectImageReferences(prompt: string): DetectedImageRef[] {
-  const refs: DetectedImageRef[] = [];
+export function detectImageReferences(prompt: string): MediaFileRef[] {
+  const refs: MediaFileRef[] = [];
   const seen = new Set<string>();
   const pathPrompt = prompt.replace(LEGACY_ATTACHMENT_MARKER_PATTERN, (marker) =>
     " ".repeat(marker.length),
@@ -263,7 +192,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   return refs;
 }
 
-function refDedupeKey(ref: DetectedImageRef, workspaceDir?: string): string {
+function refDedupeKey(ref: MediaFileRef, workspaceDir?: string): string {
   const resolved =
     ref.type === "path" && workspaceDir && !path.isAbsolute(ref.resolved)
       ? path.resolve(workspaceDir, ref.resolved)
@@ -279,16 +208,20 @@ function rawAliasDedupeKey(alias: string): string | undefined {
     : undefined;
 }
 
-async function loadImageFromRef(
-  ref: DetectedImageRef,
+async function loadMediaFromRef(
+  ref: MediaFileRef,
   workspaceDir: string,
   options?: {
+    label?: string;
     maxBytes?: number;
+    signal?: AbortSignal;
     workspaceOnly?: boolean;
     localRoots?: readonly string[];
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
-): Promise<ImageContent | null> {
+): Promise<WebMediaResult | null> {
+  options?.signal?.throwIfAborted();
+  const redactedRef = redactSensitiveText(ref.raw || ref.resolved);
   try {
     let targetPath = ref.resolved;
 
@@ -309,8 +242,8 @@ async function loadImageFromRef(
         });
         targetPath = resolved.resolved;
       } catch (err) {
-        log.debug(
-          `Native image: sandbox validation failed for ${ref.resolved}: ${formatErrorMessage(err)}`,
+        log.warn(
+          `${options?.label ?? "Native media"}: sandbox validation failed for ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
         );
         return null;
       }
@@ -331,19 +264,31 @@ async function loadImageFromRef(
             : options?.maxBytes,
         );
 
-    if (media.kind !== "image") {
-      log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
-      return null;
-    }
-
-    const mimeType = media.contentType ?? "image/jpeg";
-    const data = media.buffer.toString("base64");
-
-    return { type: "image", data, mimeType };
+    options?.signal?.throwIfAborted();
+    return media;
   } catch (err) {
-    log.debug(`Native image: failed to load ${ref.resolved}: ${formatErrorMessage(err)}`);
+    options?.signal?.throwIfAborted();
+    log.warn(
+      `${options?.label ?? "Native media"}: failed to load ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
+    );
     return null;
   }
+}
+
+async function loadImageFromRef(
+  ref: MediaFileRef,
+  workspaceDir: string,
+  options?: Parameters<typeof loadMediaFromRef>[2],
+): Promise<ImageContent | null> {
+  const media = await loadMediaFromRef(ref, workspaceDir, { ...options, label: "Native image" });
+  if (!media || media.kind !== "image") {
+    return null;
+  }
+  return {
+    type: "image",
+    data: media.buffer.toString("base64"),
+    mimeType: media.contentType ?? "image/jpeg",
+  };
 }
 
 function modelSupportsImages(model: { input?: string[] }): boolean {
@@ -367,7 +312,7 @@ export async function detectAndLoadPromptImages(params: {
 }): Promise<{
   images: ImageContent[];
   imageFactIndexes: ImageFactIndex[];
-  detectedRefs: DetectedImageRef[];
+  detectedRefs: MediaFileRef[];
   failedMediaCount: number;
   loadedCount: number;
   skippedCount: number;
@@ -382,97 +327,86 @@ export async function detectAndLoadPromptImages(params: {
       skippedCount: 0,
     };
   }
-
-  const allMediaRefs = collectMediaImageRefs(params.media);
-  const suppressedFactIndexes = new Set(params.mediaImageLayout?.suppressedFactIndexes ?? []);
-  for (const ref of allMediaRefs) {
-    if (!ref || !suppressedFactIndexes.has(ref.factIndex)) {
-      continue;
+  const media = normalizeMediaFacts(params.media);
+  const suppressed = new Set(params.mediaImageLayout?.suppressedFactIndexes ?? []);
+  const imageFactIndexes = media.flatMap((fact, factIndex) =>
+    isImageMediaFact(fact) && fact.hydrationSuppressed !== true && !suppressed.has(factIndex)
+      ? [factIndex]
+      : [],
+  );
+  const refs = collectMediaImageRefs(media);
+  const refsByFact = new Map(refs.flatMap((ref) => (ref ? [[ref.factIndex, ref] as const] : [])));
+  const inferredSlots = (() => {
+    if (params.imageOrder?.length === imageFactIndexes.length) {
+      return params.imageOrder.map((kind, index) => ({
+        kind,
+        factIndex: imageFactIndexes[index],
+      }));
     }
-    ref.hydrate = false;
-  }
-  const orderRefs = allMediaRefs.filter(
-    (ref) => !ref || (!suppressedFactIndexes.has(ref.factIndex) && ref.hydrate),
-  );
-  const imageOrder = params.mediaImageLayout?.slots.map((slot) => slot.kind) ?? params.imageOrder;
-  const refsByFactIndex = new Map(
-    allMediaRefs.flatMap((ref) => (ref ? [[ref.factIndex, ref] as const] : [])),
-  );
-  // imageOrder describes only images still requiring native delivery; described
-  // (suppressed) facts must not count against it, or the inference silently
-  // skips and inline sanitization failures dispatch as success.
-  const unsuppressedImageFactIndexes = normalizeMediaFacts(params.media).flatMap(
-    (fact, factIndex) =>
-      isImageMediaFact(fact) &&
-      fact.hydrationSuppressed !== true &&
-      !suppressedFactIndexes.has(factIndex)
-        ? [factIndex]
-        : [],
-  );
-  const inferredExistingImageFactIndexes =
-    imageOrder && unsuppressedImageFactIndexes.length === imageOrder.length
-      ? imageOrder.flatMap((entry, index) =>
-          entry === "inline" ? [unsuppressedImageFactIndexes[index] ?? null] : [],
-        )
-      : undefined;
-  const inferredMediaImageLayout =
-    !params.mediaImageLayout &&
-    imageOrder &&
-    unsuppressedImageFactIndexes.length === imageOrder.length
-      ? {
-          slots: imageOrder.map((kind, index) => ({
-            kind,
-            factIndex: unsuppressedImageFactIndexes[index],
-          })),
-          suppressedFactIndexes: [],
-        }
-      : undefined;
-  const layoutInlineFactIndexes = resolveLayoutInlineFactIndexes(
-    params.mediaImageLayout,
-    params.existingImages?.length ?? 0,
-  );
-  const existingImageFactIndexes =
-    params.existingImageFactIndexes ??
-    layoutInlineFactIndexes ??
-    (inferredExistingImageFactIndexes?.length === (params.existingImages?.length ?? 0)
-      ? inferredExistingImageFactIndexes
-      : undefined);
-  const missingInlineMediaCount = countMissingLayoutInlineSlots(
-    params.mediaImageLayout,
-    existingImageFactIndexes,
-    params.existingImages?.length ?? 0,
-  );
-  const attachmentRefs = params.mediaImageLayout
-    ? params.mediaImageLayout.slots.flatMap((slot) =>
-        slot.kind === "offloaded"
-          ? [
-              {
-                factIndex: slot.factIndex,
-                ref: slot.factIndex === undefined ? undefined : refsByFactIndex.get(slot.factIndex),
-              },
-            ]
-          : [],
+    if (params.imageOrder?.length) {
+      const pending = [...imageFactIndexes];
+      return [
+        ...params.imageOrder.map((kind) => ({
+          kind,
+          ...(kind === "offloaded" && pending.length ? { factIndex: pending.shift() } : {}),
+        })),
+        ...pending.map((factIndex) => ({ kind: "offloaded" as const, factIndex })),
+      ];
+    }
+    return imageFactIndexes.map((factIndex, imageIndex) => ({
+      factIndex,
+      kind:
+        !media[factIndex]?.path &&
+        !media[factIndex]?.url &&
+        imageIndex < (params.existingImages?.length ?? 0)
+          ? ("inline" as const)
+          : ("offloaded" as const),
+    }));
+  })();
+  const slots = params.mediaImageLayout?.slots.length
+    ? params.mediaImageLayout.slots.filter(
+        (slot) => slot.factIndex === undefined || !suppressed.has(slot.factIndex),
       )
-    : selectMediaImageRefs({
-        refs: orderRefs,
-        existingImageCount: params.existingImages?.length ?? 0,
-        imageOrder,
-      }).map((ref) => ({ factIndex: ref?.factIndex, ref }));
-  const materializedFactIndexes = new Set(
-    (existingImageFactIndexes ?? []).filter((entry): entry is number => typeof entry === "number"),
+    : inferredSlots;
+  const layoutInlineIndexes = slots.flatMap((slot) =>
+    slot.kind === "inline" ? [slot.factIndex ?? null] : [],
   );
-  const availableMediaRefs = allMediaRefs.filter((ref): ref is MediaImageRef => ref !== undefined);
-  const selectedAttachmentRefs = attachmentRefs.flatMap(({ ref }) => (ref ? [ref] : []));
+  const existingIndexes =
+    params.existingImageFactIndexes ??
+    (layoutInlineIndexes.length === (params.existingImages?.length ?? 0)
+      ? layoutInlineIndexes
+      : params.existingImages?.map(() => null));
+  const unusedExisting = (params.existingImages ?? []).map((image, index) => ({
+    image,
+    factIndex: existingIndexes?.[index] ?? null,
+  }));
+  const takeExisting = (
+    factIndex: number | undefined,
+    allowUnowned: boolean,
+  ): PromptImageEntry | undefined => {
+    const exact =
+      factIndex === undefined
+        ? -1
+        : unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
+    const index =
+      exact >= 0
+        ? exact
+        : allowUnowned
+          ? unusedExisting.findIndex((entry) => entry.factIndex === null)
+          : -1;
+    return index >= 0 ? unusedExisting.splice(index, 1)[0] : undefined;
+  };
+  const availableRefs = refs.filter((ref): ref is MediaImageRef => Boolean(ref));
+  const attachmentRefs = slots.flatMap((slot) =>
+    slot.kind === "offloaded" && slot.factIndex !== undefined
+      ? (refsByFact.get(slot.factIndex) ?? [])
+      : [],
+  );
   const attachmentKeys = new Set(
-    selectedAttachmentRefs.map((ref) => refDedupeKey(ref, ref.workspaceDir ?? params.workspaceDir)),
+    attachmentRefs.map((ref) => refDedupeKey(ref, ref.workspaceDir ?? params.workspaceDir)),
   );
   const attachmentRawKeys = new Set(
-    selectedAttachmentRefs.flatMap((ref) =>
-      ref.aliases.flatMap((alias) => {
-        const key = rawAliasDedupeKey(alias);
-        return key ? [key] : [];
-      }),
-    ),
+    attachmentRefs.flatMap((ref) => ref.aliases.flatMap((alias) => rawAliasDedupeKey(alias) ?? [])),
   );
   const promptRefs = detectImageReferences(params.prompt).filter(
     (ref) =>
@@ -480,7 +414,7 @@ export async function detectAndLoadPromptImages(params: {
       !attachmentKeys.has(refDedupeKey(ref, params.workspaceDir)),
   );
   const detectedRefs = [
-    ...availableMediaRefs.flatMap(({ detect, hydrate, raw, type, resolved }) =>
+    ...availableRefs.flatMap(({ detect, hydrate, raw, type, resolved }) =>
       detect !== false &&
       (hydrate || (!resolved.startsWith("http://") && !resolved.startsWith("https://")))
         ? [{ raw, type, resolved }]
@@ -488,40 +422,10 @@ export async function detectAndLoadPromptImages(params: {
     ),
     ...promptRefs,
   ];
-  if (attachmentRefs.length === 0 && promptRefs.length === 0) {
-    const existingImages = params.existingImages ?? [];
-    const sanitized = existingImages.length
-      ? await sanitizeImageEntriesWithLog(
-          existingImages.map((image, index) => ({
-            image,
-            factIndex: existingImageFactIndexes?.[index] ?? null,
-          })),
-          "prompt:images",
-          {
-            maxBytes: params.maxBytes,
-            maxDimensionPx: params.maxDimensionPx,
-          },
-        )
-      : { entries: [], failedMediaCount: 0 };
-    const finalized = finalizeRuntimePromptImages(sanitized.entries);
-    return {
-      ...finalized,
-      detectedRefs,
-      failedMediaCount: missingInlineMediaCount + sanitized.failedMediaCount,
-      loadedCount: 0,
-      skippedCount: 0,
-    };
-  }
-
-  log.debug(
-    `Native image: prepared ${attachmentRefs.length} attachment ref(s) and ${promptRefs.length} explicit prompt ref(s)`,
-  );
   let loadedCount = 0;
-  let failedMediaCount = missingInlineMediaCount;
+  let failedMediaCount = 0;
   let skippedCount = 0;
-  const loadRef = async (
-    ref: DetectedImageRef & { workspaceDir?: string },
-  ): Promise<ImageContent | null> => {
+  const loadRef = async (ref: MediaFileRef & { workspaceDir?: string }) => {
     const image = await loadImageFromRef(ref, ref.workspaceDir ?? params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
@@ -536,42 +440,33 @@ export async function detectAndLoadPromptImages(params: {
     }
     return image;
   };
-  const offloadedImages: Array<PromptImageEntry | null> = [];
-  for (const attachment of attachmentRefs) {
-    const factIndex = attachment.factIndex;
-    if (factIndex !== undefined && materializedFactIndexes.has(factIndex)) {
-      offloadedImages.push(null);
+  const promptImages: PromptImageEntry[] = [];
+  for (const slot of slots) {
+    const existing = takeExisting(slot.factIndex, slot.kind === "inline");
+    if (existing) {
+      promptImages.push(existing);
       continue;
     }
-    const ref = attachment.ref;
-    if (!ref) {
+    if (slot.kind === "inline") {
       failedMediaCount++;
-      offloadedImages.push(null);
       continue;
     }
-    const image = ref.hydrate ? await loadRef(ref) : null;
-    if (ref.hydrate && !image) {
+    const ref = slot.factIndex === undefined ? undefined : refsByFact.get(slot.factIndex);
+    const image = ref?.hydrate ? await loadRef(ref) : null;
+    if (ref?.hydrate && !image) {
       failedMediaCount++;
     }
-    offloadedImages.push(image ? { image, factIndex: ref.factIndex } : null);
+    if (image) {
+      promptImages.push({ image, factIndex: ref?.factIndex ?? null });
+    }
   }
-  const promptRefImages: ImageContent[] = [];
+  promptImages.push(...unusedExisting);
   for (const ref of promptRefs) {
     const image = await loadRef(ref);
     if (image) {
-      promptRefImages.push(image);
+      promptImages.push({ image, factIndex: null });
     }
   }
-
-  const promptImages = mergePromptAttachmentImages({
-    imageOrder,
-    mediaImageLayout: params.mediaImageLayout ?? inferredMediaImageLayout,
-    existingImages: params.existingImages,
-    existingImageFactIndexes,
-    offloadedImages,
-    promptRefImages,
-  });
-
   const sanitizedPromptImages = await sanitizeImageEntriesWithLog(promptImages, "prompt:images", {
     maxBytes: params.maxBytes,
     maxDimensionPx: params.maxDimensionPx,
@@ -587,26 +482,115 @@ export async function detectAndLoadPromptImages(params: {
   };
 }
 
-/** Hydrates non-enumerable facts carried by queued user turns before provider replay. */
-export async function hydratePromptMediaMessages(
+type PromptMediaOptions = {
+  workspaceDir: string;
+  model: { input?: string[] };
+  maxBytes?: number;
+  maxDimensionPx?: number;
+  workspaceOnly?: boolean;
+  localRoots?: readonly string[];
+  sandbox?: { root: string; bridge: SandboxFsBridge };
+  provider?: boolean;
+  signal?: AbortSignal;
+  onCurrentTurnImageFailure?: (count: number) => void;
+};
+
+export function buildPromptImageFailureNotice(count: number): string {
+  return `System note: ${count} image attachment${count === 1 ? "" : "s"} could not be loaded; their image contents are unavailable. Tell the user and ask them to resend ${count === 1 ? "the image" : "the images"}; do not claim inspection.`;
+}
+
+const VIDEO_OMISSION = {
+  unsupported: "(video omitted: provider does not support native video)",
+  unavailable: "(video omitted: source unavailable)",
+  invalid: "(video omitted: invalid video MIME type)",
+  limit: "(video omitted: native video byte limit exceeded)",
+} as const;
+
+async function materializeVideoFact(
+  fact: MediaFact,
+  budget: { remaining: number },
+  options: PromptMediaOptions,
+): Promise<ModelInputContent> {
+  if ((fact.sizeBytes ?? 0) > budget.remaining) {
+    return { type: "text", text: VIDEO_OMISSION.limit };
+  }
+  const ref = resolveMediaFactLocalRef(fact);
+  const loaded = ref
+    ? await loadMediaFromRef(ref, fact.workspaceDir ?? options.workspaceDir, {
+        label: "Native video",
+        maxBytes: budget.remaining,
+        signal: options.signal,
+        workspaceOnly: options.workspaceOnly,
+        localRoots:
+          options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined),
+        sandbox: options.sandbox,
+      })
+    : null;
+  if (!loaded) {
+    return { type: "text", text: VIDEO_OMISSION.unavailable };
+  }
+  const mimeType = normalizeMimeType(loaded.contentType);
+  if (loaded.kind !== "video" || !mimeType?.startsWith("video/")) {
+    return { type: "text", text: VIDEO_OMISSION.invalid };
+  }
+  if (loaded.buffer.length > budget.remaining) {
+    return { type: "text", text: VIDEO_OMISSION.limit };
+  }
+  budget.remaining -= loaded.buffer.length;
+  return { type: "video", data: loaded.buffer.toString("base64"), mimeType };
+}
+
+async function projectOrderedPromptMedia(params: {
+  content: Array<TextContent | ImageContent>;
+  media: MediaFact[];
+  images: ImageContent[];
+  imageFactIndexes: ImageFactIndex[];
+  options: PromptMediaOptions;
+  budget: { remaining: number };
+}): Promise<ModelInputContent[]> {
+  const generatedMarkers = new Set<string>(Object.values(VIDEO_OMISSION));
+  const projected: ModelInputContent[] = params.content.filter(
+    (block): block is TextContent => block.type === "text" && !generatedMarkers.has(block.text),
+  );
+  const imagesByFact = new Map<number, ImageContent[]>();
+  const factlessImages: ImageContent[] = [];
+  params.images.forEach((image, index) => {
+    const factIndex = params.imageFactIndexes[index];
+    if (factIndex == null) {
+      factlessImages.push(image);
+    } else {
+      imagesByFact.set(factIndex, [...(imagesByFact.get(factIndex) ?? []), image]);
+    }
+  });
+  for (const [factIndex, fact] of params.media.entries()) {
+    if (isImageMediaFact(fact)) {
+      projected.push(...(imagesByFact.get(factIndex) ?? []));
+    } else if (isVideoMediaFact(fact)) {
+      projected.push(
+        params.options.provider
+          ? await materializeVideoFact(fact, params.budget, params.options)
+          : { type: "text", text: VIDEO_OMISSION.unsupported },
+      );
+    }
+  }
+  projected.push(...factlessImages);
+  return projected;
+}
+
+/** Hydrates exact-message media facts for canonical replay or one provider call. */
+async function materializePromptMediaMessages(
   messages: AgentMessage[],
-  options: {
-    workspaceDir: string;
-    model: { input?: string[] };
-    maxBytes?: number;
-    maxDimensionPx?: number;
-    workspaceOnly?: boolean;
-    localRoots?: readonly string[];
-    sandbox?: { root: string; bridge: SandboxFsBridge };
-  },
+  options: PromptMediaOptions,
 ): Promise<AgentMessage[]> {
   let hydrated: AgentMessage[] | undefined;
+  const videoBudget = { remaining: MAX_VIDEO_BYTES };
+  const activeUserIndex = messages.findLastIndex((message) => message.role === "user");
   for (const [index, message] of messages.entries()) {
     if (message.role !== "user") {
       continue;
     }
     const runtimeMedia = readRuntimePromptMediaFacts(message);
-    const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+    const meta = Reflect.get(message, "__openclaw");
     const resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
     const runtimeImageOrder = readRuntimePromptImageOrder(message);
     const mediaImageLayout = readPersistedMediaImageLayout(message);
@@ -617,29 +601,13 @@ export async function hydratePromptMediaMessages(
       ? message.content
       : [{ type: "text" as const, text: message.content }];
     const existingImages = content.filter((block): block is ImageContent => block.type === "image");
-    const persistedImageFactIndexes = readPersistedImageBlockFactIndexes(message);
-    const inlineLayoutFactIndexes = mediaImageLayout?.slots.flatMap((slot) =>
-      slot.kind === "inline" ? [slot.factIndex ?? null] : [],
-    );
-    // Pre-carrier transcripts had no explicit block provenance. Their native
-    // image blocks were positionally aligned with the first image facts.
-    const legacyImageFactIndexes =
-      runtimeMedia === undefined && mediaImageLayout === undefined
-        ? collectIdentitylessMediaImageFactIndexes(resolvedMedia)
-        : undefined;
-    const existingImageFactIndexes =
-      persistedImageFactIndexes ??
-      (inlineLayoutFactIndexes?.length === existingImages.length
-        ? inlineLayoutFactIndexes
-        : legacyImageFactIndexes?.slice(0, existingImages.length));
     const result = await detectAndLoadPromptImages({
       prompt: "",
       media: resolvedMedia,
       workspaceDir: options.workspaceDir,
       model: options.model,
       existingImages,
-      existingImageFactIndexes,
-      imageOrder: runtimeImageOrder,
+      existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
       mediaImageLayout,
       maxBytes: options.maxBytes,
       maxDimensionPx: options.maxDimensionPx,
@@ -647,6 +615,35 @@ export async function hydratePromptMediaMessages(
       localRoots: options.localRoots,
       sandbox: options.sandbox,
     });
+    const projectedContent = await projectOrderedPromptMedia({
+      content,
+      media: resolvedMedia,
+      images: result.images,
+      imageFactIndexes: result.imageFactIndexes,
+      options,
+      budget: videoBudget,
+    });
+    if (
+      (options.provider || options.onCurrentTurnImageFailure) &&
+      index === activeUserIndex &&
+      result.failedMediaCount > 0
+    ) {
+      options.onCurrentTurnImageFailure?.(result.failedMediaCount);
+      projectedContent.push({
+        type: "text",
+        text: buildPromptImageFailureNotice(result.failedMediaCount),
+      });
+    }
+    hydrated ??= messages.slice();
+    if (options.provider) {
+      hydrated[index] = {
+        role: "user",
+        content: projectedContent,
+        timestamp: message.timestamp,
+        ...(message.runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
+      } as ProviderContext["messages"][number] as AgentMessage;
+      continue;
+    }
     const nextMeta =
       meta && typeof meta === "object" && !Array.isArray(meta)
         ? { ...(meta as Record<string, unknown>) }
@@ -656,15 +653,14 @@ export async function hydratePromptMediaMessages(
     } else {
       delete nextMeta.mediaImageBlockFactIndexes;
     }
-    hydrated ??= messages.slice();
     const hydratedMessage = {
       ...message,
-      content: [...content.filter((block) => block.type !== "image"), ...result.images],
+      content: projectedContent,
     } as AgentMessage;
     if (Object.keys(nextMeta).length > 0) {
-      (hydratedMessage as unknown as Record<string, unknown>)["__openclaw"] = nextMeta;
+      Reflect.set(hydratedMessage, "__openclaw", nextMeta);
     } else {
-      delete (hydratedMessage as unknown as Record<string, unknown>)["__openclaw"];
+      Reflect.deleteProperty(hydratedMessage, "__openclaw");
     }
     if (runtimeMedia) {
       attachRuntimePromptMediaFacts(hydratedMessage, runtimeMedia, runtimeImageOrder);
@@ -672,4 +668,38 @@ export async function hydratePromptMediaMessages(
     hydrated[index] = hydratedMessage;
   }
   return hydrated ?? messages;
+}
+
+/** Hydrates non-enumerable facts carried by queued user turns before canonical replay. */
+export async function hydratePromptMediaMessages(
+  messages: AgentMessage[],
+  options: Omit<PromptMediaOptions, "provider">,
+): Promise<AgentMessage[]> {
+  return await materializePromptMediaMessages(messages, options);
+}
+
+/** Materializes one transient provider context from exact-message media facts. */
+export async function materializeProviderContext(params: {
+  context: Context;
+  signal?: AbortSignal;
+  workspaceDir: string;
+  workspaceOnly?: boolean;
+  localRoots?: readonly string[];
+  sandbox?: { root: string; bridge: SandboxFsBridge };
+  onCurrentTurnImageFailure?: (count: number) => void;
+}): Promise<ProviderContext> {
+  const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
+    workspaceDir: params.workspaceDir,
+    model: { input: ["text", "image"] },
+    workspaceOnly: params.workspaceOnly,
+    localRoots: params.localRoots,
+    sandbox: params.sandbox,
+    provider: true,
+    signal: params.signal,
+    onCurrentTurnImageFailure: params.onCurrentTurnImageFailure,
+  });
+  params.signal?.throwIfAborted();
+  return messages === params.context.messages
+    ? (params.context as ProviderContext)
+    : ({ ...params.context, messages } as ProviderContext);
 }

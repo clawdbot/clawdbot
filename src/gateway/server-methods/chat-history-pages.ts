@@ -1,3 +1,4 @@
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/session-accessor.js";
 import {
@@ -5,12 +6,14 @@ import {
   isHeartbeatHistoryTurnBoundaryMessage,
   projectChatDisplayMessages,
   projectRecentChatDisplayMessages,
+  augmentChatHistoryWithCanvasBlocks,
 } from "../chat-display-projection.js";
-import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.js";
 import {
+  readChatHistoryCliSessionImportSnapshot,
   resolveChatHistoryWithCliSessionImports,
   resolveClaudeCliBindingSessionId,
 } from "../cli-session-history.js";
+import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
 import {
@@ -18,6 +21,7 @@ import {
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
   type ReadRecentSessionMessagesResult,
+  type SessionTranscriptReadScope,
 } from "../session-transcript-readers.js";
 import type { loadSessionEntry } from "../session-utils.js";
 
@@ -28,12 +32,12 @@ export function readChatHistoryMessageId(message: unknown): string | undefined {
 
 export function readChatHistoryMessageSeq(message: unknown): number | undefined {
   const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-  const seq = metadata?.seq;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+  return asPositiveSafeInteger(metadata?.seq);
 }
 
 type ChatHistoryPage = {
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
   messages: unknown[];
   responseOffset?: number;
   completeCliImport?: true;
@@ -203,6 +207,145 @@ function dropLocalHistoryOverreadContextMessage(
   return [...messages.slice(0, index), ...messages.slice(index + 1)];
 }
 
+// A silent tail can outrun the bounded raw window: tool traffic, hidden
+// memory-flush prompts, and dropped silent turns all consume raw records
+// without producing a display row, so the newest window can project to nothing
+// while visible history is still on the branch. Snapshot clients rebuild
+// destructively from a first page, so returning that empty page erases a
+// rendered conversation the transcript still holds. Scan older pages until a
+// display row appears, bounded so a pathological transcript cannot turn the
+// tail read into a full scan.
+const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
+// Chunk size stays independent of the requested display limit: a `limit: 1`
+// request must not turn the scan into one transcript read per raw record. Pages
+// are contiguous and released between iterations, and the chunk stays below the
+// record count an explicit offset page already materializes, so peak scan memory
+// never exceeds what one ordinary history page costs. A byte-budgeted read is
+// deliberately not used here: it drops oversized records from the middle of a
+// window, which would punch holes in the cursor and hide the oversized-message
+// placeholder the handler would otherwise render. Accepted tradeoff: a chunk is
+// materialized before its bytes can be counted, so the walk can overshoot its
+// budget by one page. That page is smaller than the one every explicit offset
+// request already reads, and closing the gap would need a stop-at-budget
+// contiguous reader that does not exist yet.
+const SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES = 100;
+
+type IncrementalChatHistoryTail = {
+  overreadContextMessage: unknown;
+  projected: unknown[];
+  rawMessages: unknown[];
+  rawPageMessages: number;
+  readPage: ReadRecentSessionMessagesResult;
+};
+
+/** Reads only enough raw tail records to fill one projected history page. */
+async function readIncrementalChatHistoryTail(params: {
+  entry: ReturnType<typeof loadSessionEntry>["entry"];
+  readScope: SessionTranscriptReadScope;
+  effectiveMaxChars: number;
+  max: number;
+  maxBytes: number;
+}): Promise<IncrementalChatHistoryTail> {
+  const rawHistoryWindow = resolveSessionHistoryTailReadOptions(params.max);
+  // Three raw rows per requested display row covers common tool/silent pairs
+  // while keeping the first read far below the legacy 20x safety ceiling.
+  const initialMessages = Math.min(rawHistoryWindow.maxMessages, Math.max(1, params.max * 3));
+  const readPage = await readRecentSessionMessagesWithStatsAsync(params.readScope, {
+    maxMessages: initialMessages + 1,
+    maxLines: initialMessages + 1,
+    maxBytes: Math.max(params.maxBytes * 2, 1024 * 1024),
+    allowResetArchiveFallback: true,
+  });
+  const sessionStartedAt =
+    typeof params.entry?.sessionStartedAt === "number" ? params.entry.sessionStartedAt : undefined;
+  let rawPageMessages = Math.min(
+    initialMessages,
+    Math.max(readPage.messages.length, readPage.totalMessages > 0 ? 1 : 0),
+  );
+  let overreadContextMessage =
+    readPage.messages.length > initialMessages ? readPage.messages[0] : undefined;
+  let rawMessages = dropLocalHistoryOverreadContextMessage(
+    readPage.messages,
+    overreadContextMessage,
+  );
+  const filteredRawMessages = () =>
+    dropLocalHistoryOverreadContextMessage(
+      dropPreSessionStartAnnouncePairs(
+        overreadContextMessage === undefined
+          ? rawMessages
+          : [overreadContextMessage, ...rawMessages],
+        sessionStartedAt,
+      ),
+      overreadContextMessage,
+    );
+  const project = () =>
+    projectRecentChatDisplayMessages(filteredRawMessages(), {
+      maxChars: params.effectiveMaxChars,
+      maxMessages: params.max,
+      resolveCurrentUserProfileDisplay,
+      turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
+    });
+  let projected = project();
+  let scanLimit = rawHistoryWindow.maxMessages;
+  // Record count alone does not bound a walk over large tool results, and the
+  // reader cannot bound it either: a byte-budgeted page skips an oversized
+  // record mid-window, which would strand it and its placeholder. Budget the
+  // whole walk instead, at the payload one history response may already return.
+  let scannedBytes = 0;
+  // Projection pairs records across turns, so keep the accumulated window in
+  // chronological order and retain exactly one older context record.
+  while (rawPageMessages < readPage.totalMessages) {
+    if (projected.length >= params.max) {
+      break;
+    }
+    if (rawPageMessages >= rawHistoryWindow.maxMessages) {
+      if (projected.length > 0) {
+        break;
+      }
+      scanLimit = rawHistoryWindow.maxMessages + SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES;
+    }
+    if (rawPageMessages >= scanLimit) {
+      break;
+    }
+    const chunkMessages = Math.min(
+      SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES,
+      scanLimit - rawPageMessages,
+    );
+    const page = await readSessionMessagesPageWithStatsAsync(params.readScope, {
+      offset: rawPageMessages,
+      maxMessages: chunkMessages + 1,
+      allowResetArchiveFallback: true,
+    });
+    if (page.messages.length === 0) {
+      break;
+    }
+    // The extra oldest record only supplies pair-filter and turn-boundary
+    // context. Without it a chunk boundary between a stale announce and its
+    // reply would leak the reply that the tail read hides. Each chunk's context
+    // record is the newest record of the next chunk, so this one overread also
+    // covers every junction the walk creates, including tail-to-first-chunk.
+    const contextMessage = page.messages.length > chunkMessages ? page.messages[0] : undefined;
+    rawPageMessages += page.messages.length - (contextMessage === undefined ? 0 : 1);
+    rawMessages = dropLocalHistoryOverreadContextMessage(
+      [...page.messages, ...rawMessages],
+      contextMessage,
+    );
+    overreadContextMessage = contextMessage;
+    projected = project();
+    scannedBytes += Buffer.byteLength(JSON.stringify(page.messages), "utf8");
+    if (rawPageMessages > rawHistoryWindow.maxMessages && scannedBytes >= params.maxBytes) {
+      break;
+    }
+  }
+  return {
+    overreadContextMessage,
+    projected,
+    rawMessages: filteredRawMessages(),
+    rawPageMessages,
+    readPage,
+  };
+}
+
 export async function readChatHistoryPage(params: {
   entry: ReturnType<typeof loadSessionEntry>["entry"];
   provider: string | undefined;
@@ -257,10 +400,10 @@ export async function readChatHistoryPage(params: {
   // is deferred to a follow-up issue. Anchored reads fall through with them: the
   // full-snapshot merge below still centers on messageId at the handler cap.
   if ((offset !== undefined || messageId) && !cliSessionId) {
-    const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
     let pageOffset = offset ?? 0;
     let hasOverreadContext = false;
     let readPage: ReadRecentSessionMessagesResult;
+    let incrementalTail: IncrementalChatHistoryTail | undefined;
     if (messageId) {
       const anchoredPage = await readSessionMessagesAroundIdWithStatsAsync(readScope, {
         messageId,
@@ -274,12 +417,14 @@ export async function readChatHistoryPage(params: {
       hasOverreadContext = anchoredPage.hasOverreadContext;
       readPage = anchoredPage;
     } else if (pageOffset === 0) {
-      readPage = await readRecentSessionMessagesWithStatsAsync(readScope, {
-        maxMessages: rawHistoryWindow.maxMessages + 1,
-        maxLines: rawHistoryWindow.maxLines + 1,
-        maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-        allowResetArchiveFallback: true,
+      incrementalTail = await readIncrementalChatHistoryTail({
+        entry,
+        readScope,
+        effectiveMaxChars,
+        max,
+        maxBytes: maxHistoryBytes,
       });
+      readPage = incrementalTail.readPage;
     } else {
       readPage = await readSessionMessagesPageWithStatsAsync(readScope, {
         offset: pageOffset,
@@ -289,41 +434,33 @@ export async function readChatHistoryPage(params: {
     }
     const isTailPage = !messageId && pageOffset === 0;
     const overreadContextMessage = isTailPage
-      ? readPage.messages.length > rawHistoryWindow.maxMessages
-        ? readPage.messages[0]
-        : undefined
+      ? incrementalTail?.overreadContextMessage
       : hasOverreadContext || readPage.messages.length > max
         ? readPage.messages[0]
         : undefined;
-    const localMessages = dropLocalHistoryOverreadContextMessage(
-      dropPreSessionStartAnnouncePairs(
-        readPage.messages,
-        typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-      ),
-      overreadContextMessage,
-    );
+    const localMessages = incrementalTail
+      ? incrementalTail.rawMessages
+      : dropLocalHistoryOverreadContextMessage(
+          dropPreSessionStartAnnouncePairs(
+            readPage.messages,
+            typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+          ),
+          overreadContextMessage,
+        );
     const rawPageMessages = isTailPage
-      ? Math.min(
-          rawHistoryWindow.maxMessages,
-          Math.max(readPage.messages.length, readPage.totalMessages > 0 ? 1 : 0),
-        )
+      ? (incrementalTail?.rawPageMessages ?? 0)
       : Math.min(
           max,
           Math.max(readPage.messages.length, readPage.totalMessages > pageOffset ? 1 : 0),
         );
-    const rawMessages = localMessages;
-    const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
-      rawMessages,
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-    );
+    // localMessages is already announce-filtered above; the filter is
+    // single-pass complete, so no second pass is needed.
+    const recencyFilteredMessages = localMessages;
     const projected = isTailPage
-      ? projectRecentChatDisplayMessages(recencyFilteredMessages, {
-          maxChars: effectiveMaxChars,
-          maxMessages: max,
-          turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
-        })
+      ? (incrementalTail?.projected ?? [])
       : projectChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
+          resolveCurrentUserProfileDisplay,
           turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         });
     const windowed = messageId
@@ -335,18 +472,20 @@ export async function readChatHistoryPage(params: {
       : isTailPage
         ? projected
         : capOffsetChatHistoryProjectedMessages(projected, max);
-    const normalized = augmentChatHistoryWithCanvasBlocks(windowed);
     if (messageId) {
       // Numeric offsets do not encode the selected historical transcript source.
-      return { messages: normalized };
+      return { messages: augmentChatHistoryWithCanvasBlocks(windowed) };
     }
     return {
       ...(isTailPage
         ? {
             activeLeafEntryId: resolveChatHistoryActiveLeafEntryId(readPage),
+            ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+              ? { deltaCursor: readPage.deltaCursor }
+              : {}),
           }
         : {}),
-      messages: normalized,
+      messages: augmentChatHistoryWithCanvasBlocks(windowed),
       responseOffset: pageOffset,
       pagination: {
         offset: pageOffset,
@@ -356,43 +495,41 @@ export async function readChatHistoryPage(params: {
     };
   }
 
-  const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
-  const localHistoryReadOptions = {
-    maxMessages: rawHistoryWindow.maxMessages + 1,
-    maxLines: rawHistoryWindow.maxLines + 1,
-  };
-  const readPage = await readRecentSessionMessagesWithStatsAsync(readScope, {
-    ...localHistoryReadOptions,
-    maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-    allowResetArchiveFallback: true,
+  const incrementalTail = await readIncrementalChatHistoryTail({
+    entry,
+    readScope,
+    effectiveMaxChars,
+    max,
+    maxBytes: maxHistoryBytes,
   });
-  const overreadContextMessage =
-    readPage.messages.length > rawHistoryWindow.maxMessages ? readPage.messages[0] : undefined;
+  const { overreadContextMessage, readPage } = incrementalTail;
   const turnBoundaryPending = isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage);
   const activeLeafEntryId = resolveChatHistoryActiveLeafEntryId(readPage);
-  const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
-    dropPreSessionStartAnnouncePairs(
-      readPage.messages,
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-    ),
-    overreadContextMessage,
-  );
+  const localMessagesWithBoundaryFilter = incrementalTail.rawMessages;
   // The ignore flag must gate this resolver too: the tail-window merge can report
   // imported=true while the full merge below dedupes everything to imported=false,
   // and an ungated re-resolve here would recurse through this branch forever.
+  const importedMessages = params.ignoreCliSessionImports
+    ? []
+    : await readChatHistoryCliSessionImportSnapshot({
+        entry,
+        provider,
+        localMessages: localMessagesWithBoundaryFilter,
+      });
   const cliHistory = params.ignoreCliSessionImports
-    ? { messages: localMessagesWithBoundaryFilter, imported: false as const }
+    ? { messages: localMessagesWithBoundaryFilter, imported: false }
     : resolveChatHistoryWithCliSessionImports({
         entry,
         provider,
         localMessages: localMessagesWithBoundaryFilter,
+        preparedImportedMessages: importedMessages,
       });
   if ((offset !== undefined || messageId) && !cliHistory.imported) {
     return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
   }
   if (cliHistory.imported) {
-    // The import reader already scans the complete external JSONL. Only after it
-    // succeeds do the matching full local read needed to build a pageable merge.
+    // Reuse this request's redacted external snapshot after the full local read;
+    // re-reading here would duplicate a large import and defeat cross-client singleflight.
     const completeLocalMessages = dropPreSessionStartAnnouncePairs(
       await readSessionMessagesAsync(readScope, {
         mode: "full",
@@ -405,6 +542,7 @@ export async function readChatHistoryPage(params: {
       entry,
       provider,
       localMessages: completeLocalMessages,
+      preparedImportedMessages: importedMessages,
     });
     if (!completeCliHistory.imported) {
       return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
@@ -415,6 +553,7 @@ export async function readChatHistoryPage(params: {
     );
     const displayMessages = projectChatDisplayMessages(mergedMessages, {
       maxChars: effectiveMaxChars,
+      resolveCurrentUserProfileDisplay,
     });
     return {
       activeLeafEntryId,
@@ -428,32 +567,25 @@ export async function readChatHistoryPage(params: {
       },
     };
   }
-  const rawMessages = cliHistory.messages;
-  // Drop subagent_announce pairs (user inter-session announce + adjacent
-  // assistant) whose record timestamp predates the current session's
-  // sessionStartedAt. Run after CLI history imports too, because those
-  // timestamped messages share the same chat.history response surface.
-  const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
-    rawMessages,
-    typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-  );
+  // The imported case returned above, so these are the already announce-filtered
+  // local messages; the filter is single-pass complete, so no second pass is needed.
+  const recencyFilteredMessages = cliHistory.messages;
   const displayMessages = projectRecentChatDisplayMessages(recencyFilteredMessages, {
     maxChars: effectiveMaxChars,
     maxMessages: max,
+    resolveCurrentUserProfileDisplay,
     turnBoundaryPending,
   });
   return {
     activeLeafEntryId,
+    ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+      ? { deltaCursor: readPage.deltaCursor }
+      : {}),
     messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
     pagination: {
       offset: 0,
       totalMessages: readPage.totalMessages,
-      // The extra record supplies pair-filter context; it was not returned and
-      // must remain reachable by the next strictly-older page.
-      rawPageMessages: Math.min(
-        rawHistoryWindow.maxMessages,
-        Math.max(readPage.messages.length, readPage.totalMessages > 0 ? 1 : 0),
-      ),
+      rawPageMessages: incrementalTail.rawPageMessages,
     },
   };
 }

@@ -180,6 +180,10 @@
     "target": "会话"
   },
   {
+    "source": "Session permission modes",
+    "target": "会话权限模式"
+  },
+  {
     "source": "Pi",
     "target": "Pi"
   },
@@ -674,6 +678,10 @@
   {
     "source": "Memory overview",
     "target": "记忆概览"
+  },
+  {
+    "source": "QMD memory backend removal",
+    "target": "QMD 记忆后端移除"
   },
   {
     "source": "Active memory",
@@ -1560,6 +1568,10 @@
     "target": "故障排查"
   },
   {
+    "source": "Update troubleshooting",
+    "target": "更新故障排查"
+  },
+  {
     "source": "Webhooks",
     "target": "Webhooks"
   },
@@ -1700,6 +1712,10 @@
     "target": "会话管理"
   },
   {
+    "source": "Session tools",
+    "target": "会话工具"
+  },
+  {
     "source": "Presence",
     "target": "在线状态"
   },
@@ -1738,5 +1754,13 @@
   {
     "source": "Updating OpenClaw",
     "target": "更新 OpenClaw"
+  },
+  {
+    "source": "Connect a machine",
+    "target": "连接机器"
+  },
+  {
+    "source": "Portals",
+    "target": "门户"
   }
 ]

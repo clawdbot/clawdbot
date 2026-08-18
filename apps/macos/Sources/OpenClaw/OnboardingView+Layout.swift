@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 extension OnboardingView {
-    /// The inference-first flow has no full-page chat; OpenClaw opens in its own sheet.
+    /// The inference-first flow hands off to the dashboard as soon as AI connects.
     var usesCompactHero: Bool {
         false
     }
@@ -61,11 +61,13 @@ extension OnboardingView {
             guard installed else { return }
             self.updateMonitoring(for: self.activePageIndex)
         }
+        .onChange(of: GatewayProcessManager.shared.status) { _, status in
+            self.reviseCLIActivationFailureIfGatewayReady(status)
+        }
         .onDisappear {
             self.onboardingDidDisappear()
         }
         .task {
-            await self.refreshPerms()
             await self.refreshCLIStatus()
             self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         }
@@ -93,8 +95,6 @@ extension OnboardingView {
         // Queued detection can otherwise proceed into a mutating activation
         // after the window or its selected route has gone away.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        systemAgentState.resetForGatewayChange()
-        stopPermissionMonitoring()
         stopDiscovery()
     }
 
@@ -139,9 +139,6 @@ extension OnboardingView {
         // The UI attempt belongs to one route, but its durable activation lease
         // must survive A -> B -> A while the old Gateway can still be mutating.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        // OpenClaw sessions belong to one Gateway. Dismiss and replace the chat so
-        // changing routes cannot send an old session ID to the new endpoint.
-        systemAgentState.resetForGatewayChange()
     }
 
     @discardableResult
@@ -183,7 +180,6 @@ extension OnboardingView {
             let pendingState = OnboardingSystemAgentResumeStore.pendingState(
                 for: expectedRouteIdentity,
                 defaults: self.systemAgentDefaults)
-            let systemAgentResumePending = pendingState != .none
             self.schedulePendingActivationRecheckIfNeeded(pendingState)
 
             switch outcome {
@@ -202,26 +198,14 @@ extension OnboardingView {
                     self.waitForPendingInferenceSetup()
                     return
                 case .none:
-                    // A concurrent probe can clear an expired marker while
-                    // the dispatched activation is still returning. Keep the
-                    // setup-owned handoff, and prove inference on this route.
-                    if self.aiSetup.pendingActivationVerification {
-                        self.resumePendingSystemAgent(modelRef: modelRef)
-                        return
-                    }
+                    break
                 }
-                guard Self.shouldOpenConfiguredGatewayDashboard(
-                    onboardingVisible: self.onboardingVisible,
-                    expectedMode: expectedMode,
-                    currentMode: self.state.connectionMode,
-                    systemAgentResumePending: systemAgentResumePending,
-                    setupOwnsInferenceTransition: self.aiSetup.ownsInferenceTransition)
-                else { return }
-                self.onboardingVisible = false
-                self.configuredGatewayProbe.invalidate()
-                OnboardingController.markComplete()
-                OnboardingController.shared.close()
-                AppNavigationActions.openDashboard()
+                // agents.list projects an effective model even when it only
+                // comes from an implicit runtime default. A label is not proof
+                // that inference is configured or usable, so first run must
+                // live-verify it before completing onboarding. A definitive
+                // verification failure falls through to normal detection.
+                self.resumePendingSystemAgent(modelRef: modelRef)
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that
@@ -310,21 +294,6 @@ extension OnboardingView {
         case .activationExpired, .completed, .none:
             break
         }
-    }
-
-    static func shouldOpenConfiguredGatewayDashboard(
-        onboardingVisible: Bool,
-        expectedMode: AppState.ConnectionMode,
-        currentMode: AppState.ConnectionMode,
-        systemAgentResumePending: Bool,
-        setupOwnsInferenceTransition: Bool) -> Bool
-    {
-        self.isCurrentConfiguredGatewayProbe(
-            onboardingVisible: onboardingVisible,
-            expectedMode: expectedMode,
-            currentMode: currentMode) &&
-            !systemAgentResumePending &&
-            !setupOwnsInferenceTransition
     }
 
     static func isCurrentConfiguredGatewayProbe(

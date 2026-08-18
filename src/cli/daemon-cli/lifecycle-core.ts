@@ -4,13 +4,16 @@ import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
-import type { GatewayServiceStartRepairIssue, GatewayServiceState } from "../../daemon/service.js";
+import type {
+  GatewayServiceStartRepairIssue,
+  GatewayServiceState,
+  GatewayService,
+} from "../../daemon/service.js";
 import {
   describeGatewayServiceRestart,
   inspectGatewayServiceStartRepair,
   startGatewayService,
 } from "../../daemon/service.js";
-import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
@@ -94,41 +97,38 @@ function mergeWarnings(
   return combined.length > 0 ? combined : undefined;
 }
 
-async function handleServiceNotLoaded(params: {
+async function failServiceNotLoaded(params: {
   serviceNoun: string;
   service: GatewayService;
-  loaded: boolean;
   renderStartHints: () => string[];
-  json: boolean;
-  emit: ReturnType<typeof createDaemonActionContext>["emit"];
+  fail: ReturnType<typeof createDaemonActionContext>["fail"];
 }) {
   const hints = filterContainerGenericHints(
     await maybeAugmentSystemdHints(params.renderStartHints()),
   );
-  params.emit({
-    ok: true,
-    result: "not-loaded",
-    message: `${params.serviceNoun} service ${params.service.notLoadedText}.`,
-    hints,
-    service: buildDaemonServiceSnapshot(params.service, params.loaded),
-  });
-  if (!params.json) {
-    defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
-    for (const hint of hints) {
-      defaultRuntime.log(`Start with: ${hint}`);
-    }
-  }
+  params.fail(`${params.serviceNoun} service ${params.service.notLoadedText}.`, hints);
 }
 
 async function resolveServiceLoadedOrFail(params: {
   serviceNoun: string;
   service: GatewayService;
   fail: ReturnType<typeof createDaemonActionContext>["fail"];
+  acceptInstalledDefinition?: boolean;
 }): Promise<boolean | null> {
-  // Returning null keeps failure emission centralized in the caller's action context.
+  // Keep native scope discovery in the adapter and failure emission in the action context.
+  const hasInstalledDefinition = async () =>
+    params.service.hasInstalledDefinition
+      ? await params.service.hasInstalledDefinition({ env: process.env }).catch(() => false)
+      : Boolean(await params.service.readCommand(process.env).catch(() => null));
   try {
-    return await params.service.isLoaded({ env: process.env });
+    const loaded = await params.service.isLoaded({ env: process.env });
+    return (
+      loaded || (Boolean(params.acceptInstalledDefinition) && (await hasInstalledDefinition()))
+    );
   } catch (err) {
+    if (params.acceptInstalledDefinition && (await hasInstalledDefinition())) {
+      return true;
+    }
     params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return null;
   }
@@ -266,13 +266,11 @@ export async function runServiceStart(params: {
       params.expectedPort,
     );
     if (startResult.outcome === "missing-install") {
-      await handleServiceNotLoaded({
+      await failServiceNotLoaded({
         serviceNoun: params.serviceNoun,
         service: params.service,
-        loaded: startResult.state.loaded,
         renderStartHints: params.renderStartHints,
-        json,
-        emit,
+        fail,
       });
       return;
     }
@@ -514,6 +512,7 @@ export async function runServiceRestart(params: {
     serviceNoun: params.serviceNoun,
     service: params.service,
     fail,
+    acceptInstalledDefinition: true,
   });
   if (loaded === null) {
     return false;
@@ -548,13 +547,11 @@ export async function runServiceRestart(params: {
       return false;
     }
     if (!handledRecovery) {
-      await handleServiceNotLoaded({
+      await failServiceNotLoaded({
         serviceNoun: params.serviceNoun,
         service: params.service,
-        loaded,
         renderStartHints: params.renderStartHints,
-        json,
-        emit,
+        fail,
       });
       return false;
     }
@@ -679,21 +676,11 @@ export async function runServiceRestart(params: {
         }
       }
     }
-    let restarted = loaded;
-    if (loaded) {
-      try {
-        restarted = await params.service.isLoaded({ env: process.env });
-      } catch {
-        restarted = true;
-      }
-    } else if (recoveredLoadedState !== null) {
-      restarted = recoveredLoadedState;
-    }
     emit({
       ok: true,
       result: "restarted",
       message: handledRecovery?.message ?? handledRepair?.message,
-      service: buildDaemonServiceSnapshot(params.service, restarted),
+      service: buildDaemonServiceSnapshot(params.service, loaded || recoveredLoadedState === true),
       warnings: warnings.length ? warnings : undefined,
     });
     const actionMessage = handledRecovery?.message ?? handledRepair?.message;

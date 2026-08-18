@@ -50,7 +50,11 @@ const storePath = "/tmp/openclaw/sessions.sqlite";
 
 type Method = "session.discussion.info" | "session.discussion.open";
 
-async function invoke(method: Method, params: Record<string, unknown>) {
+async function invoke(
+  method: Method,
+  params: Record<string, unknown>,
+  runtimeConfig: OpenClawConfig = cfg,
+) {
   const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
   await sessionDiscussionHandlers[method]?.({
     req: { type: "req", id: method, method, params: {} },
@@ -58,7 +62,7 @@ async function invoke(method: Method, params: Record<string, unknown>) {
     client: null,
     isWebchatConnect: () => false,
     respond: (ok, payload, error) => calls.push({ ok, payload, error }),
-    context: { getRuntimeConfig: () => cfg } as never,
+    context: { getRuntimeConfig: () => runtimeConfig } as never,
   });
   return calls[0];
 }
@@ -126,7 +130,10 @@ describe("session discussion gateway methods", () => {
       sessionKey: "agent:main:thread",
     });
 
-    expect(registered.info).toHaveBeenCalledWith({ sessionKey: "agent:main:thread" });
+    expect(registered.info).toHaveBeenCalledWith({
+      sessionKey: "agent:main:thread",
+      agentId: "main",
+    });
     expect(response).toMatchObject({
       ok: true,
       payload: {
@@ -145,8 +152,46 @@ describe("session discussion gateway methods", () => {
       sessionKey: "agent:main:thread",
     });
 
-    expect(registered.open).toHaveBeenCalledWith({ sessionKey: "agent:main:thread" });
+    expect(registered.open).toHaveBeenCalledWith({
+      sessionKey: "agent:main:thread",
+      agentId: "main",
+    });
     expect(response).toMatchObject({ ok: true, payload: { state: "available" } });
+  });
+
+  it("admits bare fixed-store keys only through their persisted owner", async () => {
+    const registered = provider();
+    mocks.getProvider.mockReturnValue(registered.value);
+    mockSession({ sessionId: "session-ops-global", updatedAt: 1 });
+    const ownedConfig: OpenClawConfig = {
+      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    expect(
+      await invoke("session.discussion.open", { sessionKey: "global" }, ownedConfig),
+    ).toMatchObject({ ok: true, payload: { state: "available" } });
+    expect(mocks.loadSessionTarget).toHaveBeenCalledWith({
+      cfg: ownedConfig,
+      key: "global",
+      agentId: "ops",
+    });
+
+    const ownerlessConfig: OpenClawConfig = {
+      ...ownedConfig,
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+    expect(
+      await invoke("session.discussion.info", { sessionKey: "global" }, ownerlessConfig),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
+    });
+    expect(registered.info).not.toHaveBeenCalled();
   });
 
   it("persists a generated title before opening an untitled session discussion", async () => {
@@ -174,7 +219,7 @@ describe("session discussion gateway methods", () => {
         sessionId: "session-1",
         sessionKey,
         storePath,
-        userMessage: "Plan the release",
+        userMessage: "",
       }),
     );
     expect(persistedEntry?.displayName).toBe("Release Planning");
@@ -185,6 +230,26 @@ describe("session discussion gateway methods", () => {
       expect.anything(),
       expect.objectContaining({ sessionKey, agentId: "main", reason: "chat.title" }),
     );
+  });
+
+  it("attempts a title when system prompt state already exists", async () => {
+    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, systemSent: true };
+    mockSession(entry);
+    mocks.readSessionTitleFields.mockReturnValue({
+      firstUserMessage: "Plan the release",
+      lastMessagePreview: null,
+    });
+    mocks.updateSessionEntry.mockImplementation(async (_scope, update) => {
+      const patch = await update({ ...entry });
+      return patch ? { ...entry, ...patch } : entry;
+    });
+    const registered = provider();
+    mocks.getProvider.mockReturnValue(registered.value);
+
+    await invoke("session.discussion.open", { sessionKey });
+
+    expect(mocks.maybeGenerateSessionTitle).toHaveBeenCalledOnce();
+    expect(mocks.generateConversationLabelWithFallback).toHaveBeenCalledOnce();
   });
 
   it("titles via the canonical session key when opened through an alias key", async () => {

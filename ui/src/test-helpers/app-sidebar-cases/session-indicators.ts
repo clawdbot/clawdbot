@@ -6,17 +6,130 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-r
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 
+function expectEmptyLead(row: Element | null) {
+  const lead = row?.querySelector(".sidebar-session-indicator");
+  expect(lead).not.toBeNull();
+  expect(lead?.childElementCount).toBe(0);
+}
+
 describe("AppSidebar session indicators", () => {
-  it("preserves child PR indicators and concurrent pinned run/unread glyph state", async () => {
+  it("renders named glyphs as strokes and keeps emoji as text", async () => {
+    const glyphKey = "agent:main:glyph";
+    const emojiKey = "agent:main:emoji";
+    const sessions = createSessionsHarness("main", [glyphKey, emojiKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const glyph = result.sessions.find((row) => row.key === glyphKey);
+    const emoji = result.sessions.find((row) => row.key === emojiKey);
+    if (!glyph || !emoji) {
+      throw new Error("expected icon sessions");
+    }
+    glyph.icon = "braces";
+    emoji.icon = "🦞";
+
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({} as GatewayBrowserClient).gateway,
+      sessions.sessions,
+    );
+    const glyphRow = sidebar.querySelector(`[data-session-key="${glyphKey}"]`);
+    const emojiRow = sidebar.querySelector(`[data-session-key="${emojiKey}"]`);
+
+    expect(glyphRow?.querySelector(".session-glyph__icon svg")).not.toBeNull();
+    expect(glyphRow?.querySelector(".session-glyph__emoji")).toBeNull();
+    expect(emojiRow?.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
+    expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
+  });
+
+  it("keeps Home activity and its active composer draft in the trailing endcap", async () => {
+    const mainKey = "agent:main:main";
+    const workingKey = "agent:main:working";
+    const sessions = createSessionsHarness("main", [mainKey, workingKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    for (const row of result.sessions) {
+      row.hasActiveRun = true;
+      row.status = "running";
+    }
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({} as GatewayBrowserClient).gateway,
+      sessions.sessions,
+    );
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = mainKey;
+    sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
+    sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+
+    const home = sidebar.querySelector(".nav-item--home");
+    const workingSession = sidebar.querySelector(`[data-session-key="${workingKey}"]`);
+    const homeSpinner = home?.querySelector(".nav-item__state .session-run-spinner");
+    const sessionSpinner = workingSession?.querySelector(".session-row-aside .session-run-spinner");
+
+    expect(home?.querySelector(".nav-item__icon")).not.toBeNull();
+    expect(home?.querySelector(".session-glyph__ring")).toBeNull();
+    expect(homeSpinner).not.toBeNull();
+    expect(homeSpinner?.className).toBe(sessionSpinner?.className);
+    expect(homeSpinner?.getAttribute("role")).toBe(sessionSpinner?.getAttribute("role"));
+    expect(homeSpinner?.getAttribute("aria-label")).toBe(
+      sessionSpinner?.getAttribute("aria-label"),
+    );
+    expect(
+      home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
+    ).toContain("2");
+    expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
+  });
+
+  it("shows when an admitted session is queued for a concurrency slot", async () => {
+    const sessionKey = "agent:main:thread:queued";
+    const gateway = createGatewayHarness({} as GatewayBrowserClient).gateway;
+    const harness = createSessionsHarness("main", ["agent:main:main", sessionKey]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    sidebar.connected = true;
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:main", kind: "direct", updatedAt: 4 },
+          {
+            key: sessionKey,
+            kind: "direct",
+            label: "Queued repair",
+            updatedAt: 5,
+            hasActiveRun: true,
+            status: "queued",
+          },
+        ],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    expect(row?.textContent).toContain("Waiting for a concurrency slot");
+    const queued = row?.querySelector(".sidebar-child-session__status--queued");
+    expect(queued?.getAttribute("aria-label")).toBe("Queued");
+    expect(row?.querySelector(".session-run-spinner")).toBeNull();
+  });
+
+  it("preserves child PR indicators and leads a pinned child like any other", async () => {
     const parentKey = "agent:main:parent";
     const pinnedKey = "agent:main:pinned-child";
+    const runningKey = "agent:main:running-child";
     const openPullRequestKey = "agent:main:open-pr-child";
     const mergedPullRequestKey = "agent:main:merged-pr-child";
     const sessions = createSessionsHarness("main", [parentKey]);
     sessions.list.mockResolvedValue({
       ts: 2,
       path: "",
-      count: 3,
+      count: 4,
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [
         {
@@ -26,11 +139,21 @@ describe("AppSidebar session indicators", () => {
           label: "Pinned child",
           updatedAt: 2,
           pinned: true,
-          icon: "🦞",
           hasActiveRun: true,
           status: "running",
           unread: true,
           worktree: { id: "wt-pinned", branch: "feature/pinned", repoRoot: "/repo" },
+        },
+        {
+          key: runningKey,
+          spawnedBy: parentKey,
+          kind: "direct",
+          label: "Running child",
+          updatedAt: 2,
+          hasActiveRun: true,
+          status: "running",
+          unread: true,
+          worktree: { id: "wt-running", branch: "feature/running", repoRoot: "/repo" },
         },
         {
           key: openPullRequestKey,
@@ -64,7 +187,7 @@ describe("AppSidebar session indicators", () => {
             kind: "direct",
             label: "Parent",
             updatedAt: 1,
-            childSessions: [pinnedKey, openPullRequestKey, mergedPullRequestKey],
+            childSessions: [pinnedKey, runningKey, openPullRequestKey, mergedPullRequestKey],
           },
         ],
       },
@@ -72,7 +195,7 @@ describe("AppSidebar session indicators", () => {
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await waitForFast(() =>
-      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(3),
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(4),
     );
     Object.assign(sidebar, {
       sessionPullRequestIndicatorState: (key: string) =>
@@ -93,12 +216,15 @@ describe("AppSidebar session indicators", () => {
         ),
       ).not.toBeNull();
     });
+    // Pinning is not a status: a pinned child must lead exactly like an
+    // unpinned child in the same run/unread state.
     const pinnedRow = sidebar.querySelector(`[data-session-key="${pinnedKey}"]`);
-    const glyph = pinnedRow?.querySelector(".sidebar-session-indicator .session-glyph");
-    expect(glyph?.classList.contains("session-glyph--running")).toBe(true);
-    expect(glyph?.querySelector(".session-glyph__ring")).not.toBeNull();
-    expect(glyph?.querySelector(".session-glyph__badge--unread")).not.toBeNull();
-    expect(glyph?.querySelector("[data-session-pr-state]")).toBeNull();
+    const runningRow = sidebar.querySelector(`[data-session-key="${runningKey}"]`);
+    const pinnedLead = pinnedRow?.querySelector(".sidebar-session-indicator");
+    const runningLead = runningRow?.querySelector(".sidebar-session-indicator");
+    expect(pinnedLead).not.toBeNull();
+    expect(pinnedLead?.innerHTML).toBe(runningLead?.innerHTML);
+    expect(pinnedLead?.querySelector("[data-session-pr-state]")).toBeNull();
     expect(pinnedRow?.querySelector(".session-row-state")).toBeNull();
   });
 
@@ -178,28 +304,28 @@ describe("AppSidebar session indicators", () => {
       expect(sidebar.querySelector('[data-session-pr-state="merged"]')).not.toBeNull();
     });
     const plain = sidebar.querySelector(`[data-session-key="${keys.plain}"]`);
-    expect(plain?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expectEmptyLead(plain);
     expect(plain?.querySelector(".session-row-state")).toBeNull();
 
     const forked = sidebar.querySelector(`[data-session-key="${keys.forked}"]`);
-    expect(forked?.querySelector(".sidebar-session-indicator")).toBeNull();
-    expect(
-      forked?.querySelector(".session-row-aside > .session-row-state .session-row-fork-indicator"),
-    ).not.toBeNull();
-    expect(forked?.querySelector(".session-row-fork-indicator")?.getAttribute("aria-label")).toBe(
-      "Forked thread",
+    expectEmptyLead(forked);
+    const forkIndicator = forked?.querySelector(
+      ".sidebar-recent-session__name .sidebar-session-fork-indicator",
     );
-    expect(forked?.querySelector(".session-row-fork-indicator")?.hasAttribute("title")).toBe(false);
+    expect(forkIndicator).not.toBeNull();
+    expect(forkIndicator?.getAttribute("aria-label")).toBe("Forked session");
+    expect(forkIndicator?.hasAttribute("title")).toBe(false);
+    expect(forked?.querySelector(".session-row-state")).toBeNull();
 
     const unread = sidebar.querySelector(`[data-session-key="${keys.unread}"]`);
-    expect(unread?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expectEmptyLead(unread);
     expect(
       unread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
     ).not.toBeNull();
 
     const runningUnread = sidebar.querySelector(`[data-session-key="${keys.runningUnread}"]`);
     expect(runningUnread?.classList.contains("session-row-host--running")).toBe(true);
-    expect(runningUnread?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expectEmptyLead(runningUnread);
     expect(
       runningUnread?.querySelector(".session-row-aside > .session-row-state .session-run-spinner"),
     ).not.toBeNull();
@@ -207,27 +333,34 @@ describe("AppSidebar session indicators", () => {
       runningUnread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
     ).not.toBeNull();
 
-    for (const key of [keys.forked, keys.unread, keys.runningUnread]) {
+    for (const key of [keys.unread, keys.runningUnread]) {
       const link = sidebar.querySelector(`[data-session-key="${key}"] a`);
       const descriptionId = link?.getAttribute("aria-describedby");
       expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);
       expect(sidebar.querySelector(`[id="${descriptionId}"]`)).not.toBeNull();
     }
-    expect(forked?.querySelector("a")?.getAttribute("title")).toContain("Forked thread");
-    expect(unread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Active run");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
+    for (const row of [forked, unread, runningUnread]) {
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
+    }
     expect(runningUnread?.querySelector(".session-row-state")?.getAttribute("aria-label")).toBe(
       "Active run · Unread",
     );
 
+    const openPullRequestIcon = sidebar.querySelector(
+      `[data-session-key="${keys.openPullRequest}"] [data-session-pr-state="open"] svg`,
+    );
+    const mergedPullRequestIcon = sidebar.querySelector(
+      `[data-session-key="${keys.mergedPullRequest}"] [data-session-pr-state="merged"] svg`,
+    );
+    expect(openPullRequestIcon).not.toBeNull();
+    expect(mergedPullRequestIcon).not.toBeNull();
+    expect(openPullRequestIcon?.isEqualNode(mergedPullRequestIcon ?? null)).toBe(false);
+
     for (const key of [keys.openPullRequest, keys.mergedPullRequest]) {
       const row = sidebar.querySelector(`[data-session-key="${key}"]`);
-      expect(row?.querySelector(".sidebar-session-indicator")).toBeNull();
+      expectEmptyLead(row);
       expect(row?.querySelector(".session-row-state [data-session-pr-state]")).not.toBeNull();
-      expect(row?.querySelector("a")?.getAttribute("title")).toContain(
-        key === keys.openPullRequest ? "Open PR" : "Merged",
-      );
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
       expect(row?.querySelector("[data-session-pr-state]")?.hasAttribute("title")).toBe(false);
     }
 
@@ -239,11 +372,7 @@ describe("AppSidebar session indicators", () => {
     sessions.publishList({ result });
     await waitForFast(() => {
       expect(sidebar.querySelector('[data-session-pr-state="open"]')).toBeNull();
-      expect(
-        sidebar.querySelector(
-          `[data-session-key="${keys.openPullRequest}"] .sidebar-session-indicator`,
-        ),
-      ).toBeNull();
+      expectEmptyLead(sidebar.querySelector(`[data-session-key="${keys.openPullRequest}"]`));
     });
   });
 });

@@ -1,8 +1,12 @@
 /** Builds plugin status reports from persisted metadata without importing full plugin runtimes. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  appendPluginControlPlaneWorkspaceDiagnostic,
+  resolvePluginControlPlaneWorkspace,
+} from "./control-plane-workspace.js";
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
   loadPluginRegistrySnapshotWithMetadata,
@@ -20,6 +24,7 @@ import type { PluginLogger } from "./types.js";
 /** Control-plane plugin status shape used by `openclaw plugins status` style surfaces. */
 export type PluginRegistryStatusReport = PluginRegistry & {
   workspaceDir?: string;
+  workspaceScope: "selected" | "omitted";
   registrySource: PluginRegistrySnapshotSource;
   registryDiagnostics: readonly PluginRegistrySnapshotDiagnostic[];
 };
@@ -31,46 +36,6 @@ type PluginRegistrySnapshotReportParams = {
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
 };
-
-type TraceDetails = Record<string, boolean | number | string | undefined>;
-
-function isPluginLifecycleTraceEnabled(): boolean {
-  const raw = process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes";
-}
-
-function formatTraceValue(value: boolean | number | string): string {
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return JSON.stringify(value);
-}
-
-function tracePluginLifecyclePhase<T>(phase: string, fn: () => T, details?: TraceDetails): T {
-  if (!isPluginLifecycleTraceEnabled()) {
-    return fn();
-  }
-  const start = process.hrtime.bigint();
-  let status: "error" | "ok" | undefined;
-  try {
-    const result = fn();
-    status = "ok";
-    return result;
-  } catch (error) {
-    status = "error";
-    throw error;
-  } finally {
-    const elapsedMs = Number(process.hrtime.bigint() - start) / 1_000_000;
-    const detailText = Object.entries(details ?? {})
-      .filter((entry): entry is [string, boolean | number | string] => entry[1] !== undefined)
-      .map(([key, value]) => `${key}=${formatTraceValue(value)}`)
-      .join(" ");
-    const suffix = detailText ? ` ${detailText}` : "";
-    console.error(
-      `[plugins:lifecycle] phase=${JSON.stringify(phase)} ms=${elapsedMs.toFixed(2)} status=${status ?? "error"}${suffix}`,
-    );
-  }
-}
 
 function buildPluginRecordFromInstalledIndex(
   plugin: import("./installed-plugin-index.js").InstalledPluginIndexRecord,
@@ -114,7 +79,6 @@ function buildPluginRecordFromInstalledIndex(
     webFetchProviderIds: [...(manifest?.contracts?.webFetchProviders ?? [])],
     webSearchProviderIds: [...(manifest?.contracts?.webSearchProviders ?? [])],
     migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
-    memoryEmbeddingProviderIds: [...(manifest?.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
     cliCommands: [],
     services: [],
@@ -141,15 +105,18 @@ export function buildPluginRegistrySnapshotReport(
 ): PluginRegistryStatusReport {
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
-  const workspaceDir =
-    params?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), env);
+  const workspace = resolvePluginControlPlaneWorkspace({
+    config,
+    env,
+    workspaceDir: params?.workspaceDir,
+  });
   const result = tracePluginLifecyclePhase(
     "plugin registry snapshot",
     () =>
       loadPluginRegistrySnapshotWithMetadata({
         config,
         env: params?.env,
-        workspaceDir,
+        workspaceDir: workspace.workspaceDir,
       }),
     { surface: "status" },
   );
@@ -157,16 +124,20 @@ export function buildPluginRegistrySnapshotReport(
     index: result.snapshot,
     config,
     env,
-    workspaceDir,
+    workspaceDir: workspace.workspaceDir,
   });
   const manifestByPluginId = metadataSnapshot.byPluginId;
   return projectPluginDependencyHealth({
-    workspaceDir,
+    workspaceDir: workspace.workspaceDir,
+    workspaceScope: workspace.workspaceScope,
     ...createEmptyPluginRegistry(),
     plugins: result.snapshot.plugins.map((plugin) =>
       buildPluginRecordFromInstalledIndex(plugin, manifestByPluginId.get(plugin.pluginId)),
     ),
-    diagnostics: [...result.snapshot.diagnostics],
+    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+      result.snapshot.diagnostics,
+      workspace,
+    ),
     registrySource: result.source,
     registryDiagnostics: result.diagnostics,
   });

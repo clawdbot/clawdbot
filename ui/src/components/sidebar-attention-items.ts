@@ -5,7 +5,7 @@ import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
-import { isCronJobActiveFailure } from "../lib/cron-status.ts";
+import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
 import { clampText } from "../lib/format.ts";
 import { isMonitoredAuthProvider } from "../lib/model-auth.ts";
 import type { IconName } from "./icons.ts";
@@ -44,6 +44,7 @@ export type SidebarAttentionItem = {
 export function buildSidebarAttentionItems(params: {
   cronJobs: readonly CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
+  modelAuthAgentId?: string | null;
   approvalQueue: readonly ExecApprovalRequest[];
   now: number;
 }): SidebarAttentionItem[] {
@@ -56,7 +57,7 @@ export function buildSidebarAttentionItems(params: {
     items.push({
       kind: "pendingApproval",
       severity: "warning",
-      icon: "shieldCheck",
+      icon: "shieldQuestion",
       label: t(count === 1 ? "attention.pendingApproval" : "attention.pendingApprovals", {
         count: String(count),
       }),
@@ -88,6 +89,7 @@ export function buildSidebarAttentionItems(params: {
   const overdueCron = params.cronJobs.filter(
     (job) =>
       job.enabled &&
+      !isCronJobRunning(job) &&
       job.state?.nextRunAtMs != null &&
       params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
   );
@@ -111,6 +113,7 @@ export function buildSidebarAttentionItems(params: {
     (provider) => provider.status === "expired" || provider.status === "missing",
   );
   if (expired.length > 0) {
+    const providerSignature = signatureOf(expired.map((provider) => provider.provider));
     items.push({
       kind: "modelAuthExpired",
       severity: "error",
@@ -119,7 +122,11 @@ export function buildSidebarAttentionItems(params: {
         providers: expired.map((provider) => provider.displayName).join(", "),
       }),
       action: { kind: "navigate", routeId: "model-providers" },
-      signature: signatureOf(expired.map((provider) => provider.provider)),
+      // Auth status is agent-scoped. Prefix its owner so dismissing one agent's
+      // missing credential cannot hide the same provider warning for another.
+      signature: params.modelAuthAgentId
+        ? `agent:${params.modelAuthAgentId}\n${providerSignature}`
+        : providerSignature,
     });
   }
   return items;

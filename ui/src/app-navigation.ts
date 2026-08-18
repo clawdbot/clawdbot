@@ -1,9 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
 import { i18n, t } from "./i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "./lib/string-coerce.ts";
 
 export type NavigationRouteId = RouteId;
 
@@ -16,8 +16,8 @@ type NavigationItem = {
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
+// Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
-  "workboard",
   "dashboards",
   "usage",
   "cron",
@@ -26,7 +26,12 @@ export const SIDEBAR_NAV_ROUTES = [
   "activity",
   "plugins",
   "apps",
+  "portals",
 ] as const satisfies readonly NavigationRouteId[];
+
+// `route:workboard` shipped in browser and synced preferences before Workboard
+// became plugin-owned. Keep it as a placement slot, but not a customizable core route.
+const PERSISTED_SIDEBAR_ROUTES = ["workboard", ...SIDEBAR_NAV_ROUTES] as const;
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
@@ -49,9 +54,14 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
+export type PersistedSidebarRoute = (typeof PERSISTED_SIDEBAR_ROUTES)[number];
+
+export function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
+  return PERSISTED_SIDEBAR_ROUTES.includes(value as PersistedSidebarRoute);
+}
 
 export type SidebarZoneEntry =
-  | { type: "route"; route: SidebarNavRoute }
+  | { type: "route"; route: PersistedSidebarRoute }
   | { type: "workboard"; boardId: string }
   | { type: "session"; key: string };
 
@@ -70,9 +80,7 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
   }
   if (value.startsWith("route:")) {
     const route = value.slice("route:".length);
-    return SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)
-      ? { type: "route", route: route as SidebarNavRoute }
-      : null;
+    return isPersistedSidebarRoute(route) ? { type: "route", route } : null;
   }
   if (value.startsWith("session:")) {
     const key = value.slice("session:".length).trim();
@@ -181,7 +189,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "communications", "talk", "nodes"],
+    routes: ["connection", "channels", "communications", "talk", "devices", "cloud-workers"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
@@ -189,11 +197,11 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSecurity",
-    routes: ["security", "approvals"],
+    routes: ["security", "secrets", "approvals"],
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "advanced", "debug", "logs", "about"],
+    routes: ["infrastructure", "advanced", "debug", "logs", "updates", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -222,6 +230,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
   apps: "layoutGrid",
+  portals: "monitor",
   approvals: "badgeCheck",
   workboard: "kanban",
   worktrees: "folder",
@@ -234,7 +243,8 @@ const NAVIGATION_ICONS: NavigationItem = {
   skills: "zap",
   plugins: "puzzle",
   "skill-workshop": "wrench",
-  nodes: "monitorSmartphone",
+  devices: "monitorSmartphone",
+  "cloud-workers": "server",
   chat: "messageSquare",
   dashboard: "layoutDashboard",
   dashboards: "layoutDashboard",
@@ -250,6 +260,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   talk: "mic",
   infrastructure: "globe",
   labs: "flaskConical",
+  updates: "download",
   about: "fileText",
   "ai-agents": "brain",
   "model-setup": "spark",
@@ -257,6 +268,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   "memory-import": "download",
   notifications: "bell",
   security: "shieldCheck",
+  secrets: "key",
   advanced: "fileCode",
   debug: "bug",
   logs: "scrollText",
@@ -328,6 +340,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
   apps: { titleKey: "tabs.apps", subtitleKey: "subtitles.apps" },
+  portals: { titleKey: "tabs.portals", subtitleKey: "subtitles.portals" },
   approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
@@ -343,7 +356,11 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     titleKey: "tabs.skillWorkshop",
     subtitleKey: "subtitles.skillWorkshop",
   },
-  nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
+  devices: { titleKey: "tabs.devices", subtitleKey: "subtitles.devices" },
+  "cloud-workers": {
+    titleKey: "tabs.cloudWorkers",
+    subtitleKey: "subtitles.cloudWorkers",
+  },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
@@ -362,6 +379,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   talk: { titleKey: "tabs.talk", subtitleKey: "subtitles.talk" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
+  updates: { titleKey: "tabs.updates", subtitleKey: "subtitles.updates" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },
@@ -375,6 +393,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.notifications",
   },
   security: { titleKey: "tabs.security", subtitleKey: "subtitles.security" },
+  secrets: { titleKey: "tabs.secrets", subtitleKey: "secretsStore.hint" },
   advanced: { titleKey: "routeTitles.advanced", subtitleKey: "subtitles.advanced" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },

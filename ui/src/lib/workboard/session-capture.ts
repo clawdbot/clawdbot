@@ -13,12 +13,7 @@ import {
 import { loadWorkboard } from "./loading.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload } from "./normalization.ts";
-import {
-  getWorkboardState,
-  invalidateWorkboardLoads,
-  waitForWorkboardLifecycleWrites,
-  type WorkboardHost,
-} from "./runtime.ts";
+import { getWorkboardState, invalidateWorkboardLoads, type WorkboardHost } from "./runtime.ts";
 import type { WorkboardCard, WorkboardStatus } from "./types.ts";
 
 const SESSION_CAPTURE_HISTORY_LIMIT = 40;
@@ -95,6 +90,9 @@ function sessionTitle(session: GatewaySessionRow, recentUserText: string | null)
 }
 
 function sessionCaptureStatus(session: GatewaySessionRow): WorkboardStatus {
+  if (session.status === "queued") {
+    return "todo";
+  }
   if (session.hasActiveRun === true || session.status === "running") {
     return "running";
   }
@@ -147,7 +145,7 @@ function buildSessionCaptureNotes(params: {
   recentUserText: string | null;
   lastAssistantText: string | null;
 }): string {
-  const lines = [`Thread: ${params.session.key}`];
+  const lines = [`Session: ${params.session.key}`];
   if (params.recentUserText) {
     lines.push("", `Recent user prompt: ${clampSessionCaptureText(params.recentUserText)}`);
   }
@@ -174,7 +172,6 @@ export async function captureSessionToWorkboard(params: {
   let captureStarted = false;
   try {
     if (!state.loaded) {
-      await waitForWorkboardLifecycleWrites(params.host);
       await loadWorkboard({
         host: params.host,
         client: params.client,

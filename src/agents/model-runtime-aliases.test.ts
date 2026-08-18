@@ -5,8 +5,6 @@ import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelPickerVisibleProviderPredicate,
   isRetiredModelPickerProvider,
-} from "./model-runtime-aliases.js";
-import {
   areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
   resolveCliRuntimeExecutionProvider as resolveCliRuntimeExecutionProviderBase,
@@ -121,17 +119,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
   });
 
   it("uses an explicit Claude CLI auth profile without a model-runtime entry", () => {
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        authProfileId: "anthropic:claude-cli",
-        cfg: createAnthropicAuthConfig({ order: ["anthropic:api"] }),
-        provider: "anthropic",
-        modelId: "opus-4.7",
-      }),
-    ).toBe("claude-cli");
-  });
-
-  it("uses prepared Anthropic auth choice aliases without metadata discovery", () => {
     expect(
       resolveCliRuntimeExecutionProvider({
         authProfileId: "anthropic:claude-cli",

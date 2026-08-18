@@ -1,4 +1,8 @@
-import { includeContributionOwnsAgentRoster } from "./agent-roster-provenance.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  includeContributionOwnsAgentRoster,
+  includeContributionOwnsBindings,
+} from "./agent-roster-provenance.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { ConfigIncludeError } from "./includes.js";
 import type { ConfigIoContext } from "./io.context.js";
@@ -28,7 +32,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.js";
+import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
@@ -67,7 +71,13 @@ export async function readConfigFileSnapshotInternal(
         parsed: {},
         sourceConfig: config,
         valid: true,
-        runtimeConfig: config,
+        // Missing config is the fresh-install default path: materialize the
+        // same runtime defaults an existing empty {} config gets, so snapshot
+        // consumers see identical out-of-box behavior either way.
+        runtimeConfig: materializeRuntimeConfig(config, "snapshot", {
+          manifestRegistry:
+            context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined,
+        }),
         hash: hashConfigRaw(null),
         issues: [],
         warnings: [],
@@ -86,6 +96,7 @@ export async function readConfigFileSnapshotInternal(
   const includeFilePathsForWatch = new Set<string>();
   const includeProvenance: NonNullable<ConfigFileSnapshot["includeProvenance"]>[number][] = [];
   let agentRosterIncludeOwned = false;
+  let bindingsIncludeOwned = false;
 
   try {
     const raw = await deps.measure("config.snapshot.read.file", () =>
@@ -133,6 +144,7 @@ export async function readConfigFileSnapshotInternal(
             const { value: _value, ...ownership } = event;
             includeProvenance.push(ownership);
             agentRosterIncludeOwned ||= includeContributionOwnsAgentRoster(event);
+            bindingsIncludeOwned ||= includeContributionOwnsBindings(event);
           },
         ),
       );
@@ -169,8 +181,13 @@ export async function readConfigFileSnapshotInternal(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
+    const contextBudgetMigration = migrateLegacyContextBudgetConfig(
+      readResolution.resolvedConfigRaw,
+    );
+    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
     envVarWarnings.push(
+      ...contextBudgetMigration.changes,
+      ...contextBudgetMigration.warnings,
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;
@@ -212,6 +229,7 @@ export async function readConfigFileSnapshotInternal(
           parsed: snapshotParsed,
           includeProvenance,
           agentRosterIncludeOwned,
+          bindingsIncludeOwned,
           sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
           sourceConfig: coerceConfig(effectiveConfigRaw),
           valid: false,
@@ -219,6 +237,7 @@ export async function readConfigFileSnapshotInternal(
           hash: snapshotHash,
           issues: validated.issues,
           warnings: [...validated.warnings, ...envVarWarnings],
+          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues,
         }),
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -244,9 +263,10 @@ export async function readConfigFileSnapshotInternal(
           configPath,
           raw,
           parsed: effectiveParsed,
-          validateBackup: async (backup) => {
-            recoveryCandidate = context.resolveSuspiciousRecoveryBackupCandidate(backup.parsed);
-            return recoveryCandidate !== null;
+          prepareBackup: (backup) => {
+            const prepared = context.prepareRecoveryBackupCandidate(backup);
+            recoveryCandidate = prepared.ok ? (prepared.candidate.config ?? null) : null;
+            return prepared;
           },
           ...(allowSuspiciousRecovery
             ? {
@@ -276,7 +296,9 @@ export async function readConfigFileSnapshotInternal(
     }
     const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
       materializeRuntimeConfig(validated.config, "snapshot", {
-        manifestRegistry: pluginMetadata.getSnapshot()?.manifestRegistry,
+        manifestRegistry:
+          pluginMetadata.getSnapshot()?.manifestRegistry ??
+          (context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined),
       }),
     );
     return await deps.measure("config.snapshot.read.observe", () =>
@@ -291,6 +313,7 @@ export async function readConfigFileSnapshotInternal(
             parsed: snapshotParsed,
             includeProvenance,
             agentRosterIncludeOwned,
+            bindingsIncludeOwned,
             sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
             sourceConfig: coerceConfig(effectiveConfigRaw),
             valid: true,
@@ -298,6 +321,7 @@ export async function readConfigFileSnapshotInternal(
             hash: snapshotHash,
             issues: [],
             warnings: [...validated.warnings, ...envVarWarnings],
+            resolutionFacts: readResolution.resolutionFacts,
             legacyIssues: [],
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -370,17 +394,16 @@ export async function readConfigFileSnapshotWithPluginMetadataFromContext(
     recoverSuspicious: options.recoverSuspicious === true,
     allowSuspiciousRecovery: options.allowSuspiciousRecovery,
   });
-  const pluginMetadataSnapshot =
-    result.pluginMetadataSnapshot ??
-    (result.snapshot.valid
-      ? context
-          .createValidationPluginMetadataSnapshotLoader({
-            effectiveConfigRaw: result.snapshot.sourceConfig,
-            env: context.deps.env,
-            allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
-          })
-          .load(result.snapshot.sourceConfig)
-      : undefined);
+  let pluginMetadataSnapshot = result.pluginMetadataSnapshot;
+  if (!pluginMetadataSnapshot && result.snapshot.valid) {
+    const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
+      effectiveConfigRaw: result.snapshot.sourceConfig,
+      env: context.deps.env,
+      allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
+    });
+    pluginMetadata.load(result.snapshot.sourceConfig);
+    pluginMetadataSnapshot = pluginMetadata.getSnapshot();
+  }
   return {
     snapshot: result.snapshot,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
@@ -393,7 +416,6 @@ export async function readConfigFileSnapshotForWriteFromContext(
   const assertConfigPathForWrite = () => {
     if (resolveConfigPathForDeps(context.deps) !== context.configPath) {
       throw new ConfigMutationConflictError("config path changed since last load", {
-        currentHash: null,
         retryable: false,
       });
     }
@@ -441,21 +463,31 @@ export async function readSourceConfigBestEffortFromContext(
   if (!deps.fs.existsSync(configPath)) {
     return {};
   }
+  // Best-effort legitimizes the fallback value, not the silence: consumers
+  // (update-channel selection, doctor lint) act on the result, so each
+  // degradation records why the real config was not used.
   try {
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = parseConfigJson5(raw, deps.json5);
     if (!parsed.ok) {
+      deps.logger.warn(
+        `Config (${configPath}): best-effort read ignored unparseable config: ${parsed.error}`,
+      );
       return {};
     }
     let resolved: unknown;
     try {
       resolved = resolveConfigIncludesForRead(parsed.parsed, configPath, deps);
-    } catch {
+    } catch (err) {
+      deps.logger.warn(
+        `Config (${configPath}): best-effort read skipped $include resolution: ${formatErrorMessage(err)}`,
+      );
       return coerceConfig(parsed.parsed);
     }
     const resolution = resolveConfigForRead(resolved, deps.env, deps.lowerPrecedenceEnv);
     return coerceConfig(resolution.resolvedConfigRaw);
-  } catch {
+  } catch (err) {
+    deps.logger.warn(`Config (${configPath}): best-effort read failed: ${formatErrorMessage(err)}`);
     return {};
   }
 }

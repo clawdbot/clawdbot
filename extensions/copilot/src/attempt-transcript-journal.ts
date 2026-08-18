@@ -10,12 +10,19 @@ import {
   publishSessionTranscriptUpdateByIdentity,
   readVisibleSessionTranscriptMessageEntries,
   type SessionTranscriptTargetParams,
+  type TranscriptEntryAnchor,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AttemptParamsLike } from "./attempt-types.js";
 
 type TranscriptMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 type AppendResult =
-  | { appended: boolean; message: TranscriptMessage; messageId: string }
+  | {
+      anchor: TranscriptEntryAnchor;
+      appended: boolean;
+      message: TranscriptMessage;
+      messageId: string;
+    }
   | undefined;
 type PendingWrite = { eventId?: string; message: TranscriptMessage };
 type ToolGroup = {
@@ -128,6 +135,7 @@ export function createAttemptTranscriptJournal(params: {
   let latestAssistantKey: string | undefined;
   let assistantTranscriptOwned = false;
   let assistantTranscriptIdempotencyKey: string | undefined;
+  let terminalAnchor: TranscriptEntryAnchor | undefined;
 
   const captureFailure = (error: unknown) => {
     if (firstFailure) {
@@ -310,10 +318,11 @@ export function createAttemptTranscriptJournal(params: {
     }
     return result.appended;
   };
-  const ownAssistant = (key: string, persisted: boolean) => {
+  const ownAssistant = (key: string, persisted: boolean, anchor?: TranscriptEntryAnchor) => {
     if (latestAssistantKey === key) {
       assistantTranscriptOwned = true;
       assistantTranscriptIdempotencyKey = persisted ? key : undefined;
+      terminalAnchor = persisted ? anchor : undefined;
     }
   };
 
@@ -366,6 +375,7 @@ export function createAttemptTranscriptJournal(params: {
       latestAssistantKey = undefined;
       assistantTranscriptOwned = false;
       assistantTranscriptIdempotencyKey = undefined;
+      terminalAnchor = undefined;
     },
     async persistInitialUser() {
       const recorder = params.attempt.userTurnTranscriptRecorder;
@@ -398,7 +408,8 @@ export function createAttemptTranscriptJournal(params: {
         const persisted = outcome.message as Extract<AgentMessage, { role: "user" }>;
         accept(outcome);
         persistedInitialUser = persisted;
-        recorder.markRuntimePersisted(persisted);
+        terminalAnchor = outcome.anchor;
+        recorder.markRuntimePersisted(persisted, outcome.anchor);
         params.attempt.onUserMessagePersisted?.(persisted);
         await publish(outcome.appended);
       })();
@@ -463,6 +474,7 @@ export function createAttemptTranscriptJournal(params: {
       latestAssistantKey = key;
       assistantTranscriptOwned = false;
       assistantTranscriptIdempotencyKey = undefined;
+      terminalAnchor = undefined;
       schedule(async () => {
         if (pendingTools) {
           throw new Error("Copilot emitted an assistant message before tool results settled");
@@ -484,7 +496,7 @@ export function createAttemptTranscriptJournal(params: {
         if (!outcome) {
           replayInvalid = true;
         }
-        ownAssistant(key, Boolean(outcome));
+        ownAssistant(key, Boolean(outcome), outcome?.anchor);
         await publish(accept(outcome));
       });
     },
@@ -523,7 +535,7 @@ export function createAttemptTranscriptJournal(params: {
             const didAppend = accept(result as AppendResult);
             appended ||= didAppend;
           }
-          ownAssistant(group.assistantKey, true);
+          ownAssistant(group.assistantKey, true, results.at(-1)?.anchor);
         }
         pendingTools = undefined;
         const deferredReceipts: PersistenceReceipt[] = [];
@@ -558,6 +570,7 @@ export function createAttemptTranscriptJournal(params: {
     snapshot: () => ({
       assistantTranscriptOwned,
       assistantTranscriptIdempotencyKey,
+      terminalAnchor,
       initialSdkUserValidated,
       messagesSnapshot: [...messagesSnapshot],
       replayInvalid,
@@ -594,9 +607,9 @@ function createPersistenceReceipt(): PersistenceReceipt {
 }
 
 function resolveTranscriptTarget(attempt: AttemptParamsLike): SessionTranscriptTargetParams {
-  const sessionId = readString(attempt.sessionTarget?.sessionId);
-  const sessionKey = readString(attempt.sessionTarget?.sessionKey);
-  const storePath = readString(attempt.sessionTarget?.storePath);
+  const sessionId = normalizeOptionalString(attempt.sessionTarget?.sessionId);
+  const sessionKey = normalizeOptionalString(attempt.sessionTarget?.sessionKey);
+  const storePath = normalizeOptionalString(attempt.sessionTarget?.storePath);
   if (!sessionId || !sessionKey || !storePath) {
     const error = new Error(
       "[copilot-attempt] canonical transcript persistence requires an exact runtime session target",
@@ -604,7 +617,7 @@ function resolveTranscriptTarget(attempt: AttemptParamsLike): SessionTranscriptT
     error.code = "transcript_persistence_failed";
     throw error;
   }
-  const agentId = readString(attempt.sessionTarget?.agentId ?? attempt.agentId);
+  const agentId = normalizeOptionalString(attempt.sessionTarget?.agentId ?? attempt.agentId);
   return { sessionId, sessionKey, storePath, ...(agentId ? { agentId } : {}) };
 }
 
@@ -725,8 +738,4 @@ function userText(content: unknown): string {
     }
   }
   return JSON.stringify(content) ?? "";
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

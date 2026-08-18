@@ -1,6 +1,6 @@
 // Regression coverage for lifecycle-owned cleanup of ephemeral command lanes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../test-utils/deferred.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   enqueueCommandInLane,
   getActiveTaskCount,

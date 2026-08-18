@@ -36,6 +36,10 @@ export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
 // records/*.json files are the pre-SQLite migration barrier. An mtime-only
 // sweep would delete both out from under that reaper.
 const MANAGED_OUTGOING_SUBDIR = "outgoing";
+const OUTBOUND_STAGING_SUBDIR = "outbound";
+// Match delivery-queue orphan grace: staged files get a full day to reach
+// every direct, streamed, fan-out, or queue-owned delivery path.
+const OUTBOUND_STAGING_TTL_MS = 24 * 60 * 60_000;
 /** Fixed disk budget for cached playback renditions; oldest outputs are evicted first. */
 const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 /** Playback renditions outlive transient media but are still retired after one week. */
@@ -84,7 +88,7 @@ function resolveMediaSubdir(subdir: string, caller: string): string {
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
     throw new Error(`${caller}: unsafe media subdir: ${JSON.stringify(subdir)}`);
   }
-  return path.join(...segments);
+  return path.posix.join(...segments);
 }
 
 function resolveMediaScopedDir(subdir: string, caller: string): string {
@@ -102,7 +106,7 @@ function resolveMediaRelativePath(id: string, subdir: string, caller: string): s
     throw new Error(`${caller}: unsafe media ID: ${JSON.stringify(id)}`);
   }
   const safeSubdir = resolveMediaSubdir(subdir, caller);
-  return safeSubdir ? path.join(safeSubdir, id) : id;
+  return safeSubdir ? path.posix.join(safeSubdir, id) : id;
 }
 
 function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
@@ -171,7 +175,9 @@ function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | 
   return findErrorWithCode(err.cause, code);
 }
 
-function isMissingPathError(err: unknown): boolean {
+function hasRecoverableMissingMediaDirCause(err: unknown): boolean {
+  // Recursive mkdir repairs only the ENOENT race where cleanup pruned the directory.
+  // Structural ENOTDIR and generic fs-safe absence remain terminal diagnostics.
   return findErrorWithCode(err, "ENOENT") !== undefined;
 }
 
@@ -188,7 +194,7 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
       attempts: 2,
       minDelayMs: 0,
       maxDelayMs: 0,
-      shouldRetry: isMissingPathError,
+      shouldRetry: hasRecoverableMissingMediaDirCause,
       onRetry: async () => {
         // Cleanup can prune the directory between mkdir and file open. Recreate
         // it once; further failures remain terminal instead of looping.
@@ -314,6 +320,18 @@ export async function prunePlaybackTranscodeCache(): Promise<void> {
     });
     await prunePlaybackTranscodeCacheToSize();
   });
+}
+
+/** Prunes stale delivery staging without touching inbound replay or SQLite-owned outgoing media. */
+export async function pruneOutboundMedia(): Promise<void> {
+  const outboundDir = resolveMediaScopedDir(OUTBOUND_STAGING_SUBDIR, "pruneOutboundMedia");
+  await openMediaStore(MAX_BYTES, outboundDir).pruneExpired({
+    ttlMs: OUTBOUND_STAGING_TTL_MS,
+    recursive: true,
+    pruneEmptyDirs: true,
+  });
+  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
+  await pruneStaleTrustedGeneratedHtmlMarkers();
 }
 
 /** Prunes expired non-playback media, optionally recursing into scoped subdirectories. */
@@ -485,7 +503,7 @@ async function writeMediaStreamToFile(params: {
         sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
         sniffLen += Math.min(buffer.byteLength, remaining);
       }
-      await handle.write(buffer);
+      await handle.writeFile(buffer);
     }
     return {
       sniffBuffer: Buffer.concat(sniffChunks, sniffLen),

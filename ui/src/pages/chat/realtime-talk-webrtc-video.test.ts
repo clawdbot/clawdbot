@@ -61,6 +61,7 @@ function dispatchDescribeViewToolCall(
       data: JSON.stringify({
         type: "response.done",
         response: {
+          id: `response-${ids.callId}`,
           status: "completed",
           output: [
             {

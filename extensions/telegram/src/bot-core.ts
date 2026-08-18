@@ -13,16 +13,21 @@ import {
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
 import {
-  isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+  getChildLogger,
+  createSubsystemLogger,
+  createNonExitingRuntime,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
@@ -44,7 +49,6 @@ import {
 } from "./bot-processing-outcome.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
-import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
@@ -96,6 +100,10 @@ export function createTelegramBotCore(
     cfg,
     accountId: opts.accountId,
   });
+  const ownerAgentId =
+    opts.ownerAgentId?.trim() ||
+    resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId });
+  const runtimeOpts = { ...opts, ownerAgentId };
   const threadBindingPolicy = resolveThreadBindingSpawnPolicy({
     cfg,
     channel: "telegram",
@@ -280,7 +288,7 @@ export function createTelegramBotCore(
     accountId: account.accountId,
     cfg,
     telegramCfg,
-    opts,
+    opts: runtimeOpts,
   });
   const groupHistories = new Map<string, HistoryEntry[]>();
   const botHistorySender = buildTelegramSelfSenderName(account.name, opts.botInfo);
@@ -313,10 +321,6 @@ export function createTelegramBotCore(
     providerSetting: telegramCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const nativeDisabledExplicit = isNativeCommandsExplicitlyDisabled({
-    providerSetting: telegramCfg.commands?.native,
-    globalSetting: cfg.commands?.native,
-  });
   const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const resolveGroupPolicy = (chatId: string | number, turnCfg: OpenClawConfig) =>
@@ -333,7 +337,7 @@ export function createTelegramBotCore(
     sessionKey?: string;
     cfg: OpenClawConfig;
   }) => {
-    const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+    const agentId = params.agentId ?? ownerAgentId;
     const sessionKey =
       params.sessionKey ??
       `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
@@ -399,11 +403,12 @@ export function createTelegramBotCore(
     resolveTelegramGroupConfig,
     sendChatActionHandler,
     runtime,
-    opts,
+    buildContext: opts.buildContext,
+    opts: runtimeOpts,
     telegramDeps,
   });
 
-  registerTelegramNativeCommands({
+  const nativeCommandCallbackDispatcher = registerTelegramNativeCommands({
     bot,
     cfg,
     runtime,
@@ -412,11 +417,10 @@ export function createTelegramBotCore(
     mediaMaxBytes,
     nativeEnabled,
     nativeSkillsEnabled,
-    nativeDisabledExplicit,
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
-    opts,
+    opts: runtimeOpts,
     telegramDeps: {
       ...telegramDeps,
       sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
@@ -426,8 +430,9 @@ export function createTelegramBotCore(
   registerTelegramHandlers({
     cfg,
     accountId: account.accountId,
+    ownerAgentId,
     bot,
-    opts,
+    opts: runtimeOpts,
     telegramTransport,
     runtime,
     mediaMaxBytes,
@@ -437,9 +442,29 @@ export function createTelegramBotCore(
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
-    processMessage,
+    processMessage: async ({
+      ctx,
+      allMedia,
+      storeAllowFrom,
+      turnContext,
+      options,
+      replyMedia,
+      replyChain,
+      promptContext,
+    }) =>
+      await processMessage(
+        ctx,
+        allMedia,
+        storeAllowFrom,
+        turnContext,
+        options,
+        replyMedia,
+        replyChain,
+        promptContext,
+      ),
     logger,
     telegramDeps,
+    nativeCommandCallbackDispatcher,
   });
 
   const originalStop = bot.stop.bind(bot);

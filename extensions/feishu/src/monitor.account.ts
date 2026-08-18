@@ -1,6 +1,7 @@
 // Feishu plugin module implements monitor.account behavior.
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
@@ -11,7 +12,6 @@ import {
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
-import { isRecord, readString } from "./comment-shared.js";
 import { hasProcessedFeishuMessage, warmupDedupFromPluginState } from "./dedup.js";
 import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";

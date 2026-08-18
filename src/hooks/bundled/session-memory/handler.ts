@@ -8,14 +8,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveDefaultAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveUserTimezone } from "../../../agents/date-time.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadTranscriptEvents,
   readSessionTranscriptBoundedMessageTailPage,
@@ -27,13 +27,10 @@ import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
-import {
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-  toAgentStoreSessionKey,
-} from "../../../routing/session-key.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
+import { formatHookErrorForLog } from "../../fire-and-forget.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { isSessionAutoResetReason } from "../../session-auto-reset.js";
@@ -43,6 +40,10 @@ const log = createSubsystemLogger("hooks/session-memory");
 const SESSION_MEMORY_CAPTURE_MAX_BYTES = 8 * 1024 * 1024;
 const SESSION_MEMORY_CAPTURE_PAGE_MESSAGES = 256;
 const SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES = 4_096;
+
+type SessionMemoryTranscript =
+  | { status: "available"; content: string | null }
+  | { status: "unavailable"; reason: string };
 
 function pickDateTimePart(
   parts: Intl.DateTimeFormatPart[],
@@ -110,25 +111,21 @@ async function getRecentSqliteSessionContent(
   messageCount: number,
   capturedEvents?: TranscriptEvent[],
 ): Promise<string | null> {
-  try {
-    const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
-    const latestResetIndex = capturedEvents
-      ? -1
-      : events.findLastIndex(
-          (event) =>
-            Boolean(event) &&
-            typeof event === "object" &&
-            !Array.isArray(event) &&
-            (event as { type?: unknown }).type === "reset",
-        );
-    const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
-    return getRecentSessionContentFromEvents(
-      selectVisibleTranscriptEvents(retiredEvents),
-      messageCount,
-    );
-  } catch {
-    return null;
-  }
+  const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
+  const latestResetIndex = capturedEvents
+    ? -1
+    : events.findLastIndex(
+        (event) =>
+          Boolean(event) &&
+          typeof event === "object" &&
+          !Array.isArray(event) &&
+          (event as { type?: unknown }).type === "reset",
+      );
+  const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
+  return getRecentSessionContentFromEvents(
+    selectVisibleTranscriptEvents(retiredEvents),
+    messageCount,
+  );
 }
 
 // The bounded reader already projects the active branch, but message pages
@@ -207,12 +204,21 @@ function resolveDisplaySessionKey(params: {
 
 const pendingSessionMemoryWrites = new Set<Promise<void>>();
 
+function requireSessionMemoryAgentId(event: Parameters<HookHandler>[0]): string {
+  const agentId = normalizeOptionalString(event.context?.agentId);
+  if (!agentId) {
+    throw new Error("Session memory hook contract requires context.agentId");
+  }
+  return agentId;
+}
+
 export async function flushSessionMemoryWritesForTest(): Promise<void> {
   await Promise.allSettled(pendingSessionMemoryWrites);
 }
 
 async function saveSessionMemoryNow(
   event: Parameters<HookHandler>[0],
+  agentId: string,
   capturedEvents?: TranscriptEvent[],
 ): Promise<void> {
   try {
@@ -224,10 +230,6 @@ async function saveSessionMemoryNow(
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
         ? context.workspaceDir
         : undefined;
-    const agentId =
-      typeof context.agentId === "string" && context.agentId.trim()
-        ? context.agentId.trim()
-        : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
     const contextStorePath =
       typeof context.storePath === "string" && context.storePath.trim()
         ? context.storePath.trim()
@@ -276,21 +278,34 @@ async function saveSessionMemoryNow(
         : 15;
 
     let slug: string | null = null;
-    let sessionContent: string | null = null;
+    let transcript: SessionMemoryTranscript = { status: "available", content: null };
 
     if (currentSessionId) {
-      sessionContent = await getRecentSqliteSessionContent(
-        {
-          agentId,
-          sessionId: currentSessionId,
+      try {
+        transcript = {
+          status: "available",
+          content: await getRecentSqliteSessionContent(
+            {
+              agentId,
+              sessionId: currentSessionId,
+              sessionKey: event.sessionKey,
+              storePath:
+                contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+            },
+            messageCount,
+            capturedEvents,
+          ),
+        };
+      } catch (error) {
+        const reason = formatHookErrorForLog(error);
+        transcript = { status: "unavailable", reason };
+        log.warn("Session transcript unavailable for memory capture", {
           sessionKey: event.sessionKey,
-          storePath: contextStorePath ?? resolveStorePath(cfg?.session?.store, { agentId }),
-        },
-        messageCount,
-        capturedEvents,
-      );
+          error: reason,
+        });
+      }
       log.debug("Session content loaded", {
-        length: sessionContent?.length ?? 0,
+        length: transcript.status === "available" ? (transcript.content?.length ?? 0) : 0,
         messageCount,
       });
 
@@ -298,11 +313,16 @@ async function saveSessionMemoryNow(
       const isTestEnv = isVitestRuntimeEnv();
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
-      if (sessionContent && cfg && allowLlmSlug) {
+      if (transcript.status === "available" && transcript.content && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
         const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
-        slug = await generateSlugViaLLM({ sessionContent, cfg, model: slugModel });
+        slug = await generateSlugViaLLM({
+          sessionContent: transcript.content,
+          cfg,
+          agentId,
+          model: slugModel,
+        });
         log.debug("Generated slug", { slug });
       }
     }
@@ -341,8 +361,15 @@ async function saveSessionMemoryNow(
     ];
 
     // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+    if (transcript.status === "available" && transcript.content) {
+      entryParts.push("## Conversation Summary", "", transcript.content, "");
+    } else if (transcript.status === "unavailable") {
+      entryParts.push(
+        "## Conversation Summary",
+        "",
+        `> Transcript content was unavailable: ${JSON.stringify(transcript.reason)}`,
+        "",
+      );
     }
 
     const entry = entryParts.join("\n");
@@ -380,6 +407,7 @@ const saveSessionToMemory: HookHandler = (event) => {
   if ((event.type !== "command" || !isResetCommand) && !isAutoReset) {
     return undefined;
   }
+  const agentId = requireSessionMemoryAgentId(event);
 
   let capturedEvents: TranscriptEvent[] | undefined;
   try {
@@ -395,14 +423,10 @@ const saveSessionToMemory: HookHandler = (event) => {
         : undefined;
     if (sessionId) {
       const cfg = context.cfg as OpenClawConfig | undefined;
-      const agentId =
-        typeof context.agentId === "string" && context.agentId.trim()
-          ? context.agentId.trim()
-          : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
       const storePath =
         typeof context.storePath === "string" && context.storePath.trim()
           ? context.storePath.trim()
-          : resolveStorePath(cfg?.session?.store, { agentId });
+          : resolveSessionStorePathCore(cfg?.session?.store, { agentId });
       const hookConfig = resolveHookConfig(cfg, "session-memory");
       const messageCount =
         typeof hookConfig?.messages === "number" && hookConfig.messages > 0
@@ -419,9 +443,9 @@ const saveSessionToMemory: HookHandler = (event) => {
     // so the async writer falls back to the authoritative transcript rows.
   }
   const writePromise = isAutoReset
-    ? saveSessionMemoryNow(event, capturedEvents)
+    ? saveSessionMemoryNow(event, agentId, capturedEvents)
     : runWithGatewayIndependentRootWorkContinuation(() =>
-        saveSessionMemoryNow(event, capturedEvents),
+        saveSessionMemoryNow(event, agentId, capturedEvents),
       );
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {

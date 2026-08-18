@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import {
   buildWorkspaceSkillStatus,
   resolveSkillStatusEntry,
@@ -10,6 +11,8 @@ import {
   assertInsideWorkspace,
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
+import { tryRealpath } from "../loading/symlink-targets.js";
+import { listWorkshopOwnedSkillDirs } from "./ownership.js";
 
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 
@@ -22,6 +25,17 @@ export function assertWritableSkillTarget(workspaceDir: string, skill: SkillStat
   if (path.basename(skill.filePath) !== "SKILL.md") {
     throw new Error("Skill Workshop can only update SKILL.md targets.");
   }
+}
+
+export function isWorkspaceOwnedSkillTarget(
+  workspaceDir: string,
+  skill: Pick<SkillStatusEntry, "baseDir">,
+): boolean {
+  const workspaceRealPath = tryRealpath(path.resolve(workspaceDir));
+  const skillRealPath = tryRealpath(path.resolve(skill.baseDir));
+  return Boolean(
+    workspaceRealPath && skillRealPath && isPathInside(workspaceRealPath, skillRealPath),
+  );
 }
 
 type WritableWorkspaceSkillSummary = {
@@ -37,15 +51,19 @@ type WritableWorkspaceSkillSummary = {
  */
 export function listWritableWorkspaceSkillSummaries(
   workspaceDir: string,
-  opts?: { config?: OpenClawConfig; agentId?: string },
+  opts?: { config?: OpenClawConfig; agentId?: string; env?: NodeJS.ProcessEnv },
 ): WritableWorkspaceSkillSummary[] {
   const status = buildWorkspaceSkillStatus(workspaceDir, {
     config: opts?.config,
     agentId: opts?.agentId,
   });
+  const ownedDirs = listWorkshopOwnedSkillDirs(workspaceDir, opts?.env ? { env: opts.env } : {});
   const summaries: WritableWorkspaceSkillSummary[] = [];
   for (const skill of status.skills) {
     if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
+      continue;
+    }
+    if (!ownedDirs.has(path.resolve(skill.baseDir))) {
       continue;
     }
     summaries.push(
@@ -62,7 +80,7 @@ export async function readWritableWorkspaceSkill(
   workspaceDir: string,
   skillName: string,
   opts?: { config?: OpenClawConfig; agentId?: string },
-): Promise<{ skillKey: string; content: string }> {
+): Promise<{ skillKey: string; skillFile: string; content: string }> {
   const name = normalizeOptionalString(skillName);
   if (!name) {
     throw new Error("Skill name is required.");
@@ -80,5 +98,5 @@ export async function readWritableWorkspaceSkill(
   if (content === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
   }
-  return { skillKey: targetSkill.skillKey, content };
+  return { skillKey: targetSkill.skillKey, skillFile: targetSkill.filePath, content };
 }

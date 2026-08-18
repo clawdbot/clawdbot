@@ -74,6 +74,17 @@
         "cwd"
       ]
     },
+    "portal": {
+      "emoji": "🌐",
+      "title": "Portal",
+      "detailKeys": [
+        "action",
+        "port",
+        "id",
+        "title",
+        "path"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
@@ -359,6 +370,15 @@
             "durationMs"
           ]
         },
+        "camera_ptz": {
+          "label": "camera PTZ",
+          "detailKeys": [
+            "ptzOperation",
+            "node",
+            "nodeId",
+            "deviceId"
+          ]
+        },
         "screen_record": {
           "label": "screen record",
           "detailKeys": [
@@ -453,12 +473,12 @@
         "status"
       ]
     },
-    "update_plan": {
+    "progress_card": {
       "emoji": "🗺️",
-      "title": "Update Plan",
+      "title": "Progress Card",
       "detailKeys": [
-        "explanation",
-        "plan.0.step"
+        "plan.0.step",
+        "markdown"
       ]
     },
     "ask_user": {
@@ -468,7 +488,7 @@
         "questions.0.question"
       ]
     },
-    "spawn_task": {
+    "suggest_task": {
       "emoji": "✨",
       "title": "Suggest Task",
       "detailKeys": [
@@ -1053,6 +1073,18 @@
         "model"
       ]
     },
+    "view_image": {
+      "emoji": "🖼️",
+      "title": "View Image",
+      "detailKeys": [
+        "path",
+        "paths",
+        "url",
+        "urls",
+        "prompt",
+        "model"
+      ]
+    },
     "image_generate": {
       "emoji": "🎨",
       "title": "Image Generation",
@@ -1139,10 +1171,7 @@
     },
     "sessions_yield": {
       "emoji": "⏸️",
-      "title": "Yield",
-      "detailKeys": [
-        "message"
-      ]
+      "title": "Yield"
     },
     "tts": {
       "emoji": "🔊",

@@ -14,7 +14,7 @@ import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
@@ -154,7 +154,7 @@ describe("Canvas agent tool over a paired Linux node", () => {
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
         },
       });
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const gatewayToken = "qa-canvas-agent-node-token";
       const config: OpenClawConfig = {
         gateway: {
@@ -305,7 +305,11 @@ describe("Canvas agent tool over a paired Linux node", () => {
             );
           }
           if (action.command === "canvas.eval") {
-            expect(result.details).toEqual({ result: "canvas-eval-result" });
+            expect(result.details).toEqual({
+              ok: true,
+              node: nodeId,
+              result: "canvas-eval-result",
+            });
           }
           if (action.command === "canvas.snapshot") {
             expect(result.details).toMatchObject({

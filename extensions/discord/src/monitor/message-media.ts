@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { getFileExtension, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { saveRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -401,7 +401,12 @@ async function appendResolvedMediaFromAttachments(params: {
       });
     } catch (err) {
       const id = attachment.id ?? attachmentUrl;
-      logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
+      // Warn on the default path: the failed download becomes a path-less fact
+      // that core drops from the media projection, so this log plus the body
+      // notice are the only records of the missing attachment.
+      getChildLogger({ module: "discord-media" }).warn(
+        `${params.errorPrefix} ${id}: ${String(err)}`,
+      );
       const classification = resolveDiscordMediaClassification({ attachment });
       params.out.push({
         ...classification,
@@ -506,7 +511,10 @@ async function appendResolvedMediaFromStickers(params: {
       }
     }
     if (lastError) {
-      logVerbose(`${params.errorPrefix} ${sticker.id}: ${formatStickerError(lastError)}`);
+      // Same visibility contract as failed attachments: path-less fact + warn.
+      getChildLogger({ module: "discord-media" }).warn(
+        `${params.errorPrefix} ${sticker.id}: ${formatStickerError(lastError)}`,
+      );
       const fallback = candidates[0];
       if (fallback) {
         params.out.push({

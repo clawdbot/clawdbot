@@ -75,3 +75,18 @@
   align-items: center;
   gap: var(--space-3);
 }
+
+.identity-github-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.identity-github-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}

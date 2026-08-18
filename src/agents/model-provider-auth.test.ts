@@ -66,6 +66,7 @@ const authProfilesMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogOwnerSnapshot: async (params?: unknown) => ({
     ...(modelCatalogMocks.ownerWorkspaceDir
       ? { workspaceDir: modelCatalogMocks.ownerWorkspaceDir }

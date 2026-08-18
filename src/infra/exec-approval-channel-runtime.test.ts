@@ -1,7 +1,7 @@
 // Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
@@ -697,6 +697,53 @@ describe("createExecApprovalChannelRuntime", () => {
       expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
       expectDeliveredRequestId(deliverRequested, "abc");
     });
+  });
+
+  it("round-trips old-shape replay requests without mutating their serialized form", async () => {
+    const oldShapeRequest = createPluginReplayRequest("plugin:old-shape");
+    const oldShapeJson = JSON.stringify(oldShapeRequest);
+    mockReplayLists({ plugin: [oldShapeRequest] });
+    const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
+    const finalizeResolved = vi.fn(async () => undefined);
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      PluginApprovalRequest,
+      PluginApprovalResolved
+    >({
+      label: "test/plugin-old-shape-replay",
+      clientDisplayName: "Test Plugin Old Shape Replay",
+      cfg: {} as never,
+      eventKinds: ["plugin"],
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested,
+      finalizeResolved,
+    });
+
+    await runtime.start();
+    await vi.waitFor(() => {
+      expect(deliverRequested).toHaveBeenCalledWith({
+        ...oldShapeRequest,
+        approvalKind: "plugin",
+      });
+    });
+
+    await runtime.handleResolved({
+      id: oldShapeRequest.id,
+      decision: "allow-once",
+      ts: 1500,
+    });
+
+    expect(finalizeResolved).toHaveBeenCalledWith({
+      request: { ...oldShapeRequest, approvalKind: "plugin" },
+      resolved: {
+        id: oldShapeRequest.id,
+        decision: "allow-once",
+        ts: 1500,
+      },
+      entries: [{ id: oldShapeRequest.id }],
+    });
+    expect(JSON.stringify(oldShapeRequest)).toBe(oldShapeJson);
   });
 
   it("does not block start on pending approval replay delivery", async () => {

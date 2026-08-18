@@ -5,6 +5,7 @@ import {
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  type buildChannelInboundEventContext,
   formatMediaPlaceholderText,
   runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -38,7 +39,7 @@ import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
-import type { EchoTracker } from "./echo.js";
+import { formatWhatsAppAudioTranscriptForAgent } from "./audio-transcript.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
@@ -199,10 +200,6 @@ export async function processMessage(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<typeof getChildLogger>;
   backgroundTasks: Set<Promise<unknown>>;
-  rememberSentText: EchoTracker["rememberText"];
-  echoHas: EchoTracker["has"];
-  echoForget: EchoTracker["forget"];
-  buildCombinedEchoKey: (p: { sessionKey: string; combinedBody: string }) => string;
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   groupHistoryLimit?: number;
@@ -216,6 +213,7 @@ export async function processMessage(params: {
    * - null    → preflight was attempted but failed / returned nothing; skip internal STT
    * - undefined (omitted) → caller did not attempt preflight; run internal STT as normal */
   preflightAudioTranscript?: string | null;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const admission = requireWhatsAppInboundAdmission(params.msg);
   if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
@@ -289,14 +287,21 @@ export async function processMessage(params: {
     }
   }
 
-  // If we have a transcript, replace the agent-facing body so the agent sees the spoken text.
+  // Frame transcript provenance in the agent-facing body; raw text stays in
+  // context.Transcript and the original payload remains authoritative for commands.
   // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
   // (used by features such as tts.auto: "inbound") still sees this as an
   // audio message. The transcript and transcribed media index are also stored on
   // context so downstream media understanding does not transcribe it again.
   const msgForAgent: AdmittedWebInboundMessage =
     audioTranscript !== undefined
-      ? { ...params.msg, payload: { ...params.msg.payload, body: audioTranscript } }
+      ? {
+          ...params.msg,
+          payload: {
+            ...params.msg.payload,
+            body: formatWhatsAppAudioTranscriptForAgent(audioTranscript),
+          },
+        }
       : params.msg;
   const visibleReplyTo = resolveVisibleWhatsAppReplyContext({
     msg: params.msg,
@@ -355,17 +360,6 @@ export async function processMessage(params: {
       });
     }
     shouldClearGroupHistory = !(params.suppressGroupHistoryClear ?? false);
-  }
-
-  // Echo detection uses combined body so we don't respond twice.
-  const combinedEchoKey = params.buildCombinedEchoKey({
-    sessionKey: params.route.sessionKey,
-    combinedBody,
-  });
-  if (params.echoHas(combinedEchoKey)) {
-    logVerbose("Skipping auto-reply: detected echo for combined message");
-    params.echoForget(combinedEchoKey);
-    return false;
   }
 
   // When statusReactions.enabled, a StatusReactionController takes over lifecycle
@@ -494,6 +488,7 @@ export async function processMessage(params: {
     msg: params.msg,
     rawBody: commandBody,
     route: params.route,
+    buildContext: params.buildContext,
     sender: {
       id: getPrimaryIdentityId(sender) ?? undefined,
       name: sender.name ?? undefined,
@@ -572,7 +567,6 @@ export async function processMessage(params: {
           maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
           inbound,
           onModelSelected,
-          rememberSentText: params.rememberSentText,
           replyLogger: params.replyLogger,
           replyPipeline: {
             ...replyPipeline,

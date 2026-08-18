@@ -136,7 +136,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.phase = "stopped";
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
-          await resolved.state.stopStreamWatchers?.();
+          await resolved.state.stopStreamWatchers();
           return;
         }
         if (schedulingPaused) {
@@ -148,8 +148,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         try {
           if (resolved.state.cronEnabled) {
             await Promise.all([
-              resolved.state.reconcileExitWatchers?.(),
-              resolved.state.reconcileStreamWatchers?.(),
+              resolved.state.reconcileExitWatchers(),
+              resolved.state.reconcileStreamWatchers(),
             ]);
           }
         } catch (err) {
@@ -160,7 +160,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.phase = "stopped";
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
-          await resolved.state.stopStreamWatchers?.();
+          await resolved.state.stopStreamWatchers();
           return;
         }
         resolved.phase = "started";
@@ -215,7 +215,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         await resolved.state.cron.stopAndDrain();
       } else {
         resolved.state.cron.stop();
-        await resolved.state.stopStreamWatchers?.();
+        await resolved.state.stopStreamWatchers();
       }
     },
     pauseScheduling() {
@@ -253,11 +253,11 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async add(input, opts) {
       return await (await load()).state.cron.add(input, opts);
     },
-    async update(id, patch) {
-      return await (await load()).state.cron.update(id, patch);
+    async update(id, patch, opts) {
+      return await (await load()).state.cron.update(id, patch, opts);
     },
-    async updateWithPrecondition(id, patch, precondition) {
-      return await (await load()).state.cron.updateWithPrecondition(id, patch, precondition);
+    async updateWithPrecondition(id, patch, precondition, opts) {
+      return await (await load()).state.cron.updateWithPrecondition(id, patch, precondition, opts);
     },
     async remove(id, opts) {
       return await (await load()).state.cron.remove(id, opts);
@@ -271,8 +271,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async run(id, mode, opts) {
       return await (await load()).state.cron.run(id, mode, opts);
     },
-    async enqueueRun(id, mode) {
-      return await (await load()).state.cron.enqueueRun(id, mode);
+    async enqueueRun(id, mode, opts) {
+      return await (await load()).state.cron.enqueueRun(id, mode, opts);
     },
     getJob(id) {
       if (!loaded) {
@@ -313,5 +313,24 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     cron,
     storePath,
     cronEnabled,
+    // Reload rules invoke these hooks on whatever cronState is live; the lazy
+    // proxy must forward every GatewayCronState member or hot reloads silently
+    // no-op until a gateway restart (heartbeat cadence changes never applied).
+    async reconcileExitWatchers() {
+      await (await load()).state.reconcileExitWatchers();
+    },
+    stopExitWatchers() {
+      loaded?.state.stopExitWatchers();
+    },
+    async reconcileStreamWatchers() {
+      await (await load()).state.reconcileStreamWatchers();
+    },
+    async stopStreamWatchers() {
+      // Nothing to stop before the heavy cron service is built.
+      await loaded?.state.stopStreamWatchers();
+    },
+    async reconcileHeartbeatJobs(cfg) {
+      await (await load()).state.reconcileHeartbeatJobs(cfg);
+    },
   };
 }

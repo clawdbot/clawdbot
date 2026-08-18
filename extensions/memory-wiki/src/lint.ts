@@ -5,6 +5,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assessPageFreshness,
@@ -476,6 +477,9 @@ function buildLintReportBody(issues: MemoryWikiLintIssue[]): string {
 
 async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): Promise<string> {
   const reportPath = path.join(rootDir, "reports", "lint.md");
+  const directoryPath = path.dirname(reportPath);
+  await fs.mkdir(directoryPath, { recursive: true });
+  const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
   const original = await fs.readFile(reportPath, "utf8").catch(() =>
     renderWikiMarkdown({
       frontmatter: {
@@ -497,7 +501,17 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
     endMarker: "<!-- openclaw:wiki:lint:end -->",
     body: buildLintReportBody(issues),
   });
-  await fs.writeFile(reportPath, withTrailingNewline(updated), "utf8");
+  await replaceFileAtomic({
+    filePath: reportPath,
+    content: withTrailingNewline(updated),
+    dirMode,
+    mode: 0o600,
+    preserveExistingMode: true,
+    tempPrefix: `${path.basename(reportPath)}.lint-report`,
+    syncTempFile: true,
+    syncParentDir: true,
+    throwOnCleanupError: true,
+  });
   return reportPath;
 }
 

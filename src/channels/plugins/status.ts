@@ -96,7 +96,7 @@ export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>
   });
 }
 
-export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
+export async function resolveChannelAccountSnapshot<ResolvedAccount>(params: {
   plugin: ChannelPlugin<ResolvedAccount>;
   cfg: OpenClawConfig;
   accountId: string;

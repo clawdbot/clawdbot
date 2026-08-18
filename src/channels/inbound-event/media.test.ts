@@ -1,4 +1,5 @@
 // Inbound event media tests cover channel media attachment normalization.
+import path from "node:path";
 import { kindFromMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -340,8 +341,8 @@ describe("channel inbound media facts", () => {
     ]);
     expect(probeMediaFilesWithinBudget).toHaveBeenCalledWith(
       [
-        { filePath: "/tmp/voice.ogg", kind: "audio" },
-        { filePath: "/tmp/clip.mp4", kind: "video" },
+        { filePath: path.resolve("/tmp/voice.ogg"), kind: "audio" },
+        { filePath: path.resolve("/tmp/clip.mp4"), kind: "video" },
       ],
       { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
     );

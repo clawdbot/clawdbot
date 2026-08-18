@@ -1,7 +1,7 @@
 // Resolves command executables and wrapper policy paths for exec approvals.
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
+import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -12,6 +12,7 @@ import {
 } from "./executable-path.js";
 
 export type ExecutableResolution = {
+  kind: "executable";
   rawExecutable: string;
   resolvedPath?: string;
   resolvedRealPath?: string;
@@ -19,6 +20,7 @@ export type ExecutableResolution = {
 };
 
 export type CommandResolution = {
+  kind: "command";
   execution: ExecutableResolution;
   policy: ExecutableResolution;
   effectiveArgv?: string[];
@@ -26,12 +28,6 @@ export type CommandResolution = {
   policyBlocked?: boolean;
   blockedWrapper?: string;
 };
-
-function isCommandResolution(
-  resolution: CommandResolution | ExecutableResolution | null,
-): resolution is CommandResolution {
-  return Boolean(resolution && "execution" in resolution && "policy" in resolution);
-}
 
 function parseFirstToken(command: string): string | null {
   const trimmed = command.trim();
@@ -51,14 +47,7 @@ function parseFirstToken(command: string): string | null {
 }
 
 function tryResolveRealpath(filePath: string | undefined): string | undefined {
-  if (!filePath) {
-    return undefined;
-  }
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return undefined;
-  }
+  return filePath ? (safeRealpathSync(filePath) ?? undefined) : undefined;
 }
 
 function buildExecutableResolution(
@@ -75,6 +64,7 @@ function buildExecutableResolution(
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
+    kind: "executable",
     rawExecutable,
     resolvedPath,
     resolvedRealPath,
@@ -97,6 +87,7 @@ function buildCommandResolution(params: {
     ? buildExecutableResolution(params.policyRawExecutable, params)
     : execution;
   const resolution: CommandResolution = {
+    kind: "command",
     execution,
     policy,
     effectiveArgv: params.effectiveArgv,
@@ -104,24 +95,7 @@ function buildCommandResolution(params: {
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
   };
-  // Compatibility getters for JS/tests while TS callers migrate to explicit targets.
-  return Object.defineProperties(resolution, {
-    rawExecutable: {
-      get: () => execution.rawExecutable,
-    },
-    resolvedPath: {
-      get: () => execution.resolvedPath,
-    },
-    resolvedRealPath: {
-      get: () => execution.resolvedRealPath,
-    },
-    executableName: {
-      get: () => execution.executableName,
-    },
-    policyResolution: {
-      get: () => (policy === execution ? undefined : policy),
-    },
-  });
+  return resolution;
 }
 
 export function resolveCommandResolution(
@@ -205,7 +179,7 @@ export function resolveExecutionTargetResolution(
   if (!resolution) {
     return null;
   }
-  return isCommandResolution(resolution) ? resolution.execution : resolution;
+  return resolution.kind === "command" ? resolution.execution : resolution;
 }
 
 export function resolvePolicyTargetResolution(
@@ -214,7 +188,7 @@ export function resolvePolicyTargetResolution(
   if (!resolution) {
     return null;
   }
-  return isCommandResolution(resolution) ? resolution.policy : resolution;
+  return resolution.kind === "command" ? resolution.policy : resolution;
 }
 
 export function resolveExecutionTargetCandidatePath(
@@ -222,7 +196,7 @@ export function resolveExecutionTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    isCommandResolution(resolution) ? resolution.execution : resolution,
+    resolution?.kind === "command" ? resolution.execution : resolution,
     cwd,
   );
 }
@@ -232,7 +206,7 @@ export function resolveExecutionTargetTrustPath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableTrustPath(
-    isCommandResolution(resolution) ? resolution.execution : resolution,
+    resolution?.kind === "command" ? resolution.execution : resolution,
     cwd,
   );
 }
@@ -242,7 +216,7 @@ export function resolvePolicyTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    isCommandResolution(resolution) ? resolution.policy : resolution,
+    resolution?.kind === "command" ? resolution.policy : resolution,
     cwd,
   );
 }
@@ -252,7 +226,7 @@ export function resolvePolicyTargetTrustPath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableTrustPath(
-    isCommandResolution(resolution) ? resolution.policy : resolution,
+    resolution?.kind === "command" ? resolution.policy : resolution,
     cwd,
   );
 }

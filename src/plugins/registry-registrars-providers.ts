@@ -1,8 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { AgentHarness } from "../agents/harness/types.js";
+import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
+import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord, PluginTextTransformsRegistration } from "./registry-types.js";
 import type {
@@ -74,7 +75,11 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerSynthesizedTextModelCatalogProvider({ record, provider: normalizedProvider });
   };
 
-  const registerAgentHarness = (record: PluginRecord, harness: AgentHarness) => {
+  const registerAgentHarness = (
+    record: PluginRecord,
+    harness: AgentHarness,
+    options?: AgentHarnessRegistrationOptions,
+  ) => {
     const id = normalizeOptionalString((harness as Partial<AgentHarness> | undefined)?.id) ?? "";
     if (!id) {
       pushDiagnostic({
@@ -85,12 +90,35 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       });
       return;
     }
+    if (id === "openclaw") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: 'agent harness id "openclaw" is reserved for the built-in runtime',
+      });
+      return;
+    }
     if (typeof harness.supports !== "function" || typeof harness.runAttempt !== "function") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
         message: `agent harness "${id}" registration missing required runtime methods`,
+      });
+      return;
+    }
+    if (
+      options?.nativeCompaction &&
+      (!canClaimReservedCommandOwnership(record) ||
+        id !== "codex" ||
+        typeof options.nativeCompaction !== "function")
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: 'native compaction requires the registry-owned "codex" harness',
       });
       return;
     }
@@ -112,6 +140,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       pluginId: record.id,
       pluginName: record.name,
       harness: normalizedHarness,
+      ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
       source: record.source,
       rootDir: record.rootDir,
     });

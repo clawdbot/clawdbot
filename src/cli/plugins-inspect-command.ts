@@ -10,7 +10,9 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
+import { formatPluginBundleFormat } from "./plugins-list-format.js";
 
 /** Options accepted by `openclaw plugins inspect`. */
 export type PluginInspectOptions = {
@@ -18,6 +20,15 @@ export type PluginInspectOptions = {
   all?: boolean;
   runtime?: boolean;
 };
+
+function failPluginInspect(message: string, json: boolean | undefined): void {
+  if (json) {
+    defaultRuntime.writeJson(formatCliJsonFailure(message));
+  } else {
+    defaultRuntime.error(message);
+  }
+  defaultRuntime.exit(1);
+}
 
 function formatInspectSection(title: string, lines: string[]): string[] {
   if (lines.length === 0) {
@@ -130,8 +141,8 @@ export async function runPluginsInspectCommand(
   const runtimeInspect = opts.runtime === true;
   if (opts.all) {
     if (id) {
-      defaultRuntime.error("Pass either a plugin id or --all, not both.");
-      return defaultRuntime.exit(1);
+      failPluginInspect("Pass either a plugin id or --all, not both.", opts.json);
+      return;
     }
     const report = runtimeInspect
       ? tracePluginLifecyclePhase(
@@ -211,8 +222,8 @@ export async function runPluginsInspectCommand(
   }
 
   if (!id) {
-    defaultRuntime.error("Provide a plugin id or use --all.");
-    return defaultRuntime.exit(1);
+    failPluginInspect("Provide a plugin id or use --all.", opts.json);
+    return;
   }
 
   const snapshotReport = tracePluginLifecyclePhase(
@@ -241,11 +252,11 @@ export async function runPluginsInspectCommand(
       if (diagnostic) {
         lines.push(diagnostic.message);
       }
-      defaultRuntime.error(lines.join("\n"));
-      return defaultRuntime.exit(1);
+      failPluginInspect(lines.join("\n"), opts.json);
+      return;
     }
-    defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
-    return defaultRuntime.exit(1);
+    failPluginInspect(formatMissingPluginMessage({ id, includeSearch: true }), opts.json);
+    return;
   }
   const report = runtimeInspect
     ? tracePluginLifecyclePhase(
@@ -266,10 +277,11 @@ export async function runPluginsInspectCommand(
     report,
   });
   if (!inspect) {
-    defaultRuntime.error(
+    failPluginInspect(
       formatMissingPluginMessage({ id, listCommand: "openclaw plugins list --json" }),
+      opts.json,
     );
-    return defaultRuntime.exit(1);
+    return;
   }
   const install = installRecords[inspect.plugin.id];
 
@@ -299,7 +311,9 @@ export async function runPluginsInspectCommand(
   }
   lines.push(`${theme.muted("Format:")} ${inspect.plugin.format ?? "openclaw"}`);
   if (inspect.plugin.bundleFormat) {
-    lines.push(`${theme.muted("Bundle format:")} ${inspect.plugin.bundleFormat}`);
+    lines.push(
+      `${theme.muted("Bundle format:")} ${formatPluginBundleFormat(inspect.plugin.bundleFormat)}`,
+    );
   }
   lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
   lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
@@ -356,7 +370,7 @@ export async function runPluginsInspectCommand(
     ...formatInspectSection(
       "MCP servers",
       inspect.mcpServers.map((entry) =>
-        entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
+        entry.unsupported ? `${entry.name} (unsupported transport)` : entry.name,
       ),
     ),
   );

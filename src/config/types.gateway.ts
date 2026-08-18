@@ -1,4 +1,5 @@
 // Defines gateway runtime and networking configuration types.
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { SecretInput } from "./types.secrets.js";
 
 /** Gateway bind-address policy for local server startup. */
@@ -136,6 +137,8 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /** Optional service credential used only for Control UI GitHub previews and discovery. */
+  github?: { token?: SecretInput };
   /**
    * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
    * When enabled, chat.toolTitles generates short titles through standard
@@ -225,6 +228,8 @@ export type GatewayAuthConfig = {
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /** Operator scopes granted to verified trusted-proxy or Tailscale identities. */
+  identityScopes?: Record<string, OperatorScope[]>;
   /** Rate-limit configuration for failed authentication attempts. */
   rateLimit?: GatewayAuthRateLimitConfig;
   /**
@@ -251,15 +256,11 @@ export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 export type GatewayTailscaleConfig = {
   /** Tailscale exposure mode for the Gateway control UI. */
   mode?: GatewayTailscaleMode;
-  /** Reset serve/funnel configuration on shutdown. */
-  resetOnExit?: boolean;
-  /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
-  serviceName?: string;
   /**
-   * When `mode="serve"` and an externally configured Tailscale Funnel route
-   * already covers the gateway port, skip re-applying `tailscale serve` on
-   * startup. Lets operators manage Funnel exposure outside OpenClaw without
-   * losing it across gateway restarts.
+   * Detect an external Funnel route left on the ordinary Gateway listener and
+   * leave exposure unchanged with migration guidance. Gateway-authenticated
+   * routes reject that ingress; plugin-authenticated webhooks keep their owner auth.
+   * @deprecated Migrate to `mode="funnel"`, which uses managed ingress.
    */
   preserveFunnel?: boolean;
 };
@@ -275,6 +276,8 @@ export type GatewayRemoteConfig = {
   token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */
   password?: SecretInput;
+  /** Headers presented to an identity-aware proxy in front of the Gateway (values are secrets). */
+  edgeAuth?: Record<string, SecretInput>;
   /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
   tlsFingerprint?: string;
   /** SSH target for tunneling remote Gateway (user@host). */
@@ -309,6 +312,12 @@ export type GatewayTerminalConfig = {
    * immediately. Default: 300.
    */
   detachedSessionTimeoutSeconds?: number;
+};
+
+/** Labs-gated external CLI session targets in the Control UI. */
+export type GatewayCliAgentsConfig = {
+  /** Show catalog-backed CLI agents in the new-session model picker. Default: false. */
+  enabled?: boolean;
 };
 
 /** Gateway config reload strategy for managed installs. */
@@ -548,7 +557,10 @@ export type GatewayConfig = {
   bind?: GatewayBindMode;
   /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
+  /** Externally reachable HTTPS origin for Gateway callback routes; HTTP only on loopback. */
+  publicOrigin?: string;
   controlUi?: GatewayControlUiConfig;
+  cliAgents?: GatewayCliAgentsConfig;
   terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;

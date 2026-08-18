@@ -5,6 +5,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -29,7 +31,7 @@ const tempDirs: string[] = [];
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() =>
   vi.fn(
-    (params: { turnSourceChannel?: string | null; approvalKind?: "exec" | "plugin" }) =>
+    (params: { turnSourceChannel?: string | null; approvalKind?: ChannelApprovalKind }) =>
       params.approvalKind === "plugin" && params.turnSourceChannel === "tui",
   ),
 );
@@ -61,6 +63,7 @@ function createContext(opts?: {
   hasExecApprovalClients?: GatewayRequestContext["hasExecApprovalClients"];
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
+  validateAgentRuntimeApprovalAuthority?: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
 }) {
   const nodeSession = opts?.nodeSession ?? createNodeSession();
   const invoke = vi.fn(
@@ -89,6 +92,7 @@ function createContext(opts?: {
       hasExecApprovalClients: opts?.hasExecApprovalClients,
       forwardPluginApprovalRequest: opts?.forwardPluginApprovalRequest,
       pluginApprovalIosPushDelivery: opts?.pluginApprovalIosPushDelivery,
+      validateAgentRuntimeApprovalAuthority: opts?.validateAgentRuntimeApprovalAuthority,
     } as unknown as GatewayRequestContext,
     invoke,
   };
@@ -156,11 +160,15 @@ function createApprovalRequestPolicy(params?: {
   timeoutMs?: number;
   title?: string;
   description?: string;
+  toolName?: string;
+  agentId?: string;
 }): NodeInvokePolicyRegistration {
   return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
     const approval = await ctx.approvals?.request({
       title: params?.title ?? "Sensitive action",
       description: params?.description ?? "Needs approval",
+      ...(params?.toolName === undefined ? {} : { toolName: params.toolName }),
+      ...(params?.agentId === undefined ? {} : { agentId: params.agentId }),
       ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
     });
     return { ok: true, payload: approval ?? null };
@@ -270,8 +278,50 @@ describe("applyPluginNodeInvokePolicy", () => {
       params: DEMO_PARAMS,
       timeoutMs: undefined,
       idempotencyKey: undefined,
+      isDispatchAuthorized: expect.any(Function),
       onDispatchReady: expect.any(Function),
     });
+  });
+
+  it("classifies exact arguments before the policy handler and transport", async () => {
+    const policy = createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => {
+      expect(ctx.risk).toEqual({ level: "high", family: "fixture_mutation" });
+      return ctx.invokeNode();
+    });
+    policy.policy.classifyRisk = ({ command, params }) => {
+      expect({ command, params }).toEqual({ command: DEMO_COMMAND, params: DEMO_PARAMS });
+      return { level: "high", family: "fixture_mutation" };
+    };
+    setDangerousDemoCommandRegistry([policy]);
+    const { context, invoke } = createContext();
+
+    await expect(invokeDemoPolicy(context)).resolves.toMatchObject({ ok: true });
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when argument risk classification throws or returns invalid metadata", async () => {
+    for (const classifyRisk of [
+      () => {
+        throw new Error("hostile argument text");
+      },
+      () => ({ level: "high" as const, family: "contains spaces" }),
+    ]) {
+      const policy = createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) =>
+        ctx.invokeNode(),
+      );
+      policy.policy.classifyRisk = classifyRisk;
+      setDangerousDemoCommandRegistry([policy]);
+      const { context, invoke } = createContext();
+
+      await expect(invokeDemoPolicy(context)).resolves.toEqual({
+        ok: false,
+        code: "PLUGIN_POLICY_RISK_CLASSIFICATION_FAILED",
+        message: `node.invoke ${DEMO_COMMAND} arguments could not be classified by plugin ${DEMO_PLUGIN_ID}`,
+        details: { nodeCommandDispatched: false },
+      });
+      expect(invoke).not.toHaveBeenCalled();
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it.each([5_000, 0])(
@@ -448,6 +498,94 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("rejects plugin transport dispatch when runtime authority closes during pairing recheck", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    let authorityActive = true;
+    let releasePairingCheck: (() => void) | undefined;
+    const pairingCheck = new Promise<void>((resolve) => {
+      releasePairingCheck = resolve;
+    });
+    const { context, invoke } = createContext({
+      validateAgentRuntimeApprovalAuthority: () => authorityActive,
+    });
+    const operationalRunInstance = createOperationalRunInstanceRef("run-node-policy-race");
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: {
+        ...createOperatorClient(),
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:test",
+            operationalRunInstance,
+            delegatedAuthority: {
+              kind: "local",
+              operationalRunInstance,
+              lifecycleGeneration: "generation",
+              claimId: "claim",
+            },
+          },
+        },
+      },
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      isInvocationCurrent: async () => {
+        await pairingCheck;
+        return true;
+      },
+    });
+
+    await vi.waitFor(() => expect(releasePairingCheck).toBeTypeOf("function"));
+    authorityActive = false;
+    releasePairingCheck?.();
+
+    await expect(resultPromise).resolves.toMatchObject({
+      ok: false,
+      code: "APPROVAL_AUTHORITY_CLOSED",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects bridged approval dispatch when its record closes during pairing recheck", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    let approvalActive = true;
+    let releasePairingCheck: (() => void) | undefined;
+    const pairingCheck = new Promise<void>((resolve) => {
+      releasePairingCheck = resolve;
+    });
+    const { context, invoke } = createContext();
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: createOperatorClient(),
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      isInvocationCurrent: async () => {
+        await pairingCheck;
+        return true;
+      },
+      isApprovalAuthorityActive: () => approvalActive,
+    });
+
+    await vi.waitFor(() => expect(releasePairingCheck).toBeTypeOf("function"));
+    approvalActive = false;
+    releasePairingCheck?.();
+
+    await expect(resultPromise).resolves.toMatchObject({
+      ok: false,
+      code: "APPROVAL_AUTHORITY_CLOSED",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("rejects plugin transport dispatch through an invalidated node session", async () => {
     setDangerousDemoCommandRegistry([
       createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
@@ -551,8 +689,41 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("forwards plugin policy approvals to the originating turn source", async () => {
+  it("sanitizes node-policy approval titles at creation like the RPC ingress", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    const getApprovalClientConnIds = createApprovalClientLookup([
+      createApprovalClient({
+        connId: "conn-owner-approval",
+        clientId: "client-owner",
+        deviceId: "device-owner",
+      }),
+    ]);
+    setDangerousDemoCommandRegistry([
+      // Bidi override + zero-width space: reviewer-spoofing characters.
+      createApprovalRequestPolicy({
+        title: "Deploy‮yolped",
+        description: "safe​text",
+        toolName: "tool‮run",
+        agentId: "agent​x",
+      }),
+    ]);
+    const { context } = createContext({ pluginApprovalManager: manager, getApprovalClientConnIds });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.title).toBe("Deploy\\u{202E}yolped");
+    expect(record.request.description).toBe("safe\\u{200B}text");
+    // Metadata is interpolated into channel approval text lines.
+    expect(record.request.toolName).toBe("tool\\u{202E}run");
+    expect(record.request.agentId).toBe("agent\\u{200B}x");
+
+    await expectApprovalResolution(resultPromise, manager, record);
+  });
+
+  it("forwards plugin policy approvals to the originating turn source", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
     const getApprovalClientConnIds = vi.fn(() => new Set<string>());
     const handlePluginApprovalRequested = vi.fn(async () => true);
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
@@ -561,7 +732,9 @@ describe("applyPluginNodeInvokePolicy", () => {
       getApprovalClientConnIds,
       hasExecApprovalClients: vi.fn(() => false),
       forwardPluginApprovalRequest: handlePluginApprovalRequested,
+      validateAgentRuntimeApprovalAuthority: () => true,
     });
+    const operationalRunInstance = createOperationalRunInstanceRef("run-node-policy");
     const resultPromise = applyPluginNodeInvokePolicy({
       context,
       client: {
@@ -571,6 +744,13 @@ describe("applyPluginNodeInvokePolicy", () => {
             kind: "agentRuntime",
             agentId: "main",
             sessionKey: "agent:main:telegram:direct:alice",
+            operationalRunInstance,
+            delegatedAuthority: {
+              kind: "local",
+              operationalRunInstance,
+              lifecycleGeneration: "test-generation",
+              claimId: "test-claim",
+            },
           },
         },
       },

@@ -2,8 +2,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callGatewayTool,
@@ -32,6 +38,13 @@ const mocks = vi.hoisted(() => ({
     | undefined,
   deviceIdentityError: undefined as Error | undefined,
 }));
+const testDelegatedAuthorities: AgentRunDelegatedAuthority[] = [];
+
+function releaseTestDelegatedAuthorities(): void {
+  for (const authority of testDelegatedAuthorities.splice(0)) {
+    releaseAgentRunDelegatedAuthority(authority);
+  }
+}
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => mocks.configState.value,
   resolveGatewayPort: () => 18789,
@@ -61,6 +74,20 @@ function capturedGatewayCall(): CallGatewayOptions {
   return call[0] as CallGatewayOptions;
 }
 
+function testGatewayCaller(
+  identity: Omit<
+    NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>,
+    "operationalRunInstance"
+  >,
+): NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]> {
+  const operationalRunInstance = createOperationalRunInstanceRef("run-gateway-tool-test");
+  testDelegatedAuthorities.push(claimAgentRunDelegatedAuthority(operationalRunInstance));
+  return {
+    ...identity,
+    operationalRunInstance,
+  };
+}
+
 describe("gateway tool defaults", () => {
   const envSnapshot = {
     openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
@@ -68,6 +95,7 @@ describe("gateway tool defaults", () => {
   };
 
   beforeEach(() => {
+    releaseTestDelegatedAuthorities();
     mocks.callGateway.mockClear();
     mocks.deviceIdentityError = undefined;
     mocks.persistedDeviceIdentity = undefined;
@@ -78,6 +106,7 @@ describe("gateway tool defaults", () => {
   });
 
   afterAll(() => {
+    releaseTestDelegatedAuthorities();
     if (envSnapshot.openclaw === undefined) {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
@@ -328,7 +357,7 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("exec.approval.request");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call).not.toHaveProperty("deviceIdentity");
   });
 
   it.each([
@@ -432,7 +461,7 @@ describe("gateway tool defaults", () => {
     expect(capturedGatewayCall().deviceIdentity).toEqual(mocks.deviceIdentity);
     const turnCapability = "unused";
     await withGatewayToolCallerIdentity(
-      { agentId: "ops", sessionKey: "agent:ops:telegram:group:room-1" },
+      testGatewayCaller({ agentId: "ops", sessionKey: "agent:ops:telegram:group:room-1" }),
       async () => {
         expect(
           await resolveMessageActionAgentRuntimeIdentityToken({
@@ -465,7 +494,7 @@ describe("gateway tool defaults", () => {
 
     await expect(
       withGatewayToolCallerIdentity(
-        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        testGatewayCaller({ agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" }),
         async () => {
           await callGatewayTool("cron.remove", {}, { id: "job-1" });
         },
@@ -487,7 +516,7 @@ describe("gateway tool defaults", () => {
 
     await expect(
       withGatewayToolCallerIdentity(
-        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        testGatewayCaller({ agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" }),
         async () => {
           await callGatewayTool("cron.remove", {}, { id: "job-1" });
         },
@@ -512,7 +541,7 @@ describe("gateway tool defaults", () => {
   it("fails contextual cron calls closed for gatewayUrl overrides", async () => {
     await expect(
       withGatewayToolCallerIdentity(
-        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        testGatewayCaller({ agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" }),
         async () => {
           await callGatewayTool(
             "cron.remove",
@@ -528,7 +557,7 @@ describe("gateway tool defaults", () => {
   it("fails contextual cron calls closed for explicit gateway tokens", async () => {
     await expect(
       withGatewayToolCallerIdentity(
-        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        testGatewayCaller({ agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" }),
         async () => {
           await callGatewayTool("cron.remove", { gatewayToken: "token" }, { id: "job-1" });
         },
@@ -550,7 +579,7 @@ describe("gateway tool defaults", () => {
 
     await expect(
       withGatewayToolCallerIdentity(
-        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        testGatewayCaller({ agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" }),
         async () => {
           await callGatewayTool("cron.remove", {}, { id: "job-1" });
         },
@@ -568,10 +597,10 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("exec.approval.waitDecision");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call).not.toHaveProperty("deviceIdentity");
   });
 
-  it("marks local plugin approval wait calls with runtime and device identity", async () => {
+  it("marks local plugin approval wait calls as approval runtime calls", async () => {
     mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
 
     await callGatewayTool("plugin.approval.waitDecision", {}, { id: "approval-id" });
@@ -580,21 +609,21 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("plugin.approval.waitDecision");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call).not.toHaveProperty("deviceIdentity");
   });
 
   it("attaches trusted turn-source metadata to node invokes", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
 
     await withGatewayToolCallerIdentity(
-      {
+      testGatewayCaller({
         agentId: "ops",
         sessionKey: "agent:ops:telegram:direct:alice",
         turnSourceChannel: "telegram",
         turnSourceTo: "chat:123",
         turnSourceAccountId: "work",
         turnSourceThreadId: 42,
-      },
+      }),
       async () => {
         await callGatewayTool(
           "node.invoke",
@@ -642,12 +671,12 @@ describe("gateway tool defaults", () => {
       .mockResolvedValueOnce({ ok: true });
 
     await withGatewayToolCallerIdentity(
-      {
+      testGatewayCaller({
         agentId: "ops",
         sessionKey: "agent:ops:main",
         turnSourceChannel: "telegram",
         turnSourceTo: "chat:123",
-      },
+      }),
       async () => {
         await callGatewayTool(
           "node.invoke",
@@ -686,12 +715,12 @@ describe("gateway tool defaults", () => {
     mocks.callGateway.mockRejectedValueOnce(schemaError).mockResolvedValueOnce({ ok: true });
 
     await withGatewayToolCallerIdentity(
-      {
+      testGatewayCaller({
         agentId: "ops",
         sessionKey: "agent:ops:main",
         turnSourceChannel: "telegram",
         turnSourceTo: "chat:123",
-      },
+      }),
       async () => {
         await callGatewayTool(
           "node.invoke",
@@ -730,12 +759,12 @@ describe("gateway tool defaults", () => {
 
     await expect(
       withGatewayToolCallerIdentity(
-        {
+        testGatewayCaller({
           agentId: "ops",
           sessionKey: "agent:ops:main",
           turnSourceChannel: "telegram",
           turnSourceTo: "chat:123",
-        },
+        }),
         async () =>
           await callGatewayTool(
             "node.invoke",
@@ -763,12 +792,12 @@ describe("gateway tool defaults", () => {
 
     await expect(
       withGatewayToolCallerIdentity(
-        {
+        testGatewayCaller({
           agentId: "ops",
           sessionKey: "agent:ops:main",
           turnSourceChannel: "telegram",
           turnSourceTo: "chat:123",
-        },
+        }),
         async () =>
           await callGatewayTool(
             "node.invoke",
@@ -784,7 +813,7 @@ describe("gateway tool defaults", () => {
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   });
 
-  it("marks local plugin approval request calls with runtime and device identity", async () => {
+  it("marks local plugin approval request calls as approval runtime calls", async () => {
     mocks.callGateway.mockResolvedValueOnce({ id: "plugin:approval-id" });
 
     await callGatewayTool("plugin.approval.request", {}, { title: "approve", description: "test" });
@@ -793,7 +822,7 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("plugin.approval.request");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call).not.toHaveProperty("deviceIdentity");
   });
 
   it("marks local approval resolve calls as approval runtime calls", async () => {
@@ -809,14 +838,14 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("exec.approval.resolve");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
-    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call).not.toHaveProperty("deviceIdentity");
   });
 
   it("does not attach agent provenance to ordinary contextual approval resolutions", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
 
     await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:main" },
+      testGatewayCaller({ agentId: "main", sessionKey: "agent:main:main" }),
       async () => {
         await callGatewayTool(
           "exec.approval.resolve",
@@ -835,7 +864,7 @@ describe("gateway tool defaults", () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
 
     await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:main" },
+      testGatewayCaller({ agentId: "main", sessionKey: "agent:main:main" }),
       async () => {
         await callGatewayTool(
           "exec.approval.resolve",
@@ -875,6 +904,26 @@ describe("gateway tool defaults", () => {
     expect(call).not.toHaveProperty("deviceIdentity");
   });
 
+  it.each([
+    "exec.approval.request",
+    "exec.approval.resolve",
+    "exec.approval.waitDecision",
+    "plugin.approval.request",
+    "plugin.approval.waitDecision",
+  ])("never pairs a requester device identity with the %s runtime token", async (method) => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(method, {}, { id: "approval-id", decision: "allow-once" });
+
+    const call = capturedGatewayCall();
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    // Sending both would put the approval bridge back under the shared CLI device's
+    // paired scope baseline. A device paired before operator.approvals existed then
+    // fails the scope-upgrade pairing gate, and the prompt that would re-pair it is
+    // exactly what these calls carry.
+    expect(call).not.toHaveProperty("deviceIdentity");
+  });
+
   it("does not send the local approval runtime token to configured remote gateways", async () => {
     mocks.configState.value = {
       gateway: {
@@ -907,7 +956,7 @@ describe("gateway tool defaults", () => {
     await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
 
     const call = capturedGatewayCall();
-    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call).not.toHaveProperty("deviceIdentity");
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
   });
 

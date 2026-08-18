@@ -1,5 +1,6 @@
 // Qa Lab tests cover suite runtime flow plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { parseModelRef, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
 const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
@@ -42,9 +43,74 @@ import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-r
 import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
 import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import * as webRuntime from "./web-runtime.js";
 
+const qaSuiteRuntimeFlowTestConstants = {
+  imageUnderstandingPngBase64: "small",
+  imageUnderstandingLargePngBase64: "large",
+  imageUnderstandingValidPngBase64: "valid",
+};
+
+function createQaSuiteRuntimeFlowTestEnv(
+  transportOverrides: Partial<QaSuiteRuntimeEnv["transport"]> = {},
+) {
+  return {
+    lab: { baseUrl: "http://127.0.0.1:4444" },
+    webSessionIds: new Set<string>(),
+    gateway: {} as QaSuiteRuntimeEnv["gateway"],
+    transport: {
+      id: "qa-channel",
+      label: "QA Channel",
+      accountId: "qa-channel",
+      waitReady: vi.fn(),
+      createGatewayConfig: vi.fn(),
+      buildAgentDelivery: vi.fn(),
+      requiredPluginIds: [],
+      supportedActions: [],
+      handleAction: vi.fn(),
+      createReportNotes: vi.fn(),
+      reset: vi.fn(),
+      sendInbound: vi.fn(),
+      sendNativeCommand: vi.fn(),
+      waitForNoOutbound: vi.fn(),
+      waitForOutbound: vi.fn(),
+      waitForOutboundSequence: vi.fn(),
+      state: {
+        reset: vi.fn(),
+        getSnapshot: vi.fn(),
+        addInboundMessage: vi.fn(),
+        addOutboundMessage: vi.fn(),
+        readMessage: vi.fn(),
+        searchMessages: vi.fn(),
+        waitFor: vi.fn(),
+      },
+      waitForCondition: vi.fn(),
+      ...transportOverrides,
+    },
+    outputDir: "/artifacts",
+    repoRoot: "/repo",
+    providerMode: "mock-openai",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-mini",
+    mock: null,
+    cfg: {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-5": { alias: "opus" },
+          },
+        },
+      },
+    },
+  } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
+}
+
 describe("qa suite runtime flow", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("records intentional scenario skips without running later steps", async () => {
     const laterStep = vi.fn();
     const result = await runQaSuiteScenarioSteps("requires group credentials", [
@@ -72,46 +138,7 @@ describe("qa suite runtime flow", () => {
   });
 
   it("wires the split suite runtime deps into the scenario runtime api", async () => {
-    const env = {
-      lab: { baseUrl: "http://127.0.0.1:4444" },
-      webSessionIds: new Set<string>(),
-      gateway: {} as QaSuiteRuntimeEnv["gateway"],
-      transport: {
-        id: "qa-channel",
-        label: "QA Channel",
-        accountId: "qa-channel",
-        waitReady: vi.fn(),
-        createGatewayConfig: vi.fn(),
-        buildAgentDelivery: vi.fn(),
-        requiredPluginIds: [],
-        supportedActions: [],
-        handleAction: vi.fn(),
-        createReportNotes: vi.fn(),
-        reset: vi.fn(),
-        sendInbound: vi.fn(),
-        sendNativeCommand: vi.fn(),
-        waitForNoOutbound: vi.fn(),
-        waitForOutbound: vi.fn(),
-        waitForOutboundSequence: vi.fn(),
-        state: {
-          reset: vi.fn(),
-          getSnapshot: vi.fn(),
-          addInboundMessage: vi.fn(),
-          addOutboundMessage: vi.fn(),
-          readMessage: vi.fn(),
-          searchMessages: vi.fn(),
-          waitFor: vi.fn(),
-        },
-        waitForCondition: vi.fn(),
-      },
-      outputDir: "/artifacts",
-      repoRoot: "/repo",
-      providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna-mini",
-      mock: null,
-      cfg: {} as QaSuiteRuntimeEnv["cfg"],
-    } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
+    const env = createQaSuiteRuntimeFlowTestEnv();
     const scenario = {
       id: "session-memory-ranking",
       title: "Session memory ranking",
@@ -126,7 +153,7 @@ describe("qa suite runtime flow", () => {
       },
     };
     const runScenario = vi.fn();
-    const splitModelRef = vi.fn();
+    const splitModelRef = vi.fn((raw: string) => parseModelRef(raw, "openai"));
     const formatErrorMessage = vi.fn();
     const liveTurnTimeoutMs = vi.fn();
     const resolveQaLiveTurnTimeoutMs = vi.fn();
@@ -140,11 +167,7 @@ describe("qa suite runtime flow", () => {
       formatErrorMessage,
       liveTurnTimeoutMs,
       resolveQaLiveTurnTimeoutMs,
-      constants: {
-        imageUnderstandingPngBase64: "small",
-        imageUnderstandingLargePngBase64: "large",
-        imageUnderstandingValidPngBase64: "valid",
-      },
+      constants: qaSuiteRuntimeFlowTestConstants,
     });
 
     expect(result).toEqual({ api: "ok" });
@@ -202,6 +225,22 @@ describe("qa suite runtime flow", () => {
     for (const [name, helper] of Object.entries(aliasedDependencies)) {
       expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
     }
+    const canonicalOpus = resolveModelRefFromString({
+      cfg: env.cfg,
+      raw: "anthropic/opus",
+      defaultProvider: "anthropic",
+    })?.ref;
+    const normalizeModelRef = call.deps.normalizeModelRef as (
+      raw: string,
+    ) => { provider: string; model: string } | null;
+    expect(canonicalOpus).toEqual({ provider: "anthropic", model: "claude-opus-5" });
+    expect(normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
+    expect(normalizeModelRef("AnThRoPiC/OPUS")).toEqual(canonicalOpus);
+    expect(normalizeModelRef("OPENAI/gpt-5.6-luna")).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    });
+    expect(normalizeModelRef("")).toBeNull();
     expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
     const outboundPredicate = vi.fn();
     call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
@@ -234,5 +273,74 @@ describe("qa suite runtime flow", () => {
     await call.deps.webOpenPage({ url: "https://openclaw.ai" });
     expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
     expect(env.webSessionIds.has("page-1")).toBe(true);
+  });
+
+  it("records live transport preparation as the first shared flow step", async () => {
+    const prepareFlow = vi.fn(async () => {
+      throw new Error("setup failed");
+    });
+    const env = createQaSuiteRuntimeFlowTestEnv({
+      label: "Matrix live",
+      prepareFlow,
+    });
+    const scenario = makeQaSuiteTestScenario("matrix-preparation-failure", {
+      channel: "matrix",
+      config: { expected: "value" },
+    });
+    if (scenario.execution.kind !== "flow") {
+      throw new Error("expected flow scenario");
+    }
+    scenario.execution.timeoutMs = 45_000;
+    const runScenario = vi.fn(runQaSuiteScenarioSteps);
+
+    createQaScenarioRuntimeApi.mockReturnValueOnce({ api: "ok" });
+    await runQaSuiteScenarioDefinition({
+      env,
+      scenario,
+      runScenario,
+      splitModelRef: (raw) => parseModelRef(raw, "openai"),
+      formatErrorMessage: (error) => String(error),
+      liveTurnTimeoutMs: () => 60_000,
+      resolveQaLiveTurnTimeoutMs: () => 60_000,
+      constants: qaSuiteRuntimeFlowTestConstants,
+    });
+
+    expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(1);
+    const capturedCall = createQaScenarioRuntimeApi.mock.calls[0]?.[0];
+    if (!capturedCall) {
+      throw new Error("expected QA scenario runtime API call");
+    }
+    const capturedDeps = (
+      capturedCall as {
+        deps: {
+          runScenario: Parameters<typeof runQaSuiteScenarioDefinition>[0]["runScenario"];
+        };
+      }
+    ).deps;
+    const scenarioStep = vi.fn(async () => "not reached");
+    await expect(
+      capturedDeps.runScenario("Matrix preparation", [{ name: "Scenario", run: scenarioStep }]),
+    ).resolves.toEqual({
+      name: "Matrix preparation",
+      status: "fail",
+      steps: [{ name: "Prepare Matrix live", status: "fail", details: "setup failed" }],
+      details: "setup failed",
+    });
+
+    expect(runScenario).toHaveBeenCalledWith("Matrix preparation", [
+      { name: "Prepare Matrix live", run: expect.any(Function) },
+      { name: "Scenario", run: scenarioStep },
+    ]);
+    expect(prepareFlow).toHaveBeenCalledWith({
+      config: { expected: "value" },
+      gateway: env.gateway,
+      outputDir: "/artifacts",
+      primaryModel: "openai/gpt-5.6-luna",
+      scenarioId: "matrix-preparation-failure",
+      scenarioTitle: "matrix-preparation-failure",
+      timeoutMs: 45_000,
+      waitForConfigRestartSettle: expect.any(Function),
+    });
+    expect(scenarioStep).not.toHaveBeenCalled();
   });
 });

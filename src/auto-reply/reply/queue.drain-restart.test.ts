@@ -1,6 +1,7 @@
 // Tests queue drain restart behavior when follow-up runs chain together.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -18,7 +19,6 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import {
-  createDeferred,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
@@ -32,8 +32,8 @@ describe("followup queue drain restart after idle window", () => {
     resetGatewayWorkAdmission();
     const key = `test-detached-drain-root-${Date.now()}`;
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-    const parentReleased = createDeferred<void>();
-    const drained = createDeferred<void>();
+    const parentReleased = createDeferred();
+    const drained = createDeferred();
     const parent = tryBeginGatewayRootWorkAdmission();
     if (!parent) {
       throw new Error("expected parent Gateway work admission");
@@ -108,7 +108,7 @@ describe("followup queue drain restart after idle window", () => {
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
     const staleCalls: FollowupRun[] = [];
     const freshCalls: FollowupRun[] = [];
-    const drained = createDeferred<void>();
+    const drained = createDeferred();
 
     scheduleFollowupDrain(key, async (run) => {
       staleCalls.push(run);
@@ -136,8 +136,8 @@ describe("followup queue drain restart after idle window", () => {
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
 
-    const firstProcessed = createDeferred<void>();
-    const secondProcessed = createDeferred<void>();
+    const firstProcessed = createDeferred();
+    const secondProcessed = createDeferred();
     let callCount = 0;
     const runFollowup = async (run: FollowupRun) => {
       callCount++;
@@ -177,8 +177,8 @@ describe("followup queue drain restart after idle window", () => {
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
     const staleCalls: FollowupRun[] = [];
     const freshCalls: FollowupRun[] = [];
-    const firstProcessed = createDeferred<void>();
-    const secondProcessed = createDeferred<void>();
+    const firstProcessed = createDeferred();
+    const secondProcessed = createDeferred();
 
     const staleFollowup = async (run: FollowupRun) => {
       staleCalls.push(run);
@@ -261,7 +261,7 @@ describe("followup queue drain restart after idle window", () => {
     const key = `test-idle-window-cross-module-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-    const firstProcessed = createDeferred<void>();
+    const firstProcessed = createDeferred();
 
     resetRecentQueuedMessageIdDedupe();
 
@@ -310,7 +310,7 @@ describe("followup queue drain restart after idle window", () => {
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
 
-    const allProcessed = createDeferred<void>();
+    const allProcessed = createDeferred();
     let runFollowupResolve: (() => void) | undefined;
     const runFollowupGate = new Promise<void>((res) => {
       runFollowupResolve = res;
@@ -341,7 +341,7 @@ describe("followup queue drain restart after idle window", () => {
     const key = `test-deferred-followup-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-    const retried = createDeferred<void>();
+    const retried = createDeferred();
     let attempts = 0;
 
     const runFollowup = async (run: FollowupRun) => {
@@ -367,9 +367,9 @@ describe("followup queue drain restart after idle window", () => {
   it("refreshes the callback used by a deferred active-drain retry", async () => {
     const key = `test-active-drain-refreshes-retry-${Date.now()}`;
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-    const firstStarted = createDeferred<void>();
-    const releaseFirst = createDeferred<void>();
-    const retried = createDeferred<void>();
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
+    const retried = createDeferred();
     const staleCalls: FollowupRun[] = [];
     const freshCalls: FollowupRun[] = [];
 
@@ -415,7 +415,7 @@ describe("followup queue drain restart after idle window", () => {
         cap: 1,
         dropPolicy: "summarize",
       };
-      const retried = createDeferred<void>();
+      const retried = createDeferred();
       let attempts = 0;
 
       const runFollowup = async (run: FollowupRun) => {
@@ -502,7 +502,7 @@ describe("followup queue drain restart after idle window", () => {
       cap: 1,
       dropPolicy: "summarize",
     };
-    const retried = createDeferred<void>();
+    const retried = createDeferred();
     let attempts = 0;
 
     const runFollowup = async (run: FollowupRun) => {
@@ -536,7 +536,7 @@ describe("followup queue drain restart after idle window", () => {
       cap: 1,
       dropPolicy: "summarize",
     };
-    const completed = createDeferred<void>();
+    const completed = createDeferred();
     let retainedIdentityCount = 0;
     let attempts = 0;
 
@@ -676,7 +676,7 @@ describe("followup queue drain restart after idle window", () => {
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
 
-    const firstProcessed = createDeferred<void>();
+    const firstProcessed = createDeferred();
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
       firstProcessed.resolve();
@@ -704,7 +704,7 @@ describe("followup queue drain restart after idle window", () => {
     const key = `test-auto-clear-callback-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-    const firstProcessed = createDeferred<void>();
+    const firstProcessed = createDeferred();
 
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);

@@ -914,7 +914,7 @@ describe("collectCodexRouteWarnings", () => {
 
   it("does not overwrite a non-Lossless context-engine slot", () => {
     const result = maybeRepairCodexRoutes({
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
@@ -953,7 +953,7 @@ describe("collectCodexRouteWarnings", () => {
 
   it("preserves local Lossless models when inherited provider migration is blocked", () => {
     const result = maybeRepairCodexRoutes({
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: { model: "openai/gpt-5.5", compaction: { provider: "lossless-claw" } },
         list: [
@@ -1053,7 +1053,7 @@ describe("collectCodexRouteWarnings", () => {
       models: {
         providers: { openai: { baseUrl: "https://proxy.example.test/v1" } },
       },
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
@@ -1089,7 +1089,7 @@ describe("collectCodexRouteWarnings", () => {
 
   it("points inherited Lossless model warnings at defaults when migration is blocked", () => {
     const result = maybeRepairCodexRoutes({
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: { model: "openai/gpt-5.5", compaction: { model: "openai/gpt-5.4-mini" } },
         list: [
@@ -1127,7 +1127,7 @@ describe("collectCodexRouteWarnings", () => {
       models: {
         providers: { openai: { baseUrl: "https://proxy.example.test/v1" } },
       },
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: {
           model: "anthropic/claude-sonnet-4-6",
@@ -3297,6 +3297,7 @@ describe("collectCodexRouteWarnings", () => {
         authProfileOverride: "openai-codex:default",
         authProfileOverrideSource: "auto",
         contextTokens: 64_000,
+        contextTokensSource: "runtime",
         contextBudgetStatus: {
           schemaVersion: 1,
           source: "pre-prompt-estimate",
@@ -3336,6 +3337,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(getSession(store, "main").modelProvider).toBeUndefined();
     expect(getSession(store, "main").model).toBeUndefined();
     expect(getSession(store, "main").contextTokens).toBeUndefined();
+    expect(getSession(store, "main").contextTokensSource).toBeUndefined();
     expect(getSession(store, "main").contextBudgetStatus).toBeUndefined();
   });
 
@@ -3373,6 +3375,8 @@ describe("collectCodexRouteWarnings", () => {
         agentHarnessId: "openclaw",
         agentRuntimeOverride: "openclaw",
         authProfileOverride: "openai:work",
+        contextTokens: 128_000,
+        contextTokensSource: "runtime",
       },
     };
 
@@ -3386,6 +3390,8 @@ describe("collectCodexRouteWarnings", () => {
     expect(getSession(store, "main").agentHarnessId).toBe("openclaw");
     expect(getSession(store, "main").agentRuntimeOverride).toBe("openclaw");
     expect(getSession(store, "main").authProfileOverride).toBe("openai:work");
+    expect(getSession(store, "main").contextTokens).toBe(128_000);
+    expect(getSession(store, "main").contextTokensSource).toBe("runtime");
   });
 
   it("repairs legacy routes without probing OAuth readiness", () => {

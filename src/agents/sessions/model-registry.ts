@@ -20,6 +20,7 @@ import type {
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
+import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
@@ -227,13 +228,6 @@ function formatValidationPath(error: TLocalizedValidationError): string {
   }
   const path = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
   return path || "root";
-}
-
-/** Strip `//` line comments and trailing commas from JSON, leaving string literals untouched. */
-function stripJsonComments(input: string): string {
-  return input
-    .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (m) => (m[0] === '"' ? m : ""))
-    .replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (m, tail) => tail ?? (m[0] === '"' ? m : ""));
 }
 
 interface ProviderRequestConfig {
@@ -539,7 +533,7 @@ export class ModelRegistry {
 
     try {
       const content = options.contents ?? readFileSync(modelsJsonPath, "utf-8");
-      const parsed = JSON.parse(stripJsonComments(content)) as unknown;
+      const parsed = parseModelCatalogJson(content);
       if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
         return emptyCustomModelsResult();
       }

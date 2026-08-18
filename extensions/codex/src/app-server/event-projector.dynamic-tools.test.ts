@@ -1,3 +1,5 @@
+import { withDynamicToolTranscriptDetails } from "./dynamic-tool-response-state.js";
+import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -18,6 +20,39 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector dynamic tool projection", () => {
+  it.each([
+    ["gateway", { ok: true, result: { path: "gateway.port", config: 19_801 } }],
+    ["dashboard", { ok: true, delivered: 0 }],
+    ["memory_search", { ok: true, results: [{ id: "memory-1" }] }],
+  ])("retains structured %s transcript details", async (tool, details) => {
+    const projector = await createProjector();
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: `call-${tool}`,
+      namespace: null,
+      tool,
+      arguments: {},
+    };
+    const protocolResponse = {
+      success: true,
+      contentItems: [{ type: "inputText" as const, text: `${tool} done` }],
+    };
+
+    projector.recordDynamicToolCall({ callId: call.callId, tool, arguments: {} });
+    recordCodexDynamicToolResult(
+      projector,
+      call,
+      withDynamicToolTranscriptDetails({ ...protocolResponse }, details),
+      protocolResponse,
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(toolResultMessage).toMatchObject({ role: "toolResult", toolName: tool, details });
+    expect(protocolResponse).not.toHaveProperty("details");
+  });
+
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
     const projector = await createProjector(undefined, {
       resolveDynamicToolResultContentSource: (toolName) =>
@@ -39,6 +74,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
+    expect(result.toolMetas).toEqual([{ toolName: "browser", isError: false }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -219,6 +255,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
         toolName: "image_generate",
         meta: "lighthouse",
         asyncStarted: true,
+        isError: false,
       },
     ]);
     expect(result.replayMetadata).toEqual({

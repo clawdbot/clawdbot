@@ -4,8 +4,7 @@
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
 import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
-import { emitModelTransportDebug } from "@openclaw/ai/transports";
-import { formatModelTransportDebugUrl } from "@openclaw/ai/transports";
+import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw/ai/transports";
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
@@ -45,11 +44,12 @@ import {
 } from "./provider-local-service.js";
 import {
   buildProviderRequestDispatcherPolicy,
-  getModelProviderMetadataOwners,
+  getModelProviderRequestRouteFacts,
   getModelProviderRequestTransport,
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
+import { getProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES = 2 * 1024;
@@ -591,12 +591,12 @@ function resolveModelRequestPolicy(model: Model) {
         }
       : undefined,
   });
-  const providerMetadataOwners = getModelProviderMetadataOwners(model);
+  const routeFacts = getModelProviderRequestRouteFacts(model);
   return resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
-    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
+    ...(routeFacts ? { routeFacts } : {}),
     capability: "llm",
     transport: "stream",
     request,
@@ -831,10 +831,7 @@ export function buildGuardedModelFetch(
       allowPrivateNetwork: requestConfig.allowPrivateNetwork,
       // Only operator-configured custom/local endpoints get exact-origin trust;
       // known public/native providers keep the default rebinding checks.
-      trustConfiguredBaseUrlOrigin:
-        !requestConfig.privateNetworkExplicitlyDenied &&
-        (requestConfig.policy?.endpointClass === "custom" ||
-          requestConfig.policy?.endpointClass === "local"),
+      trustConfiguredBaseUrlOrigin: requestConfig.trustConfiguredBaseUrlOrigin,
     });
     const requestInit =
       request &&
@@ -862,6 +859,7 @@ export function buildGuardedModelFetch(
         },
       },
       dispatcherPolicy,
+      dispatcherPool: getProviderTransportDispatcherPool(),
       timeoutMs: requestTimeoutMs,
       ...(baseSignal ? { signal: baseSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
@@ -904,6 +902,7 @@ export function buildGuardedModelFetch(
       log,
       `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +
         `status=${response.status} elapsedMs=${Date.now() - fetchStartedAt} ` +
+        `dispatcher=${result.dispatcherReused ? "reused" : "new"} ` +
         `contentType=${response.headers.get("content-type") ?? ""}`,
     );
     if (shouldBypassLongSdkRetry(response)) {

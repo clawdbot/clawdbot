@@ -3,18 +3,14 @@
 
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import { formatLookupMiss } from "../cli/error-format.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  resolveAllAgentSessionStoreTargetsSync,
-  runSessionRegistryMaintenanceForStore,
-} from "../config/sessions.js";
-import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
-import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
@@ -42,23 +38,31 @@ import {
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
-import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  TASK_RUNTIMES,
+  TASK_STATUSES,
+  type TaskNotifyPolicy,
+  type TaskRecord,
+} from "../tasks/task-registry.types.js";
 import { formatTaskStatusDetail } from "../tasks/task-status.js";
+import {
+  TASK_SYSTEM_AUDIT_CODES,
+  TASK_SYSTEM_AUDIT_SEVERITIES,
+  type TaskSystemAuditCode,
+  type TaskSystemAuditSeverity,
+} from "../tasks/task-system-audit.types.js";
 import {
   buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
-  type TaskSystemAuditCode,
   type TaskSystemAuditFinding,
-  type TaskSystemAuditSeverity,
 } from "./tasks-audit-system.js";
+import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintenance.js";
 
 const RUNTIME_PAD = 8;
 const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
-const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
-
 const info = theme.info;
 
 function formatTaskLookupMiss(lookup: string): string {
@@ -95,7 +99,7 @@ type GatewayTaskCancelResult = {
 async function tryCancelGatewayOwnedTaskViaGateway(
   task: TaskRecord,
 ): Promise<GatewayTaskCancelResult | null> {
-  if (task.runtime !== "cron" && task.runtime !== "acp") {
+  if (task.runtime === "cli") {
     return null;
   }
   try {
@@ -106,16 +110,16 @@ async function tryCancelGatewayOwnedTaskViaGateway(
       timeoutMs: 5_000,
     });
   } catch (error) {
-    if (task.runtime === "acp") {
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        found: true,
-        cancelled: false,
-        reason: `ACP task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
-        task,
-      };
+    if (task.runtime === "cron") {
+      return null;
     }
-    return null;
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      found: true,
+      cancelled: false,
+      reason: `${task.runtime.toUpperCase()} task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
+      task,
+    };
   }
 }
 
@@ -123,90 +127,13 @@ function configureTaskMaintenanceFromConfig(): void {
   configureTaskRegistryMaintenance();
 }
 
-type SessionRegistryMaintenanceStoreSummary = {
-  agentId: string;
-  storePath: string;
-  beforeCount: number;
-  afterCount: number;
-  pruned: number;
-  preservedRunning: number;
-};
-
-type SessionRegistryMaintenanceSummary = {
-  retentionMs: number;
-  runningCronJobs: number;
-  pruned: number;
-  stores: SessionRegistryMaintenanceStoreSummary[];
-};
-
-function resolveExplicitCronSessionSegment(sessionKey: string | undefined): string | undefined {
-  const match = /^(?:agent:[^:]+:)?cron:([^:]+)$/u.exec(sessionKey?.trim() ?? "");
-  return match?.[1]?.toLowerCase();
-}
-
-function readRunningCronJobIds(): { ids: Set<string>; count: number } {
-  try {
-    const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
-      (job) => typeof job.state?.runningAtMs === "number",
-    );
-    return {
-      // A running job may have been retargeted after its session was created. Keep both historical
-      // shapes; the registry has no producer metadata, so retaining an ambiguous alias is safer
-      // than pruning a live transcript.
-      ids: new Set(
-        runningJobs.flatMap((job) => [
-          job.id.toLowerCase(),
-          normalizeCronLaneSegment(job.id, "job"),
-          ...(job.sessionTarget !== "main" && job.sessionKey
-            ? [resolveExplicitCronSessionSegment(job.sessionKey)].filter(
-                (segment): segment is string => segment !== undefined,
-              )
-            : []),
-        ]),
-      ),
-      count: runningJobs.length,
-    };
-  } catch {
-    return { ids: new Set(), count: 0 };
-  }
-}
-
-async function runSessionRegistryMaintenance(params: {
-  apply: boolean;
-}): Promise<SessionRegistryMaintenanceSummary> {
-  const cfg = getRuntimeConfig();
-  const runningCronJobs = readRunningCronJobIds();
-  const stores: SessionRegistryMaintenanceStoreSummary[] = [];
-  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    const result = await runSessionRegistryMaintenanceForStore({
-      apply: params.apply,
-      retentionMs: SESSION_REGISTRY_RETENTION_MS,
-      runningCronJobIds: runningCronJobs.ids,
-      storePath: target.storePath,
-    });
-    stores.push({
-      agentId: target.agentId,
-      storePath: target.storePath,
-      beforeCount: result.beforeCount,
-      afterCount: result.afterCount,
-      pruned: result.pruned,
-      preservedRunning: result.preservedRunning,
-    });
-  }
-  return {
-    retentionMs: SESSION_REGISTRY_RETENTION_MS,
-    runningCronJobs: runningCronJobs.count,
-    pruned: stores.reduce((total, store) => total + store.pruned, 0),
-    stores,
-  };
-}
-
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
     return value;
   }
-  return maxChars <= 0 ? "" : `${truncateUtf16Safe(value, maxChars - 1)}…`;
+  return maxChars <= 0
+    ? ""
+    : truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
@@ -348,8 +275,8 @@ export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
 ) {
-  const runtimeFilter = normalizeOptionalString(opts.runtime);
-  const statusFilter = normalizeOptionalString(opts.status);
+  const runtimeFilter = parseCliEnumFilter(opts.runtime, "--runtime", TASK_RUNTIMES);
+  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUSES);
   const tasks = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -397,7 +324,12 @@ export async function tasksShowCommand(
 ) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
-    runtime.error(formatTaskLookupMiss(opts.lookup));
+    const message = formatTaskLookupMiss(opts.lookup);
+    if (opts.json) {
+      writeRuntimeJson(runtime, formatCliJsonFailure(message));
+    } else {
+      runtime.error(message);
+    }
     runtime.exit(1);
     return;
   }
@@ -565,6 +497,7 @@ async function runTaskRecoveryCommand(
       ),
     );
   } catch (error) {
+    rethrowExpectedCliError(error);
     runtime.error(
       sanitizeTerminalText(
         `Task delivery ${action} requires a live Gateway: ${error instanceof Error ? error.message : String(error)}`,
@@ -594,11 +527,15 @@ export async function tasksAuditCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  configureTaskMaintenanceFromConfig();
-  const severityFilter = normalizeOptionalString(opts.severity) as
-    | TaskSystemAuditSeverity
+  const severityFilter = parseCliEnumFilter(
+    opts.severity,
+    "--severity",
+    TASK_SYSTEM_AUDIT_SEVERITIES,
+  ) as TaskSystemAuditSeverity | undefined;
+  const codeFilter = parseCliEnumFilter(opts.code, "--code", TASK_SYSTEM_AUDIT_CODES) as
+    | TaskSystemAuditCode
     | undefined;
-  const codeFilter = normalizeOptionalString(opts.code) as TaskSystemAuditCode | undefined;
+  configureTaskMaintenanceFromConfig();
   const auditResult = toSystemAuditFindings({
     severityFilter,
     codeFilter,
@@ -704,7 +641,9 @@ export async function tasksMaintenanceCommand(
   );
   runtime.log(
     info(
-      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
+      sessionMaintenance.skippedReason
+        ? `Session registry: sweep skipped (${sessionMaintenance.skippedReason})`
+        : `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
     ),
   );
   runtime.log(

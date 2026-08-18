@@ -3,11 +3,29 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
+import { GitHubIdentityController } from "./github-identity-controller.ts";
 import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
 
 installBrowserHistoryIsolation();
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
+  const githubIdentity = new GitHubIdentityController({
+    requestUpdate: () => undefined,
+    runExternalMutation: async () => ({
+      ok: false,
+      reason: "unavailable",
+      error: "Mutation unavailable in rendering test.",
+    }),
+  });
+  githubIdentity.sync({
+    client: null,
+    connected: false,
+    agentId: "main",
+    config: null,
+    supported: true,
+    configurable: false,
+    clientRevision: 0,
+  });
   return {
     agentId: "main",
     canUpdateConfig: true,
@@ -27,6 +45,7 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
     toolsEffectiveResult: null,
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: true,
+    githubIdentity,
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
     onConfigReload: () => undefined,
@@ -129,7 +148,7 @@ describe("agents tools panel (browser)", () => {
       Array.from(container.querySelectorAll(".settings-section__heading")).map((heading) =>
         heading.textContent?.trim(),
       ),
-    ).toEqual(["Tool Access", "Available Right Now", "Tool Catalog"]);
+    ).toEqual(["Tool Access", "Available Right Now", "GitHub Identity", "Tool Catalog"]);
     expect(
       Array.from(container.querySelectorAll(".settings-row__title")).some(
         (title) => title.textContent?.trim() === "Quick Presets",
@@ -162,6 +181,45 @@ describe("agents tools panel (browser)", () => {
       { title: "voice_call", badges: ["Plugin: voice-call", "Optional"] },
     ]);
     expect(container.querySelector(".agent-tool-card[open]")).toBeNull();
+  });
+
+  it("renders the GitHub identity section with settings rows only", async () => {
+    const container = document.createElement("div");
+    const params = createBaseParams();
+    params.githubIdentity.status = {
+      agentId: "main",
+      source: "system-detected",
+      credentialState: "available",
+      account: { login: "octocat", avatarUrl: "https://example.test/a.png" },
+      gitAuthor: { name: null, email: null },
+      evidence: "github-api",
+    };
+    render(renderAgentTools(params), container);
+    await Promise.resolve();
+
+    const section = Array.from(container.querySelectorAll(".settings-section")).find((candidate) =>
+      candidate.querySelector(".settings-section__heading")?.textContent?.includes("GitHub"),
+    );
+    expect(section).toBeDefined();
+    if (!section) {
+      throw new Error("expected GitHub identity section");
+    }
+    // The whole section stays inside the one group surface: no bespoke form
+    // markup or nested callouts, per ui/docs/design-system/settings-design.md.
+    expect(section.querySelector(".form-grid")).toBeNull();
+    expect(section.querySelector(".callout")).toBeNull();
+    expect(section.querySelector(".settings-group .settings-account__avatar")).not.toBeNull();
+    expect(section.textContent).toContain("@octocat");
+    expect(section.querySelector(".settings-status")?.textContent?.trim()).toBe("Verified");
+    // Raw wire enums never render; friendly labels replace them.
+    expect(section.textContent).not.toContain("system-detected");
+    expect(section.textContent).not.toContain("github-api");
+    const authorRow = Array.from(section.querySelectorAll(".settings-row")).find((row) =>
+      row.querySelector(".settings-row__title")?.textContent?.includes("Git Author"),
+    );
+    expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("Not set");
+    expect(section.querySelector(".settings-segmented")).not.toBeNull();
+    expect(section.querySelector(".settings-secret input")).not.toBeNull();
   });
 
   it("shows fallback warning when runtime catalog fails", async () => {
@@ -345,7 +403,7 @@ describe("agents tools panel (browser)", () => {
       { label: "Access", value: "Enabled by the current profile." },
       { label: "Source", value: "Plugin: voice-call" },
       { label: "Default Presets", value: "full" },
-      { label: "Current Thread", value: "Not available in this chat thread right now." },
+      { label: "Current Session", value: "Not available in this chat session right now." },
     ]);
   });
 

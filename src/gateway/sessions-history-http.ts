@@ -29,6 +29,7 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   buildSessionHistorySnapshot,
+  resolveCursorSeq,
   resolveSessionHistoryTailReadOptions,
   SessionHistorySseState,
 } from "./session-history-state.js";
@@ -178,6 +179,10 @@ export async function handleSessionHistoryHttpRequest(
   }
   const limit = limitResult.value;
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
+  if (cursor !== undefined && resolveCursorSeq(cursor) === undefined) {
+    sendInvalidRequest(res, "cursor must be a positive integer");
+    return true;
+  }
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   let boundedSnapshot:
     | Awaited<ReturnType<typeof readRecentSessionMessagesWithStatsAsync>>
@@ -235,17 +240,15 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
   const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
-  const historySnapshot = buildSessionHistorySnapshot({
-    rawMessages: rawSnapshot,
-    maxChars: effectiveMaxChars,
-    limit,
-    cursor,
-    rawTranscriptSeq: boundedSnapshot?.totalMessages,
-    totalRawMessages: boundedSnapshot?.totalMessages,
-  });
-  const history = historySnapshot.history;
-
   if (!shouldStreamSse(req)) {
+    const history = buildSessionHistorySnapshot({
+      rawMessages: rawSnapshot,
+      maxChars: effectiveMaxChars,
+      limit,
+      cursor,
+      rawTranscriptSeq: boundedSnapshot?.totalMessages,
+      totalRawMessages: boundedSnapshot?.totalMessages,
+    }).history;
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
       ...history,
@@ -266,7 +269,6 @@ export async function handleSessionHistoryHttpRequest(
       )
     : new Set<string>();
 
-  let sentHistory = history;
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
       agentId: target.agentId,
@@ -283,7 +285,7 @@ export async function handleSessionHistoryHttpRequest(
     limit,
     cursor,
   });
-  sentHistory = sseState.snapshot();
+  let sentHistory = sseState.snapshot();
   let streamStopped = false;
   let streamQueue = Promise.resolve();
   const streamResources: {

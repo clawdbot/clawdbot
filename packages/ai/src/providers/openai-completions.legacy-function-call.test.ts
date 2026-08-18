@@ -32,6 +32,7 @@ const context = {
     },
   ],
 } satisfies Context;
+const TOOL_ARGUMENT_BYTE_LIMIT = 256_000;
 
 function chunk(
   delta: ChatCompletionChunk.Choice.Delta,
@@ -67,6 +68,46 @@ function toolCallDelta({
       arguments: rawArguments,
     },
   };
+}
+
+function idOnlyToolCallDelta(params: {
+  id: string;
+  name?: string;
+  arguments: string;
+}): ChatCompletionChunk.Choice.Delta.ToolCall {
+  return {
+    id: params.id,
+    type: "function",
+    function: {
+      ...(params.name !== undefined ? { name: params.name } : {}),
+      arguments: params.arguments,
+    },
+  } as ChatCompletionChunk.Choice.Delta.ToolCall;
+}
+
+function argumentsWithByteLength(bytes: number, fill = "a"): string {
+  const prefix = '{"query":"';
+  const suffix = '"}';
+  const availableBytes = bytes - Buffer.byteLength(prefix + suffix, "utf8");
+  const characterBytes = Buffer.byteLength(fill, "utf8");
+  const value =
+    prefix +
+    fill.repeat(Math.floor(availableBytes / characterBytes)) +
+    "a".repeat(availableBytes % characterBytes) +
+    suffix;
+  expect(Buffer.byteLength(value, "utf8")).toBe(bytes);
+  return value;
+}
+
+function splitSurrogateArguments(bytes: number): [string, string] {
+  const prefix = '{"query":"';
+  const suffix = '"}';
+  const emoji = "😀";
+  const padding = bytes - Buffer.byteLength(prefix + suffix + emoji, "utf8");
+  const value = `${prefix}${"a".repeat(padding)}${emoji}${suffix}`;
+  expect(Buffer.byteLength(value, "utf8")).toBe(bytes);
+  const surrogateBoundary = value.indexOf(emoji) + 1;
+  return [value.slice(0, surrogateBoundary), value.slice(surrogateBoundary)];
 }
 
 const modernCallChunk = (
@@ -474,6 +515,117 @@ describe.each([
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
     expect(eventTypes).not.toContain("toolcall_start");
+  });
+
+  it("bounds an indexed modern call through an id-only continuation", async () => {
+    const value = argumentsWithByteLength(TOOL_ARGUMENT_BYTE_LIMIT + 1);
+    const { eventTypes, result } = await collectFixture([
+      chunk({
+        tool_calls: [
+          toolCallDelta({
+            index: 0,
+            id: "call_alias",
+            name: "lookup",
+            arguments: value.slice(0, 128_000),
+          }),
+        ],
+      }),
+      chunk({
+        tool_calls: [idOnlyToolCallDelta({ id: "call_alias", arguments: value.slice(128_000) })],
+      }),
+      chunk({}, "tool_calls"),
+    ]);
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
+    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
+    expect(eventTypes).not.toContain("toolcall_end");
+  });
+
+  it("keeps independent id-only modern calls independently bounded", async () => {
+    const { result } = await collectFixture([
+      chunk({
+        tool_calls: [
+          idOnlyToolCallDelta({
+            id: "call_id_a",
+            name: "lookup",
+            arguments: argumentsWithByteLength(200_000),
+          }),
+          idOnlyToolCallDelta({
+            id: "call_id_b",
+            name: "lookup",
+            arguments: argumentsWithByteLength(200_000),
+          }),
+        ],
+      }),
+      chunk({}, "tool_calls"),
+    ]);
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(
+      result.content
+        .filter((block) => block.type === "toolCall")
+        .map((block) => [block.id, Buffer.byteLength(JSON.stringify(block.arguments), "utf8")]),
+    ).toEqual([
+      ["call_id_a", 200_000],
+      ["call_id_b", 200_000],
+    ]);
+  });
+
+  it.each([
+    {
+      name: "accepts an exact-limit surrogate pair split between deltas",
+      bytes: TOOL_ARGUMENT_BYTE_LIMIT,
+      stopReason: "toolUse",
+    },
+    {
+      name: "rejects an oversized surrogate pair split between deltas",
+      bytes: TOOL_ARGUMENT_BYTE_LIMIT + 1,
+      stopReason: "error",
+    },
+  ] as const)("$name", async ({ bytes, stopReason }) => {
+    const [first, second] = splitSurrogateArguments(bytes);
+    const { eventTypes, result } = await collectFixture([
+      chunk({
+        tool_calls: [
+          toolCallDelta({
+            index: 0,
+            id: "call_surrogate",
+            name: "lookup",
+            arguments: first,
+          }),
+        ],
+      }),
+      chunk({ tool_calls: [toolCallDelta({ index: 0, arguments: second })] }),
+      chunk({}, "tool_calls"),
+    ]);
+
+    expect(result.stopReason).toBe(stopReason);
+    if (stopReason === "error") {
+      expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
+      expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
+      expect(eventTypes).not.toContain("toolcall_end");
+      return;
+    }
+    expect(result.content[0]).toMatchObject({ id: "call_surrogate", type: "toolCall" });
+    expect(
+      result.content[0]?.type === "toolCall"
+        ? Buffer.byteLength(JSON.stringify(result.content[0].arguments), "utf8")
+        : undefined,
+    ).toBe(bytes);
+  });
+
+  it("measures multibyte modern arguments by UTF-8 bytes", async () => {
+    const { eventTypes, result } = await collectFixture(
+      confirmedModernCallChunks(argumentsWithByteLength(TOOL_ARGUMENT_BYTE_LIMIT + 1, "é"), {
+        id: "call_multibyte",
+      }),
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
+    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
+    expect(eventTypes).not.toContain("toolcall_end");
   });
 
   it("coalesces tiny provisional legacy fragments into one bounded executable delta", async () => {

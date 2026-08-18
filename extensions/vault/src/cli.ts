@@ -8,6 +8,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { parseVaultSecretId } from "../vault-secret-id.js";
 
 const VAULT_PROVIDER_ALIAS = "vault";
+type PluginSecretRefSetupCli = ReturnType<typeof createPluginSecretRefSetupCli>;
 
 function normalizeVaultSecretId(label: string, value: string): string {
   try {
@@ -18,7 +19,7 @@ function normalizeVaultSecretId(label: string, value: string): string {
   }
 }
 
-const vaultSecretRefSetupCli = createPluginSecretRefSetupCli({
+const vaultSecretRefSetupCli: PluginSecretRefSetupCli = createPluginSecretRefSetupCli({
   productName: "Vault",
   secretIdLabel: "Vault secret id",
   secretIdPlaceholder: "vault-secret-id",

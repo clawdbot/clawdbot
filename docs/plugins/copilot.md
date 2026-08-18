@@ -14,7 +14,7 @@ agent loop: native tool execution, native compaction (`infiniteSessions`), and
 CLI-managed thread state under `copilotHome`. OpenClaw still owns chat
 channels, session files, model selection, dynamic tools (bridged), approvals,
 media delivery, the visible transcript mirror, `/btw` side questions (see
-[Side questions (`/btw`)](#side-questions-btw)), and `openclaw doctor`.
+[Side questions (`/btw`)](/plugins/copilot#side-questions-%2Fbtw)), and `openclaw doctor`.
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes).
@@ -260,13 +260,13 @@ keeps `/btw` behavior identical to other non-Codex runtimes.
 
 ## Doctor
 
-`extensions/copilot/doctor-contract-api.ts` is auto-loaded by
-`src/plugins/doctor-contract-registry.ts`. It contributes:
+The Copilot plugin contributes doctor repair metadata through its manifest and
+doctor contract:
 
 - An empty `legacyConfigRules` (no retired fields yet).
 - A no-op `normalizeCompatibilityConfig` (kept so future field retirements
   have a stable in-tree home).
-- One `sessionRouteStateOwners` entry: provider `github-copilot`, runtime
+- Its manifest declares one `sessionRouteStateOwners` entry: provider `github-copilot`, runtime
   `copilot`, CLI session key `copilot`, auth profile prefix `github-copilot:`.
 
 ## Limitations

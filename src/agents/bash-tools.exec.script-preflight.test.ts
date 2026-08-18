@@ -7,13 +7,27 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
+import { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
-vi.mock("./bash-tools.exec-host-gateway.js", () => ({
-  processGatewayAllowlist: async () => ({ allowWithoutEnforcedCommand: true }),
+const processGatewayAllowlistMock = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<{
+      allowWithoutEnforcedCommand: boolean;
+      revalidateBeforeExecution?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+    }> => ({ allowWithoutEnforcedCommand: true }),
+  ),
+);
+
+vi.mock("./bash-tools.exec-host-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bash-tools.exec-host-gateway.js")>()),
+  processGatewayAllowlist: processGatewayAllowlistMock,
 }));
 
 vi.mock("./bash-tools.exec-host-node.js", () => ({
@@ -22,7 +36,7 @@ vi.mock("./bash-tools.exec-host-node.js", () => ({
   },
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (value: unknown) => value,
 }));
 
@@ -37,6 +51,11 @@ const runExecPreflight = (params: { command: string; workdir: string }) =>
 
 afterEach(() => {
   __setFsSafeTestHooksForTest();
+});
+
+beforeEach(() => {
+  processGatewayAllowlistMock.mockReset();
+  processGatewayAllowlistMock.mockResolvedValue({ allowWithoutEnforcedCommand: true });
 });
 
 async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
@@ -120,6 +139,64 @@ describe("exec interactive OpenClaw channel login guard", () => {
 });
 
 describeNonWin("exec script preflight", () => {
+  it.each([
+    { name: "denies changed bytes", mutate: true },
+    { name: "executes unchanged bytes", mutate: false },
+  ])("revalidates gateway approval script operands before spawn: $name", async ({ mutate }) => {
+    await withTempDir("openclaw-exec-approval-binding-", async (tmp) => {
+      const script = path.join(tmp, "script.sh");
+      await fs.writeFile(script, "#!/bin/sh\necho approved\n");
+      const prepared = await prepareSystemRunMutableFileApproval({
+        command: "sh script.sh",
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error(prepared.message);
+      }
+      processGatewayAllowlistMock.mockResolvedValueOnce({
+        allowWithoutEnforcedCommand: true,
+        revalidateBeforeExecution: async () => {
+          const current = await prepared.revalidate();
+          if (current.ok) {
+            return undefined;
+          }
+          return {
+            content: [{ type: "text", text: current.message }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              durationMs: 0,
+              aggregated: current.message,
+              timedOut: false,
+              cwd: tmp,
+            },
+          };
+        },
+      });
+      if (mutate) {
+        await fs.writeFile(script, "#!/bin/sh\necho mutated\n");
+      }
+
+      const result = await runExecPreflight({ command: "sh script.sh", workdir: tmp });
+
+      if (mutate) {
+        expect(result.details.status).toBe("failed");
+        expect(result.content[0]).toEqual(
+          expect.objectContaining({
+            text: expect.stringContaining("approval script operand changed before execution"),
+          }),
+        );
+      } else {
+        expect(result.details.status).toBe("completed");
+        if (result.details.status !== "completed") {
+          throw new Error("expected completed exec result");
+        }
+        expect(result.details.aggregated).toBe("approved");
+      }
+    });
+  });
+
   it("blocks shell env var injection tokens in python scripts before execution", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
@@ -573,12 +650,11 @@ describeWin("exec script preflight on windows path syntax", () => {
 
 describe("exec interpreter heuristics ReDoS guard", () => {
   it("does not hang on long commands with VAR=value assignments and whitespace-heavy text", async () => {
-    // Keep the workload side-effect free while exercising the full exec path.
     const htmlBlock = '<section style="padding: 30px 20px; font-family: Arial;">'.repeat(50);
     const command = `ACCESS_TOKEN=$(__openclaw_missing_redos_guard__)\nprintf '%s' '${htmlBlock}' >/dev/null`;
 
     const start = Date.now();
-    await runExecPreflight({ command, workdir: process.cwd() });
+    await validateScriptFileForShellBleed({ command, workdir: process.cwd() });
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(5000);
   });

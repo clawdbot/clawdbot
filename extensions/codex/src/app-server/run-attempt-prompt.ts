@@ -33,6 +33,8 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
 
+const CODEX_META_KEY = "__openclaw";
+
 function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
   return toolsAllow !== undefined && !toolsAllow.some((name) => name.trim() === "*");
 }
@@ -44,11 +46,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     historyState,
     hookContext,
     workspaceBootstrapContext,
+    buildActiveContextEngineRuntimeContext,
     baseDeveloperInstructions,
     openClawPromptContext,
     skillsCollaborationInstructions,
     promptState,
     codexContextProjectionMaxChars,
+    codexContinuityProjectionMaxChars,
   } = context;
   const {
     connection,
@@ -77,11 +81,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       assembledMessages: historyState.messages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: codexContinuityProjectionMaxChars,
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
+    promptState.noEngineContinuityProjectionApplied = true;
   };
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: typeof mutable.startupBinding,
@@ -108,6 +113,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
       fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
       degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
+      runtimeContext: buildActiveContextEngineRuntimeContext(),
+      transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
       prompt: params.prompt,
     });
     if (!assembled) {
@@ -324,8 +331,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       if (message.role !== "user" && message.role !== "assistant") {
         return false;
       }
-      const record = message as unknown as Record<string, unknown>;
-      const meta = record["__openclaw"];
+      const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
       const mirrorIdentity =
         meta && typeof meta === "object" && !Array.isArray(meta)
           ? (meta as Record<string, unknown>).mirrorIdentity
@@ -342,8 +348,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             : Number.NaN;
       return (
         !(
-          typeof record.idempotencyKey === "string" &&
-          record.idempotencyKey.startsWith("codex-app-server:")
+          "idempotencyKey" in message &&
+          typeof message.idempotencyKey === "string" &&
+          message.idempotencyKey.startsWith("codex-app-server:")
         ) &&
         mirrorOrigin !== "codex-app-server" &&
         !(typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) &&
@@ -363,11 +370,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       assembledMessages: newerVisibleMessages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: codexContinuityProjectionMaxChars,
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
+    promptState.noEngineContinuityProjectionApplied = true;
     return true;
   };
   const precomputeNoContextEngineStaleBindingProjection = () => {
@@ -420,7 +428,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
     const previousThreadId = binding.threadId;
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(binding);
-    mutable.startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+    const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       binding,
       bindingStore,
       identity: bindingIdentity,
@@ -434,6 +442,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         developerInstructions: buildRenderedCodexDeveloperInstructions(),
       }),
     });
+    mutable.startupBinding = startupBindingResolution.binding;
+    mutable.startupContextTokens = startupBindingResolution.startupContextTokens;
     if (mutable.startupBinding?.threadId) {
       return;
     }

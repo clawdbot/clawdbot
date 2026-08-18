@@ -19,6 +19,8 @@
     "build": "tsdown src/index.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
-    "@openclaw/gateway-client": "workspace:*"
+    "@openclaw/gateway-client": "workspace:*",
+    "@openclaw/gateway-protocol": "workspace:*",
+    "@openclaw/normalization-core": "workspace:*"
   }
 }

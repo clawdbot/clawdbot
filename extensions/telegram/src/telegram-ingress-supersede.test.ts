@@ -44,6 +44,8 @@ function messageUpdate(params: {
   messageThreadId?: number;
   isTopicMessage?: boolean;
   isForum?: boolean;
+  isDirectMessages?: boolean;
+  directMessagesTopicId?: number;
   entities?: Array<{ type: string; offset: number; length: number }>;
 }) {
   return {
@@ -55,11 +57,17 @@ function messageUpdate(params: {
         id: params.chatId ?? Number(params.senderId),
         type: params.chatType ?? "private",
         ...(params.isForum !== undefined ? { is_forum: params.isForum } : {}),
+        ...(params.isDirectMessages !== undefined
+          ? { is_direct_messages: params.isDirectMessages }
+          : {}),
       },
       ...(params.messageThreadId !== undefined
         ? { message_thread_id: params.messageThreadId }
         : {}),
       ...(params.isTopicMessage !== undefined ? { is_topic_message: params.isTopicMessage } : {}),
+      ...(params.directMessagesTopicId !== undefined
+        ? { direct_messages_topic: { topic_id: params.directMessagesTopicId } }
+        : {}),
       ...(params.entities ? { entities: params.entities } : {}),
     },
   };
@@ -233,6 +241,35 @@ describe("telegram ingress supersede policy", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      name: "does not supersede an identityless foreign targeted command",
+      text: "/queue@OtherBot",
+      entityText: "/queue@OtherBot",
+      expected: false,
+    },
+    {
+      name: "keeps identityless targeted aborts pessimistic",
+      text: "/stop@OtherBot!",
+      entityText: "/stop@OtherBot",
+      expected: true,
+    },
+  ])("$name", async ({ text, entityText, expected }) => {
+    const update = messageUpdate({
+      updateId: 2,
+      text,
+      senderId: OWNER_ID,
+      entities: [{ type: "bot_command", offset: 0, length: entityText.length }],
+    });
+
+    expect(
+      await shouldSupersede(
+        record("2", update),
+        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
+      ),
+    ).toBe(expected);
+  });
+
   it("does not supersede when a bot_command entity appears inside ordinary text", async () => {
     const ourBotAuth = {
       ...auth,
@@ -363,6 +400,56 @@ describe("telegram ingress supersede policy", () => {
     expect(
       await shouldSupersedeTopic(record("3", ownerInRestrictedTopic), claim("1", pendingInTopic)),
     ).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "allows the topic sender when the base chat denies them",
+      baseAllowFrom: [STRANGER_ID],
+      topicAllowFrom: [OWNER_ID],
+      expected: true,
+    },
+    {
+      name: "denies the topic sender when the base chat allows them",
+      baseAllowFrom: [OWNER_ID],
+      topicAllowFrom: [STRANGER_ID],
+      expected: false,
+    },
+  ])("uses channel-DM topic authorization: $name", async (testCase) => {
+    const channelDmAuth = {
+      cfg: {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: testCase.baseAllowFrom,
+            groups: {
+              "-1001": {
+                allowFrom: testCase.baseAllowFrom,
+                topics: { "77": { allowFrom: testCase.topicAllowFrom } },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+    };
+    const update = messageUpdate({
+      updateId: 2,
+      text: "stop",
+      senderId: OWNER_ID,
+      chatId: -1001,
+      chatType: "supergroup",
+      isDirectMessages: true,
+      directMessagesTopicId: 77,
+      messageThreadId: 999,
+    });
+
+    expect(
+      await createShouldSupersedeTelegramSpooledPending(channelDmAuth)(
+        record("2", update),
+        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
+      ),
+    ).toBe(testCase.expected);
   });
 
   it("reuses ingress command gate for sender authorization", async () => {

@@ -1,17 +1,17 @@
 // Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
-  hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -48,34 +48,35 @@ export function collectGatewayConfigFindings(
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
     ? cfg.gateway.trustedProxies
     : [];
-  const hasToken = typeof auth.token === "string" && auth.token.trim().length > 0;
-  const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
-  const envTokenConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN);
-  const envPasswordConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD);
-  const tokenConfiguredFromConfig = hasConfiguredSecretInput(
-    sourceConfig.gateway?.auth?.token,
-    sourceConfig.secrets?.defaults,
-  );
-  const passwordConfiguredFromConfig = hasConfiguredSecretInput(
-    sourceConfig.gateway?.auth?.password,
-    sourceConfig.secrets?.defaults,
-  );
-  const remoteTokenConfigured = hasConfiguredSecretInput(
-    sourceConfig.gateway?.remote?.token,
-    sourceConfig.secrets?.defaults,
-  );
+  const hasToken =
+    typeof auth.token === "string" &&
+    auth.token.trim().length > 0 &&
+    !hasUnresolvedConfigPath(sourceConfig, "gateway.auth.token");
+  const hasPassword =
+    typeof auth.password === "string" &&
+    auth.password.trim().length > 0 &&
+    !hasUnresolvedConfigPath(sourceConfig, "gateway.auth.password");
+  const plan = createGatewayCredentialPlan({ config: sourceConfig, env });
   const explicitAuthMode = options.gatewayAuthOverride?.mode ?? sourceConfig.gateway?.auth?.mode;
-  const tokenCanWin =
-    hasToken || envTokenConfigured || tokenConfiguredFromConfig || remoteTokenConfigured;
+  const tokenConfigured = Boolean(
+    hasToken ||
+    plan.envToken ||
+    plan.localToken.value ||
+    plan.localToken.hasSecretRef ||
+    plan.remoteToken.value ||
+    plan.remoteToken.hasSecretRef,
+  );
   const passwordCanWin =
     explicitAuthMode === "password" ||
     (explicitAuthMode !== "token" &&
       explicitAuthMode !== "none" &&
       explicitAuthMode !== "trusted-proxy" &&
-      !tokenCanWin);
-  const tokenConfigured = tokenCanWin;
-  const passwordConfigured =
-    hasPassword || (passwordCanWin && (envPasswordConfigured || passwordConfiguredFromConfig));
+      !tokenConfigured);
+  const passwordConfigured = Boolean(
+    hasPassword ||
+    (passwordCanWin &&
+      (plan.envPassword || plan.localPassword.value || plan.localPassword.hasSecretRef)),
+  );
   const hasSharedSecret =
     explicitAuthMode === "token"
       ? tokenConfigured

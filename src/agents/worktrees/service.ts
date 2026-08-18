@@ -3,7 +3,14 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
+import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
+import {
+  executeGitCommand as runGit,
+  requireGitCommand as requireGit,
+  requireGitCommandBuffer as requireGitBuffer,
+} from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -14,11 +21,8 @@ import {
   commandError,
   insideGitCheckout,
   listGitWorktrees,
-  pathExists,
+  worktreePathExists,
   removeEmptyParents,
-  requireGit,
-  requireGitBuffer,
-  runGit,
   type GitResult,
 } from "./git.js";
 import { worktreeNameAllocationFamily } from "./name.js";
@@ -41,6 +45,7 @@ import {
   insertRegistryWorktree,
   listRegistryWorktrees,
   updateRegistryWorktree,
+  WorktreeRemovalContentionError,
 } from "./registry.js";
 import {
   abortWorktreeRemoval,
@@ -55,6 +60,8 @@ import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
+  ManagedWorktreeRunEndCleanup,
+  ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
 } from "./types.js";
 
@@ -121,12 +128,19 @@ async function nameIsUnavailable(
 ): Promise<boolean> {
   const worktreePath = path.join(root, name);
   const registered = findRegistryWorktreeByPath(env, worktreePath);
-  if (owner.ownerId && registered && worktreeOwnerMatches(registered, owner)) {
-    // Let createForRepository reuse or restore the caller's existing record.
-    // Treating it as a collision can create a second checkout for one owner.
+  if (
+    owner.ownerId &&
+    registered &&
+    registered.removedAt === undefined &&
+    worktreeOwnerMatches(registered, owner)
+  ) {
+    // Let createForRepository reuse the caller's live checkout; a collision here
+    // could mint a second checkout for one owner. Removed records stay collisions:
+    // restore is explicit-name/id only, so a generated name (title slug or random
+    // crustacean) must never silently resurrect a retired checkout.
     return false;
   }
-  if (registered || (await pathExists(worktreePath))) {
+  if (registered || (await worktreePathExists(worktreePath))) {
     return true;
   }
   const branch = `openclaw/${name}`;
@@ -225,28 +239,9 @@ async function shouldPreserveOrphanCandidate(
   if (managedPaths.has(targetKey)) {
     return true;
   }
-  const hasOwnGitMarker = await pathExists(path.join(target, ".git"));
-  if (!hasOwnGitMarker) {
-    return false;
-  }
-  // Query from the checkout itself so registered unborn worktrees do not pass
-  // through resolveRepository's intentional HEAD commit requirement.
-  const listed = await listGitWorktrees(target);
-  for (const entry of listed) {
-    let listedKey: string;
-    try {
-      listedKey = await canonicalPathKey(entry.path);
-    } catch (error) {
-      if (isMissingFileError(error)) {
-        continue;
-      }
-      throw error;
-    }
-    if (listedKey === targetKey) {
-      return true;
-    }
-  }
-  return false;
+  // Any top-level .git entry marks uncertain user work; broken indirection only
+  // strengthens preservation and must never abort global orphan cleanup.
+  return await worktreePathExists(path.join(target, ".git"));
 }
 
 async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branch: string) {
@@ -273,7 +268,7 @@ async function resetFailedWorktreeAdd(
     if (removed.code !== 0) {
       throw commandError("git worktree remove", removed);
     }
-  } else if (await pathExists(worktreePath)) {
+  } else if (await worktreePathExists(worktreePath)) {
     // A failed add can leave an unregistered directory; it is safe debris once git omits it.
     await fs.rm(worktreePath, { recursive: true, force: true });
   }
@@ -303,7 +298,7 @@ async function canResetFailedWorktreeAdd(
   const listed = (await listGitWorktrees(repoRoot)).some(
     (entry) => path.resolve(entry.path) === path.resolve(worktreePath),
   );
-  if (listed || (await pathExists(worktreePath))) {
+  if (listed || (await worktreePathExists(worktreePath))) {
     return false;
   }
   const branchExists = await runGit(repoRoot, [
@@ -336,21 +331,17 @@ async function runSetupScript(repoRoot: string, worktreePath: string): Promise<v
   }
 }
 
-function isMissingFileError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
 /**
  * Sums file sizes without following symlinks, so a link cannot inflate or escape
- * the worktree. Only ENOENT is tolerated (cleanup races with removals); other
- * failures propagate so an unreadable tree is never measured as zero bytes.
+ * the worktree. Missing paths are tolerated because cleanup races with removals;
+ * other failures propagate so an unreadable tree is never measured as zero bytes.
  */
 async function directorySizeBytes(root: string): Promise<number> {
   let entries: Dirent[];
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return 0;
     }
     throw error;
@@ -364,7 +355,7 @@ async function directorySizeBytes(root: string): Promise<number> {
       try {
         total += (await fs.lstat(child)).size;
       } catch (error) {
-        if (!isMissingFileError(error)) {
+        if (!isMissingPathError(error)) {
           throw error;
         }
       }
@@ -378,7 +369,7 @@ async function containsGitMarker(root: string, checkoutRoot = false): Promise<bo
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return false;
     }
     throw error;
@@ -431,7 +422,7 @@ async function rawPathExists(target: string | Buffer): Promise<boolean> {
     await fs.lstat(target);
     return true;
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return false;
     }
     throw error;
@@ -570,6 +561,14 @@ export class ManagedWorktreeService {
     this.now = options.now ?? Date.now;
   }
 
+  private async worktreesRoot(): Promise<string> {
+    const root = path.join(resolveStateDir(this.env), "worktrees");
+    await fs.mkdir(root, { recursive: true });
+    // Git canonicalizes paths in `git worktree list`; minting below the real root keeps
+    // lock-state and adoption comparisons aligned when the state path traverses symlinks.
+    return await fs.realpath(root);
+  }
+
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
     const repository = await resolveRepository(params.repoRoot);
     if (params.ownerId) {
@@ -588,7 +587,7 @@ export class ManagedWorktreeService {
         },
         async () => {
           const existing = findLiveRegistryWorktreeByOwner(this.env, ownerKind, ownerId);
-          if (existing && (await pathExists(existing.path))) {
+          if (existing && (await worktreePathExists(existing.path))) {
             if (existing.repoRoot !== repository.repoRoot) {
               throw new Error(
                 `worktree owner ${ownerKind} ${ownerId} is already bound to another repository`,
@@ -633,7 +632,7 @@ export class ManagedWorktreeService {
     repository: Awaited<ReturnType<typeof resolveRepository>>,
     inferredName: string,
   ): Promise<ManagedWorktreeRecord> {
-    const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
+    const root = path.join(await this.worktreesRoot(), repository.fingerprint);
     const name = validateName(
       params.name ??
         (await generateName(
@@ -655,7 +654,7 @@ export class ManagedWorktreeService {
       );
     }
     if (existing?.name === name && existing.removedAt === undefined) {
-      if (await pathExists(existing.path)) {
+      if (await worktreePathExists(existing.path)) {
         return existing;
       }
       updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
@@ -682,6 +681,7 @@ export class ManagedWorktreeService {
       throw commandError("git show-ref --verify", branchExists);
     }
     const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
+    params.commitGuard?.();
     await fs.mkdir(root, { recursive: true });
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
@@ -715,6 +715,7 @@ export class ManagedWorktreeService {
       if (runRepositorySetup) {
         await runSetupScript(repository.sourceRoot, worktreePath);
       }
+      params.commitGuard?.();
     } catch (error) {
       try {
         await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
@@ -744,7 +745,7 @@ export class ManagedWorktreeService {
   async list(): Promise<ManagedWorktreeRecord[]> {
     const records = listRegistryWorktrees(this.env);
     for (const record of records) {
-      if (record.removedAt === undefined && !(await pathExists(record.path))) {
+      if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
         const removedAt = this.now();
         updateRegistryWorktree(this.env, record.id, { removedAt });
         record.removedAt = removedAt;
@@ -753,11 +754,21 @@ export class ManagedWorktreeService {
     return records.filter((record) => record.removedAt === undefined || record.snapshotRef);
   }
 
+  /** Returns persisted worktree facts without probing paths or mutating lifecycle state. */
+  listRegistryRecords(): ManagedWorktreeRecord[] {
+    return listRegistryWorktrees(this.env);
+  }
+
   findLiveByOwner(
     ownerKind: ManagedWorktreeOwnerKind,
     ownerId: string,
   ): ManagedWorktreeRecord | undefined {
     return findLiveRegistryWorktreeByOwner(this.env, ownerKind, ownerId);
+  }
+
+  findLiveById(id: string): ManagedWorktreeRecord | undefined {
+    const record = getRegistryWorktree(this.env, id);
+    return record?.removedAt === undefined ? record : undefined;
   }
 
   /** Resolves the canonical registry root and the caller's own checkout root. */
@@ -769,6 +780,22 @@ export class ManagedWorktreeService {
     return {
       canonicalRoot: resolved.repoRoot,
       sourceRoot: resolved.sourceRoot,
+    };
+  }
+
+  /** Resolves the repository facts shared by managed worktrees and project discovery. */
+  async resolveRepositoryIdentity(repoRoot: string): Promise<{
+    checkoutRoot: string;
+    repoRoot: string;
+    originUrl: string;
+    fingerprint: string;
+  }> {
+    const resolved = await resolveRepository(repoRoot);
+    return {
+      checkoutRoot: resolved.sourceRoot,
+      repoRoot: resolved.repoRoot,
+      originUrl: resolved.originUrl,
+      fingerprint: resolved.fingerprint,
     };
   }
 
@@ -880,7 +907,7 @@ export class ManagedWorktreeService {
 
   async release(id: string): Promise<void> {
     const record = getRegistryWorktree(this.env, id);
-    if (!record || record.removedAt !== undefined || !(await pathExists(record.path))) {
+    if (!record || record.removedAt !== undefined || !(await worktreePathExists(record.path))) {
       return;
     }
     const state = await lockState(record);
@@ -900,6 +927,7 @@ export class ManagedWorktreeService {
     reason: string;
     force?: boolean;
     claimToken?: string;
+    runEndCleanup?: ManagedWorktreeRunEndCleanup;
   }): Promise<RemoveManagedWorktreeResult> {
     const record = this.requireLiveRecord(params.id);
     const force = params.force ?? false;
@@ -962,12 +990,15 @@ export class ManagedWorktreeService {
         throw commandError("git branch -D", branchDelete);
       }
       await requireGit(record.repoRoot, ["worktree", "prune"]);
-      await removeEmptyParents(
-        path.dirname(record.path),
-        path.join(resolveStateDir(this.env), "worktrees"),
-      );
+      await removeEmptyParents(path.dirname(record.path), await this.worktreesRoot());
       const removedAt = this.now();
-      updateRegistryWorktree(this.env, record.id, { removedAt, snapshotRef });
+      // Persist the run-end outcome atomically with finalization: a post-finalize
+      // write could race a restore plus newer cleanup and overwrite the newer fact.
+      updateRegistryWorktree(this.env, record.id, {
+        removedAt,
+        snapshotRef,
+        ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
+      });
       finalizeWorktreeRemoval(this.env, record.id);
       return {
         removed: true,
@@ -985,7 +1016,7 @@ export class ManagedWorktreeService {
     if (!record?.snapshotRef || record.removedAt === undefined) {
       throw new Error(`worktree ${params.id} is not restorable`);
     }
-    if (!(await pathExists(record.repoRoot))) {
+    if (!(await worktreePathExists(record.repoRoot))) {
       throw new Error(`source repository no longer exists: ${record.repoRoot}`);
     }
     const parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
@@ -1024,29 +1055,75 @@ export class ManagedWorktreeService {
       }
       throw error;
     }
-    const lastActiveAt = this.now();
+    // Advance past the stored stamp even within the same millisecond: stale
+    // cleanup writes fence on the activity stamp they observed, so a restore
+    // must never revive the row with an identical value.
+    const lastActiveAt = Math.max(this.now(), record.lastActiveAt + 1);
     updateRegistryWorktree(this.env, params.id, {
       removedAt: undefined,
       lastActiveAt,
       provisionedPaths: restoredProvisionedPaths,
+      // The recorded cleanup outcome described the removed lifecycle; a restored
+      // checkout starts a new one, so a stale removed-lossless must not show on
+      // a live row until the next run-end cleanup records fresh truth.
+      runEndCleanup: undefined,
     });
     // Clear any lease rows or removal marker stranded by a crash between git removal
     // and finalize so the restored worktree admits runs again.
     finalizeWorktreeRemoval(this.env, params.id);
     const restored = { ...record, lastActiveAt };
     delete restored.removedAt;
+    delete restored.runEndCleanup;
     return restored;
   }
 
   async removeIfLossless(id: string): Promise<boolean> {
     const record = this.requireLiveRecord(id);
     const claimToken = randomUUID();
+    const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
+      // Retained/failed writes happen after this remover released or aborted its
+      // claim, so racing removers may have finalized the row, or removed AND
+      // restored it into a new lifecycle. The live condition blocks the first;
+      // conditioning on the activity stamp this remover observed blocks the
+      // second (restore bumps lastActiveAt). The winning removal persists its
+      // outcome atomically inside remove()'s finalization update, never here.
+      updateRegistryWorktree(
+        this.env,
+        id,
+        {
+          runEndCleanup: {
+            outcome,
+            at: this.now(),
+            ...(outcome === "failed"
+              ? { reason: truncateUtf16Safe(formatErrorMessage(error), 500) }
+              : {}),
+          },
+        },
+        { onlyIfLive: true, onlyIfActiveAt: record.lastActiveAt },
+      );
+    };
+    // Run-end cleanup must leave a durable outcome even when safety retains the checkout.
+    // QA and operators observe this product-boundary fact through worktrees.list.
     try {
       claimWorktreeRemoval(this.env, { worktreeId: id, token: claimToken, force: false });
-    } catch {
-      // A live run lease or a competing remover holds the worktree; a lossless
-      // auto-cleanup must not race it.
-      return false;
+    } catch (error) {
+      if (error instanceof WorktreeRemovalContentionError) {
+        if (error.kind === "finalized") {
+          // The winning remover owns the terminal cleanup fact; a late contender
+          // must return without replacing it with a false retained/failed outcome.
+          return false;
+        }
+        // A live run lease or a competing remover holds the worktree; a lossless
+        // auto-cleanup must not race it.
+        recordOutcome("retained-busy");
+        return false;
+      }
+      try {
+        recordOutcome("failed", error);
+      } catch {
+        // Preserve the claim failure when the same infrastructure blocks recording it.
+      }
+      throw error;
     }
     try {
       const status = await requireGit(record.path, ["status", "--porcelain"]);
@@ -1061,16 +1138,36 @@ export class ManagedWorktreeService {
         record.path,
         getRegistryWorktreeProvisionedPaths(this.env, record.id),
       );
-      if (status || unpushed || ignoredDrift) {
+      const retainedOutcome = status
+        ? "retained-dirty"
+        : unpushed
+          ? "retained-unpushed"
+          : ignoredDrift
+            ? "retained-provisioned-drift"
+            : undefined;
+      if (retainedOutcome) {
         abortWorktreeRemoval(this.env, id, claimToken);
+        recordOutcome(retainedOutcome);
         return false;
       }
     } catch (error) {
       abortWorktreeRemoval(this.env, id, claimToken);
+      recordOutcome("failed", error);
       throw error;
     }
-    await this.release(id);
-    await this.remove({ id, reason: "run-end", claimToken });
+    try {
+      await this.release(id);
+      await this.remove({
+        id,
+        reason: "run-end",
+        claimToken,
+        runEndCleanup: { outcome: "removed-lossless", at: this.now() },
+      });
+    } catch (error) {
+      abortWorktreeRemoval(this.env, id, claimToken);
+      recordOutcome("failed", error);
+      throw error;
+    }
     return true;
   }
 
@@ -1098,7 +1195,7 @@ export class ManagedWorktreeService {
     const records = listRegistryWorktrees(this.env);
     for (const record of records) {
       try {
-        if (record.removedAt === undefined && !(await pathExists(record.path))) {
+        if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
           updateRegistryWorktree(this.env, record.id, { removedAt: now });
           record.removedAt = now;
         }
@@ -1127,7 +1224,7 @@ export class ManagedWorktreeService {
         continue;
       }
       try {
-        if (record.snapshotRef && (await pathExists(record.repoRoot))) {
+        if (record.snapshotRef && (await worktreePathExists(record.repoRoot))) {
           await requireGit(record.repoRoot, ["update-ref", "-d", record.snapshotRef]);
         }
         deleteRegistryWorktree(this.env, record.id);
@@ -1278,12 +1375,12 @@ export class ManagedWorktreeService {
       try {
         managedPaths.add(await canonicalPathKey(record.path));
       } catch (error) {
-        if (!isMissingFileError(error)) {
+        if (!isMissingPathError(error)) {
           throw error;
         }
       }
     }
-    const worktreesRoot = path.join(resolveStateDir(this.env), "worktrees");
+    const worktreesRoot = await this.worktreesRoot();
     const fingerprints = await fs.readdir(worktreesRoot, { withFileTypes: true }).catch(() => []);
     let deleted = 0;
     for (const fingerprint of fingerprints) {

@@ -10,6 +10,8 @@ import {
   type WorkerConnectParams,
   type WorkerLiveEventErrorDetails,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
+  type WorkerSessionToolResult,
   type WorkerTranscriptCommitErrorReason,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -23,6 +25,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -36,6 +40,7 @@ const HANDSHAKE = {
     "worker-heartbeat-v1",
     WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
     WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+    WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
     WORKER_INFERENCE_PROTOCOL_FEATURE,
   ],
 };
@@ -65,6 +70,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: HANDSHAKE.bundleHash,
   sessionId: null,
   runId: null,
+  turnClaim: null,
   ownerEpoch: 1,
   rpcSetVersion: 1,
   protocolFeatures: [...HANDSHAKE.protocolFeatures],
@@ -93,6 +99,13 @@ const ATTACHED_IDENTITY: WorkerConnectionIdentity = {
   ...IDENTITY,
   sessionId: "session-1",
   runId: "run-1",
+  turnClaim: {
+    sessionId: "session-1",
+    claimId: "claim-1",
+    runId: "run-1",
+    placementGeneration: 1,
+    owner: { kind: "worker", environmentId: "worker-1", ownerEpoch: 1 },
+  },
 };
 const INFERENCE_IDS = {
   runEpoch: 1,
@@ -132,13 +145,29 @@ function createLogger() {
   return { warn: vi.fn() };
 }
 
+function createRateLimiter(overrides: Partial<AuthRateLimiter> = {}): AuthRateLimiter {
+  return {
+    check: vi.fn(() => ({ allowed: true, remaining: 10, retryAfterMs: 0 })),
+    recordFailure: vi.fn(),
+    recordFailureAndDelay: vi.fn(async () => {}),
+    reset: vi.fn(),
+    size: vi.fn(() => 0),
+    prune: vi.fn(),
+    dispose: vi.fn(),
+    ...overrides,
+  };
+}
+
 function attachHarness(
   options: {
     admissionFailure?: WorkerAdmissionFailureReason;
     commitFailure?: WorkerTranscriptCommitErrorReason;
     identity?: WorkerConnectionIdentity;
     liveFailure?: WorkerLiveEventErrorDetails;
+    omitPublicAdmission?: boolean;
+    rateLimiter?: AuthRateLimiter;
     onInferenceLaunch?: (sink: InferenceSink) => void;
+    onSessionTool?: (signal: AbortSignal | undefined) => Promise<WorkerSessionToolResult>;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
 ) {
@@ -181,6 +210,12 @@ function attachHarness(
       ok: true as const,
       result: { status: "cancelled" as const },
     })),
+    executeSessionTool: vi.fn(async (_identity, _toolName, _request, signal) => ({
+      ok: true as const,
+      result: options.onSessionTool
+        ? await options.onSessionTool(signal)
+        : { resultJson: JSON.stringify({ content: [] }) },
+    })),
     validateWorkerConnection: vi.fn(() => options.validationFailure ?? null),
   };
   let client: GatewayWsClient | null = null;
@@ -190,11 +225,15 @@ function attachHarness(
   });
   const logGateway = createLogger();
   const logWsControl = createLogger();
+  const setCloseCause = vi.fn();
   const setLastFrameMeta = vi.fn();
   const cleanup = attachWorkerWsMessageHandler({
     socket: socket as unknown as WebSocket,
     connId: "worker-connection",
     service,
+    publicAdmission: options.omitPublicAdmission
+      ? undefined
+      : { clientIp: "203.0.113.10", rateLimiter: options.rateLimiter },
     send: (frame) => responses.push(frame),
     close,
     isClosed: () => false,
@@ -203,7 +242,7 @@ function attachHarness(
     setClient,
     setHandshakeState: vi.fn(),
     advanceHandshakePhase: vi.fn(),
-    setCloseCause: vi.fn(),
+    setCloseCause,
     setLastFrameMeta,
     logGateway,
     logWsControl,
@@ -212,12 +251,14 @@ function attachHarness(
   const send = (frame: unknown) => socket.emit("message", Buffer.from(JSON.stringify(frame)));
   return {
     client: () => client,
+    cleanup,
     close,
     logGateway,
     logWsControl,
     responses,
     service,
     setClient,
+    setCloseCause,
     setLastFrameMeta,
     sendRequest: (method: string, params: unknown, id = "request-1") =>
       send({ type: "req", id, method, params }),
@@ -256,12 +297,105 @@ describe("dedicated worker websocket protocol", () => {
     const harness = attachHarness({ admissionFailure: reason });
     harness.sendConnect();
 
-    await waitForWorkerProtocol(() => expect(harness.close).toHaveBeenCalledWith(1008, reason));
-    expect(harness.responses[0]).toMatchObject({ ok: false, error: { details: { reason } } });
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+    );
+    expect(harness.responses[0]).toMatchObject({
+      ok: false,
+      error: { details: { reason: "invalid-handshake" } },
+    });
     expect(harness.logWsControl.warn).toHaveBeenCalledWith(
       `worker admission rejected reason=${reason}`,
     );
     expect(harness.setClient).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when public ingress context is missing", async () => {
+    const harness = attachHarness({ omitPublicAdmission: true });
+    harness.sendConnect();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+    );
+    expect(harness.service.admitWorker).not.toHaveBeenCalled();
+    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+      "worker admission rejected reason=public-ingress-context-missing",
+    );
+  });
+
+  it.each(["invalid-credential", "environment-mismatch"] as const)(
+    "projects public %s failures to one opaque reason",
+    async (internalReason) => {
+      const recordFailure = vi.fn();
+      const rateLimiter = createRateLimiter({ recordFailure });
+      const harness = attachHarness({
+        admissionFailure: internalReason,
+        rateLimiter,
+      });
+      harness.sendConnect();
+
+      await waitForWorkerProtocol(() =>
+        expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+      );
+      expect(harness.responses[0]).toMatchObject({
+        ok: false,
+        error: { details: { reason: "invalid-handshake" } },
+      });
+      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+        `worker admission rejected reason=${internalReason}`,
+      );
+      expect(harness.setCloseCause).toHaveBeenCalledWith(internalReason);
+      expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+    },
+  );
+
+  it("rejects rate-limited public admission before credential verification", async () => {
+    const rateLimiter = createRateLimiter({
+      check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs: 12_000 })),
+    });
+    const harness = attachHarness({ rateLimiter });
+    harness.sendConnect();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+    );
+    expect(harness.responses[0]).toMatchObject({
+      ok: false,
+      error: {
+        details: { reason: "invalid-handshake" },
+      },
+    });
+    expect(harness.service.admitWorker).not.toHaveBeenCalled();
+    expect(harness.setCloseCause).toHaveBeenCalledWith("rate-limited");
+  });
+
+  it("resets public credential failures after successful admission", async () => {
+    const reset = vi.fn();
+    const rateLimiter = createRateLimiter({ reset });
+    const harness = attachHarness({ rateLimiter });
+    await admit(harness);
+
+    expect(reset).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+  });
+
+  it("keeps public ownership failures opaque and charges the admission budget", async () => {
+    const reset = vi.fn();
+    const recordFailure = vi.fn();
+    const rateLimiter = createRateLimiter({ reset, recordFailure });
+    const harness = attachHarness({
+      rateLimiter,
+      validationFailure: "credential-replaced",
+    });
+    harness.sendConnect();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+    );
+    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+      "worker admission rejected reason=credential-replaced",
+    );
+    expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+    expect(reset).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -334,6 +468,66 @@ describe("dedicated worker websocket protocol", () => {
     expect(harness.service.cancelInference).toHaveBeenCalledWith(ATTACHED_IDENTITY, INFERENCE_IDS);
   });
 
+  it("keeps heartbeats flowing while a session operation is pending", async () => {
+    const operation = createDeferredCore<WorkerSessionToolResult>();
+    const harness = attachHarness({
+      identity: ATTACHED_IDENTITY,
+      onSessionTool: () => operation.promise,
+    });
+    await admit(harness);
+    harness.sendRequest(
+      "worker.sessions.spawn",
+      { toolCallId: "call-spawn", task: "run the child" },
+      "spawn-1",
+    );
+    await waitForWorkerProtocol(() =>
+      expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
+    );
+
+    harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" }, "heartbeat-1");
+    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      id: "heartbeat-1",
+      ok: true,
+      payload: { status: "ok" },
+    });
+
+    operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(3));
+    expect(harness.responses[2]).toMatchObject({ id: "spawn-1", ok: true });
+  });
+
+  it("continues durable session work but suppresses its response after connection cleanup", async () => {
+    let operationStarted = false;
+    let operationSignal: AbortSignal | undefined;
+    const operation = createDeferredCore<WorkerSessionToolResult>();
+    const harness = attachHarness({
+      identity: ATTACHED_IDENTITY,
+      onSessionTool: (signal) => {
+        operationStarted = true;
+        operationSignal = signal;
+        return operation.promise;
+      },
+    });
+    await admit(harness);
+    harness.sendRequest(
+      "worker.sessions.send",
+      {
+        toolCallId: "call-send",
+        sessionKey: "agent:main:dashboard:child",
+        message: "status",
+      },
+      "send-1",
+    );
+    await waitForWorkerProtocol(() => expect(operationStarted).toBe(true));
+
+    harness.cleanup();
+    expect(operationSignal).toBeUndefined();
+    operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+    await Promise.resolve();
+    expect(harness.responses).toHaveLength(1);
+  });
+
   it("dispatches semantic transcript commits on the closed worker allowlist", async () => {
     const harness = attachHarness();
     await admit(harness);
@@ -390,6 +584,35 @@ describe("dedicated worker websocket protocol", () => {
       }),
     );
     expect(invalid.service.pushLiveEvent).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a TLS certificate fallback step without closing the worker", async () => {
+    const request = {
+      ...LIVE_EVENT,
+      event: {
+        kind: "lifecycle" as const,
+        payload: {
+          phase: "fallback_step" as const,
+          fallbackStepType: "fallback_step" as const,
+          fallbackStepFromModel: "openai/gpt-primary",
+          fallbackStepFromFailureReason: "tls_certificate" as const,
+          fallbackStepFinalOutcome: "next_fallback" as const,
+        },
+      },
+    };
+    const harness = attachHarness();
+    await admit(harness);
+    harness.sendRequest("worker.live-event", request);
+
+    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.service.pushLiveEvent).toHaveBeenCalledWith(IDENTITY, request);
+    expect(harness.responses[1]).toEqual({
+      type: "res",
+      id: "request-1",
+      ok: true,
+      payload: { ackedSeq: request.seq },
+    });
+    expect(harness.close).not.toHaveBeenCalled();
   });
 
   it("rejects transcript commits when the admitted worker lacks the feature", async () => {
@@ -460,8 +683,9 @@ describe("dedicated worker websocket protocol", () => {
     harness.sendConnect();
 
     await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"),
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
     );
+    expect(harness.setCloseCause).toHaveBeenCalledWith("credential-replaced");
     expect(harness.setClient).not.toHaveBeenCalled();
   });
 
@@ -473,6 +697,25 @@ describe("dedicated worker websocket protocol", () => {
 
     await waitForWorkerProtocol(() =>
       expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"),
+    );
+  });
+
+  it("keeps an expired credential connected only while its durable turn remains valid", async () => {
+    const harness = attachHarness({
+      identity: { ...ATTACHED_IDENTITY, credentialExpiresAtMs: Date.now() + 20 },
+    });
+    await admit(harness);
+    vi.mocked(harness.service.validateWorkerConnection).mockClear();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.service.validateWorkerConnection).toHaveBeenCalled(),
+    );
+    expect(harness.close).not.toHaveBeenCalled();
+
+    vi.mocked(harness.service.validateWorkerConnection).mockReturnValue("credential-expired");
+    harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" });
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "credential-expired"),
     );
   });
 

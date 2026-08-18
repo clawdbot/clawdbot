@@ -2,7 +2,10 @@
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
+import { cliProcessTestFiles } from "./vitest/vitest.cli-process-paths.mjs";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
+import { createContractsPluginVitestConfig } from "./vitest/vitest.contracts-plugin.config.ts";
+import { pluginContractPatterns } from "./vitest/vitest.contracts-shared.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
 import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
@@ -195,6 +198,44 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
   });
 
+  it("keeps excluded stateful files out of directory-scoped CLI runs", () => {
+    // A directory argument must narrow the curated inventory, never replace it with the
+    // directory glob. The lane is non-isolated, so re-admitting an excluded stateful file
+    // pollutes whichever unrelated files share its worker.
+    const otherLaneFiles = new Set([
+      ...getUnitFastTimerTestFiles(),
+      ...getUnitFastIsolatedTestFiles(),
+    ]);
+    for (const dir of ["src/plugins", "src/agents", "src/commands"]) {
+      const testConfig = requireTestConfig(
+        createUnitFastVitestConfig({}, { argv: ["node", "vitest", "run", dir] }),
+      );
+      const include = testConfig.include as string[];
+      const expected = unitFastTestFiles.filter(
+        (file) => file.startsWith(`${dir}/`) && !otherLaneFiles.has(file),
+      );
+
+      expect(include, dir).toEqual(expected);
+      expect(
+        include.filter((entry) => !isUnitFastTestFile(entry)),
+        `${dir} admitted non-unit-fast entries`,
+      ).toEqual([]);
+    }
+
+    const pluginsInclude = requireTestConfig(
+      createUnitFastVitestConfig({}, { argv: ["node", "vitest", "run", "src/plugins"] }),
+    ).include as string[];
+    expect(isUnitFastTestFile("src/plugins/install-persistence.test.ts")).toBe(false);
+    expect(pluginsInclude).not.toContain("src/plugins/install-persistence.test.ts");
+
+    // Glob-scoped lanes keep their own scope too: a parent-directory argument must not widen
+    // contracts-plugin from `contracts/` to every sibling test under `src/plugins`.
+    const contractsInclude = requireTestConfig(
+      createContractsPluginVitestConfig({}, ["node", "vitest", "run", "src/plugins"]),
+    ).include as string[];
+    expect(contractsInclude).toEqual(pluginContractPatterns);
+  });
+
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/openai-transport-stream.base.test.ts")).toBe(false);
@@ -215,6 +256,13 @@ describe("unit-fast vitest lane", () => {
       "vitest-mock-api",
       "dynamic-import",
     ]);
+  });
+
+  it("keeps process-launching CLI files in their owner lane", () => {
+    for (const file of cliProcessTestFiles) {
+      expect(isUnitFastTestFile(file), file).toBe(false);
+      expect(unitFastTestFiles, file).not.toContain(file);
+    }
   });
 
   it("routes unit-fast source files to their unit-fast sibling tests", () => {
@@ -258,8 +306,12 @@ describe("unit-fast vitest lane", () => {
   });
 
   it("isolates tests that import stateful test helpers", () => {
+    // Fixture files must genuinely import a stateful test helper; #121923
+    // rewrote the outbound poll tests to be stateless, so they left this list.
     const files = [
+      "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
+      "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
       "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
     ];
     for (const file of files) {

@@ -16,7 +16,6 @@ import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
-import { shouldMigrateStateFromPath } from "../argv.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
@@ -191,7 +190,7 @@ function isGatewayStartupCommand(commandPath: string[]): boolean {
 }
 
 async function getConfigSnapshot(
-  options?: { observe: false; skipPluginValidation?: true },
+  options?: { observe: false; pluginValidation?: "skip" | "core-only" },
   measure?: ConfigSnapshotReadMeasure,
 ) {
   if (options?.observe === false) {
@@ -226,14 +225,28 @@ export async function ensureConfigReady(
     measure?: ConfigSnapshotReadMeasure;
     skipPristineCoreStateMigrations?: boolean;
     skipPristineStartupStateMigrations?: boolean;
+    validateConfigOnly?: boolean;
   },
   recoveryDeps?: InvalidConfigRecoveryDeps,
 ): Promise<void> {
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  const isRestartController =
+    (commandName === "gateway" || commandName === "daemon") && subcommandName === "restart";
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
-  const shouldConsiderStateMigration = shouldMigrateStateFromPath(commandPath);
+  const shouldConsiderStateMigration =
+    !params.validateConfigOnly &&
+    commandName !== "config" &&
+    commandName !== "health" &&
+    commandName !== "logs" &&
+    commandName !== "sessions" &&
+    // Remote RPC clients must not migrate state owned by the running gateway.
+    !(commandName === "gateway" && subcommandName === "call") &&
+    // A newer restart client may be controlling an older live Gateway. Validate
+    // config without advancing the persistent schema owned by that process.
+    !isRestartController &&
+    !(commandName === "update" && subcommandName === "status");
   const requiresLegacyStateInput = shouldRunStateMigrationOnlyWithLegacyInputs(commandPath);
   const runStateMigrationPreflight = async () => {
     didRunDoctorConfigFlow = true;
@@ -277,12 +290,15 @@ export async function ensureConfigReady(
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  // Read-only diagnostics must not record config health; logs also skips plugin
-  // metadata discovery because opening the shared state DB creates SQLite sidecars.
-  const configSnapshotOptions =
-    commandName === "logs"
-      ? ({ observe: false, skipPluginValidation: true } as const)
-      : commandName === "status" || (commandName === "gateway" && subcommandName === "call")
+  // Read-only diagnostics must not record config health. Core-only validation
+  // also skips plugin metadata discovery, whose state reads create SQLite sidecars.
+  const configSnapshotOptions = params.validateConfigOnly
+    ? ({ observe: false, pluginValidation: "core-only" } as const)
+    : commandName === "logs"
+      ? ({ observe: false, pluginValidation: "core-only" } as const)
+      : commandName === "status" ||
+          (commandName === "gateway" && subcommandName === "call") ||
+          isRestartController
         ? ({ observe: false } as const)
         : undefined;
   let snapshot =
@@ -312,11 +328,12 @@ export async function ensureConfigReady(
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const { formatConfigIssueLines } = await import("../../config/issue-format.js");
+  const [{ formatConfigIssueLines }, { renderConfigValidationIssueLines }] = await Promise.all([
+    import("../../config/issue-format.js"),
+    import("../../config/issue-location.js"),
+  ]);
   const issues =
-    snapshot.exists && !snapshot.valid
-      ? formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })
-      : [];
+    snapshot.exists && !snapshot.valid ? renderConfigValidationIssueLines(snapshot) : [];
   const legacyIssues =
     snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
 
@@ -407,9 +424,7 @@ export async function ensureConfigReady(
           })
         ).snapshot;
         if (retrySnapshot.exists && !retrySnapshot.valid) {
-          const retryIssues = formatConfigIssueLines(retrySnapshot.issues, "-", {
-            normalizeRoot: true,
-          });
+          const retryIssues = renderConfigValidationIssueLines(retrySnapshot);
           throw createInvalidConfigError(
             retrySnapshot.path,
             retryIssues.join("\n") || "Unknown validation issue.",

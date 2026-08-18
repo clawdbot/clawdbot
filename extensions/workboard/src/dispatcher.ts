@@ -6,7 +6,10 @@ import type {
   WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveNonNegativeIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -15,8 +18,12 @@ import {
   resolveDispatchWorkspaceAccess,
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
+import { workboardSessionKeyForCard } from "./session-link.js";
 import { cardBoardId } from "./store-card-helpers.js";
-import { isWorkboardClaimReclaimable } from "./store-constants.js";
+import {
+  DEFAULT_WORKBOARD_DISPATCH_OWNER,
+  isWorkboardClaimReclaimable,
+} from "./store-constants.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -26,7 +33,6 @@ import {
 } from "./workspace-access.js";
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
-const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
 
 export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
 export type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
@@ -71,21 +77,6 @@ type WorkboardDispatchStartParams = {
 
 const pendingWorkboardDispatches = new WeakMap<WorkboardStore, Promise<void>>();
 
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : fallback;
-}
-
-function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
-  const sanitized = (value ?? fallback)
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  return (sanitized || fallback).slice(0, 96);
-}
-
 function cardIsArchived(card: WorkboardCard): boolean {
   return Boolean(card.metadata?.archivedAt);
 }
@@ -93,13 +84,6 @@ function cardIsArchived(card: WorkboardCard): boolean {
 function cardHasActiveClaim(card: WorkboardCard, now: number): boolean {
   const claim = card.metadata?.claim;
   return Boolean(claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now }));
-}
-
-function buildSessionKey(card: WorkboardCard): string {
-  const boardId = sanitizeSessionSegment(cardBoardId(card), "default");
-  const cardId = sanitizeSessionSegment(card.id, "card");
-  const suffix = `subagent:workboard-${boardId}-${cardId}`;
-  return card.agentId ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}` : suffix;
 }
 
 function buildExecution(params: {
@@ -216,7 +200,7 @@ function buildWorkerPrompt(params: {
     "",
     "Heartbeat with workboard_heartbeat using the card id and token while working.",
     "When done, call workboard_complete with the card id, token, summary, and proof.",
-    "If you called workboard_proof separately, pass its returned proofId to workboard_complete.",
+    "If you recorded proof separately, pass its returned proofId to workboard_complete.",
     "If blocked, call workboard_block with the card id, token, and reason.",
     "",
     params.context,
@@ -242,7 +226,7 @@ function resolveDispatchOwner(card: WorkboardCard, now: number, ownerOverride?: 
     ownerOverride ||
     (cardHasActiveClaim(card, now) ? card.metadata?.claim?.ownerId : undefined) ||
     card.agentId ||
-    DEFAULT_DISPATCH_OWNER
+    DEFAULT_WORKBOARD_DISPATCH_OWNER
   );
 }
 
@@ -327,7 +311,7 @@ async function runWorkboardDispatch(
   const now = params.options?.now ?? Date.now();
   const boardId = params.options?.boardId;
   const dispatch = await params.store.dispatch({ now, boardId });
-  const maxStarts = normalizePositiveInteger(
+  const maxStarts = resolveNonNegativeIntegerOption(
     params.options?.maxStarts,
     DEFAULT_DISPATCH_MAX_STARTS,
   );
@@ -350,7 +334,7 @@ async function runWorkboardDispatch(
     if (startedOwners.has(ownerId)) {
       continue;
     }
-    const sessionKey = buildSessionKey(card);
+    const sessionKey = workboardSessionKeyForCard(card);
     let claimValue = "";
     let materializedWorkspace: WorkboardWorkspace | undefined;
     let implicitWorkspaceCwd: string | undefined;

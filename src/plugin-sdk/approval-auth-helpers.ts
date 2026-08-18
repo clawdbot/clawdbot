@@ -1,9 +1,9 @@
 // Approval auth helpers resolve actor and channel identity for approval requests.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { resolveApprovalApprovers } from "./approval-approvers.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 
-type ApprovalKind = "exec" | "plugin";
 type ApproverInput = string | number;
 type ApprovalApproverInputs = {
   explicit?: readonly ApproverInput[] | null;
@@ -100,7 +100,7 @@ export function createResolvedApproverActionAuthAdapter(params: {
       /** Approval action being authorized. */
       action: "approve";
       /** Approval kind used in user-facing denial copy. */
-      approvalKind: ApprovalKind;
+      approvalKind: ChannelApprovalKind;
     }) {
       const approvers = params.resolveApprovers({ cfg, accountId });
       if (approvers.length === 0) {
@@ -167,7 +167,7 @@ export function createChannelApprovalAuth(params: {
         accountId?: string | null;
         senderId?: string | null;
         action: "approve";
-        approvalKind: ApprovalKind;
+        approvalKind: ChannelApprovalKind;
       }) {
         const inputs = params.resolveInputs(input);
         const approvers = resolveApprovalApprovers({

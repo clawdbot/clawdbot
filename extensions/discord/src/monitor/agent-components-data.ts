@@ -201,17 +201,3 @@ export function formatModalSubmissionText(
   }
   return lines.join("\n");
 }
-
-export function resolveDiscordInteractionId(interaction: AgentComponentInteraction): string {
-  const rawId =
-    interaction.rawData && typeof interaction.rawData === "object" && "id" in interaction.rawData
-      ? (interaction.rawData as { id?: unknown }).id
-      : undefined;
-  if (typeof rawId === "string" && rawId.trim()) {
-    return rawId.trim();
-  }
-  if (typeof rawId === "number" && Number.isFinite(rawId)) {
-    return String(rawId);
-  }
-  return `discord-interaction:${Date.now()}`;
-}

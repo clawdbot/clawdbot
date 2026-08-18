@@ -10,7 +10,10 @@ import {
   resolveCompatibleAgentRuntimeForProvider,
   resolveSessionRuntimeOverrideForProvider,
 } from "../agents/session-runtime-compat.js";
-import { persistStickyModelSelectionBestEffort } from "../agents/sticky-model-selection.js";
+import {
+  persistStickyModelSelectionBestEffort,
+  type StickyModelSelectionDispatchOutcome,
+} from "../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../auto-reply/reply/directive-handling.model-runtime.js";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
@@ -18,6 +21,7 @@ import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../auto-reply/thinking.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import {
   adoptPersistedSessionSnapshot,
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
@@ -49,6 +53,7 @@ export type ApplySessionModelSelectionParams = {
   storePath?: string;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
+  allowCreate?: boolean;
   defaultProvider: string;
   defaultModel: string;
   currentProvider: string;
@@ -71,6 +76,7 @@ export type ApplySessionModelSelectionResult =
       effectiveModelRef: string;
       changed: boolean;
       contextTokens: number;
+      configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
       runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
       thinkingRemap?: {
         from: ThinkLevel;
@@ -273,6 +279,7 @@ export async function applySessionModelSelection(
       sessionKey: params.sessionKey,
       initialEntry,
       entry: nextEntry,
+      allowCreate: params.allowCreate,
       reassertLiveModelSwitchPending: applied.changed && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
@@ -310,9 +317,13 @@ export async function applySessionModelSelection(
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
   const changed = applied.changed || thinkingRemap !== undefined;
-  if (params.canPersistStickyModelSelection === true && !request.isDefault) {
-    persistStickyModelSelectionBestEffort({ agentId: params.agentId, model: effectiveModelRef });
-  }
+  const configuredDefaultUpdate =
+    params.canPersistStickyModelSelection === true && !request.isDefault
+      ? persistStickyModelSelectionBestEffort({
+          agentId: params.agentId,
+          model: effectiveModelRef,
+        })
+      : undefined;
   if (changed) {
     triggerSessionPatchHook({
       cfg: params.cfg,
@@ -325,9 +336,9 @@ export async function applySessionModelSelection(
       nextProvider: provider,
       nextModel: model,
       nextRouteResolution: "resolved",
-      nextModelOverrideSource: "user",
+      nextModelOverrideSource: request.isDefault ? undefined : "user",
       nextAuthProfileId: persistedEntry.authProfileOverride,
-      nextAuthProfileIdSource: persistedEntry.authProfileOverrideSource,
+      nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(persistedEntry),
       nextThinking: {
         level: persistedEntry.thinkingLevel,
         catalog: [...thinkingCatalog],
@@ -373,12 +384,12 @@ export async function applySessionModelSelection(
     changed,
     contextTokens: resolveContextTokens({
       cfg: params.cfg,
-      agentCfg: params.cfg.agents?.defaults,
       provider: contextProvider,
       model,
       modelContextWindow: selectedCatalogEntry?.contextWindow,
       modelContextTokens: selectedCatalogEntry?.contextTokens,
     }),
+    ...(configuredDefaultUpdate ? { configuredDefaultUpdate } : {}),
     ...(applied.runtimeChange ? { runtimeChange: applied.runtimeChange } : {}),
     ...(thinkingRemap ? { thinkingRemap } : {}),
   };

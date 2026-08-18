@@ -1,6 +1,7 @@
 // Tests approval view model formatting for prompts and decisions.
 import { describe, expect, it } from "vitest";
-import { buildPendingApprovalView, resolveApprovalRequestKind } from "./approval-view-model.js";
+import { normalizeApprovalRequest, resolveApprovalRequestKind } from "./approval-types.js";
+import { buildPendingApprovalView } from "./approval-view-model.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
@@ -58,6 +59,21 @@ describe("buildPendingApprovalView", () => {
       approvalKind: "plugin",
       decision: "allow-once",
     });
+  });
+
+  it("does not trust conflicting approval kind metadata", () => {
+    const request: PluginApprovalRequest = {
+      id: "plugin-approval",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        title: "Use protected tool",
+        description: "The plugin needs operator consent.",
+      },
+    };
+    Object.defineProperty(request, "approvalKind", { value: "exec", enumerable: true });
+
+    expect(normalizeApprovalRequest(request).approvalKind).toBe("plugin");
   });
 
   it("keeps the fail-closed plugin decision in channel-facing actions", () => {

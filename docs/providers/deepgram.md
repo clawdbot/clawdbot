@@ -36,9 +36,9 @@ returns them.
     {
       tools: {
         media: {
+          models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
           audio: {
             enabled: true,
-            models: [{ provider: "deepgram", model: "nova-3" }],
           },
         },
       },
@@ -68,9 +68,11 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
     {
       tools: {
         media: {
+          models: [
+            { provider: "deepgram", model: "nova-3", language: "en", capabilities: ["audio"] },
+          ],
           audio: {
             enabled: true,
-            models: [{ provider: "deepgram", model: "nova-3", language: "en" }],
           },
         },
       },
@@ -82,6 +84,7 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
     {
       tools: {
         media: {
+          models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             providerOptions: {
@@ -91,7 +94,6 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
                 smart_format: true,
               },
             },
-            models: [{ provider: "deepgram", model: "nova-3" }],
           },
         },
       },

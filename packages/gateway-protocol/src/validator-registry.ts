@@ -16,6 +16,8 @@ export const validateConnectParams = compile(S.ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = compile(S.WorkerAdmissionHandshakeSchema);
 export const validateWorkerConnectRequestFrame = compile(S.WorkerConnectRequestFrameSchema);
 export const validateWorkerHeartbeatParams = compile(S.WorkerHeartbeatParamsSchema);
+export const validateWorkerSessionsSpawnParams = compile(S.WorkerSessionsSpawnParamsSchema);
+export const validateWorkerSessionsSendParams = compile(S.WorkerSessionsSendParamsSchema);
 
 function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
@@ -89,8 +91,11 @@ export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
   S.AuditRunInspectParamsSchema,
 );
 export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
+export const validateDecisionReceiptV1 = compile(S.DecisionReceiptV1Schema);
 export const validateAuditListParams = compile(S.AuditListParamsSchema);
 export const validateUsersListParams = compile(S.UsersListParamsSchema);
+export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);
+export const validateUsersPrefsSetParams = compile(S.UsersPrefsSetParamsSchema);
 export const validateUsersSelfParams = compile(S.UsersSelfParamsSchema);
 export const validateUsersSelfResult = compile(S.UsersSelfResultSchema);
 export const validateUsersLinkEmailParams = compile(S.UsersLinkEmailParamsSchema);
@@ -99,10 +104,23 @@ export const validateUsersSetDisplayNameParams = compile(S.UsersSetDisplayNamePa
 export const validateUsersSetDisplayNameResult = compile(S.UsersSetDisplayNameResultSchema);
 export const validateUsersSetAvatarParams = compile(S.UsersSetAvatarParamsSchema);
 export const validateUsersSetAvatarResult = compile(S.UsersSetAvatarResultSchema);
+export const validateUsersSetGitHubIdentityParams = compile(S.UsersSetGitHubIdentityParamsSchema);
+export const validateUsersSetGitHubIdentityResult = compile(S.UsersSetGitHubIdentityResultSchema);
+export const validateUsersClearGitHubIdentityParams = compile(
+  S.UsersClearGitHubIdentityParamsSchema,
+);
+export const validateUsersClearGitHubIdentityResult = compile(
+  S.UsersClearGitHubIdentityResultSchema,
+);
 export const validateAgentIdentityParams = compile(S.AgentIdentityParamsSchema);
 export const validateAgentWaitParams = compile(S.AgentWaitParamsSchema);
 export const validateWakeParams = compile(S.WakeParamsSchema);
 export const validateAgentsListParams = compile(S.AgentsListParamsSchema);
+export const validateProjectsListParams = compile(S.ProjectsListParamsSchema);
+export const validateProjectsRegisterParams = compile(S.ProjectsRegisterParamsSchema);
+export const validateProjectsAddParams = compile(S.ProjectsAddParamsSchema);
+export const validateProjectsSearchRemoteParams = compile(S.ProjectsSearchRemoteParamsSchema);
+export const validateProjectsRemoveParams = compile(S.ProjectsRemoveParamsSchema);
 export const validateWorktreesListParams = compile(S.WorktreesListParamsSchema);
 export const validateBoardGetParams = compile(S.BoardGetParamsSchema);
 export const validateBoardUpdateParams = compile(S.BoardUpdateParamsSchema);
@@ -114,6 +132,8 @@ export const validateBoardEventParams = compile(S.BoardEventParamsSchema);
 export const validateBoardPromptAuthorizeParams = compile(S.BoardPromptAuthorizeParamsSchema);
 export const validateBoardDataReadParams = compile(S.BoardDataReadParamsSchema);
 export const validateBoardActionParams = compile(S.BoardActionParamsSchema);
+export const validateProgressCardGetParams = compile(S.ProgressCardGetParamsSchema);
+export const validateProgressCardPutParams = compile(S.ProgressCardPutParamsSchema);
 export const validateWorktreesCreateParams = compile(S.WorktreesCreateParamsSchema);
 export const validateWorktreesRemoveParams = compile(S.WorktreesRemoveParamsSchema);
 export const validateWorktreesRestoreParams = compile(S.WorktreesRestoreParamsSchema);
@@ -144,6 +164,16 @@ export const validateEnvironmentsCreateParams = compile(S.EnvironmentsCreatePara
 export const validateEnvironmentsDestroyParams = compile(S.EnvironmentsDestroyParamsSchema);
 export const validateEnvironmentsListParams = compile(S.EnvironmentsListParamsSchema);
 export const validateEnvironmentsStatusParams = compile(S.EnvironmentsStatusParamsSchema);
+export const validatePortalListParams = compile(S.PortalListParamsSchema);
+export const validatePortalOpenParams = compile(S.PortalOpenParamsSchema);
+export const validatePortalCloseParams = compile(S.PortalCloseParamsSchema);
+export const validateWorkerDesktopObserveParams = compile(S.WorkerDesktopObserveParamsSchema);
+export const validateWorkerDesktopObserveResult = compile(S.WorkerDesktopObserveResultSchema);
+export const validateWorkerDesktopLaunchParams = compile(S.WorkerDesktopLaunchParamsSchema);
+export const validateWorkerDesktopLaunchResult = compile(S.WorkerDesktopLaunchResultSchema);
+export const validateDesktopObserveParams = compile(S.DesktopObserveParamsSchema);
+export const validateDesktopObserveResult = compile(S.DesktopObserveResultSchema);
+export const validateDesktopLaunchParams = compile(S.DesktopLaunchParamsSchema);
 export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
 export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
 export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);
@@ -168,11 +198,19 @@ export const validateWebPushUnsubscribeParams = compile<WebPushUnsubscribeParams
 export const validateWebPushTestParams = compile<WebPushTestParams>(S.WebPushTestParamsSchema);
 export const validateSecretsResolveParams = compile(S.SecretsResolveParamsSchema);
 export const validateSecretsResolveResult = compile(S.SecretsResolveResultSchema);
+export const validateSecretsStoreListParams = compile(S.SecretsStoreListParamsSchema);
+export const validateSecretsStoreListResult = compile(S.SecretsStoreListResultSchema);
+export const validateSecretsStoreSetParams = compile(S.SecretsStoreSetParamsSchema);
+export const validateSecretsStoreDeleteParams = compile(S.SecretsStoreDeleteParamsSchema);
+export const validateSecretsStoreMutationResult = compile(S.SecretsStoreMutationResultSchema);
 export const validateSessionsListParams = compile(S.SessionsListParamsSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = compile(S.SessionsCatalogContinueParamsSchema);
 export const validateSessionsCatalogArchiveParams = compile(S.SessionsCatalogArchiveParamsSchema);
+export const validateSessionsCatalogStartTerminalParams = compile(
+  S.SessionsCatalogStartTerminalParamsSchema,
+);
 export const validateSessionsSearchParams = compile(S.SessionsSearchParamsSchema);
 export const validateSessionsCleanupParams = compile(S.SessionsCleanupParamsSchema);
 export const validateSessionsPreviewParams = compile(S.SessionsPreviewParamsSchema);
@@ -200,9 +238,13 @@ export const validateSessionSuggestionsResolveParams = compile(
 );
 export const validateSessionTypingParams = compile(S.SessionTypingParamsSchema);
 export const validateSessionsCreateParams = compile(S.SessionsCreateParamsSchema);
+export const validateSessionsRecoverParams = compile(S.SessionsRecoverParamsSchema);
 export const validateSessionsSendParams = compile(S.SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = compile(S.SessionsDispatchParamsSchema);
 export const validateSessionsReclaimParams = compile(S.SessionsReclaimParamsSchema);
+export const validateSessionsReclaimResult = compile(S.SessionsReclaimResultSchema);
+export const validateSessionsMoveParams = compile(S.SessionsMoveParamsSchema);
+export const validateSessionsMoveResult = compile(S.SessionsMoveResultSchema);
 export const validateSessionsMessagesSubscribeParams = compile(
   S.SessionsMessagesSubscribeParamsSchema,
 );
@@ -214,18 +256,23 @@ export const validateSessionsViewerPresenceSetParams = compile(
 );
 export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
 export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
+export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);
 export const validateSessionsDeleteParams = compile(S.SessionsDeleteParamsSchema);
+export const validateSessionsAssignOwnerParams = compile(S.SessionsAssignOwnerParamsSchema);
 export const validateSessionsGroupsListParams = compile(S.SessionsGroupsListParamsSchema);
 export const validateSessionsGroupsListResult = compile(S.SessionsGroupsListResultSchema);
+export const validateSessionsGroupsDefaultsParams = compile(S.SessionsGroupsDefaultsParamsSchema);
+export const validateSessionsGroupsDefaultsResult = compile(S.SessionsGroupsDefaultsResultSchema);
 export const validateSessionsGroupsPutParams = compile(S.SessionsGroupsPutParamsSchema);
 export const validateSessionsGroupsRenameParams = compile(S.SessionsGroupsRenameParamsSchema);
+export const validateSessionsGroupsUpdateParams = compile(S.SessionsGroupsUpdateParamsSchema);
+export const validateSessionsGroupsUpdateResult = compile(S.SessionsGroupsUpdateResultSchema);
 export const validateSessionsGroupsDeleteParams = compile(S.SessionsGroupsDeleteParamsSchema);
 export const validateSessionsGroupsMutationResult = compile(S.SessionsGroupsMutationResultSchema);
 export const validateSessionsCompactParams = compile(S.SessionsCompactParamsSchema);
 export const validateSessionsCompactionListParams = compile(S.SessionsCompactionListParamsSchema);
-export const validateSessionsCompactionGetParams = compile(S.SessionsCompactionGetParamsSchema);
 export const validateSessionsCompactionBranchParams = compile(
   S.SessionsCompactionBranchParamsSchema,
 );
@@ -284,13 +331,10 @@ export const validateTalkClientToolCallResult = compile(S.TalkClientToolCallResu
 export const validateTalkClientTranscriptParams = compile(S.TalkClientTranscriptParamsSchema);
 export const validateTalkClientSteerParams = compile(S.TalkClientSteerParamsSchema);
 export const validateTalkSessionCreateParams = compile(S.TalkSessionCreateParamsSchema);
-export const validateTalkSessionJoinParams = compile(S.TalkSessionJoinParamsSchema);
 export const validateTalkSessionAppendAudioParams = compile(S.TalkSessionAppendAudioParamsSchema);
 export const validateTalkSessionAcknowledgeMarkParams = compile(
   S.TalkSessionAcknowledgeMarkParamsSchema,
 );
-export const validateTalkSessionTurnParams = compile(S.TalkSessionTurnParamsSchema);
-export const validateTalkSessionCancelTurnParams = compile(S.TalkSessionCancelTurnParamsSchema);
 export const validateTalkSessionCancelOutputParams = compile(S.TalkSessionCancelOutputParamsSchema);
 export const validateTalkSessionSteerParams = compile(S.TalkSessionSteerParamsSchema);
 export const validateTalkSessionSubmitToolResultParams = compile(
@@ -312,6 +356,8 @@ export const validateModelsListParams = compile(S.ModelsListParamsSchema);
 export const validateSkillsStatusParams = compile(S.SkillsStatusParamsSchema);
 export const validateHooksStatusParams = compile(S.HooksStatusParamsSchema);
 export const validateToolsCatalogParams = compile(S.ToolsCatalogParamsSchema);
+export const validateToolsGitHubStatusParams = compile(S.ToolsGitHubStatusParamsSchema);
+export const validateToolsGitHubConfigureParams = compile(S.ToolsGitHubConfigureParamsSchema);
 export const validateToolsEffectiveParams = compile(S.ToolsEffectiveParamsSchema);
 export const validateToolsInvokeParams = compile(S.ToolsInvokeParamsSchema);
 export const validateSkillsBinsParams = compile(S.SkillsBinsParamsSchema);
@@ -354,9 +400,12 @@ export const validateDevicePairApproveParams = compile(S.DevicePairApproveParams
 export const validateDevicePairRejectParams = compile(S.DevicePairRejectParamsSchema);
 export const validateDevicePairRemoveParams = compile(S.DevicePairRemoveParamsSchema);
 export const validateDevicePairSetupCodeParams = compile(S.DevicePairSetupCodeParamsSchema);
+export const validateDevicePairSetupStatusParams = compile(S.DevicePairSetupStatusParamsSchema);
 export const validateDevicePairRenameParams = compile(S.DevicePairRenameParamsSchema);
 export const validateDeviceTokenRotateParams = compile(S.DeviceTokenRotateParamsSchema);
 export const validateDeviceTokenRevokeParams = compile(S.DeviceTokenRevokeParamsSchema);
+export const validateScopeUpgradeRequest = compile(S.ScopeUpgradeRequestSchema);
+export const validateScopeUpgradeWait = compile(S.ScopeUpgradeWaitSchema);
 export const validateApprovalPresentation = compile(S.ApprovalPresentationSchema);
 export const validateApprovalGetParams = compile(S.ApprovalGetParamsSchema);
 export const validateApprovalHistoryParams = compile(S.ApprovalHistoryParamsSchema);
@@ -396,6 +445,9 @@ export const validateChatSendParams = compile(S.ChatSendParamsSchema);
 export const validateChatAbortParams = compile(S.ChatAbortParamsSchema);
 export const validateChatInjectParams = compile(S.ChatInjectParamsSchema);
 export const validateUpdateStatusParams = compile(S.UpdateStatusParamsSchema);
+export const validateUpdateStatusResult = compile(S.UpdateStatusResultSchema);
+export const validateUpdateHoldParams = compile(S.UpdateHoldParamsSchema);
+export const validateUpdateHoldResult = compile(S.UpdateHoldResultSchema);
 export const validateUpdateRunParams = compile(S.UpdateRunParamsSchema);
 export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
 export const validateWebLoginStartParams = compile(S.WebLoginStartParamsSchema);

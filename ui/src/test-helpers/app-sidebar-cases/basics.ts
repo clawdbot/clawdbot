@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
@@ -18,36 +20,10 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { installDialogPolyfill, nextFrame, waitForRenderedModalDialog } from "../modal-dialog.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
-
-type SidebarNativeGatewayTestSnapshot = {
-  gateways: Array<{
-    id: string;
-    name: string;
-    isPrimary: boolean;
-    health: "ok" | "error" | "unknown";
-  }>;
-  currentId: string;
-};
-
-type SidebarNativeGatewayTestWindow = Window & {
-  __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
-  __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewayTestSnapshot;
-};
-
-function setNativeGatewayTestState(snapshot: SidebarNativeGatewayTestSnapshot): void {
-  const nativeWindow = window as SidebarNativeGatewayTestWindow;
-  nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
-  nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = snapshot;
-}
-
-afterEach(() => {
-  const nativeWindow = window as SidebarNativeGatewayTestWindow;
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
-});
 
 describe("AppSidebar update card wiring", () => {
   it("keeps OpenClaw out of the workspace sidebar", async () => {
@@ -55,18 +31,22 @@ describe("AppSidebar update card wiring", () => {
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
     expect(sidebar.querySelector('.nav-item[href="/custodian"]')).toBeNull();
+    expect(sidebar.querySelector('.nav-item[href="/settings/secrets"]')).toBeNull();
   });
 
   it("renders the update card in the footer after the attention slot and forwards its action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const onUpdate = vi.fn();
+    const onRefresh = vi.fn();
     sidebar.updateAvailable = {
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
       channel: "stable",
     };
+    sidebar.canUpdate = true;
     sidebar.onUpdate = onUpdate;
+    sidebar.onRefresh = onRefresh;
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-shell__footer");
@@ -74,12 +54,102 @@ describe("AppSidebar update card wiring", () => {
     expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-attention");
     const card = footer?.querySelector("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
+    const restoreDialogPolyfill = installDialogPolyfill();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    [...modal.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Update and restart")
+      ?.click();
+    await nextFrame();
+    restoreDialogPolyfill();
+    expect(onUpdate).toHaveBeenCalledOnce();
+
+    sidebar.refreshRequired = true;
+    await sidebar.updateComplete;
+    const refreshCard = footer?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-sidebar-update-card",
+    );
+    await refreshCard?.updateComplete;
+    expect(refreshCard?.textContent).toContain("Server updated");
+    refreshCard?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 });
 
 describe("AppSidebar viewer presence", () => {
+  it("shows only other online identities with active-first ordering and idle dimming", async () => {
+    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+
+    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "self-instance",
+          user: { id: "self", name: "Self" },
+          lastInputSeconds: 0,
+          ts: 1,
+        },
+      ],
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "self-instance",
+          user: { id: "self", name: "Self" },
+          lastInputSeconds: 0,
+          ts: 1,
+        },
+        {
+          instanceId: "zed-instance",
+          user: { id: "zed", name: "Zed" },
+          lastInputSeconds: 20,
+          ts: 1,
+        },
+        {
+          instanceId: "alice-instance",
+          user: { id: "alice", name: "Alice" },
+          lastInputSeconds: 600,
+          ts: 1,
+        },
+        {
+          instanceId: "bob-instance",
+          user: { id: "bob", name: "Bob" },
+          ts: 1,
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      const rows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-online__person")];
+      expect(
+        rows.map((row) => row.querySelector(".sidebar-online__person-name")?.textContent?.trim()),
+      ).toEqual(["Bob", "Zed", "Alice"]);
+      expect(rows.map((row) => row.classList.contains("sidebar-online__person--away"))).toEqual([
+        false,
+        false,
+        true,
+      ]);
+    });
+    expect(sidebar.querySelector('[data-online-user-id="self"]')).toBeNull();
+
+    sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')?.click();
+    expect(onNavigate).toHaveBeenCalledWith("activity", {
+      pathname: "/activity",
+      search: "?person=alice",
+    });
+  });
+
   it("renders the self user's avatar route in the footer identity chip", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
@@ -199,7 +269,7 @@ describe("AppSidebar viewer presence", () => {
     ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
 
     const identityCard = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
-    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
       "Self User",
     );
     expect(identityCard?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
@@ -212,7 +282,7 @@ describe("AppSidebar viewer presence", () => {
     expect(footer?.querySelector(".sidebar-brand__logo-slot")).toBeNull();
     expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
       "openclaw-tooltip",
-      "span",
+      "openclaw-tooltip",
     ]);
     gatewayHarness.gateway.updateSelfUser?.({
       name: "Augusta Ada",
@@ -221,14 +291,16 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
 
     // Profile mutations update gateway state directly; no presence event follows them.
-    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
       "Augusta Ada",
     );
     expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=4");
 
     sidebar.connected = false;
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Augusta Ada");
+    expect(sidebar.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
+      "Augusta Ada",
+    );
   });
 
   it("renders an Account fallback for an unidentified connection", async () => {
@@ -248,92 +320,10 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
 
     const identityCard = sidebar.querySelector(".sidebar-identity-card");
-    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
       "Account",
     );
     expect(identityCard?.querySelector('[data-viewer-id="account"]')?.textContent).toContain("A");
-  });
-});
-
-describe("AppSidebar gateway footer subtitle", () => {
-  const twoGateways = {
-    gateways: [
-      { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
-      { id: "remote", name: "Remote Gateway", isPrimary: false, health: "unknown" },
-    ],
-    currentId: "local",
-  } satisfies SidebarNativeGatewayTestSnapshot;
-
-  it("stays hidden outside native chrome", async () => {
-    const nativeWindow = window as SidebarNativeGatewayTestWindow;
-    nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = twoGateways;
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-  });
-
-  it("stays hidden with one configured gateway", async () => {
-    setNativeGatewayTestState({ gateways: [twoGateways.gateways[0]!], currentId: "local" });
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-  });
-
-  it("shows the current gateway health, name, and primary suffix", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(
-      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
-    ).toBe("ok");
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
-      "Local Gateway",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")?.textContent).toBe(
-      "· primary",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Account: Local Gateway, primary",
-    );
-  });
-
-  it("keeps the reconnecting subtitle while offline", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.offline = true;
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
-      "Reconnecting…",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")).toBeNull();
-  });
-
-  it("updates when the native gateway snapshot changes", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    setNativeGatewayTestState({
-      gateways: [
-        { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
-        { id: "remote", name: "Remote Gateway", isPrimary: false, health: "error" },
-      ],
-      currentId: "remote",
-    });
-    window.dispatchEvent(new CustomEvent("openclaw:native-gateways-changed"));
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
-      "Remote Gateway",
-    );
-    expect(
-      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
-    ).toBe("error");
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")).toBeNull();
   });
 });
 
@@ -343,7 +333,7 @@ describe("AppSidebar brand actions", () => {
     const agentsList = {
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "main" }, { id: "research" }],
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(
@@ -362,7 +352,7 @@ describe("AppSidebar brand actions", () => {
     expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(
       brandButton,
     );
-    expect(brandButton?.getAttribute("aria-label")).toBe("New thread");
+    expect(brandButton?.getAttribute("aria-label")).toBe("New session");
     expect(brandButton?.disabled).toBe(true);
     expect(actions?.querySelectorAll("button")).toHaveLength(1);
     expect(sidebar.querySelector(".sidebar-search")).toBeNull();
@@ -377,7 +367,50 @@ describe("AppSidebar brand actions", () => {
     const headerButton = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-section="ungrouped"] .sidebar-new-session',
     );
-    expect(headerButton?.getAttribute("aria-label")).toBe("New thread");
+    expect(headerButton?.getAttribute("aria-label")).toBe("New session");
+  });
+});
+
+describe("AppSidebar footer actions", () => {
+  it("gates Ask OpenClaw on the advertised method and admin scope", async () => {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.chat"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await sidebar.updateComplete;
+    const toggle = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__custodian");
+    expect(toggle?.getAttribute("aria-label")).toBe("Ask OpenClaw");
+    const toggleListener = vi.fn();
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
+    toggle?.click();
+    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
+    expect(toggleListener).toHaveBeenCalledOnce();
+
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: [] as string[] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-footer-bar__custodian")).toBeNull();
+
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["openclaw.chat"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-footer-bar__custodian")).toBeNull();
   });
 });
 
@@ -465,7 +498,7 @@ describe("AppSidebar agent chip", () => {
     const agents = {
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "main" }, { id: "settings" }],
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(
@@ -517,7 +550,9 @@ describe("AppSidebar agent chip", () => {
     sidebar.offline = true;
     await sidebar.updateComplete;
     const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
-    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Account");
+    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
+      "Account",
+    );
     expect(card?.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
       "Reconnecting…",
     );
@@ -566,17 +601,14 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).toContain(
       "Working",
     );
-    // Run state rings the Home icon in the leading slot; the row edge keeps
-    // only approval/outbox counts.
-    const ring = sidebar.querySelector(
-      ".nav-item--home .session-glyph--running .session-glyph__ring",
-    );
-    expect(ring).not.toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .nav-item__state")).toBeNull();
-    expect(ring?.hasAttribute("title")).toBe(false);
-    expect(
-      (ring?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
-    ).toBe("Active run");
+    // Run state uses the session spinner at the row edge without changing the Home icon.
+    const spinner = sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner");
+    expect(spinner).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(spinner?.getAttribute("role")).toBe("img");
+    expect(spinner?.getAttribute("aria-label")).toBe("Active run");
+    expect(spinner?.getAttribute("title")).toBe("Active run");
   });
 
   it("uses the shared tooltip for the Home dashboard glyph", async () => {

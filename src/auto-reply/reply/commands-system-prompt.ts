@@ -21,7 +21,7 @@ import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-con
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
-import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -112,28 +112,30 @@ async function resolveCommandSkillsPrompt(params: {
               ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
               : {}),
           },
-          effectiveWorkspace: sandboxWorkspace.workspaceDir,
+          skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
         });
-        const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-          workspaceDir: skillsWorkspaceDir,
-          config: params.config,
-          agentId: params.agentId,
-          eligibility: skillsEligibility,
-          skillsSnapshot: skillsSnapshotForRun,
-          workspaceOnly,
-        });
+        const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
+          resolveEmbeddedRunSkillEntries({
+            workspaceDir: skillsWorkspaceDir,
+            config: params.config,
+            agentId: params.agentId,
+            eligibility: skillsEligibility,
+            skillsSnapshot: skillsSnapshotForRun,
+            workspaceOnly,
+          });
         const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
           entries: shouldLoadSkillEntries ? skillEntries : undefined,
           skillsWorkspaceDir,
           skillsPromptWorkspaceDir,
         });
-        return resolveSkillsPromptForRun({
+        return resolveSkillsPrompt({
           skillsSnapshot: skillsSnapshotForRun,
           entries: promptSkillEntries,
           config: params.config,
           workspaceDir: skillsPromptWorkspaceDir,
           agentId: params.agentId,
           eligibility: skillsEligibility,
+          preserveEntryOrder,
         });
       }
       // Existing third-party backends may not expose the optional workdir
@@ -176,6 +178,7 @@ export async function resolveCommandsSystemPromptBundle(
     agentId: sessionAgentId,
   });
   const toolPolicySessionKey = resolveRuntimePolicySessionKey({
+    agentId: sessionAgentId,
     cfg: params.cfg,
     ctx: params.ctx,
     sessionKey: params.sessionKey,

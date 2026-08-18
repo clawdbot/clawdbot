@@ -133,6 +133,51 @@ describe("openclaw-image-lightbox", () => {
     expect(createObjectUrl).not.toHaveBeenCalled();
   });
 
+  it("omits the original action for active blob image formats", async () => {
+    fetchImage.mockResolvedValueOnce({
+      blob: async () => new Blob(["svg"], { type: "image/svg+xml" }),
+    });
+    render(
+      html`<openclaw-image-lightbox
+        src="blob:untrusted-svg"
+        title="Untrusted SVG"
+      ></openclaw-image-lightbox>`,
+      container,
+    );
+    const modal = container.querySelector("openclaw-image-lightbox");
+    if (!modal) {
+      throw new Error("missing image lightbox");
+    }
+    await modal.updateComplete;
+
+    await vi.waitFor(() => expect(fetchImage).toHaveBeenCalledWith("blob:untrusted-svg"));
+    expect(modal.shadowRoot?.querySelector(".open-original")).toBeNull();
+    expect(createObjectUrl).not.toHaveBeenCalled();
+  });
+
+  it("keeps the original action for inert blob image formats", async () => {
+    render(
+      html`<openclaw-image-lightbox
+        src="blob:safe-png"
+        title="Safe PNG"
+      ></openclaw-image-lightbox>`,
+      container,
+    );
+    const modal = container.querySelector("openclaw-image-lightbox");
+    if (!modal) {
+      throw new Error("missing image lightbox");
+    }
+    await modal.updateComplete;
+
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(
+        "blob:safe-png",
+      ),
+    );
+    expect(fetchImage).toHaveBeenCalledWith("blob:safe-png");
+    expect(createObjectUrl).not.toHaveBeenCalled();
+  });
+
   it("keeps Tab focus within the lightbox actions", async () => {
     const { modal } = await renderLightbox();
     const root = modal.shadowRoot;

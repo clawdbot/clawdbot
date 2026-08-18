@@ -1,15 +1,18 @@
 // Session snapshot helpers capture and restore runtime skill state for sessions.
-import crypto from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { redactConfigObject } from "../../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
-import { buildWorkspaceSkillSnapshot } from "../loading/workspace.js";
+import {
+  loadMergedWorkspaceSkills,
+  normalizeWorkspaceSkillRoots,
+} from "../loading/workspace-skill-loader.js";
+import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
+import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 import { hydrateResolvedSkills } from "./snapshot-hydration.js";
 
 // The resolved index is gateway-process state. Mutation RPCs and watcher events
@@ -20,6 +23,7 @@ const RESOLVED_SKILLS_CACHE_MAX = 10;
 /** Inputs that make a resolved skill snapshot reusable within a process. */
 type ReusableSkillSnapshotParams = {
   workspaceDir: string;
+  executionSkillsDir?: string;
   config: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
@@ -37,13 +41,6 @@ type ReusableSkillSnapshotResult = {
   snapshotVersion: number;
 };
 
-function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
-  return crypto
-    .createHash("sha256")
-    .update(stableStringify(redactConfigObject(config)))
-    .digest("hex");
-}
-
 function cacheResolvedSkills(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
   resolvedSkillsCache.set(cacheKey, snapshot.resolvedSkills);
   pruneMapToMaxSize(resolvedSkillsCache, RESOLVED_SKILLS_CACHE_MAX);
@@ -53,10 +50,25 @@ function cacheResolvedSkills(cacheKey: string, snapshot: SkillSnapshot): SkillSn
 export function resolveReusableWorkspaceSkillSnapshot(
   params: ReusableSkillSnapshotParams,
 ): ReusableSkillSnapshotResult {
+  const normalizedRoots = normalizeWorkspaceSkillRoots({
+    agentWorkspaceDir: params.workspaceDir,
+    ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
+  });
+  const skillRoots = normalizedRoots.executionSkillsDir
+    ? {
+        agentWorkspaceDir: normalizedRoots.agentWorkspaceDir,
+        executionSkillsDir: normalizedRoots.executionSkillsDir,
+      }
+    : undefined;
+  const watcherWorkspaceDir = skillRoots?.agentWorkspaceDir ?? params.workspaceDir;
   if (params.watch !== false) {
-    ensureSkillsWatcher({ workspaceDir: params.workspaceDir, config: params.config });
+    ensureSkillsWatcher({
+      workspaceDir: watcherWorkspaceDir,
+      ...(skillRoots ? { executionSkillsDir: skillRoots.executionSkillsDir } : {}),
+      config: params.config,
+    });
   }
-  const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(params.workspaceDir);
+  const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(watcherWorkspaceDir);
   const promptFormatChanged =
     params.existingSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION;
   const skillVersionChanged = shouldRefreshSnapshotForVersion(
@@ -69,26 +81,42 @@ export function resolveReusableWorkspaceSkillSnapshot(
   const skillOverridesChanged =
     stableStringify(params.existingSnapshot?.skillOverrides) !==
     stableStringify(params.skillOverrides);
+  const skillRootsChanged =
+    stableStringify(params.existingSnapshot?.skillRoots) !== stableStringify(skillRoots);
   const shouldRefresh =
     promptFormatChanged ||
     skillVersionChanged ||
     nodeSkillsEligibilityChanged ||
+    skillRootsChanged ||
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
     skillOverridesChanged;
   const buildSnapshot = () => {
-    return buildWorkspaceSkillSnapshot(params.workspaceDir, {
+    const entries = skillRoots
+      ? loadMergedWorkspaceSkills({
+          ...skillRoots,
+          config: params.config,
+          agentId: params.agentId,
+          skillFilter: params.skillFilter,
+          skillOverrides: params.skillOverrides,
+          eligibility: params.eligibility,
+        })
+      : undefined;
+    const snapshot = buildSkillSnapshot(params.workspaceDir, {
       config: params.config,
+      ...(entries ? { entries, preserveEntryOrder: true } : {}),
       agentId: params.agentId,
       skillFilter: params.skillFilter,
       skillOverrides: params.skillOverrides,
       eligibility: params.eligibility,
       snapshotVersion,
     });
+    return skillRoots ? { ...snapshot, skillRoots } : snapshot;
   };
 
   const buildSnapshotCacheKey = () =>
     JSON.stringify([
       params.workspaceDir,
+      skillRoots,
       snapshotVersion,
       params.skillFilter,
       params.skillOverrides,

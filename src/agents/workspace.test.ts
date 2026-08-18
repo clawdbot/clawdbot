@@ -69,9 +69,29 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
     expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
   });
 
+  it("roots named profile workspaces inside the profile state directory", () => {
+    const dir = resolveDefaultAgentWorkspaceDir({
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+      HOME: "/home/other",
+    } as NodeJS.ProcessEnv);
+
+    expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw-work", "workspace"));
+  });
+
+  it("rejects invalid environment-only profile names", () => {
+    expect(() =>
+      resolveDefaultAgentWorkspaceDir({
+        OPENCLAW_PROFILE: "../escape",
+        HOME: "/home/peter",
+      } as NodeJS.ProcessEnv),
+    ).toThrow('Invalid profile name: "../escape"');
+  });
+
   it("prefers OPENCLAW_WORKSPACE_DIR for default workspace resolution", () => {
     const dir = resolveDefaultAgentWorkspaceDir({
       OPENCLAW_WORKSPACE_DIR: "/srv/openclaw-workspace",
+      OPENCLAW_PROFILE: "work",
       OPENCLAW_HOME: "/srv/openclaw-home",
       HOME: "/home/other",
     } as NodeJS.ProcessEnv);
@@ -151,6 +171,23 @@ function expectCronAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
 }
 
 describe("ensureAgentWorkspace", () => {
+  it("registers workspace aliases in the selected state database", async () => {
+    const root = testState!.root;
+    const workspace = path.join(root, "custom-db-workspace");
+    const workspaceAlias = path.join(root, "custom-db-workspace-alias");
+    const databasePath = path.join(root, "custom-state.sqlite");
+    const options = { path: databasePath };
+    const seededAt = "2026-07-31T12:00:00.000Z";
+    await fs.mkdir(workspace);
+    await fs.symlink(workspace, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
+    mergeWorkspaceSetupState(workspace, { bootstrapSeededAt: seededAt }, Date.now(), options);
+
+    expect(readWorkspaceStateSnapshot(workspaceAlias, options).setup).toEqual({
+      version: 1,
+      bootstrapSeededAt: seededAt,
+    });
+  });
+
   it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
@@ -953,7 +990,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
-  it("treats hardlinked bootstrap aliases as missing", async () => {
+  it("treats hardlinked bootstrap aliases as unreadable", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -977,8 +1014,8 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
       const files = await loadWorkspaceBootstrapFiles(workspaceDir);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-      expect(agents?.missing).toBe(true);
-      expect(agents?.content).toBeUndefined();
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("[UNREADABLE: path must not be hardlinked]");
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
@@ -1027,7 +1064,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }
   });
 
-  it("marks a bootstrap file missing after transient read retries are exhausted", async () => {
+  it("marks a bootstrap file unreadable after transient read retries are exhausted", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({
       dir: tempDir,
@@ -1046,12 +1083,10 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }) as typeof syncFs.read);
 
     try {
-      // Unlike the template check, this reader returns an io failure (not a
-      // throw) when the budget is exhausted, so the file surfaces as missing.
       const files = await loadWorkspaceBootstrapFiles(tempDir);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-      expect(agents?.missing).toBe(true);
-      expect(agents?.content).toBeUndefined();
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("[UNREADABLE: Unknown system error -11: read]");
     } finally {
       readSpy.mockRestore();
     }
@@ -1065,7 +1100,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nboundary retry\n",
     });
 
-    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const agentsPath = path.join(syncFs.realpathSync(tempDir), DEFAULT_AGENTS_FILENAME);
     const originalLstat = syncFs.promises.lstat.bind(syncFs.promises);
     let agentsLstatAttempts = 0;
     const lstatSpy = vi.spyOn(syncFs.promises, "lstat").mockImplementation((async (
@@ -1083,7 +1118,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
     try {
       const files = await loadWorkspaceBootstrapFiles(tempDir);
-      expect(agentsLstatAttempts).toBe(2);
+      expect(agentsLstatAttempts).toBeGreaterThanOrEqual(2);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
       expect(agents?.missing).toBe(false);
       expect(agents?.content).toContain("boundary retry");

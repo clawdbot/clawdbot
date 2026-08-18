@@ -4,6 +4,8 @@ import {
   SessionsCatalogHostEventSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
+  SessionsCatalogStartTerminalParamsSchema,
+  SessionsCatalogStartTerminalResultSchema,
 } from "./sessions-catalog.js";
 
 describe("SessionsCatalogListResultSchema", () => {
@@ -17,7 +19,10 @@ describe("SessionsCatalogListResultSchema", () => {
             capabilities: {
               continueSession: true,
               archive: false,
-              createSession: { model: "anthropic/claude-opus-4-8" },
+              createSession: {
+                model: "anthropic/claude-opus-4-8",
+                startTerminal: true,
+              },
               openTerminal: true,
             },
             hosts: [
@@ -43,6 +48,35 @@ describe("SessionsCatalogListResultSchema", () => {
         ],
       }),
     ).toBe(true);
+  });
+});
+
+describe("SessionsCatalogStartTerminal schemas", () => {
+  it("accepts the terminal start contract and rejects unknown fields", () => {
+    const params = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      agentId: "main",
+      cwd: "/tmp/worktree",
+      initialMessage: "Inspect the failing test",
+    };
+    const result = {
+      sessionId: "terminal-1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/tmp/worktree",
+      confined: false,
+      title: "Codex",
+    };
+
+    expect(Value.Check(SessionsCatalogStartTerminalParamsSchema, params)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogStartTerminalParamsSchema, { ...params, unexpected: true }),
+    ).toBe(false);
+    expect(Value.Check(SessionsCatalogStartTerminalResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogStartTerminalResultSchema, { ...result, unexpected: true }),
+    ).toBe(false);
   });
 });
 

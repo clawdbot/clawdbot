@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 import "./board-widget-cell.ts";
@@ -29,9 +30,14 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+// The Workboard card element arrives via a lazy chunk; a cold transform can
+// exceed vi.waitFor's 1s default on loaded machines, so these waits get a
+// real budget instead of flaking.
+const CHUNK_LOAD_WAIT = { timeout: 10_000 };
+
 describe("plugin board widget cells", () => {
   it("renders a removable placeholder when the owning plugin is inactive", async () => {
-    const widget: BoardViewWidget = {
+    const widget: BoardWidget = {
       name: "work-item",
       tabId: "main",
       title: "Work item",
@@ -62,7 +68,7 @@ describe("plugin board widget cells", () => {
   });
 
   it("retries a failed plugin renderer load for the same widget kind", async () => {
-    const widget: BoardViewWidget = {
+    const widget: BoardWidget = {
       name: "work-item",
       tabId: "main",
       title: "Work item",
@@ -97,8 +103,9 @@ describe("plugin board widget cells", () => {
     cell.callbacks = callbacks();
     provider.append(cell);
     document.body.append(provider);
-    await vi.waitFor(() =>
-      expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+    await vi.waitFor(
+      () => expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
     );
 
     Reflect.set(cell, "pluginRenderer", null);
@@ -111,46 +118,50 @@ describe("plugin board widget cells", () => {
     expect(retry?.textContent?.trim()).toBe("Retry");
     retry?.click();
 
-    await vi.waitFor(() =>
-      expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+    await vi.waitFor(
+      () => expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
     );
     expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
 
-  it.each([
-    { name: "read-only board", canMutate: false, widgetReadOnly: false },
-    { name: "read-only widget", canMutate: true, widgetReadOnly: true },
-  ])(
-    "keeps an embedded Workboard card read-only for a $name",
-    async ({ canMutate, widgetReadOnly }) => {
-      const request = vi.fn(async (method: string) => {
-        if (method === "workboard.cards.list") {
-          return {
-            cards: [
-              {
-                id: "card-123",
-                title: "Read-only embedded card",
-                status: "ready",
-                priority: "normal",
-                labels: [],
-                position: 0,
-                createdAt: 1,
-                updatedAt: 1,
-              },
-            ],
-            statuses: ["ready", "running", "done"],
-          };
-        }
-        throw new Error(`Unexpected method: ${method}`);
-      });
+  it("renders an advertised session progress card and its empty state", async () => {
+    const dashboardSessionKey = "agent:main:dashboard";
+    const targetSessionKey = "agent:main:target";
+    const responses = [
+      {
+        props: { sessionKey: targetSessionKey },
+        response: {
+          card: {
+            sessionKey: targetSessionKey,
+            revision: 1,
+            updatedAt: 1,
+            markdown: "**Release** validation is active.",
+            steps: [{ step: "Run focused checks", status: "in_progress" }],
+          },
+        },
+        text: "Run focused checks",
+        requestedSessionKey: targetSessionKey,
+      },
+      {
+        props: undefined,
+        response: { card: null },
+        text: "No progress card yet",
+        requestedSessionKey: dashboardSessionKey,
+      },
+    ] as const;
+
+    for (const [index, scenario] of responses.entries()) {
+      const request = vi.fn(async () => scenario.response);
       const context = {
         gateway: {
           snapshot: {
             phase: "connected",
             client: { request },
             hello: {
+              features: { methods: ["progressCard.get"] },
               controlUiWidgetKinds: [
-                { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+                { pluginId: "session", kind: "session:progress", label: "Session progress" },
               ],
             },
           },
@@ -158,45 +169,268 @@ describe("plugin board widget cells", () => {
           subscribeEvents: () => () => undefined,
         },
       } as unknown as ApplicationContext;
-      const widget: BoardViewWidget = {
-        name: "work-item",
+      const widget: BoardWidget = {
+        name: `session-progress-${index}`,
         tabId: "main",
-        title: "Work item",
+        title: "Session progress",
         contentKind: "plugin",
-        pluginKind: "workboard:card",
-        props: { cardId: "card-123" },
+        pluginKind: "session:progress",
+        ...(scenario.props ? { props: scenario.props } : {}),
         sizeW: 6,
         sizeH: 4,
-        position: 0,
+        position: index,
         grantState: "none",
         revision: 1,
       };
-      if (widgetReadOnly) {
-        Reflect.set(widget, "readOnly", true);
-      }
       const provider = createApplicationContextProvider(context);
       const cell = document.createElement("openclaw-board-widget-cell");
       cell.widget = widget;
-      cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
-      cell.sessionKey = "agent:main:test";
+      cell.rect = { name: widget.name, x: 0, y: index * 4, w: 6, h: 4 };
+      cell.sessionKey = dashboardSessionKey;
+      cell.active = index !== 0;
       cell.callbacks = callbacks();
-      cell.canMutate = canMutate;
       provider.append(cell);
       document.body.append(provider);
 
-      await vi.waitFor(() =>
+      if (index === 0) {
+        await cell.updateComplete;
+        expect(request).not.toHaveBeenCalled();
+        cell.active = true;
+      }
+
+      await vi.waitFor(
+        () =>
+          expect(cell.querySelector("openclaw-session-progress-widget")?.textContent).toContain(
+            scenario.text,
+          ),
+        CHUNK_LOAD_WAIT,
+      );
+      expect(request).toHaveBeenCalledWith("progressCard.get", {
+        sessionKey: scenario.requestedSessionKey,
+      });
+    }
+  });
+
+  it("surfaces a failed session progress read and retries it", async () => {
+    const sessionKey = "agent:main:protected";
+    let attempts = 0;
+    const deniedSessionKey = "agent:main:private";
+    const request = vi.fn(async (_method: string, params: { sessionKey: string }) => {
+      if (params.sessionKey === deniedSessionKey) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "session is private for this connection",
+          details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+        });
+      }
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("session not shared");
+      }
+      return {
+        card: {
+          sessionKey,
+          revision: 1,
+          updatedAt: 1,
+          steps: [{ step: "Recovered progress", status: "in_progress" }],
+        },
+      };
+    });
+    const context = {
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request },
+          hello: {
+            features: { methods: ["progressCard.get"] },
+            controlUiWidgetKinds: [
+              { pluginId: "session", kind: "session:progress", label: "Session progress" },
+            ],
+          },
+        },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    const widget: BoardWidget = {
+      name: "protected-session-progress",
+      tabId: "main",
+      title: "Session progress",
+      contentKind: "plugin",
+      pluginKind: "session:progress",
+      props: { sessionKey },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const provider = createApplicationContextProvider(context);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = "agent:main:dashboard";
+    cell.callbacks = callbacks();
+    provider.append(cell);
+    document.body.append(provider);
+
+    await vi.waitFor(
+      () => expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
+    );
+    cell
+      .querySelector<HTMLButtonElement>('[data-test-id="session-progress-error"] button')
+      ?.click();
+
+    await vi.waitFor(
+      () =>
+        expect(cell.querySelector("openclaw-session-progress-widget")?.textContent).toContain(
+          "Recovered progress",
+        ),
+      CHUNK_LOAD_WAIT,
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+
+    cell.widget = { ...widget, props: { sessionKey: deniedSessionKey } };
+    await vi.waitFor(
+      () =>
+        expect(
+          cell.querySelector('[data-test-id="session-progress-error"]')?.textContent,
+        ).toContain("Select a session you can access or change sharing for this session."),
+      CHUNK_LOAD_WAIT,
+    );
+    expect(cell.querySelector('[data-test-id="session-progress-error"] button')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("passes activity to a retained Workboard plugin element", async () => {
+    const context = {
+      gateway: {
+        snapshot: {
+          phase: "stopped",
+          hello: {
+            controlUiWidgetKinds: [
+              { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+            ],
+          },
+        },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    const widget: BoardWidget = {
+      name: "work-item",
+      tabId: "main",
+      title: "Work item",
+      contentKind: "plugin",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-123" },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const provider = createApplicationContextProvider(context);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = "agent:main:test";
+    cell.callbacks = callbacks();
+    provider.append(cell);
+    document.body.append(provider);
+
+    await vi.waitFor(
+      () => expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
+    );
+    const retained = cell.querySelector("openclaw-workboard-card-widget");
+    expect(retained?.active).toBe(true);
+
+    cell.active = false;
+    await cell.updateComplete;
+    expect(cell.querySelector("openclaw-workboard-card-widget")).toBe(retained);
+    expect(retained?.active).toBe(false);
+
+    cell.active = true;
+    await cell.updateComplete;
+    expect(cell.querySelector("openclaw-workboard-card-widget")).toBe(retained);
+    expect(retained?.active).toBe(true);
+  });
+
+  it("keeps an embedded Workboard card read-only for a read-only board", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return {
+          cards: [
+            {
+              id: "card-123",
+              title: "Read-only embedded card",
+              status: "ready",
+              priority: "normal",
+              labels: [],
+              position: 0,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          statuses: ["ready", "running", "done"],
+        };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const context = {
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request },
+          hello: {
+            controlUiWidgetKinds: [
+              { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+            ],
+          },
+        },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    const widget: BoardWidget = {
+      name: "work-item",
+      tabId: "main",
+      title: "Work item",
+      contentKind: "plugin",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-123" },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const provider = createApplicationContextProvider(context);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = "agent:main:test";
+    cell.callbacks = callbacks();
+    cell.canMutate = false;
+    provider.append(cell);
+    document.body.append(provider);
+
+    await vi.waitFor(
+      () =>
         expect(cell.querySelector("openclaw-workboard-card-widget")?.textContent).toContain(
           "Read-only embedded card",
         ),
-      );
-      const select = cell.querySelector<HTMLSelectElement>("openclaw-workboard-card-widget select");
-      expect(select).not.toBeNull();
-      expect(select?.disabled).toBe(true);
-      if (select) {
-        select.value = "running";
-        select.dispatchEvent(new Event("change"));
-      }
-      expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
-    },
-  );
+      CHUNK_LOAD_WAIT,
+    );
+    const select = cell.querySelector<HTMLSelectElement>("openclaw-workboard-card-widget select");
+    expect(select).not.toBeNull();
+    expect(select?.disabled).toBe(true);
+    if (select) {
+      select.value = "running";
+      select.dispatchEvent(new Event("change"));
+    }
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
+  });
 });

@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookSkillProposalEvaluationOutcome } from "../../plugins/hook-types.js";
 import type { SkillScanFinding } from "../security/scanner.js";
+import type { SkillCollectionReconcileContext } from "./collection-contracts.js";
 
 /** Schema id for persisted skill workshop proposal records. */
 export const SKILL_WORKSHOP_SCHEMA = "openclaw.skill-workshop.proposal.v1" as const;
@@ -73,9 +74,7 @@ export type SkillWorkshopProposalMutationBudget = {
   failedMutations?: number;
   /** Run-local identity set used to keep idea counts distinct. */
   mutatedProposalIds?: Set<string>;
-  /** Proposals composed mechanically by patching the live body with a reviewer edit. */
-  patchProposalIds?: Set<string>;
-  /** Content hash per live skill read this run; patches require a matching receipt. */
+  /** Content hash per live skill read this run; autonomous updates require a matching receipt. */
   readSkillHashes?: Map<string, string>;
 };
 
@@ -102,6 +101,7 @@ export type SkillWorkshopRunOptions = {
   origin?: SkillProposalOrigin;
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
+  collectionReconcile?: SkillCollectionReconcileContext;
 };
 
 export type SkillProposalScan = {
@@ -176,6 +176,8 @@ export type SkillProposalManifestEntry = {
   scanState: SkillProposalScannerState;
   /** The proposal remains bound to an earlier workspace for this agent. */
   workspaceMismatch?: true;
+  /** The durable proposal body is unavailable; metadata remains inspectable in list output. */
+  degradedState?: "draft-missing";
 };
 
 export type SkillProposalManifest = {

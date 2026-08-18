@@ -1,5 +1,6 @@
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 import fs from "node:fs";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
@@ -14,21 +15,28 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_TERMINAL_UPLOAD_COMMAND,
 } from "../infra/node-commands.js";
+import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
 import { logDebug } from "../logger.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
+import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
+import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
   ensureNodeHostPluginRegistry,
   isRegisteredNodeHostCommandDuplex,
   listRegisteredNodeHostCapsAndCommands,
+  notifyRegisteredNodeHostCommandDisconnect,
   watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
 import { scanNodeHostedSkills } from "./skills.js";
@@ -38,6 +46,7 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 type NodeHostManifest = {
   caps: string[];
   commands: string[];
+  computerUse?: ComputerUseCapabilityDescriptor;
   pathEnv: string;
 };
 
@@ -48,11 +57,13 @@ export type NodeHostInventory = {
 
 type PreparedNodeHostRuntime = {
   manifest: NodeHostManifest;
+  workerHostingEnabled: boolean;
   initialInventory: NodeHostInventory;
   start(params: {
     client: NodeHostClient;
     onInventoryChanged?: (inventory: NodeHostInventory) => void;
     onManifestChanged?: (manifest: NodeHostManifest) => void;
+    onRunnerCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   }): ActiveNodeHostRuntime;
 };
 
@@ -61,6 +72,11 @@ type ActiveNodeHostRuntime = {
   handleInput(invokeId: string, seq: number, payloadJSON: string): void;
   cancel(invokeId: string): void;
   cancelAll(): void;
+  updateGatewayConnection(connection?: {
+    url: string;
+    tlsFingerprint?: string;
+    cloudflareAccess?: CloudflareAccessCredentials;
+  }): void;
   close(): Promise<void>;
 };
 
@@ -201,22 +217,20 @@ function ensureNodePathEnv(): string {
   return DEFAULT_NODE_PATH;
 }
 
-function createInventory(params: {
-  skills: unknown[] | null;
-  pluginTools: unknown[];
-  mcpManager?: NodeHostMcpManager;
-}): NodeHostInventory {
-  const pluginTools = [...params.pluginTools, ...(params.mcpManager?.descriptors ?? [])].toSorted(
-    (left, right) => {
-      const a = left as { pluginId?: string; name?: string };
-      const b = right as { pluginId?: string; name?: string };
-      return (
-        (a.pluginId ?? "").localeCompare(b.pluginId ?? "") ||
-        (a.name ?? "").localeCompare(b.name ?? "")
-      );
-    },
-  );
-  return { skills: params.skills, pluginTools };
+function createInventory(
+  skills: unknown[] | null,
+  pluginTools: unknown[],
+  mcpDescriptors: readonly unknown[] = [],
+): NodeHostInventory {
+  const sortedPluginTools = [...pluginTools, ...mcpDescriptors].toSorted((left, right) => {
+    const a = left as { pluginId?: string; name?: string };
+    const b = right as { pluginId?: string; name?: string };
+    return (
+      (a.pluginId ?? "").localeCompare(b.pluginId ?? "") ||
+      (a.name ?? "").localeCompare(b.name ?? "")
+    );
+  });
+  return { skills, pluginTools: sortedPluginTools };
 }
 
 function sameStringList(left: string[], right: string[]): boolean {
@@ -227,7 +241,8 @@ function sameManifest(left: NodeHostManifest, right: NodeHostManifest): boolean 
   return (
     left.pathEnv === right.pathEnv &&
     sameStringList(left.caps, right.caps) &&
-    sameStringList(left.commands, right.commands)
+    sameStringList(left.commands, right.commands) &&
+    JSON.stringify(left.computerUse) === JSON.stringify(right.computerUse)
   );
 }
 
@@ -236,6 +251,10 @@ export async function prepareNodeHostRuntime(params?: {
   env?: NodeJS.ProcessEnv;
   /** The embedded app worker never advertises native agent runs. */
   enableAgentRuns?: boolean;
+  /** The embedded app worker never advertises full worker session hosting. */
+  enableWorkerRuns?: boolean;
+  /** Process-scoped worker hosting for environment-managed disposable nodes. */
+  forceWorkerRuns?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
   installedAppsSharingEnabled?: boolean;
@@ -252,6 +271,9 @@ export async function prepareNodeHostRuntime(params?: {
   const platform = params?.platform ?? process.platform;
   const installedAppsSharingEnabled =
     platform === "darwin" && params?.installedAppsSharingEnabled === true;
+  const desktopStreamingEnabled =
+    (platform === "darwin" || platform === "linux" || platform === "win32") &&
+    config.desktop?.host?.enabled === true;
   const availabilityContext = { config, env };
   const resolvePluginNodeHost = () =>
     listRegisteredNodeHostCapsAndCommands(availabilityContext, {
@@ -264,6 +286,9 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
+  const workerRunsEnabled =
+    params?.enableWorkerRuns === true &&
+    (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
@@ -281,61 +306,88 @@ export async function prepareNodeHostRuntime(params?: {
         NODE_FS_LIST_DIR_COMMAND,
         NODE_TERMINAL_UPLOAD_COMMAND,
         NODE_MCP_TOOLS_CALL_COMMAND,
+        ...(desktopStreamingEnabled ? [NODE_DESKTOP_STREAM_COMMAND] : []),
         ...(installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []),
         ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
         ...pluginManifest.commands,
       ]),
     ].toSorted(),
+    ...(pluginManifest.computerUse ? { computerUse: pluginManifest.computerUse } : {}),
     pathEnv,
   });
   const manifest = buildManifest(pluginNodeHost);
-  const initialInventory = createInventory({
-    skills,
-    pluginTools: pluginNodeHost.nodePluginTools,
-  });
+  const initialInventory = createInventory(skills, pluginNodeHost.nodePluginTools);
 
   return {
     manifest,
+    workerHostingEnabled: workerRunsEnabled,
     initialInventory,
-    start({ client, onInventoryChanged, onManifestChanged }) {
+    start({ client, onInventoryChanged, onManifestChanged, onRunnerCapacityChanged }) {
       const mcpAbort = new AbortController();
+      const workerWorkspace = workerRunsEnabled
+        ? new NodeWorkerWorkspaceRuntime({ env })
+        : undefined;
+      const workerBundleInstaller = workerRunsEnabled
+        ? new NodeWorkerBundleInstaller({ env })
+        : undefined;
+      const workerSupervisor = workerRunsEnabled
+        ? createNodeWorkerSupervisor({
+            env,
+            onCapacityChanged: onRunnerCapacityChanged,
+            workspace: workerWorkspace,
+          })
+        : undefined;
+      if (workerSupervisor) {
+        void workerSupervisor.initialize().catch((error: unknown) => {
+          logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
+        });
+      }
       const skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
+      let pluginDisconnectCleanup: Promise<void> = Promise.resolve();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
         sendNodeEvent: async (event, payload) =>
           await client.request("node.event", buildNodeEventParams(event, payload)),
       };
       let currentPluginNodeHost = pluginNodeHost;
       let currentManifest = manifest;
+      let gatewayConnection:
+        | {
+            url: string;
+            tlsFingerprint?: string;
+            cloudflareAccess?: CloudflareAccessCredentials;
+          }
+        | undefined;
       let manager: NodeHostMcpManager | undefined;
+      let closing = false;
+      let closePromise: Promise<void> | undefined;
+      const publishInventory = () =>
+        onInventoryChanged?.(
+          createInventory(skills, currentPluginNodeHost.nodePluginTools, manager?.descriptors),
+        );
       const startup = startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
         signal: mcpAbort.signal,
+        onDescriptorsChanged: () => {
+          if (!closing && manager) {
+            publishInventory();
+          }
+        },
       }).then((resolved) => {
         manager = resolved;
-        onInventoryChanged?.(
-          createInventory({
-            skills,
-            pluginTools: currentPluginNodeHost.nodePluginTools,
-            mcpManager: manager,
-          }),
-        );
+        if (!closing) {
+          publishInventory();
+        }
         return resolved;
       });
       const refreshAvailability = () => {
         const nextPluginNodeHost = resolvePluginNodeHost();
         const nextManifest = buildManifest(nextPluginNodeHost);
         currentPluginNodeHost = nextPluginNodeHost;
-        onInventoryChanged?.(
-          createInventory({
-            skills,
-            pluginTools: currentPluginNodeHost.nodePluginTools,
-            mcpManager: manager,
-          }),
-        );
         if (!sameManifest(currentManifest, nextManifest)) {
           currentManifest = nextManifest;
           onManifestChanged?.(nextManifest);
         }
+        publishInventory();
       };
       const stopAvailabilityWatch = onManifestChanged
         ? watchRegisteredNodeHostCommandAvailability(availabilityContext, refreshAvailability)
@@ -347,7 +399,9 @@ export async function prepareNodeHostRuntime(params?: {
       }
       return {
         async invoke(frame) {
+          await pluginDisconnectCleanup;
           const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
+          const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
           const controller = new AbortController();
           // Every command must remain cancellable after dispatch; only duplex
           // commands own ordered input and its pre-spawn buffer.
@@ -373,7 +427,7 @@ export async function prepareNodeHostRuntime(params?: {
           // let its cleanup unregister the replacement invocation.
           activeInvokes.get(frame.id)?.controller.abort();
           activeInvokes.set(frame.id, active);
-          const progress = duplexCommand
+          const progress = progressEnabled
             ? createNodeInvokeProgressWriter({
                 client,
                 frame,
@@ -381,7 +435,9 @@ export async function prepareNodeHostRuntime(params?: {
                 onError: () => controller.abort(),
               })
             : undefined;
-          progress?.startHeartbeats();
+          if (duplexCommand) {
+            progress?.startHeartbeats();
+          }
           const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
             input && progress
               ? {
@@ -399,9 +455,21 @@ export async function prepareNodeHostRuntime(params?: {
               ...(claudePath ? { claudePath } : {}),
               signal: controller.signal,
               ...(pluginCommandIo ? { pluginCommandIo } : {}),
+              ...(gatewayConnection?.url ? { gatewayUrl: gatewayConnection.url } : {}),
+              ...(gatewayConnection?.tlsFingerprint
+                ? { gatewayTlsFingerprint: gatewayConnection.tlsFingerprint }
+                : {}),
+              ...(gatewayConnection?.cloudflareAccess
+                ? { gatewayCloudflareAccess: gatewayConnection.cloudflareAccess }
+                : {}),
+              ...(config.desktop?.host ? { desktopHostConfig: config.desktop.host } : {}),
+              ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),
               installedAppsSharingEnabled,
               installedAppsPlatform: platform,
               pluginCommandContext,
+              ...(workerBundleInstaller ? { workerBundleInstaller } : {}),
+              ...(workerSupervisor ? { workerSupervisor } : {}),
+              ...(workerWorkspace ? { workerWorkspace } : {}),
             });
           } finally {
             progress?.stop();
@@ -425,13 +493,49 @@ export async function prepareNodeHostRuntime(params?: {
             active.controller.abort();
           }
           activeInvokes.clear();
+          pluginDisconnectCleanup = pluginDisconnectCleanup
+            .then(async () => await notifyRegisteredNodeHostCommandDisconnect())
+            .catch((error: unknown) => {
+              logDebug(`node-host: plugin disconnect cleanup failed: ${String(error)}`);
+            });
         },
-        async close() {
+        updateGatewayConnection(connection) {
+          gatewayConnection = connection;
+        },
+        close() {
+          if (closePromise) {
+            return closePromise;
+          }
+          closing = true;
           this.cancelAll();
-          stopAvailabilityWatch();
+          const preludeErrors: unknown[] = [];
+          try {
+            stopAvailabilityWatch();
+          } catch (error) {
+            preludeErrors.push(error);
+          }
+          // Startup observes this signal before either independent owner is joined.
           mcpAbort.abort();
-          const resolved = manager ?? (await startup.catch(() => undefined));
-          await resolved?.close();
+          const disconnectClose = pluginDisconnectCleanup;
+          const supervisorClose = Promise.resolve().then(() => workerSupervisor?.close());
+          const mcpClose = startup.then((resolved) => resolved.close());
+          closePromise = Promise.allSettled([disconnectClose, supervisorClose, mcpClose]).then(
+            (results) => {
+              const errors = [
+                ...preludeErrors,
+                ...results.flatMap((result) =>
+                  result.status === "rejected" ? [result.reason] : [],
+                ),
+              ];
+              if (errors.length === 1) {
+                throw errors[0];
+              }
+              if (errors.length > 1) {
+                throw new AggregateError(errors, "node-host runtime close failed");
+              }
+            },
+          );
+          return closePromise;
         },
       };
     },

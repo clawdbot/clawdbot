@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements process tree cpu behavior.
 import { spawnSync } from "node:child_process";
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaWindowsPowerShellExePath } from "./windows-system-tools.js";
 
 type ProcessTreeSnapshot = {
@@ -10,10 +11,6 @@ type ProcessTreeSnapshot = {
 };
 
 const PROCESS_TREE_SNAPSHOT_TIMEOUT_MS = 5_000;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parsePositiveInteger(value: unknown): number | null {
   const parsed = parseStrictInteger(value);

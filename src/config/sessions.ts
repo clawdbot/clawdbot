@@ -17,7 +17,7 @@ export {
   resolveSessionEntryCandidateTarget,
 } from "./sessions/session-accessor.js";
 export * from "./sessions/session-key.js";
-export { resolveSessionStoreEntry } from "./sessions/store-entry.js";
+export { resolveSessionStoreEntryCore } from "./sessions/store-entry.js";
 export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
 export * from "./sessions/session-registry-maintenance.js";
@@ -27,3 +27,4 @@ export * from "./sessions/delivery-info.js";
 export * from "./sessions/disk-budget.js";
 export * from "./sessions/targets.js";
 export * from "./sessions/cleanup-service.js";
+export * from "./sessions/context-token-provenance.js";

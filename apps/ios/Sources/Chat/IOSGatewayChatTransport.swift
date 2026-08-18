@@ -102,11 +102,12 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         guard let route = await currentSessionMutationRoute() else { return nil }
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, label, category, pinned, archived, unread in
+            patchSession: { key, expectedSessionID, label, category, pinned, archived, unread in
                 let target = transport.sessionTarget(for: key)
                 let request = OpenClawChatGatewayRequests.patchSession(
                     sessionKey: target.sessionKey,
                     agentID: target.agentID,
+                    expectedSessionID: expectedSessionID,
                     label: label,
                     category: category,
                     pinned: pinned,
@@ -431,6 +432,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
 
     func patchSession(
         key: String,
+        expectedSessionID: String? = nil,
         label: String?? = nil,
         category: String?? = nil,
         pinned: Bool? = nil,
@@ -441,6 +443,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
+            expectedSessionID: expectedSessionID,
             label: label,
             category: category,
             pinned: pinned,
@@ -458,11 +461,16 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func forkSession(parentKey: String) async throws -> String {
+        try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
+    }
+
+    func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
         let target = self.sessionTarget(for: parentKey)
         let childAgentID = target.agentID ?? OpenClawChatSessionKey.agentID(from: target.sessionKey)
         let request = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: target.sessionKey,
-            agentID: childAgentID)
+            agentID: childAgentID,
+            fromLastCompleted: fromLastCompleted)
         let response = try await requestSessionMutation(request)
         return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: response).key
     }
@@ -541,6 +549,22 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, ifCurrentRoute: nil)
+    }
+
+    func gatewayAdvertisesProgressCardStore() async -> Bool? {
+        guard let route = await self.currentSessionMutationRoute() else { return nil }
+        return await self.gateway.supportsServerMethod(
+            "progressCard.get",
+            ifCurrentRoute: route)
+    }
+
+    func fetchProgressCard(sessionKey: String) async throws -> ProgressCard? {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.progressCardGet(sessionKey: target.sessionKey)
+        let data = try await self.gateway.request(request)
+        let result = try JSONDecoder().decode(ProgressCardGetResult.self, from: data)
+        guard !(result.card.value is NSNull) else { return nil }
+        return try GatewayPayloadDecoding.decode(result.card, as: ProgressCard.self)
     }
 
     func resolveInlineWidgetResource(
@@ -773,6 +797,13 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     func listQuestions() async throws -> [QuestionRecord] {
         let data = try await gateway.request(OpenClawChatGatewayRequests.questionList())
         return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
+    }
+
+    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
+        let data = try await gateway.request(OpenClawChatGatewayRequests.tasksList(
+            sessionKey: sessionKey,
+            agentID: agentID))
+        return try JSONDecoder().decode(TasksListResult.self, from: data).tasks
     }
 
     func getQuestion(id: String) async throws -> QuestionRecord {

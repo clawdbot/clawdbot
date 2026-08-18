@@ -10,9 +10,11 @@ import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import type { Model } from "../llm/types.js";
 import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -21,6 +23,7 @@ import {
   signalChildProcessTree,
   shouldDetachChildForProcessTree,
 } from "../process/child-process-tree.js";
+import { setManagedProviderLocalServicesActive } from "./provider-runtime-lifecycle.js";
 import { unwrapHeadersInitSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
 const log = createSubsystemLogger("provider-local-service");
@@ -227,6 +230,7 @@ export async function ensureProviderLocalService(
   installExitHandler();
   const managed = services.get(key) ?? { active: 0 };
   services.set(key, managed);
+  setManagedProviderLocalServicesActive(true);
   clearIdleTimer(managed);
   managed.active += 1;
 
@@ -287,12 +291,13 @@ export async function ensureProviderLocalService(
   }
 }
 
-/** Stop all managed local services and clear process state for tests. */
-export function stopManagedProviderLocalServicesForTest(): void {
+/** Stop all managed local services owned by this process. */
+export function stopManagedProviderLocalServices(): void {
   for (const [key, managed] of services) {
-    stopManagedService(key, managed, "test");
+    stopManagedService(key, managed, "host-shutdown");
   }
   services.clear();
+  setManagedProviderLocalServicesActive(false);
 }
 
 /** Return bounded local-service state for focused lifecycle tests. */
@@ -311,11 +316,7 @@ function validateLocalServiceConfig(service: ModelProviderLocalServiceConfig, pr
 }
 
 function resolveHealthUrl(service: ModelProviderLocalServiceConfig, baseUrl: string): string {
-  const configured = service.healthUrl?.trim();
-  if (configured) {
-    return configured;
-  }
-  return `${baseUrl.replace(/\/+$/, "")}/models`;
+  return service.healthUrl?.trim() || `${baseUrl.replace(/\/+$/, "")}/models`;
 }
 
 function localServiceKey(
@@ -425,7 +426,7 @@ async function startAndWaitForLocalService(params: {
   log.info(`starting ${provider} local service: ${service.command}`);
   managed.process = spawn(service.command, service.args ?? [], {
     cwd: service.cwd,
-    env: service.env ? { ...process.env, ...service.env } : process.env,
+    env: service.env ? mergeProcessEnv([process.env, service.env]) : process.env,
     stdio: ["ignore", "pipe", "pipe"],
     detached: shouldDetachChildForProcessTree(),
   });
@@ -505,7 +506,7 @@ async function startAndWaitForLocalService(params: {
     if (Date.now() >= deadline) {
       throw new Error(`${provider} local service did not become ready at ${healthUrl}`);
     }
-    await sleep(PROBE_INTERVAL_MS, signal);
+    await sleepWithAbort(PROBE_INTERVAL_MS, signal, { ref: false });
   }
 }
 
@@ -582,6 +583,7 @@ function scheduleIdleStop(
   if (!managed.process) {
     if (!managed.starting) {
       services.delete(key);
+      setManagedProviderLocalServicesActive(services.size > 0);
     }
     return;
   }
@@ -612,6 +614,7 @@ function stopManagedService(key: string, managed: ManagedLocalService, reason: s
   managed.process = undefined;
   managed.lastExit = undefined;
   services.delete(key);
+  setManagedProviderLocalServicesActive(services.size > 0);
   if (child) {
     drainLocalServiceOutput(child);
   }
@@ -703,25 +706,6 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
   });
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  throwIfAborted(signal);
-  return new Promise((resolve, reject) => {
-    const cleanup = () => signal?.removeEventListener("abort", onAbort);
-    const onDone = () => {
-      cleanup();
-      resolve();
-    };
-    const onAbort = () => {
-      clearTimeout(timeout);
-      cleanup();
-      reject(toAbortError(signal));
-    };
-    const timeout: NodeJS.Timeout = setTimeout(onDone, ms);
-    timeout.unref?.();
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 function waitForSpawnResult(
   child: ChildProcess,
   signal?: AbortSignal | null,
@@ -790,4 +774,3 @@ export function hasLocalServiceProcessExited(
 ): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -159,7 +159,7 @@ GRAPHQL
   rm -f "$variables_file"
 
   local result
-  result=$(gh api graphql --input - <<< "$payload" 2>&1) || {
+  result=$(gh_plain api graphql --input - <<< "$payload" 2>&1) || {
     echo "GraphQL push failed: $result" >&2
     return 1
   }
@@ -175,32 +175,13 @@ GRAPHQL
   printf '%s\n' "$new_oid"
 }
 
-resolve_head_push_url_https() {
-  # shellcheck disable=SC1091
-  source .local/pr-meta.env
-
-  if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
-    printf 'https://github.com/%s/%s.git\n' "$PR_HEAD_OWNER" "$PR_HEAD_REPO_NAME"
-    return 0
-  fi
-
-  if [ -n "${PR_HEAD_REPO_URL:-}" ] && [ "$PR_HEAD_REPO_URL" != "null" ]; then
-    case "$PR_HEAD_REPO_URL" in
-      *.git) printf '%s\n' "$PR_HEAD_REPO_URL" ;;
-      *) printf '%s.git\n' "$PR_HEAD_REPO_URL" ;;
-    esac
-    return 0
-  fi
-
-  return 1
-}
-
 verify_pr_head_branch_matches_expected() {
   local pr="$1"
   local expected_head="$2"
 
-  local current_head
-  current_head=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+  local current_head current_head_json
+  current_head_json=$(read_pr_view_json "$pr" "headRefName") || exit 1
+  current_head=$(pr_view_string_field "$current_head_json" "headRefName" "$pr" "Re-run prepare-init.") || exit 1
   if [ "$current_head" != "$expected_head" ]; then
     echo "PR head branch changed from $expected_head to $current_head. Re-run prepare-init."
     exit 1
@@ -228,17 +209,8 @@ resolve_prhead_remote_sha() {
   local remote_sha
   remote_sha=$(git ls-remote "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
   if [ -z "$remote_sha" ]; then
-    local https_url
-    https_url=$(resolve_head_push_url_https 2>/dev/null) || true
-    if [ -n "$https_url" ] && [ "$https_url" != "$PRHEAD_REMOTE_URL" ]; then
-      echo "SSH remote failed; falling back to HTTPS..." >&2
-      PRHEAD_REMOTE_URL="$https_url"
-      remote_sha=$(git ls-remote "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
-    fi
-    if [ -z "$remote_sha" ]; then
-      echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
-      exit 1
-    fi
+    echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
+    exit 1
   fi
 
   PRHEAD_REMOTE_SHA="$remote_sha"

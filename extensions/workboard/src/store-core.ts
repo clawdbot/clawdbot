@@ -7,11 +7,15 @@ import type {
   WorkboardMetadata,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isWorkboardCardStore } from "./persistence-types.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardBoardCardAggregate,
+  WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
@@ -55,7 +59,6 @@ import {
   normalizeLinkType,
   normalizeMetadata,
   normalizeNotes,
-  normalizeOptionalString,
   normalizePosition,
   normalizePriority,
   normalizeStatus,
@@ -71,6 +74,7 @@ export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();
   private lastNotificationSequence = 0;
   private readonly changes: WorkboardChangeTracker;
+  private readonly cardStore?: WorkboardCardStore;
   protected readonly store: WorkboardKeyedStore;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
@@ -86,7 +90,12 @@ export class WorkboardCoreStore {
     } = {},
   ) {
     this.changes = new WorkboardChangeTracker(stores.dataVersion);
-    this.store = this.changes.track(store);
+    if (isWorkboardCardStore(store)) {
+      this.cardStore = this.changes.trackCardStore(store);
+      this.store = this.cardStore;
+    } else {
+      this.store = this.changes.track(store);
+    }
     this.boardStore = this.changes.track(
       stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>),
     );
@@ -177,6 +186,7 @@ export class WorkboardCoreStore {
         ...(board.description ? { description: board.description } : {}),
         ...(board.icon ? { icon: board.icon } : {}),
         ...(board.color ? { color: board.color } : {}),
+        ...(board.automationJobId ? { automationJobId: board.automationJobId } : {}),
         ...(board.defaultWorkspace ? { defaultWorkspace: board.defaultWorkspace } : {}),
         ...(board.orchestration ? { orchestration: board.orchestration } : {}),
         total: 0,
@@ -196,8 +206,17 @@ export class WorkboardCoreStore {
         byStatus: {},
       });
     }
-    for (const card of await this.list()) {
-      const boardId = cardBoardId(card);
+    const cardAggregates: WorkboardBoardCardAggregate[] = this.cardStore
+      ? await this.cardStore.listBoardAggregates()
+      : (await this.list()).map((card) => ({
+          boardId: cardBoardId(card),
+          status: card.status,
+          total: 1,
+          archived: card.metadata?.archivedAt ? 1 : 0,
+          updatedAt: card.updatedAt,
+        }));
+    for (const aggregate of cardAggregates) {
+      const boardId = aggregate.boardId;
       const summary =
         boards.get(boardId) ??
         ({
@@ -207,14 +226,12 @@ export class WorkboardCoreStore {
           archived: 0,
           byStatus: {},
         } satisfies WorkboardBoardSummary);
-      summary.total += 1;
-      if (card.metadata?.archivedAt) {
-        summary.archived += 1;
-      } else {
-        summary.active += 1;
-      }
-      summary.byStatus[card.status] = (summary.byStatus[card.status] ?? 0) + 1;
-      summary.updatedAt = Math.max(summary.updatedAt ?? 0, card.updatedAt);
+      summary.total += aggregate.total;
+      summary.archived += aggregate.archived;
+      summary.active += aggregate.total - aggregate.archived;
+      summary.byStatus[aggregate.status] =
+        (summary.byStatus[aggregate.status] ?? 0) + aggregate.total;
+      summary.updatedAt = Math.max(summary.updatedAt ?? 0, aggregate.updatedAt);
       boards.set(boardId, summary);
     }
     return {

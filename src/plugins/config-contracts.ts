@@ -3,7 +3,10 @@ import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findBundledPluginMetadataById } from "./bundled-plugin-metadata.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -26,6 +29,7 @@ export function resolvePluginConfigContractsById(params: {
   fallbackBundledPluginIds?: readonly string[];
   pluginIds: readonly string[];
   discovery?: PluginDiscoveryResult;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): ReadonlyMap<string, PluginConfigContractMetadata> {
   const matches = new Map<string, PluginConfigContractMetadata>();
   const pluginIds = normalizeSortedUniqueStringEntries(params.pluginIds);
@@ -48,7 +52,7 @@ export function resolvePluginConfigContractsById(params: {
         workspaceDir: params.workspaceDir,
         env: params.env,
       });
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
@@ -74,12 +78,14 @@ export function resolvePluginConfigContractsById(params: {
   };
 
   const resolvedPluginOrigins = new Map<string, PluginOrigin>();
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
+  const registry =
+    params.manifestRegistry ??
+    loadPluginManifestRegistryForPluginRegistry({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      includeDisabled: true,
+    });
   for (const plugin of registry.plugins) {
     if (!pluginIds.includes(plugin.id)) {
       continue;
@@ -100,7 +106,7 @@ export function resolvePluginConfigContractsById(params: {
       const shouldHydrateBundledMatch =
         existing &&
         ((params.fallbackToBundledMetadataForResolvedBundled && existing.origin === "bundled") ||
-          fallbackBundledPluginIds.has(pluginId));
+          (!params.manifestRegistry && fallbackBundledPluginIds.has(pluginId)));
       if (shouldHydrateBundledMatch) {
         const bundledConfigContracts = findBundledConfigContracts(pluginId);
         if (bundledConfigContracts) {
@@ -128,6 +134,12 @@ export function resolvePluginConfigContractsById(params: {
         !(params.fallbackToBundledMetadataForResolvedBundled && resolvedOrigin === "bundled") &&
         !fallbackBundledPluginIds.has(pluginId)
       ) {
+        continue;
+      }
+      if (params.manifestRegistry && resolvedOrigin && resolvedOrigin !== "bundled") {
+        continue;
+      }
+      if (params.manifestRegistry && !fallbackBundledPluginIds.has(pluginId)) {
         continue;
       }
       const bundledConfigContracts = findBundledConfigContracts(pluginId);

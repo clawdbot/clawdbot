@@ -132,21 +132,6 @@ describe("stopSlackStream finalize error handling", () => {
     expect(session.stopped).toBe(true);
   });
 
-  it("throws SlackStreamNotDeliveredError carrying stop()'s final text too", async () => {
-    const session = makeSession({
-      appendImpl: async () => null,
-      stopImpl: async () => {
-        throw slackApiError("team_not_found");
-      },
-    });
-    await appendSlackStream({ session, text: "hello " });
-
-    const thrown = await stopSlackStream({ session, text: "world" }).catch((err: unknown) => err);
-    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
-    expect((thrown as SlackStreamNotDeliveredError).slackCode).toBe("team_not_found");
-    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("hello world");
-  });
-
   it("throws SlackStreamNotDeliveredError for unexpected finalize codes while text is buffered", async () => {
     const session = makeSession({
       appendImpl: async () => null,

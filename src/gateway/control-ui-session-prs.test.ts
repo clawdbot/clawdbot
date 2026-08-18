@@ -33,12 +33,15 @@ describe("parseGitHubRemoteUrl", () => {
 describe("loadControlUiSessionPullRequests", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
     cacheEpochMs += 10 * 60_000;
     vi.setSystemTime(cacheEpochMs);
   });
 
   afterEach(async () => {
     await evictPullRequestCache();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
 
@@ -47,7 +50,7 @@ describe("loadControlUiSessionPullRequests", () => {
       { match: "/pulls?head=", response: () => githubJson([pullListItem()]) },
       {
         match: "/pulls/103469",
-        response: () => githubJson({ additions: 4, deletions: 3 }),
+        response: () => githubJson({ additions: 4, deletions: 3, changed_files: 2 }),
       },
       {
         match: "/check-runs",
@@ -78,6 +81,7 @@ describe("loadControlUiSessionPullRequests", () => {
           state: "open",
           additions: 4,
           deletions: 3,
+          changedFiles: 2,
           checks: { state: "passing", passed: 1, failed: 0, skipped: 1, running: 0 },
           checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
         },
@@ -91,6 +95,64 @@ describe("loadControlUiSessionPullRequests", () => {
       },
       rateLimited: false,
     });
+  });
+
+  it("retries stale optional authentication anonymously for session PRs", async () => {
+    vi.stubEnv("GH_TOKEN", "stale-github-token");
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(githubJson({ message: "Bad credentials" }, 401))
+      .mockResolvedValueOnce(githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z" })]));
+
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    expect(result.pullRequests).toHaveLength(1);
+    expect(result.pullRequests[0]).toMatchObject({ number: 103469, state: "merged" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toHaveProperty(
+      "Authorization",
+      "Bearer stale-github-token",
+    );
+    expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+  });
+
+  it("does not reuse cached private PRs after the GitHub token is removed", async () => {
+    vi.stubEnv("GH_TOKEN", "github-token-a");
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const authorization = new Headers(init?.headers).get("Authorization");
+      return authorization === "Bearer github-token-a"
+        ? githubJson([
+            pullListItem({
+              title: "private PR from token A",
+              merged_at: "2026-08-12T00:00:00Z",
+            }),
+          ])
+        : githubJson({ message: "Not Found" }, 404);
+    });
+
+    const first = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    vi.stubEnv("GH_TOKEN", "");
+    await expect(
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:main" },
+        { fetchImpl, resolveGitContext },
+      ),
+    ).rejects.toMatchObject({ statusCode: 404 });
+
+    expect(first.pullRequests[0]?.title).toBe("private PR from token A");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toHaveProperty(
+      "Authorization",
+      "Bearer github-token-a",
+    );
+    expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
   });
 
   it("skips diff and check fetches for merged PRs", async () => {

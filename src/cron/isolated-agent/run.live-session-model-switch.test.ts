@@ -192,6 +192,64 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
+  it("propagates a legacy source-less user auth profile into the run", async () => {
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-a");
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          authProfileOverride: "profile-a",
+        }),
+        isNewSession: false,
+      }),
+    );
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }));
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(requireEmbeddedAgentCall(0)).toMatchObject({
+      authProfileId: "profile-a",
+      authProfileIdSource: "user",
+    });
+    expect(runWithModelFallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userLockedAuthProfileId: "profile-a" }),
+    );
+  });
+
+  it("keeps a resolved fallback profile automatic when it differs from the stored pin", async () => {
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-b");
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          authProfileOverride: "profile-a",
+        }),
+        isNewSession: false,
+      }),
+    );
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }));
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(requireEmbeddedAgentCall(0)).toMatchObject({
+      authProfileId: "profile-b",
+      authProfileIdSource: "auto",
+    });
+    expect(runWithModelFallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userLockedAuthProfileId: undefined }),
+    );
+  });
+
   it("retries with switched auth profile state from LiveSessionModelSwitchError", async () => {
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-a");
     const cronSession = makeCronSession({
@@ -199,8 +257,8 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         model: undefined,
         modelProvider: undefined,
         authProfileOverride: "profile-a",
-        authProfileOverrideSource: "auto",
         compactionCount: 7,
+        authProfileOverrideCompactionCount: 7,
       }),
       isNewSession: true,
     });
@@ -245,6 +303,15 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(retryParams.authProfileId).toBe("profile-b");
     expect(retryParams.authProfileIdSource).toBe("user");
     const firstParams = requireEmbeddedAgentCall(0);
+    expect(firstParams.authProfileIdSource).toBe("auto");
+    expect(runWithModelFallbackMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ userLockedAuthProfileId: undefined }),
+    );
+    expect(runWithModelFallbackMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ userLockedAuthProfileId: "profile-b" }),
+    );
     expect(retryParams.userTurnTranscriptRecorder).toBe(firstParams.userTurnTranscriptRecorder);
     expect(firstParams.suppressNextUserMessagePersistence).toBe(false);
     expect(retryParams.suppressNextUserMessagePersistence).toBe(true);
@@ -262,6 +329,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         model: "gpt-5.6-luna",
         modelProvider: "openai",
         agentRuntimeOverride: "openclaw",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        contextBudgetStatus: {} as NonNullable<
+          ReturnType<typeof makeCronSessionEntry>["contextBudgetStatus"]
+        >,
       }),
       isNewSession: false,
     });
@@ -307,6 +379,9 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(requireEmbeddedAgentCall(0).agentHarnessRuntimeOverride).toBe("openclaw");
     expect(requireEmbeddedAgentCall(1).agentHarnessRuntimeOverride).toBe("codex");
     expect(cronSession.sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(cronSession.sessionEntry.contextTokens).toBe(128_000);
+    expect(cronSession.sessionEntry.contextTokensSource).toBe("resolved");
+    expect(cronSession.sessionEntry.contextBudgetStatus).toBeUndefined();
   });
 
   it("returns error (not infinite loop) when LiveSessionModelSwitchError is thrown repeatedly", async () => {

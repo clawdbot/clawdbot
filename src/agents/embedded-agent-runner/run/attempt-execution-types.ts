@@ -1,28 +1,31 @@
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
+import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 /** Shared contracts for the prepared attempt execution phases. */
 import type {
   createEmbeddedAttemptExternalAbortController,
   EmbeddedAttemptAbortStatePort,
-} from "./attempt-abort.js";
-import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
-import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
-import type { prepareEmbeddedAttemptSessionLock } from "./attempt-session-lock-prepare.js";
+} from "./attempt-finalize.js";
+import type { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
-import type { prepareEmbeddedAttemptStreamRuntime } from "./attempt-stream-runtime-prepare.js";
+import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
+import type { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
-import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
+import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
+import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type Prepared<T extends (...args: never[]) => unknown> = Awaited<ReturnType<T>>;
 type PreparedSetup = Prepared<typeof prepareEmbeddedAttemptSetup>;
-type PreparedSessionLock = Prepared<typeof prepareEmbeddedAttemptSessionLock>;
-type StreamRuntimeInput = Parameters<typeof prepareEmbeddedAttemptStreamRuntime>[0];
-type AttemptContextEngine = NonNullable<StreamRuntimeInput["history"]["activeContextEngine"]>;
+type PreparedTranscriptLifecycle = Prepared<typeof prepareEmbeddedAttemptTranscriptLifecycle>;
+type HistoryInput = Parameters<typeof prepareEmbeddedAttemptHistory>[0];
+type StreamInput = Parameters<typeof prepareEmbeddedAttemptStream>[0];
+type StreamGuardInput = Parameters<typeof installEmbeddedAttemptStreamGuards>[0];
+type AttemptContextEngine = NonNullable<HistoryInput["activeContextEngine"]>;
 
 export type EmbeddedAttemptExecutionState = {
-  beforeAgentRunBlocked: boolean;
   beforeAgentRunBlockedBy: string | undefined;
   terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
@@ -49,11 +52,8 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
   };
   sessionLock: Pick<
-    PreparedSessionLock,
-    | "compactionTimeoutMs"
-    | "ownedTranscriptWriteContext"
-    | "sessionLockController"
-    | "withOwnedSessionWriteLock"
+    PreparedTranscriptLifecycle,
+    "compactionTimeoutMs" | "ownedTranscriptWriteContext" | "withOwnedTranscriptWrite"
   >;
   setup: Pick<
     PreparedSetup,
@@ -66,8 +66,8 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     | "sessionAgentId"
   >;
   diagnostics: {
-    diagnosticTrace: StreamRuntimeInput["stream"]["diagnosticTrace"];
-    runTrace: StreamRuntimeInput["guards"]["runTrace"];
+    diagnosticTrace: StreamInput["diagnosticTrace"];
+    runTrace: StreamGuardInput["runTrace"];
   };
   state: EmbeddedAttemptExecutionState;
   lifecycle: {
@@ -75,7 +75,10 @@ export type EmbeddedAttemptExecutionPhaseInput = {
       yieldAbortSettled: Promise<void> | null;
       yieldDetected: boolean;
       yieldMessage: string | null;
+      yieldAcknowledgment?: string;
     };
-    setToolSearchCatalogExecutor: StreamRuntimeInput["lifecycle"]["setToolSearchCatalogExecutor"];
+    setToolSearchCatalogExecutor: (
+      executor: ReturnType<typeof prepareEmbeddedAttemptStream>["toolSearchCatalogExecutor"],
+    ) => void;
   };
 };

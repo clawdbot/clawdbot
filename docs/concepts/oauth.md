@@ -198,11 +198,11 @@ The auth profile store supports multiple profile IDs for the same provider.
 Pick which one is used:
 
 - globally via config ordering (`auth.order`)
-- per-session via `/model ...@<profileId>`
+- per-session via `/model ...@<profileId> -s`
 
 Example (session override):
 
-- `/model Opus@anthropic:work`
+- `/model Opus@anthropic:work -s`
 
 List existing profile IDs with:
 

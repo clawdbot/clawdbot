@@ -6,7 +6,7 @@ read_when:
 title: "Hooks"
 ---
 
-Hooks are small scripts that run inside the Gateway when agent events fire: commands like `/new`, `/reset`, `/stop`, session compaction, gateway lifecycle, and message flow. They are discovered from directories and managed with `openclaw hooks`. The Gateway loads internal hooks only after you enable hooks or configure at least one hook entry, hook pack, legacy handler, or extra hook directory.
+Hooks are small scripts that run inside the Gateway when agent events fire: commands like `/new`, `/reset`, `/stop`, session compaction, gateway lifecycle, and message flow. They are discovered from directories and managed with `openclaw hooks`. The Gateway loads internal hooks only after you enable hooks or configure at least one hook entry, hook pack, or extra hook directory.
 
 There are two kinds of hooks in OpenClaw:
 
@@ -112,7 +112,7 @@ Detailed documentation goes here.
 | `export`   | Named export to use (defaults to `"default"`)        |
 | `os`       | Required platforms (e.g., `["darwin", "linux"]`)     |
 | `requires` | Required `bins`, `anyBins`, `env`, or `config` paths |
-| `always`   | Bypass eligibility checks (boolean)                  |
+| `always`   | Bypass `requires.*` checks on a compatible OS        |
 | `hookKey`  | Config key override (defaults to the hook name)      |
 | `homepage` | Docs URL shown by `openclaw hooks info`              |
 | `install`  | Installation methods                                 |
@@ -211,7 +211,7 @@ Hooks are discovered from four sources:
 
 Workspace hooks can add new hook names but cannot override bundled, managed, or plugin-provided hooks with the same name.
 
-The Gateway skips internal hook discovery on startup until internal hooks are configured. Enable a bundled or managed hook with `openclaw hooks enable <name>`, install a hook pack, or set `hooks.internal.enabled=true` to opt in. When you enable one named hook, the Gateway loads only that hook's handler; `hooks.internal.enabled=true`, extra hook directories, and legacy handlers opt into broad discovery.
+The Gateway skips internal hook discovery on startup until internal hooks are configured. Enable a bundled or managed hook with `openclaw hooks enable <name>`, install a hook pack, or set `hooks.internal.enabled=true` to opt in. Named entries remain an allowlist even when the master flag is true. A bare `hooks.internal.enabled=true` with no named entries enables broad discovery; non-empty extra hook directories and hook-pack installs that do not declare their hook names are also open-ended.
 
 ### Hook packs
 
@@ -310,6 +310,14 @@ coarse command/lifecycle event system and show up in `openclaw hooks list` as
 `plugin:<id>`. Use those for side effects and compatibility with hook packs, not
 for ordered middleware or policy gates.
 
+The legacy Plugin SDK `api.registerHook` registers into the internal event
+system only (`command:new`, `gateway:startup`, `message:received`, ...). Typed
+lifecycle event names such as `before_tool_call`, `message_received`, or
+`session_start` are dispatched exclusively by the typed hook runner and are
+**not** invoked through `registerHook`. Registering a typed name with
+`registerHook` emits a registration warning pointing to the public `api.on(...)`
+API as the replacement; it never silently no-ops.
+
 For the complete plugin hook reference, see [Plugin hooks](/plugins/hooks).
 
 ## Configuration
@@ -359,9 +367,9 @@ Extra hook directories:
 }
 ```
 
-<Note>
-The legacy `hooks.internal.handlers` array config format is still supported for backwards compatibility, but new hooks should use the discovery-based system.
-</Note>
+<Warning>
+`hooks.internal.handlers` is retired and is no longer loaded or accepted by normal config validation. Before running `openclaw doctor --fix`, move each registered module into a managed or workspace hook directory with `HOOK.md` and a handler file. Doctor removes the retired registrations; it does not create executable hook files. For a legacy-only configuration with `hooks.internal.enabled: true`, Doctor also removes `enabled` to avoid enabling unrelated discovered hooks. Canonical entries, non-empty extra directories, and explicit `enabled: false` are preserved.
+</Warning>
 
 ## CLI reference
 

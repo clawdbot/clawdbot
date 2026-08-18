@@ -21,7 +21,6 @@ const SECURITY_DOCS_URL = "https://docs.openclaw.ai/gateway/security";
 export type SecurityOverview = {
   gatewayAuth: string;
   execPolicy: string;
-  deviceAuth: boolean;
   browserEnabled: boolean;
   browserEnabledOverridden: boolean;
   toolProfile: string;
@@ -45,7 +44,6 @@ function renderSecurityOverview(props: SecurityViewProps) {
   const {
     gatewayAuth,
     execPolicy,
-    deviceAuth,
     browserEnabled,
     browserEnabledOverridden,
     toolProfile,
@@ -107,22 +105,15 @@ function renderSecurityOverview(props: SecurityViewProps) {
       `,
     }),
     renderSettingsRow({
-      title: t("quickSettings.security.deviceAuth"),
-      control: renderSettingsStatus({
-        kind: deviceAuth ? "ok" : "warn",
-        label: deviceAuth ? t("common.enabled") : t("common.disabled"),
-      }),
-    }),
-    renderSettingsRow({
-      title: t("nodes.pairing.title"),
+      title: t("devices.pairing.title"),
       control: html`
         <button
           class="btn"
-          title=${props.canPairDevice ? "" : t("nodes.pairing.adminRequired")}
+          title=${props.canPairDevice ? "" : t("devices.pairing.adminRequired")}
           ?disabled=${!props.canPairDevice}
           @click=${props.onPairMobile}
         >
-          ${icons.smartphone} ${t("nodes.pairing.button")}
+          ${icons.smartphone} ${t("devices.pairing.button")}
         </button>
       `,
     }),

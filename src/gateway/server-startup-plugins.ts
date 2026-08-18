@@ -1,6 +1,7 @@
 // Gateway plugin startup bootstrap and adjacent startup maintenance.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { initSubagentRegistry } from "../agents/subagents/registry/subagent-registry.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -131,22 +132,22 @@ export async function prepareGatewayPluginBootstrap(params: {
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
+  const pluginWorkspaceDir = tryResolveConfiguredAgentWorkspaceDir(gatewayPluginConfig);
+  const defaultWorkspaceDir = pluginWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined
       : loadPluginLookUpTable({
           config: gatewayPluginConfig,
-          workspaceDir: defaultWorkspaceDir,
+          workspaceDir: pluginWorkspaceDir,
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
           workerProviderIds: params.workerProviderIds ?? [],
           ambientEnvTriggers: params.ambientEnvTriggers,
         });
-  // Startup logging consumes the same process-stable manifest snapshot used for
-  // activation planning. Minimal gateways deliberately have no plugin metadata.
+  // Startup logging and lifecycle publication consume the process-stable metadata snapshot.
+  // Minimal gateways skip runtime lookup-table construction, not metadata ownership.
   const pluginManifestRecords =
     pluginLookUpTable?.manifestRegistry.plugins ??
     params.pluginMetadataSnapshot?.manifestRegistry.plugins ??
@@ -177,8 +178,10 @@ export async function prepareGatewayPluginBootstrap(params: {
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
+    pluginMetadataSnapshot: pluginLookUpTable ?? params.pluginMetadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,
@@ -194,7 +197,7 @@ export async function prepareGatewayPluginBootstrap(params: {
  */
 export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   config: OpenClawConfig;
-  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
+  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders">>;
   log: Pick<GatewayPluginBootstrapLog, "warn">;
 }): void {
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
@@ -213,7 +216,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir: string;
+  workspaceDir?: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
   coreGatewayMethodNames?: readonly string[];

@@ -51,6 +51,7 @@ final class NodesStore {
     var nodes: [NodeInfo] = []
     var lastError: String?
     var statusMessage: String?
+    let persistentServiceNotice: String?
     var isLoading = false
     private(set) var localNodeIdentityState: LocalNodeIdentityState = .loading
 
@@ -65,11 +66,15 @@ final class NodesStore {
     @ObservationIgnored private var localNodeIdentityPreparationTask: Task<Void, Never>?
 
     init(
+        appProfile: AppProfile = .current,
         localNodeIdentityProfile: GatewayDeviceIdentityProfile = MacNodeModeCoordinator.nodeIdentityProfile,
         localNodeIDLoader: @escaping @Sendable (GatewayDeviceIdentityProfile) -> String? = { profile in
             DeviceIdentityStore.loadOrCreatePersisted(profile: profile)?.deviceId
         })
     {
+        self.persistentServiceNotice = appProfile.isActive
+            ? "Persistent Mac node service unavailable under app profile; runtime node remains available."
+            : nil
         self.localNodeIdentityProfile = localNodeIdentityProfile
         self.localNodeIDLoader = localNodeIDLoader
     }

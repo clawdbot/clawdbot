@@ -1,7 +1,8 @@
 // Gateway import-boundary tests keep startup-critical modules lazy and prevent
 // heavyweight cron, doctor, secret, task, and WebSocket handlers from eager loads.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -10,9 +11,84 @@ function readSource(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
+function resolveRelativeSource(importer: string, specifier: string): string | null {
+  const rawPath = path.resolve(path.dirname(importer), specifier);
+  const withoutJs = rawPath.replace(/\.(?:mjs|cjs|js)$/u, "");
+  for (const candidate of [
+    rawPath,
+    `${withoutJs}.ts`,
+    `${withoutJs}.mts`,
+    `${withoutJs}.cts`,
+    path.join(withoutJs, "index.ts"),
+  ]) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function staticValueSpecifiers(filePath: string, source: string): string[] {
+  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const specifiers: string[] = [];
+  for (const statement of sourceFile.statements) {
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+      const clause = statement.importClause;
+      if (clause?.isTypeOnly) {
+        continue;
+      }
+      if (
+        clause?.namedBindings &&
+        ts.isNamedImports(clause.namedBindings) &&
+        !clause.name &&
+        clause.namedBindings.elements.every((element) => element.isTypeOnly)
+      ) {
+        continue;
+      }
+      specifiers.push(statement.moduleSpecifier.text);
+      continue;
+    }
+    if (
+      ts.isExportDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteral(statement.moduleSpecifier)
+    ) {
+      specifiers.push(statement.moduleSpecifier.text);
+    }
+  }
+  return specifiers;
+}
+
+function collectStaticValueImportGraph(entryRelativePath: string): Map<string, string[]> {
+  const entryPath = path.join(repoRoot, entryRelativePath);
+  const graph = new Map<string, string[]>();
+  const pending = [entryPath];
+  while (pending.length > 0) {
+    const filePath = pending.pop();
+    if (!filePath || graph.has(filePath)) {
+      continue;
+    }
+    const specifiers = staticValueSpecifiers(filePath, readFileSync(filePath, "utf8"));
+    graph.set(filePath, specifiers);
+    for (const specifier of specifiers) {
+      if (!specifier.startsWith(".")) {
+        continue;
+      }
+      const resolved = resolveRelativeSource(filePath, specifier);
+      if (resolved) {
+        pending.push(resolved);
+      }
+    }
+  }
+  return graph;
+}
+
 function readServerImplementation(): string {
   return [
     "src/gateway/server-start.ts",
+    "src/gateway/server-kernel.ts",
+    "src/gateway/server-shutdown.runtime.ts",
     "src/gateway/server-startup-bootstrap.ts",
     "src/gateway/server-runtime-state-prepare.ts",
     "src/gateway/server-lifecycle.ts",
@@ -24,7 +100,32 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
-  it("keeps heavy cron and doctor legacy paths out of the server.impl import graph", () => {
+  it("keeps ordinary session lifecycle code out of the prepared shutdown graph", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/server-close.runtime.ts");
+
+    expect([...graph.keys()].map((filePath) => path.relative(repoRoot, filePath))).not.toContain(
+      "src/gateway/session-reset-service.ts",
+    );
+  });
+
+  it("keeps the kernel static import graph free of HTTP server and WebSocket construction", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/server-kernel.ts");
+    const violations: string[] = [];
+    for (const [filePath, specifiers] of graph) {
+      for (const specifier of specifiers) {
+        if (specifier === "node:http" || specifier === "node:https" || specifier === "ws") {
+          violations.push(`${path.relative(repoRoot, filePath)} -> ${specifier}`);
+        }
+      }
+    }
+
+    expect([...graph.keys()].map((filePath) => path.relative(repoRoot, filePath))).not.toContain(
+      "src/gateway/server-runtime-state.ts",
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps heavy cron and doctor legacy paths out of the server-start import graph", () => {
     const serverImpl = readServerImplementation();
     const validation = readSource("src/config/validation.ts");
 
@@ -78,6 +179,9 @@ describe("gateway startup import boundaries", () => {
       expect(workerStartup).toContain(`import("./worker-environments/${workerModule}.js")`);
     }
     expect(serverImpl).not.toContain('from "../plugins/worker-provider-registry.js"');
+    expect(readSource("src/gateway/server-reload-managed.ts")).toContain(
+      'import("../state/openclaw-database-preflight.js")',
+    );
     expect(workerStartup).toContain('import("../plugins/worker-provider-registry.js")');
     expect(serverImpl).not.toContain(
       'from "../../packages/gateway-protocol/src/schema/worker-admission.js"',
@@ -87,11 +191,18 @@ describe("gateway startup import boundaries", () => {
     );
   });
 
+  it("keeps channel startup maintenance on the loaded-only registry", () => {
+    const lifecycleStartup = readSource("src/channels/plugins/lifecycle-startup.ts");
+
+    expect(lifecycleStartup).toContain('from "./registry-loaded.js"');
+    expect(lifecycleStartup).not.toContain('from "./registry.js"');
+  });
+
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
     const serverImpl = readServerImplementation();
     const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");
     const importBoundary = serverImpl.indexOf("type LoadGatewayModelCatalog");
-    const serverStart = serverImpl.indexOf("export async function startGatewayServer");
+    const serverStart = serverImpl.indexOf("export async function startGatewayServerCore");
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({", serverStart);
     const cleanupCall = serverImpl.lastIndexOf("cleanupRetainedPluginInstallGenerations(");
 
@@ -112,10 +223,13 @@ describe("gateway startup import boundaries", () => {
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     const runtimeLoad = "loadWorkerEnvironmentRuntimeModule()";
     const prepareStart = workerStartup.indexOf("const prepareInstallation = async");
-    const serviceStart = workerStartup.indexOf("const workerEnvironmentService =", prepareStart);
+    const serviceStart = workerStartup.indexOf(
+      "const workerEnvironmentServiceBase =",
+      prepareStart,
+    );
     const identityStart = workerStartup.indexOf("resolveSshIdentity: async", serviceStart);
     const bootstrapStart = workerStartup.indexOf("bootstrapWorker: async", serviceStart);
-    const loggerStart = workerStartup.indexOf("logger: params.log.child", bootstrapStart);
+    const loggerStart = workerStartup.indexOf("logger: workerEnvironmentLog", bootstrapStart);
 
     expect(prepareStart).toBeGreaterThan(-1);
     expect(serviceStart).toBeGreaterThan(prepareStart);
@@ -135,9 +249,12 @@ describe("gateway startup import boundaries", () => {
   it("fences config reload before gateway teardown and gateway_stop hooks", () => {
     const serverImpl = readServerImplementation();
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
-    const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
-    const reloadStopStart = serverImpl.indexOf("await beginClosePrelude();", closeStart);
-    const terminalStopStart = serverImpl.indexOf("terminalSessions.disposeAll();", closeStart);
+    const hookStart = serverImpl.indexOf('name: "gateway_stop plugin hooks"', closeStart);
+    const reloadStopStart = serverImpl.indexOf('name: "close prelude fence"', closeStart);
+    const terminalStopStart = serverImpl.indexOf('name: "terminal sessions"', closeStart);
+    const closePreludeStart = serverImpl.indexOf('name: "gateway close prelude"', closeStart);
+    const lateSidecarJoinStart = serverImpl.indexOf('name: "late sidecar cleanup"', closeStart);
+    const gatewayCloseStart = serverImpl.indexOf('name: "gateway close"', lateSidecarJoinStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
     const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
@@ -150,6 +267,9 @@ describe("gateway startup import boundaries", () => {
     expect(reloadStopStart).toBeGreaterThan(closeStart);
     expect(reloadStopStart).toBeLessThan(terminalStopStart);
     expect(reloadStopStart).toBeLessThan(hookStart);
+    expect(lateSidecarJoinStart).toBeGreaterThan(closePreludeStart);
+    expect(lateSidecarJoinStart).toBeLessThan(gatewayCloseStart);
+    expect(serverImpl.slice(closeStart, hookStart)).not.toContain("await import(");
     expect(markHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
       "clearPostReadyMaintenanceTimer();",

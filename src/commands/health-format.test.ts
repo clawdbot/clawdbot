@@ -1,6 +1,31 @@
 import { describe, expect, it } from "vitest";
 import type { HealthSummary } from "../gateway/health/types.js";
-import { formatHealthChannelLines } from "./health-format.js";
+import { formatGatewayClosedDiagnostic, formatHealthChannelLines } from "./health-format.js";
+
+describe("formatGatewayClosedDiagnostic", () => {
+  it("formats a coded gateway transport close", () => {
+    const error = Object.assign(new Error("gateway closed (1006): no close reason"), {
+      name: "GatewayTransportError",
+      kind: "closed",
+      code: 1006,
+      connectionDetails: {},
+    });
+
+    expect(formatGatewayClosedDiagnostic(error)).toBe(
+      "Gateway connect failed: gateway closed (1006): no close reason",
+    );
+  });
+
+  it("does not equate an uncoded connect-time close with a websocket close", () => {
+    const error = Object.assign(new Error("Gateway not reachable at ws://127.0.0.1:18789"), {
+      name: "GatewayTransportError",
+      kind: "closed",
+      connectionDetails: {},
+    });
+
+    expect(formatGatewayClosedDiagnostic(error)).toBeUndefined();
+  });
+});
 
 const createHealthSummary = (
   params: Pick<HealthSummary, "channels" | "channelOrder" | "channelLabels">,

@@ -1,14 +1,17 @@
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 // Outbound message entrypoint resolves channel/target, durable capability
 // requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import {
-  sendDurableMessageBatch,
+  sendDurableMessageBatchCore,
   serializeDurableMessagePayloadOutcomes,
+  type DurableMessageBatchSendResult,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
 import type { DurableMessageSendIntent } from "../../channels/message/types.js";
+import type { ChannelPlugin, ChannelPollResult } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -16,7 +19,6 @@ import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
 import { formatErrorMessage } from "../errors.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
@@ -59,6 +61,10 @@ type MessageSendParams = {
   agentId?: string;
   /** Originating session key used for requester-scoped outbound media policy. */
   requesterSessionKey?: string;
+  /** Admitted run correlation retained with durable delivery custody. */
+  runId?: string;
+  /** Exact admitted execution provenance retained with durable delivery custody. */
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Originating account id used for requester-scoped outbound media policy. */
   requesterAccountId?: string;
   /** Originating sender id used for sender-scoped outbound media policy. */
@@ -95,6 +101,8 @@ type MessageSendParams = {
   idempotencyKey?: string;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
   preparedMessageId?: string;
+  /** @internal Channel plugin already selected and bootstrapped by the caller. */
+  preparedPlugin?: ChannelPlugin;
   /** @internal Use the active adapter directly when already executing inside the Gateway. */
   gatewayOwnedDelivery?: boolean;
   /** @internal Stable producer id for idempotent durable queue creation. */
@@ -127,6 +135,7 @@ export type MessageSendResult = {
   mediaUrls?: string[];
   result?: OutboundDeliveryResult | { messageId: string };
   deliveryStatus?: "sent" | "suppressed" | "partial_failed" | "failed";
+  suppressionReason?: Extract<DurableMessageBatchSendResult, { status: "suppressed" }>["reason"];
   /** Formatted send error when deliveryStatus is "failed" or "partial_failed". */
   error?: string;
   sentBeforeError?: boolean;
@@ -150,6 +159,8 @@ type MessagePollParams = {
   cfg?: OpenClawConfig;
   gateway?: OutboundMessageGatewayOptionsInput;
   idempotencyKey?: string;
+  /** @internal Channel plugin already selected and bootstrapped by the caller. */
+  preparedPlugin?: ChannelPlugin;
 };
 
 export type MessagePollResult = {
@@ -161,15 +172,23 @@ export type MessagePollResult = {
   durationSeconds: number | null;
   durationHours: number | null;
   via: "direct" | "gateway";
-  result?: {
-    messageId: string;
-    toJid?: string;
-    channelId?: string;
-    conversationId?: string;
-    pollId?: string;
-  };
+  result?: Pick<OutboundDeliveryResult, "messageId" | "target" | "toJid" | "pollId">;
   dryRun?: boolean;
 };
+
+function normalizeMessagePollDeliveryResult(
+  result: ChannelPollResult,
+): NonNullable<MessagePollResult["result"]> {
+  const { channelId, conversationId, ...delivery } = result;
+  return {
+    ...delivery,
+    ...(channelId
+      ? { target: { kind: "channel" as const, id: channelId } }
+      : conversationId
+        ? { target: { kind: "conversation" as const, id: conversationId } }
+        : {}),
+  };
+}
 
 function buildMessagePollResult(params: {
   channel: string;
@@ -200,7 +219,7 @@ function buildMessagePollResult(params: {
 
 function assertPollOptionSupport(params: {
   channel: string;
-  outbound: NonNullable<ReturnType<typeof resolveRequiredPlugin>["outbound"]>;
+  outbound: NonNullable<ChannelPlugin["outbound"]>;
   durationSeconds?: number;
   isAnonymous?: boolean;
 }): void {
@@ -218,20 +237,11 @@ function assertPollOptionSupport(params: {
 async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
-}): Promise<string> {
-  const selection = await resolveMessageChannelSelection({
+}): Promise<{ channel: string; plugin: ChannelPlugin }> {
+  return await resolveMessageChannelSelection({
     cfg: params.cfg,
     channel: params.channel,
   });
-  return selection.channel;
-}
-
-function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
-  const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-  if (!plugin) {
-    throw new Error(`Unknown channel: ${channel}`);
-  }
-  return plugin;
 }
 
 function deriveRequiredMessageSendCapabilities(params: {
@@ -248,6 +258,7 @@ function deriveRequiredMessageSendCapabilities(params: {
 
 async function assertRequiredMessageSendDurability(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   channel: Exclude<string, "none">;
   payloads: ReplyPayload[];
   replyToId?: string | null;
@@ -256,6 +267,7 @@ async function assertRequiredMessageSendDurability(params: {
 }): Promise<void> {
   const support = await resolveOutboundDurableFinalDeliverySupport({
     cfg: params.cfg,
+    agentId: params.agentId,
     channel: params.channel,
     requirements: deriveRequiredMessageSendCapabilities(params),
   });
@@ -313,8 +325,10 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
-  const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
-  const plugin = resolveRequiredPlugin(channel, cfg);
+  const prepared = params.preparedPlugin
+    ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
+    : await resolveRequiredChannel({ cfg, channel: params.channel });
+  const { channel, plugin } = prepared;
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
     (source): source is string => Boolean(source),
@@ -357,6 +371,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const outboundChannel = channel;
     const resolvedTarget = resolveOutboundTarget({
       channel: outboundChannel,
+      plugin,
       to: params.to,
       cfg,
       accountId: params.accountId,
@@ -384,6 +399,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     if (requireUnknownSendReconciliation) {
       await assertRequiredMessageSendDurability({
         cfg,
+        agentId: params.agentId,
         channel: outboundChannel,
         payloads: normalizedPayloads,
         replyToId: params.replyToId,
@@ -391,11 +407,13 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         silent: params.silent,
       });
     }
-    const send = await sendDurableMessageBatch({
+    const send = await sendDurableMessageBatchCore({
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
       session: outboundSession,
+      runId: params.runId,
+      executionIdentityToken: params.executionIdentityToken,
       accountId: params.accountId,
       conversationReadOrigin: params.conversationReadOrigin,
       payloads: normalizedPayloads,
@@ -443,6 +461,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       result: results.at(-1),
       deliveryStatus: send.status,
+      ...(send.status === "suppressed" ? { suppressionReason: send.reason } : {}),
       ...(send.status === "failed" || send.status === "partial_failed"
         ? { error: formatErrorMessage(send.error) }
         : {}),
@@ -489,7 +508,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
   const cfg = await resolveMessageConfig(params.cfg);
-  const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
+  const prepared = params.preparedPlugin
+    ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
+    : await resolveRequiredChannel({ cfg, channel: params.channel });
+  const { channel, plugin } = prepared;
 
   const pollInput: PollInput = {
     question: params.question,
@@ -498,8 +520,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     durationSeconds: params.durationSeconds,
     durationHours: params.durationHours,
   };
-  const plugin = resolveRequiredPlugin(channel, cfg);
-  const outbound = plugin?.outbound;
+  const outbound = plugin.outbound;
   if (!outbound?.sendPoll) {
     throw new Error(`Unsupported poll channel: ${channel}`);
   }
@@ -528,6 +549,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   if (deliveryMode !== "gateway") {
     const resolvedTarget = resolveOutboundTarget({
       channel,
+      plugin,
       to: params.to,
       cfg,
       accountId: params.accountId,
@@ -552,17 +574,11 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       to: params.to,
       normalized,
       via: "direct",
-      result,
+      result: normalizeMessagePollDeliveryResult(result),
     });
   }
 
-  const result = await callMessageGateway<{
-    messageId: string;
-    toJid?: string;
-    channelId?: string;
-    conversationId?: string;
-    pollId?: string;
-  }>({
+  const result = await callMessageGateway<ChannelPollResult>({
     gateway: params.gateway,
     method: "poll",
     params: {
@@ -586,6 +602,6 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     to: params.to,
     normalized,
     via: "gateway",
-    result,
+    result: normalizeMessagePollDeliveryResult(result),
   });
 }

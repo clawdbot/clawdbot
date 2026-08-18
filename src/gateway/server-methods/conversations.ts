@@ -11,6 +11,7 @@ import {
   type ConversationTurnCancelParams,
   type ConversationTurnParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { cancelPendingConversationTurn } from "../../sessions/conversation-turns.js";
 import {
   ConversationInputError,
@@ -21,6 +22,7 @@ import { runGatewayConversationSend } from "../conversation-send.js";
 import { runGatewayConversationTurn } from "../conversation-turn.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import {
   cacheGatewayDedupeResult,
@@ -47,6 +49,42 @@ function isAuthenticatedOwner(client: GatewayClient | null): boolean {
   // These RPCs require operator.admin. Derive owner status from the admitted
   // socket anyway so no future schema field can self-assert channel authority.
   return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+}
+
+function validateConversationSourceSession(params: {
+  config: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+  agentId: string;
+  sourceSessionKey?: string;
+  respond: RespondFn;
+}): boolean {
+  if (!params.sourceSessionKey) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(params.sourceSessionKey);
+  if (parsed) {
+    if (normalizeAgentId(parsed.agentId) === normalizeAgentId(params.agentId)) {
+      return true;
+    }
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `agent "${params.agentId}" does not match session key agent "${parsed.agentId}"`,
+      ),
+    );
+    return false;
+  }
+  const owner = resolveRequestedSessionAgentId(
+    params.config,
+    params.sourceSessionKey,
+    params.agentId,
+  );
+  if (owner.ok) {
+    return true;
+  }
+  params.respond(false, undefined, owner.error);
+  return false;
 }
 
 function conversationOperationKey(params: {
@@ -237,6 +275,17 @@ export function createConversationHandlers(
         return;
       }
       const request = params as ConversationSendParams;
+      const config = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      if (
+        !validateConversationSourceSession({
+          config,
+          agentId: request.agentId,
+          sourceSessionKey: request.sourceSessionKey,
+          respond,
+        })
+      ) {
+        return;
+      }
       const requestIdentity = bindConversationOperationIdentity(context, {
         method: "send",
         operationId: request.operationId,
@@ -268,7 +317,7 @@ export function createConversationHandlers(
         respond,
         execute: async () =>
           await deps.runConversationSend({
-            config: resolveGatewayPluginConfig({ config: context.getRuntimeConfig() }),
+            config,
             agentId: request.agentId,
             senderIsOwner: isAuthenticatedOwner(client),
             ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
@@ -308,6 +357,17 @@ export function createConversationHandlers(
         return;
       }
       const request = params as ConversationTurnParams;
+      const config = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      if (
+        !validateConversationSourceSession({
+          config,
+          agentId: request.agentId,
+          sourceSessionKey: request.sourceSessionKey,
+          respond,
+        })
+      ) {
+        return;
+      }
       const requestIdentity = bindConversationOperationIdentity(context, {
         method: "turn",
         operationId: request.turnId,
@@ -340,7 +400,7 @@ export function createConversationHandlers(
         respond,
         execute: async () =>
           await deps.runConversationTurn({
-            config: resolveGatewayPluginConfig({ config: context.getRuntimeConfig() }),
+            config,
             agentId: request.agentId,
             senderIsOwner: isAuthenticatedOwner(client),
             ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),

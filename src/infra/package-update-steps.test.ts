@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
@@ -47,6 +47,10 @@ function createNpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
     command: "npm",
     globalRoot,
     packageRoot: path.join(globalRoot, "openclaw"),
+    npmOwner: {
+      version: "12.0.0",
+      lifecyclePolicy: "allow-scripts",
+    },
   };
 }
 
@@ -75,6 +79,9 @@ async function expectPathMissing(filePath: string): Promise<void> {
 
 function createRootRunner(globalRoot: string): CommandRunner {
   return async (argv) => {
+    if (argv.join(" ") === "npm --version") {
+      return { stdout: "12.0.0\n", stderr: "", code: 0 };
+    }
     if (argv.join(" ") === "npm root -g") {
       return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
     }
@@ -155,9 +162,35 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
   });
 });
 
+describe("npm lifecycle policy preflight", () => {
+  it("stops before mutation when the owning npm version is unknown", async () => {
+    const runStep = vi.fn();
+    const runCommand = vi.fn<CommandRunner>();
+    const installTarget = createNpmTarget("/tmp/npm-policy-test/lib/node_modules");
+    installTarget.npmOwner = {
+      version: null,
+      lifecyclePolicy: null,
+      probeError: "version probe failed",
+    };
+
+    const result = await runGlobalPackageUpdateSteps({
+      installTarget,
+      installSpec: "openclaw@2.0.0",
+      packageName: "openclaw",
+      runCommand,
+      runStep,
+      timeoutMs: 1000,
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(result.failedStep?.stderrTail).toContain("Unable to determine the owning npm version");
+    expect(runStep).not.toHaveBeenCalled();
+  });
+});
+
 describe("runGlobalPackageUpdateSteps", () => {
   it("installs npm updates into a clean staged prefix before swapping the global package", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-staged-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-staged-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
@@ -235,7 +268,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   it.runIf(process.platform !== "win32")(
     "swaps npm package roots that contain package-manager hardlinks",
     async () => {
-      await withTempDir({ prefix: "openclaw-package-update-hardlinks-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-package-update-hardlinks-" }, async (base) => {
         const prefix = path.join(base, "prefix");
         const globalRoot = path.join(prefix, "lib", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
@@ -288,7 +321,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   );
 
   it("swaps staged npm updates into an explicitly selected direct node_modules root", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-direct-root-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-direct-root-" }, async (base) => {
       const managedRoot = path.join(base, ".openclaw", "npm", "node_modules");
       const packageRoot = path.join(managedRoot, "openclaw");
       await writePackageRoot(packageRoot, "1.0.0");
@@ -343,7 +376,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   });
 
   it("accepts v-prefixed exact npm specs when verifying staged installs", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-v-prefix-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-v-prefix-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
@@ -399,7 +432,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   ])(
     "accepts concrete version $installedVersion staged from $installSpec",
     async ({ installSpec, installedVersion }) => {
-      await withTempDir({ prefix: "openclaw-package-update-moving-spec-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-package-update-moving-spec-" }, async (base) => {
         const prefix = path.join(base, "prefix");
         const globalRoot = path.join(prefix, "lib", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
@@ -451,7 +484,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   );
 
   it("packs npm GitHub specs before installing into the staged prefix", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-npm-pack-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-npm-pack-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
@@ -569,7 +602,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   ] as const)(
     "packs additional npm git source spec forms before install: $name",
     async ({ sourceSpec }) => {
-      await withTempDir({ prefix: "openclaw-package-update-npm-pack-variant-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-package-update-npm-pack-variant-" }, async (base) => {
         const globalRoot = path.join(base, "prefix", "lib", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
@@ -634,7 +667,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   );
 
   it("swaps staged npm package roots through the copy fallback when rename crosses devices", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-exdev-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-exdev-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
@@ -697,7 +730,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   });
 
   it("stages pnpm-detected updates through npm when the global root has npm prefix layout", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-staged-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-staged-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
@@ -753,7 +786,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   it("keeps Windows pnpm global roots on the pnpm update path", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
-      await withTempDir({ prefix: "openclaw-package-update-win32-pnpm-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-package-update-win32-pnpm-" }, async (base) => {
         const globalDir = path.join(base, "pnpm", "global");
         const globalRoot = path.join(globalDir, "5", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
@@ -802,7 +835,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   });
 
   it("keeps a successful staged swap when old package cleanup hits a transient Windows native module error", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-staged-cleanup-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-staged-cleanup-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
@@ -867,7 +900,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   });
 
   it("does not run post-verify work when staged npm verification fails", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-verify-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-verify-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
@@ -922,7 +955,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   it.runIf(process.platform !== "win32")(
     "restores the existing bin shim when staged shim replacement fails",
     async () => {
-      await withTempDir({ prefix: "openclaw-package-update-shim-rollback-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-package-update-shim-rollback-" }, async (base) => {
         const prefix = path.join(base, "prefix");
         const globalRoot = path.join(prefix, "lib", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
@@ -991,7 +1024,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   );
 
   it("cleans the staged npm prefix when the install command throws", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-cleanup-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-cleanup-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");

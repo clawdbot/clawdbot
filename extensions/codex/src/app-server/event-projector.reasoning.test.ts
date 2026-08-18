@@ -78,6 +78,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     expect(completed.userAuthorization).toBe("high");
     expect(completed.rationale).toBe("Benign local probe.");
     expect(completed.actionType).toBe("execve");
+    expect(completed.command).toBe("printf hello");
     expect(
       projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
     ).toBe(false);
@@ -178,7 +179,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         completed: true,
       },
     );
-    expect(result.toolMetas).toEqual([{ toolName: "sessions_send" }]);
+    expect(result.toolMetas).toEqual([{ toolName: "sessions_send", isError: false }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
       "assistant",

@@ -3,8 +3,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -13,7 +16,7 @@ import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -24,11 +27,8 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
@@ -37,7 +37,6 @@ import {
 } from "../infra/restart.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
-import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -60,12 +59,13 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import type { GatewayServerOptions } from "./server.js";
 import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
-  agentCommand,
+  agentCommandMock,
   cronIsolatedRun,
   embeddedRunMock,
-  getReplyFromConfig,
+  gatewayReplyMock,
   agentDiscoveryMock,
   sendWhatsAppMock,
   setTestConfigRoot,
@@ -80,6 +80,7 @@ const getServerModule = createLazyRuntimeModule(() => import("./server.js"));
 const GATEWAY_TEST_ENV_KEYS = [
   "HOME",
   "USERPROFILE",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
@@ -284,7 +285,7 @@ export async function writeSessionStore(params: {
     upsertsByAgentId.set(normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID), []);
   }
   for (const [agentId, upserts] of upsertsByAgentId) {
-    const removals = listSessionEntries({ agentId, storePath }).map(({ sessionKey }) => ({
+    const removals = listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey }) => ({
       sessionKey,
     }));
     await applySessionEntryLifecycleMutation({
@@ -354,6 +355,61 @@ function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: bool
   resetGatewayWorkAdmission();
 }
 
+function resetGatewayMutableTestFixtures(): void {
+  testTailnetIPv4.value = undefined;
+  testTailscaleWhois.value = null;
+  testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
+  testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
+  testState.gatewayControlUi = undefined;
+  testState.hooksConfig = undefined;
+  testState.legacyIssues = [];
+  testState.legacyParsed = {};
+  testState.migrationConfig = null;
+  testState.migrationChanges = [];
+  testState.cronEnabled = false;
+  testState.cronTriggersEnabled = undefined;
+  testState.cronStorePath = undefined;
+  testState.sessionConfig = undefined;
+  testState.sessionStorePath = undefined;
+  testState.agentConfig = undefined;
+  testState.agentsConfig = undefined;
+  testState.bindingsConfig = undefined;
+  testState.channelsConfig = undefined;
+  testState.allowFrom = undefined;
+  lastSyncedSessionStorePath = testState.sessionStorePath;
+  lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
+  testIsNixMode.value = false;
+  cronIsolatedRun.mockReset();
+  cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
+  agentCommandMock.mockReset();
+  agentCommandMock.mockResolvedValue(undefined);
+  gatewayReplyMock.mockReset();
+  gatewayReplyMock.mockResolvedValue(undefined);
+  sendWhatsAppMock.mockReset();
+  sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
+  embeddedRunMock.activeIds.clear();
+  embeddedRunMock.abortCalls = [];
+  embeddedRunMock.waitCalls = [];
+  embeddedRunMock.waitResults.clear();
+  embeddedRunMock.endWaitCalls = [];
+  for (const resolve of embeddedRunMock.endWaiters.values()) {
+    resolve(false);
+  }
+  embeddedRunMock.endWaiters.clear();
+  embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
+  embeddedRunMock.compactEmbeddedAgentSession.mockReset();
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  });
+}
+
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
@@ -415,57 +471,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetConfigRuntimeState();
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
-  testTailnetIPv4.value = undefined;
-  testTailscaleWhois.value = null;
-  testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
-  testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
-  testState.gatewayControlUi = undefined;
-  testState.hooksConfig = undefined;
-  testState.legacyIssues = [];
-  testState.legacyParsed = {};
-  testState.migrationConfig = null;
-  testState.migrationChanges = [];
-  testState.cronEnabled = false;
-  testState.cronStorePath = undefined;
-  testState.sessionConfig = undefined;
-  testState.sessionStorePath = undefined;
-  testState.agentConfig = undefined;
-  testState.agentsConfig = undefined;
-  testState.bindingsConfig = undefined;
-  testState.channelsConfig = undefined;
-  testState.allowFrom = undefined;
-  lastSyncedSessionStorePath = testState.sessionStorePath;
-  lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
-  testIsNixMode.value = false;
-  cronIsolatedRun.mockReset();
-  cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
-  agentCommand.mockReset();
-  agentCommand.mockResolvedValue(undefined);
-  getReplyFromConfig.mockReset();
-  getReplyFromConfig.mockResolvedValue(undefined);
-  sendWhatsAppMock.mockReset();
-  sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
-  embeddedRunMock.activeIds.clear();
-  embeddedRunMock.abortCalls = [];
-  embeddedRunMock.waitCalls = [];
-  embeddedRunMock.waitResults.clear();
-  embeddedRunMock.endWaitCalls = [];
-  for (const resolve of embeddedRunMock.endWaiters.values()) {
-    resolve(false);
-  }
-  embeddedRunMock.endWaiters.clear();
-  embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
-  embeddedRunMock.compactEmbeddedAgentSession.mockReset();
-  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
-    ok: true,
-    compacted: true,
-    result: {
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 120,
-      tokensAfter: 80,
-    },
-  });
+  resetGatewayMutableTestFixtures();
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
@@ -512,57 +518,7 @@ async function resetGatewayTestRuntimeOnly() {
   resetConfigRuntimeState();
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
-  testTailnetIPv4.value = undefined;
-  testTailscaleWhois.value = null;
-  testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
-  testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
-  testState.gatewayControlUi = undefined;
-  testState.hooksConfig = undefined;
-  testState.legacyIssues = [];
-  testState.legacyParsed = {};
-  testState.migrationConfig = null;
-  testState.migrationChanges = [];
-  testState.cronEnabled = false;
-  testState.cronStorePath = undefined;
-  testState.sessionConfig = undefined;
-  testState.sessionStorePath = undefined;
-  testState.agentConfig = undefined;
-  testState.agentsConfig = undefined;
-  testState.bindingsConfig = undefined;
-  testState.channelsConfig = undefined;
-  testState.allowFrom = undefined;
-  lastSyncedSessionStorePath = testState.sessionStorePath;
-  lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
-  testIsNixMode.value = false;
-  cronIsolatedRun.mockReset();
-  cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
-  agentCommand.mockReset();
-  agentCommand.mockResolvedValue(undefined);
-  getReplyFromConfig.mockReset();
-  getReplyFromConfig.mockResolvedValue(undefined);
-  sendWhatsAppMock.mockReset();
-  sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
-  embeddedRunMock.activeIds.clear();
-  embeddedRunMock.abortCalls = [];
-  embeddedRunMock.waitCalls = [];
-  embeddedRunMock.waitResults.clear();
-  embeddedRunMock.endWaitCalls = [];
-  for (const resolve of embeddedRunMock.endWaiters.values()) {
-    resolve(false);
-  }
-  embeddedRunMock.endWaiters.clear();
-  embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
-  embeddedRunMock.compactEmbeddedAgentSession.mockReset();
-  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
-    ok: true,
-    compacted: true,
-    result: {
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 120,
-      tokensAfter: 80,
-    },
-  });
+  resetGatewayMutableTestFixtures();
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
@@ -617,7 +573,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   });
 }
 
-export async function getFreePort(): Promise<number> {
+export async function getGatewayTestPort(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
@@ -698,7 +654,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   });
 }
 
-export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
+export async function startTestGatewayServer(port: number, opts?: GatewayServerOptions) {
   // Tests mutate testState-backed config before server startup; discard earlier
   // helper reads so startup observes the current fixture state.
   resetConfigRuntimeState();
@@ -739,20 +695,20 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
 export async function startGatewayServerWithRetries(params: {
   port: number;
   opts?: GatewayServerOptions;
-}): Promise<{ port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }> {
+}): Promise<{ port: number; server: Awaited<ReturnType<typeof startTestGatewayServer>> }> {
   let port = params.port;
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
       return {
         port,
-        server: await startGatewayServer(port, params.opts),
+        server: await startTestGatewayServer(port, params.opts),
       };
     } catch (err) {
       const code = (err as { cause?: { code?: string } }).cause?.code;
       if (code !== "EADDRINUSE") {
         throw err;
       }
-      port = await getFreePort();
+      port = await getGatewayTestPort();
     }
   }
   throw new Error("failed to start gateway server after retries");
@@ -799,11 +755,14 @@ async function openTrackedWebSocket(params: {
 }
 
 export async function withGatewayServer<T>(
-  fn: (ctx: { port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }) => Promise<T>,
+  fn: (ctx: {
+    port: number;
+    server: Awaited<ReturnType<typeof startTestGatewayServer>>;
+  }) => Promise<T>,
   opts?: { port?: number; serverOptions?: GatewayServerOptions },
 ): Promise<T> {
   const started = await startGatewayServerWithRetries({
-    port: opts?.port ?? (await getFreePort()),
+    port: opts?.port ?? (await getGatewayTestPort()),
     opts: opts?.serverOptions,
   });
   try {
@@ -818,12 +777,12 @@ export async function createGatewaySuiteHarness(opts?: {
   serverOptions?: GatewayServerOptions;
 }): Promise<{
   port: number;
-  server: Awaited<ReturnType<typeof startGatewayServer>>;
+  server: Awaited<ReturnType<typeof startTestGatewayServer>>;
   openWs: (headers?: Record<string, string>) => Promise<WebSocket>;
   close: () => Promise<void>;
 }> {
   const started = await startGatewayServerWithRetries({
-    port: opts?.port ?? (await getFreePort()),
+    port: opts?.port ?? (await getGatewayTestPort()),
     opts: opts?.serverOptions,
   });
   return {
@@ -842,7 +801,7 @@ export async function createGatewaySuiteHarness(opts?: {
 }
 
 export async function startServer(token?: string, opts?: GatewayServerOptions) {
-  let port = await getFreePort();
+  let port = await getGatewayTestPort();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof token === "string") {
@@ -951,14 +910,6 @@ function resolveAuthTokenForSignature(opts?: {
   deviceToken?: string;
 }) {
   return opts?.token ?? opts?.bootstrapToken ?? opts?.deviceToken;
-}
-
-export function testOnlyResolveAuthTokenForSignature(opts?: {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-}) {
-  return resolveAuthTokenForSignature(opts);
 }
 
 type ConnectReqClient = {

@@ -5,100 +5,6 @@ import { controlSessionUrl } from "./control-session-url.js";
 import { fallbackDiscussionLabel } from "./naming.js";
 import { MANAGED_CONTRACT_FIELDS, createHarness, testExternalRef } from "./service-test-support.js";
 
-type SessionUrlContractCase = {
-  sessionKey: string;
-  agentId: string;
-  mainKey: string | undefined;
-  expectedPath: string | null;
-};
-
-// Keep in sync with ui/src/app-navigation.test.ts. Core cannot import plugin internals,
-// and this independently published plugin cannot source-import the workspace contract.
-const SESSION_URL_CONTRACT_CASES = [
-  {
-    sessionKey: "agent:main:main",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main",
-  },
-  { sessionKey: "main", agentId: "research", mainKey: undefined, expectedPath: "/chat/research" },
-  {
-    sessionKey: "main",
-    agentId: "research",
-    mainKey: "workspace",
-    expectedPath: "/chat/research",
-  },
-  { sessionKey: "main", agentId: "..", mainKey: undefined, expectedPath: "/chat/main" },
-  {
-    sessionKey: "agent:research:workspace",
-    agentId: "main",
-    mainKey: "workspace",
-    expectedPath: "/chat/research",
-  },
-  {
-    sessionKey: "agent:research:main",
-    agentId: "main",
-    mainKey: "workspace",
-    expectedPath: "/chat/research/main",
-  },
-  {
-    sessionKey: "telegram:12345",
-    agentId: "research",
-    mainKey: undefined,
-    expectedPath: "/chat/research/telegram/12345",
-  },
-  {
-    // Dots must be percent-escaped or the server treats the URL as a static asset
-    // request and it never reaches the SPA on refresh or via an external link.
-    sessionKey: "channel:release.js",
-    agentId: "research",
-    mainKey: undefined,
-    expectedPath: "/chat/research/channel/release%2Ejs",
-  },
-  {
-    sessionKey: "agent:main:control-link",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/control-link",
-  },
-  {
-    sessionKey: "agent:main:12345678",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/~key/12345678",
-  },
-  {
-    sessionKey: "agent:main:release-deadbeef",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/~key/release-deadbeef",
-  },
-  {
-    sessionKey: "agent:main:telegram:12345",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/telegram/12345",
-  },
-  {
-    sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/12345678",
-  },
-  {
-    sessionKey: "agent:main:dashboard:deadbeef-0aaa-4000-8000-000000000001",
-    agentId: "main",
-    mainKey: "deadbeef",
-    expectedPath: "/chat/main/deadbeef0",
-  },
-  {
-    sessionKey: "agent:main:cron:..:run",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/cron/~dotdot/run",
-  },
-] satisfies readonly SessionUrlContractCase[];
-
 function legacyCreateResponse(
   input: Parameters<ClickClackClient["createChannel"]>[1],
 ): ClickClackChannel {
@@ -115,16 +21,23 @@ function legacyCreateResponse(
 }
 
 describe("ClickClack discussion service", () => {
-  it("matches the Control UI session URL contract vectors", () => {
-    for (const testCase of SESSION_URL_CONTRACT_CASES) {
-      const url = controlSessionUrl(
-        "https://control.example",
-        testCase.sessionKey,
-        testCase.agentId,
-        testCase.mainKey,
-      );
-      expect(url ? new URL(url).pathname : null).toBe(testCase.expectedPath);
-    }
+  it("reaches the host session URL seam through the published plugin wrapper", () => {
+    expect(controlSessionUrl(undefined, "agent:main:main", "main", undefined)).toBeUndefined();
+    expect(controlSessionUrl("https://control.example", "agent:main:main", "main", undefined)).toBe(
+      "https://control.example/chat/main",
+    );
+    expect(controlSessionUrl("https://control.example", "main", "research", undefined)).toBe(
+      "https://control.example/chat/research",
+    );
+    expect(
+      controlSessionUrl(
+        "https://control.example/control///?tenant=alpha#old",
+        "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+        "main",
+        undefined,
+        "Control Link",
+      ),
+    ).toBe("https://control.example/control/chat/main/control-link-12345678?tenant=alpha");
   });
 
   it("opens a managed channel once and returns stable info URLs", async () => {
@@ -257,11 +170,15 @@ describe("ClickClack discussion service", () => {
     expect(globalHarness.store.lookup("global")).toMatchObject({ agentId: "ops" });
 
     const qualifiedHarness = createHarness({ label: "Qualified session" });
-    qualifiedHarness.config.agents = { list: [{ id: "ops", default: true }] };
+    qualifiedHarness.config.agents = { list: [{ id: "ops" }, { id: "worker" }] };
     const qualifiedKey = "agent:worker:qualified";
 
     expect(await qualifiedHarness.service.open(qualifiedKey)).toMatchObject({ state: "open" });
     expect(qualifiedHarness.store.lookup(qualifiedKey)).toMatchObject({ agentId: "worker" });
+    expect(qualifiedHarness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({ external_url: expect.stringContaining("/chat/worker/") }),
+    );
   });
 
   it("uses the account agent for unscoped links without changing the configured owner", async () => {

@@ -1,18 +1,25 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticModelStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
 import {
   abortActiveReplyRuns,
+  beginReplyMessageInjectionTarget,
   createReplyOperation,
   expireStaleReplyOperation,
   forceClearReplyOperation,
@@ -22,18 +29,27 @@ import {
   isReplyRunAbortableForCompaction,
   isReplyRunAbortableForSignal,
   clearReplyRunForResetBySessionId,
-  queueReplyRunMessage,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
+  registerReplyOperationSuccessorBarrier,
+  type ReplyBackendQueueMessageOptions,
   ReplyRunAlreadyActiveError,
+  ReplyRunSuccessorAdmissionBlockedError,
   replyRunRegistry,
   markReplyOperationGlobalLaneWaitProgress,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
+  resolveActiveReplyOperationForSessionId,
   resolveReplyRunPhaseForSessionId,
+  waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
+  waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
+import {
+  createFollowupRunToolAuthorityProjector,
+  resolveFollowupRunToolAuthorityFingerprint,
+} from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
@@ -49,7 +65,137 @@ function createTestReplyOperation(
   });
 }
 
+function toolAuthorityOverlay(
+  run: ReturnType<typeof createQueueTestRun>,
+): ReplyToolAuthorityOverlay {
+  return {
+    originatingChannel: run.originatingChannel,
+    messageProvider: run.run.messageProvider,
+    chatType: run.run.chatType,
+    agentAccountId: run.run.agentAccountId,
+    conversationToolPolicy: run.run.conversationToolPolicy,
+    groupId: run.run.groupId,
+    groupChannel: run.run.groupChannel,
+    groupSpace: run.run.groupSpace,
+    memberRoleIds: run.run.memberRoleIds,
+    spawnedBy: run.run.spawnedBy,
+    senderId: run.run.senderId,
+    senderName: run.run.senderName,
+    senderUsername: run.run.senderUsername,
+    senderE164: run.run.senderE164,
+    senderIsOwner: run.run.senderIsOwner === true,
+    inputProvenance: run.run.inputProvenance,
+    trustedInternalHandoff: run.run.trustedInternalHandoff,
+    scheduledToolPolicy: run.run.scheduledToolPolicy,
+    runtimePluginToolGrant: run.run.runtimePluginToolGrant,
+    toolsAllow: run.toolsAllow,
+    disableTools: run.disableTools === true,
+    traceAuthorized: run.run.traceAuthorized === true,
+    approvalReviewerDeviceId: run.run.approvalReviewerDeviceId,
+    clientCaps: run.run.clientCaps,
+    toolBindings: run.run.toolBindings,
+  };
+}
+
+async function queueCurrentReplyRunMessage(
+  sessionId: string,
+  text: string,
+  options?: Parameters<typeof beginReplyMessageInjectionTarget>[2],
+) {
+  const operation = resolveActiveReplyOperationForSessionId(sessionId);
+  const target = operation
+    ? replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: operation.key,
+        originatingLeafEntryId: operation.originatingLeafEntryId,
+      })
+    : undefined;
+  return target
+    ? await queueReplyMessageInjectionTarget(target, text, options)
+    : { status: "rejected" as const, reason: "injection_unavailable" as const };
+}
+
+async function queueReplyMessageInjectionTarget(
+  ...args: Parameters<typeof beginReplyMessageInjectionTarget>
+) {
+  return await beginReplyMessageInjectionTarget(...args).outcome;
+}
+
+async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    return await run();
+  } finally {
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+  }
+}
+
 describe("reply run registry", () => {
+  it("distinguishes hidden allowlist intersections in steering authority", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    const second = createQueueTestRun({ prompt: "second" });
+    first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
+    second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
+
+    expect(resolveFollowupRunToolAuthorityFingerprint(first)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(second),
+    );
+  });
+
+  it.each([
+    {
+      label: "provider",
+      first: { provider: "openai", model: "gpt-test" },
+      second: { provider: "anthropic", model: "gpt-test" },
+    },
+    {
+      label: "model",
+      first: { provider: "openai", model: "gpt-primary" },
+      second: { provider: "openai", model: "gpt-fallback" },
+    },
+  ])("distinguishes the concrete $label route in steering authority", ({ first, second }) => {
+    const run = createQueueTestRun({ prompt: "route authority" });
+
+    expect(resolveFollowupRunToolAuthorityFingerprint(run, first)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(run, second),
+    );
+  });
+
+  it("projects only while the active operation owns a concrete route", () => {
+    const run = createQueueTestRun({ prompt: "operation projection" });
+    const operation = createTestReplyOperation({ sessionId: "session-projector" });
+    const projector = createFollowupRunToolAuthorityProjector(run);
+    const overlay = toolAuthorityOverlay(run);
+
+    operation.bindToolAuthorityProjector(projector);
+    expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
+
+    operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-primary" });
+    expect(operation.projectToolAuthorityFingerprint(overlay)).toBe(
+      resolveFollowupRunToolAuthorityFingerprint(run, {
+        provider: "openai",
+        model: "gpt-primary",
+      }),
+    );
+
+    operation.complete();
+    expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
+  });
+
+  it("tracks the concrete authority route across fallback candidates", () => {
+    const operation = createTestReplyOperation({ sessionId: "session-route" });
+
+    operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-primary" });
+    expect(operation.toolAuthorityRoute).toEqual({ provider: "openai", model: "gpt-primary" });
+
+    operation.bindToolAuthorityRoute({ provider: "anthropic", model: "claude-fallback" });
+    expect(operation.toolAuthorityRoute).toEqual({
+      provider: "anthropic",
+      model: "claude-fallback",
+    });
+    operation.complete();
+  });
+
   afterEach(() => {
     testing.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
@@ -58,8 +204,7 @@ describe("reply run registry", () => {
   });
 
   it("keeps ownership stable by sessionKey while sessionId rotates", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionId: "session-old",
       });
@@ -83,10 +228,7 @@ describe("reply run registry", () => {
       operation.complete();
 
       await expect(oldWaitPromise).resolves.toBe(true);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("treats queued reply operations as non-abortable for compaction", () => {
@@ -105,22 +247,6 @@ describe("reply run registry", () => {
     operation.setPhase("running");
 
     expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
-  });
-
-  it("matches streaming owners only to their immutable originating leaf", () => {
-    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: () => {},
-      isStreaming: () => true,
-      queueMessage: async () => {},
-    });
-
-    expect(replyRunRegistry.isStreamingFromOriginatingLeaf("agent:main:main", "leaf-a")).toBe(true);
-    expect(replyRunRegistry.isStreamingFromOriginatingLeaf("agent:main:main", "leaf-b")).toBe(
-      false,
-    );
   });
 
   it("records reply-operation progress without claiming embedded-run activity", () => {
@@ -160,6 +286,51 @@ describe("reply run registry", () => {
     ).toMatchObject({
       activeWorkKind: undefined,
       lastProgressReason: "reply_operation:ended",
+    });
+  });
+
+  it("keeps repeated request evidence across reply-operation progress", () => {
+    const startedAt = Date.parse("2026-08-06T08:00:00Z");
+    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    const ref = {
+      sessionKey: "agent:main:telegram:direct:retry-bridge",
+      sessionId: "session-retry-bridge",
+    };
+    const runId = "run-retry-bridge";
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId,
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
+    now.mockReturnValue(startedAt + 30_000);
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId,
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+    });
+
+    const operation = createTestReplyOperation(ref);
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "reply_operation:queued",
+      repeatedRequestNoProgressAgeMs: 30_000,
+    });
+
+    operation.markWaitingForDeferredMaintenance();
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "deferred_maintenance:waiting",
+      repeatedRequestNoProgressAgeMs: 30_000,
+    });
+
+    operation.complete();
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "reply_operation:ended",
+      repeatedRequestNoProgressAgeMs: 30_000,
     });
   });
 
@@ -320,6 +491,329 @@ describe("reply run registry", () => {
     });
   });
 
+  it("keeps owner settlement pending after stale expiry through its completion barrier", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-stale-owner" });
+    operation.setPhase("running");
+
+    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
+
+    const settlement = waitForReplyOperationOwnerSettlement(operation, 1_000);
+    let settled = false;
+    void settlement.then((value) => {
+      settled = value;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    let releaseCompletion: () => void = () => {};
+    const completionBarrier = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    operation.completeWithAfterClearBarrier(completionBarrier);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseCompletion();
+    await expect(settlement).resolves.toBe(true);
+  });
+
+  it("installs stale recovery barrier before synchronous cancel completion", async () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const operation = createTestReplyOperation({ sessionId: "session-sync-cancel" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => operation.complete(),
+      isStreaming: () => true,
+    });
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(true);
+    expect(afterClear).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("reply run stale takeover: forced release"),
+    );
+
+    releaseRecovery();
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-sync-cancel");
+    });
+  });
+
+  it("settles a reentrant completion independently of its recovery fence", async () => {
+    let releaseCompletion: () => void = () => {};
+    const completionBarrier = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    const operation = createTestReplyOperation({ sessionId: "session-sync-durable-completion" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => operation.completeWithAfterClearBarrier(completionBarrier),
+      isStreaming: () => true,
+    });
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(true);
+    const ownerSettlement = waitForReplyOperationOwnerSettlement(operation, 1_000);
+    releaseCompletion();
+    await expect(ownerSettlement).resolves.toBe(true);
+    expect(afterClear).not.toHaveBeenCalled();
+
+    releaseRecovery();
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-sync-durable-completion");
+    });
+  });
+
+  it("retains exact ownership when stale backend cancellation throws", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-cancel-throws" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {
+        throw new Error("cancel failed");
+      },
+      isStreaming: () => true,
+    });
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(false);
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+
+    releaseRecovery();
+    await recoveryBarrier;
+    await Promise.resolve();
+    expect(afterClear).not.toHaveBeenCalled();
+
+    expect(forceClearReplyOperation(operation, new Error("cancel failed"))).toBe(true);
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-cancel-throws");
+    });
+    expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
+  });
+
+  it("retains exact ownership when stale backend cancellation awaits terminal completion", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-cancel-pending" });
+    operation.setPhase("running");
+    const cancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(false);
+    expect(cancel).toHaveBeenCalledWith("superseded");
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+
+    releaseRecovery();
+    await recoveryBarrier;
+    await Promise.resolve();
+    expect(afterClear).not.toHaveBeenCalled();
+
+    expect(forceClearReplyOperation(operation, new Error("terminal completion timed out"))).toBe(
+      true,
+    );
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-cancel-pending");
+    });
+    expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
+  });
+
+  it("retains pre-backend ownership and rejects a backend that attaches after expiry", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-cancel-before-attach" });
+    operation.setPhase("running");
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(false);
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+
+    const lateCancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: lateCancel,
+      isStreaming: () => true,
+    });
+    expect(lateCancel).toHaveBeenCalledWith("superseded");
+    expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+
+    releaseRecovery();
+    await recoveryBarrier;
+    await Promise.resolve();
+    expect(afterClear).not.toHaveBeenCalled();
+
+    expect(forceClearReplyOperation(operation)).toBe(true);
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-cancel-before-attach");
+    });
+    expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
+  });
+
+  it("bounds retained ownership when stale cancellation awaits terminal completion", async () => {
+    await withFakeReplyTimers(async () => {
+      const operation = createTestReplyOperation({ sessionId: "session-cancel-pending-bound" });
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: () => {},
+        isStreaming: () => true,
+      });
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+
+      expect(expireStaleReplyOperation(operation, "no_activity")).toBe(false);
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - 1);
+      expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+      expect(afterClear).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
+      expect(afterClear).toHaveBeenCalledWith("session-cancel-pending-bound");
+    });
+  });
+
+  it("bounds retained ownership when stale cancellation throws undefined", async () => {
+    await withFakeReplyTimers(async () => {
+      const operation = createTestReplyOperation({ sessionId: "session-undefined-cancel" });
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: () => {
+          // oxlint-disable-next-line typescript/only-throw-error -- JavaScript permits undefined; this guards the explicit cancelFailed sentinel.
+          throw undefined;
+        },
+        isStreaming: () => true,
+      });
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+
+      expect(expireStaleReplyOperation(operation, "no_activity")).toBe(false);
+      expect(operation.abortSignal.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - 1);
+      expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+      expect(afterClear).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
+      expect(afterClear).toHaveBeenCalledWith("session-undefined-cancel");
+    });
+  });
+
+  it("keeps a reentrant completion fenced when cancel then throws", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-complete-then-throw" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {
+        operation.complete();
+        throw new Error("cancel failed after completion");
+      },
+      isStreaming: () => true,
+    });
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(true);
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get("agent:main:main")).toBeUndefined();
+    expect(afterClear).not.toHaveBeenCalled();
+
+    releaseRecovery();
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-complete-then-throw");
+    });
+  });
+
+  it("keeps late after-clear registration behind an active stale barrier", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-late-callback" });
+    operation.setPhase("running");
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(false);
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+    expect(afterClear).not.toHaveBeenCalled();
+
+    releaseRecovery();
+    await recoveryBarrier;
+    await Promise.resolve();
+    expect(afterClear).not.toHaveBeenCalled();
+
+    expect(forceClearReplyOperation(operation)).toBe(true);
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-late-callback");
+    });
+  });
+
   it("keeps later after-clear work behind earlier delivery barriers", async () => {
     const first = createTestReplyOperation({
       sessionId: "first-session",
@@ -356,8 +850,7 @@ describe("reply run registry", () => {
   });
 
   it("keeps follow-up admission blocked until slow delivery settles", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionId: "hung-session",
       });
@@ -390,15 +883,93 @@ describe("reply run registry", () => {
         respectFollowupAdmissionBarrier: true,
       });
       next.complete();
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
+  });
+
+  it("fences every durable alias until successor handoff settles", async () => {
+    await withFakeReplyTimers(async () => {
+      const requestKey = "agent:main:telegram:alias:request";
+      const canonicalKey = "agent:main:telegram:alias:canonical";
+      const adoptedKey = "agent:main:telegram:alias:adopted";
+      const operation = createTestReplyOperation({
+        sessionKey: requestKey,
+        sessionId: "alias-session",
+      });
+      let releaseFirstBarrier = () => {};
+      const firstBarrier = new Promise<void>((resolve) => {
+        releaseFirstBarrier = resolve;
+      });
+      registerReplyOperationSuccessorBarrier({
+        operation,
+        sessionId: "alias-session",
+        sessionKeys: [requestKey, canonicalKey],
+        start: () => firstBarrier,
+      });
+      let releaseSecondBarrier = () => {};
+      const secondBarrier = new Promise<void>((resolve) => {
+        releaseSecondBarrier = resolve;
+      });
+      registerReplyOperationSuccessorBarrier({
+        operation,
+        sessionId: "alias-session",
+        sessionKeys: [adoptedKey],
+        start: () => secondBarrier,
+      });
+
+      operation.updateSessionId("rotated-alias-session");
+      operation.complete();
+      for (const sessionKey of [requestKey, canonicalKey, adoptedKey]) {
+        expect(() => createTestReplyOperation({ sessionKey })).toThrow(
+          ReplyRunSuccessorAdmissionBlockedError,
+        );
+      }
+      const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(timedWait).resolves.toEqual({ settled: false });
+
+      const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
+      const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
+      releaseFirstBarrier();
+      for (const wait of [requestWait, canonicalWait]) {
+        await expect(wait).resolves.toEqual({
+          settled: true,
+          sessionId: "rotated-alias-session",
+        });
+      }
+      expect(() => createTestReplyOperation({ sessionKey: adoptedKey })).toThrow(
+        ReplyRunSuccessorAdmissionBlockedError,
+      );
+      releaseSecondBarrier();
+      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
+        settled: true,
+        sessionId: "rotated-alias-session",
+      });
+      const successor = createTestReplyOperation({ sessionKey: canonicalKey });
+      successor.complete();
+    });
+  });
+
+  it("stops a successor wait when its signal aborts", async () => {
+    const operation = createTestReplyOperation();
+    registerReplyOperationSuccessorBarrier({
+      operation,
+      sessionId: operation.sessionId,
+      sessionKeys: [operation.key],
+      start: () => new Promise<void>(() => {}),
+    });
+    operation.complete();
+    const controller = new AbortController();
+    const wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(wait).resolves.toEqual({ settled: false });
   });
 
   it("extends a hung delivery barrier only while bounded owner work remains active", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionId: "active-owner-session",
       });
@@ -418,15 +989,11 @@ describe("reply run registry", () => {
       await vi.waitFor(() => {
         expect(afterClear).toHaveBeenCalledWith("active-owner-session");
       });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("keeps follow-up admission blocked during an unsettled inter-block delay", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:mattermost:direct:user-1",
         sessionId: "mattermost-delivery-session",
@@ -463,15 +1030,11 @@ describe("reply run registry", () => {
         respectFollowupAdmissionBarrier: true,
       });
       followup.complete();
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("eventually releases a permanently hung delivery barrier at the default timeout", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionId: "hung-session",
       });
@@ -491,10 +1054,7 @@ describe("reply run registry", () => {
         respectFollowupAdmissionBarrier: true,
       });
       next.complete();
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("retains failed operations until final delivery completes", () => {
@@ -633,9 +1193,75 @@ describe("reply run registry", () => {
     operation.complete();
   });
 
+  it.each([
+    {
+      name: "user abort while queued",
+      abort: (operation: ReturnType<typeof createTestReplyOperation>) => operation.abortByUser(),
+      code: "aborted_by_user",
+      reason: "user_abort",
+      phase: "queued",
+    },
+    {
+      name: "restart abort while queued",
+      abort: (operation: ReturnType<typeof createTestReplyOperation>) =>
+        operation.abortForRestart(),
+      code: "aborted_for_restart",
+      reason: "restart",
+      phase: "queued",
+    },
+    {
+      name: "user abort while running",
+      abort: (operation: ReturnType<typeof createTestReplyOperation>) => operation.abortByUser(),
+      code: "aborted_by_user",
+      reason: "user_abort",
+      phase: "running",
+    },
+    {
+      name: "restart abort while running",
+      abort: (operation: ReturnType<typeof createTestReplyOperation>) =>
+        operation.abortForRestart(),
+      code: "aborted_for_restart",
+      reason: "restart",
+      phase: "running",
+    },
+  ] as const)("preserves cleanup when backend cancellation throws: $name", async (testCase) => {
+    await withFakeReplyTimers(async () => {
+      const cancelError = new Error("cancel failed");
+      const cancel = vi.fn(() => {
+        throw cancelError;
+      });
+      const operation = createTestReplyOperation({
+        sessionKey: `agent:main:${testCase.reason}-${testCase.phase}`,
+        sessionId: `session-${testCase.reason}-${testCase.phase}`,
+      });
+      operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+      operation.setPhase(testCase.phase);
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+
+      expect(() => testCase.abort(operation)).toThrow(cancelError);
+      expect(operation.result).toEqual({ kind: "aborted", code: testCase.code });
+      expect(operation.phase).toBe("aborted");
+      expect(operation.abortSignal.aborted).toBe(true);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledWith(testCase.reason);
+
+      const retained = testCase.phase === "running";
+      expect(replyRunRegistry.isActive(operation.key)).toBe(retained);
+      expect(afterClear).toHaveBeenCalledTimes(retained ? 0 : 1);
+      expect(vi.getTimerCount()).toBe(retained ? 1 : 0);
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+      expect(replyRunRegistry.isActive(operation.key)).toBe(false);
+      expect(afterClear).toHaveBeenCalledOnce();
+      operation.complete();
+      expect(afterClear).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+  });
+
   it("force-releases a running aborted operation when the owner never returns", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const cancel = vi.fn();
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:hung-abort",
@@ -672,15 +1298,11 @@ describe("reply run registry", () => {
       if (next.status === "owned") {
         next.operation.complete();
       }
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("keeps late owner complete harmless after forced terminal release", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:late-complete",
         sessionId: "session-late-complete",
@@ -695,15 +1317,11 @@ describe("reply run registry", () => {
 
       expect(replyRunRegistry.isActive("agent:main:late-complete")).toBe(false);
       expect(afterClear).toHaveBeenCalledTimes(1);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("force-releases retained failures when the owner never completes", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:retained-hung-failure",
         sessionId: "session-retained-hung-failure",
@@ -718,13 +1336,10 @@ describe("reply run registry", () => {
       expect(replyRunRegistry.get("agent:main:retained-hung-failure")).toBeUndefined();
       expect(afterClear).toHaveBeenCalledTimes(1);
       expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
-  it("keeps run_stalled attribution when backend cancel re-enters abortByUser", () => {
+  it("keeps run_stalled attribution and ownership when cancel re-enters abortByUser", () => {
     const operation = createTestReplyOperation({
       sessionKey: "agent:main:reentrant-expire",
       sessionId: "reentrant-session",
@@ -740,14 +1355,35 @@ describe("reply run registry", () => {
     });
     operation.setPhase("running");
 
-    expect(expireStaleReplyOperation(operation, "no_activity")).toBe(true);
+    expect(expireStaleReplyOperation(operation, "no_activity")).toBe(false);
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(replyRunRegistry.get("agent:main:reentrant-expire")).toBe(operation);
+    expect(forceClearReplyOperation(operation)).toBe(true);
     expect(replyRunRegistry.get("agent:main:reentrant-expire")).toBeUndefined();
   });
 
+  it("keeps supersession attribution when backend cancellation re-enters user abort", () => {
+    const operation = createTestReplyOperation({
+      sessionKey: "agent:main:heartbeat-preemption",
+      sessionId: "heartbeat-preemption-session",
+      turnKind: "heartbeat",
+    });
+    const cancel = vi.fn(() => {
+      operation.abortByUser();
+    });
+    operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+    operation.setPhase("running");
+
+    expect(operation.supersede()).toBe(true);
+    expect(cancel).toHaveBeenCalledWith("superseded");
+    expect(operation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_for_supersession",
+    });
+  });
+
   it("cancels terminal settle when the owner clears state first", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:owner-clears",
@@ -763,10 +1399,7 @@ describe("reply run registry", () => {
       expect(warnSpy).not.toHaveBeenCalledWith(
         expect.stringContaining("reply run terminal settle: forced release"),
       );
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("force-clears retained failed operations", () => {
@@ -791,8 +1424,7 @@ describe("reply run registry", () => {
   });
 
   it("force-clears a running operation after abort without backend cleanup", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const cancel = vi.fn();
       const operation = createTestReplyOperation({
         sessionId: "session-running",
@@ -815,10 +1447,7 @@ describe("reply run registry", () => {
 
       expect(isReplyRunActiveForSessionId("session-running")).toBe(false);
       await expect(waitPromise).resolves.toBe(true);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("rejects aborts while the attached backend is finalizing", () => {
@@ -905,8 +1534,7 @@ describe("reply run registry", () => {
   });
 
   it("expires finalization when its owner stops making progress", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const afterClear = vi.fn();
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:hung-finalization",
@@ -929,15 +1557,11 @@ describe("reply run registry", () => {
       expect(operation.phase).toBe("failed");
       expect(operation.abortSignal.aborted).toBe(true);
       expect(afterClear).toHaveBeenCalledTimes(1);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("renews finalization from owner progress", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:progressing-finalization",
         sessionId: "session-progressing-finalization",
@@ -956,15 +1580,11 @@ describe("reply run registry", () => {
 
       expect(replyRunRegistry.get("agent:main:progressing-finalization")).toBeUndefined();
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("preserves bounded work that starts before finalization", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:pre-finalization-work",
         sessionId: "session-pre-finalization-work",
@@ -981,15 +1601,11 @@ describe("reply run registry", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       expect(replyRunRegistry.get("agent:main:pre-finalization-work")).toBeUndefined();
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("does not shorten bounded work when ordinary activity renews", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:overlapping-finalization-work",
         sessionId: "session-overlapping-finalization-work",
@@ -1007,15 +1623,11 @@ describe("reply run registry", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       expect(replyRunRegistry.get("agent:main:overlapping-finalization-work")).toBeUndefined();
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("honors a bounded extended finalization lease", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:extended-finalization",
         sessionId: "session-extended-finalization",
@@ -1030,15 +1642,11 @@ describe("reply run registry", () => {
       await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
       expect(replyRunRegistry.get("agent:main:extended-finalization")).toBeUndefined();
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("keeps late finalization cleanup from clearing a successor", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:late-finalization",
         sessionId: "session-late-finalization",
@@ -1055,15 +1663,11 @@ describe("reply run registry", () => {
 
       expect(replyRunRegistry.get("agent:main:late-finalization")).toBe(successor);
       successor.complete();
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("clamps oversized wait timers instead of resolving idle waits immediately", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const operation = createTestReplyOperation({
         sessionId: "session-running",
@@ -1077,15 +1681,11 @@ describe("reply run registry", () => {
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
       operation.complete();
       await expect(waitPromise).resolves.toBe(true);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
   it("waits for reply-run completion without a timer when requested", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
         sessionKey: "agent:main:unbounded",
         sessionId: "session-unbounded",
@@ -1097,13 +1697,10 @@ describe("reply run registry", () => {
       expect(setTimeoutSpy).not.toHaveBeenCalled();
       operation.complete();
       await expect(waitPromise).resolves.toBe(true);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+    });
   });
 
-  it("queues messages only through the active running backend", () => {
+  it("queues messages only through the active running backend", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-running",
@@ -1116,15 +1713,22 @@ describe("reply run registry", () => {
       queueMessage,
     });
 
-    expect(queueReplyRunMessage("session-running", "before running")).toBe(false);
+    await expect(
+      queueCurrentReplyRunMessage("session-running", "before running"),
+    ).resolves.toMatchObject({ status: "rejected" });
 
     operation.setPhase("running");
 
-    expect(queueReplyRunMessage("session-running", "hello")).toBe(true);
-    expect(queueMessage).toHaveBeenCalledWith("hello");
+    await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toEqual({
+      status: "accepted",
+    });
+    expect(queueMessage).toHaveBeenCalledWith(
+      "hello",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
   });
 
-  it("queues messages only when the task-suggestion tool surface matches", () => {
+  it("queues messages only when the task-suggestion tool surface matches", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-task-suggestions",
@@ -1138,25 +1742,36 @@ describe("reply run registry", () => {
     });
     operation.setPhase("running");
 
-    expect(
-      queueReplyRunMessage("session-task-suggestions", "legacy client", {
+    await expect(
+      queueCurrentReplyRunMessage("session-task-suggestions", "legacy client", {
         taskSuggestionDeliveryMode: undefined,
       }),
-    ).toBe(false);
-    expect(
-      queueReplyRunMessage("session-task-suggestions", "capable client", {
+    ).resolves.toEqual({ status: "rejected", reason: "task_suggestion_delivery_mode_mismatch" });
+    await expect(
+      queueCurrentReplyRunMessage("session-task-suggestions", "capable client", {
         taskSuggestionDeliveryMode: "gateway",
       }),
-    ).toBe(true);
-    expect(queueReplyRunMessage("session-task-suggestions", "internal completion")).toBe(true);
+    ).resolves.toEqual({ status: "accepted" });
+    await expect(
+      queueCurrentReplyRunMessage("session-task-suggestions", "internal completion"),
+    ).resolves.toEqual({ status: "accepted" });
     expect(queueMessage).toHaveBeenCalledTimes(2);
-    expect(queueMessage).toHaveBeenNthCalledWith(1, "capable client", {
-      taskSuggestionDeliveryMode: "gateway",
-    });
-    expect(queueMessage).toHaveBeenNthCalledWith(2, "internal completion");
+    expect(queueMessage).toHaveBeenNthCalledWith(
+      1,
+      "capable client",
+      expect.objectContaining({
+        taskSuggestionDeliveryMode: "gateway",
+        onQueueAccepted: expect.any(Function),
+      }),
+    );
+    expect(queueMessage).toHaveBeenNthCalledWith(
+      2,
+      "internal completion",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
   });
 
-  it("queues images only through backends that preserve them", () => {
+  it("queues images only through backends that preserve them", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-images",
@@ -1170,7 +1785,9 @@ describe("reply run registry", () => {
     operation.setPhase("running");
     const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
 
-    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(false);
+    await expect(
+      queueCurrentReplyRunMessage("session-images", "inspect", { images }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "image_input_unsupported" });
     expect(queueMessage).not.toHaveBeenCalled();
 
     operation.attachBackend({
@@ -1181,11 +1798,16 @@ describe("reply run registry", () => {
       supportsQueueMessageImages: true,
     });
 
-    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(true);
-    expect(queueMessage).toHaveBeenCalledWith("inspect", { images });
+    await expect(
+      queueCurrentReplyRunMessage("session-images", "inspect", { images }),
+    ).resolves.toEqual({ status: "accepted" });
+    expect(queueMessage).toHaveBeenCalledWith(
+      "inspect",
+      expect.objectContaining({ images, onQueueAccepted: expect.any(Function) }),
+    );
   });
 
-  it("queues messages through active non-streaming backends with live stopped state", () => {
+  it("queues messages through queue-first legacy backends while token streaming is idle", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-running",
@@ -1195,45 +1817,147 @@ describe("reply run registry", () => {
       kind: "embedded",
       cancel: vi.fn(),
       isStreaming: () => false,
-      isStopped: () => false,
       queueMessage,
     });
     operation.setPhase("running");
 
-    expect(queueReplyRunMessage("session-running", "hello")).toBe(true);
-    expect(queueMessage).toHaveBeenCalledWith("hello");
+    await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toEqual({
+      status: "accepted",
+    });
+    expect(queueMessage).toHaveBeenCalledWith(
+      "hello",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
   });
 
-  it("refuses stale reply-run steering until real activity resumes", () => {
+  it("rejects inbound steering when tool authority changes before backend admission", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createTestReplyOperation({ sessionId: "session-authority" });
+    operation.bindToolAuthorityFingerprint("authority-a");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    await expect(
+      queueCurrentReplyRunMessage("session-authority", "restricted turn", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "authority-b",
+      }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+    expect(queueMessage).not.toHaveBeenCalled();
+
+    await expect(
+      queueCurrentReplyRunMessage("session-authority", "same authority", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "authority-a",
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+  });
+
+  it("projects inbound authority before backend admission without forwarding the overlay", async () => {
+    const run = createQueueTestRun({ prompt: "projected inbound" });
+    const route = { provider: "openai", model: "gpt-primary" };
+    const overlay = toolAuthorityOverlay(run);
+    const queueMessage = vi.fn(
+      async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
+    );
+    const operation = createTestReplyOperation({ sessionId: "session-projected-authority" });
+    operation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(run));
+    operation.bindToolAuthorityRoute(route);
+    operation.bindToolAuthorityFingerprint(resolveFollowupRunToolAuthorityFingerprint(run, route));
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    await expect(
+      queueCurrentReplyRunMessage("session-projected-authority", "same authority", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "caller-cannot-override-projection",
+        toolAuthorityOverlay: overlay,
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+    const forwardedOptions = queueMessage.mock.calls[0]?.[1];
+    expect(forwardedOptions).toMatchObject({
+      isInboundUserMessage: true,
+      toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(run, route),
+    });
+    expect(forwardedOptions).not.toHaveProperty("toolAuthorityOverlay");
+
+    await expect(
+      queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: { ...overlay, clientCaps: ["changed-capability"] },
+      }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+    expect(queueMessage).toHaveBeenCalledOnce();
+  });
+
+  it("refuses stale injectable owners for admission and delivery until activity resumes", async () => {
     vi.useFakeTimers();
     try {
       const queueMessage = vi.fn(async () => {});
       const operation = createTestReplyOperation({
         sessionId: "session-running",
+        originatingLeafEntryId: "leaf-a",
       });
       operation.attachBackend({
         kind: "embedded",
         cancel: vi.fn(),
-        isStreaming: () => true,
+        isStreaming: () => false,
+        isStopped: () => false,
         queueMessage,
       });
       operation.setPhase("running");
 
+      const target = replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: "agent:main:main",
+        originatingLeafEntryId: "leaf-a",
+      });
+      expect(target).toBeDefined();
+
       vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
 
-      expect(queueReplyRunMessage("session-running", "stale")).toBe(false);
+      expect(
+        replyRunRegistry.resolveMessageInjectionTarget({
+          sessionKey: "agent:main:main",
+          originatingLeafEntryId: "leaf-a",
+        }),
+      ).toBeUndefined();
+      await expect(queueReplyMessageInjectionTarget(target!, "stale")).resolves.toMatchObject({
+        status: "rejected",
+        reason: "stale_run",
+      });
       expect(queueMessage).not.toHaveBeenCalled();
 
       operation.recordActivity();
 
-      expect(queueReplyRunMessage("session-running", "fresh")).toBe(true);
-      expect(queueMessage).toHaveBeenCalledWith("fresh");
+      expect(
+        replyRunRegistry.resolveMessageInjectionTarget({
+          sessionKey: "agent:main:main",
+          originatingLeafEntryId: "leaf-a",
+        }),
+      ).toBeDefined();
+      await expect(queueReplyMessageInjectionTarget(target!, "fresh")).resolves.toEqual({
+        status: "accepted",
+      });
+      expect(queueMessage).toHaveBeenCalledWith(
+        "fresh",
+        expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+      );
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("does not queue messages through stopped backends", () => {
+  it("does not queue messages through stopped backends", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-running",
@@ -1248,11 +1972,14 @@ describe("reply run registry", () => {
     });
     operation.setPhase("running");
 
-    expect(queueReplyRunMessage("session-running", "hello")).toBe(false);
+    await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toMatchObject({
+      status: "rejected",
+      reason: "injection_unavailable",
+    });
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("fails closed when backend stopped state checks throw", () => {
+  it("fails closed when backend stopped state checks throw", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-running",
@@ -1269,8 +1996,284 @@ describe("reply run registry", () => {
     });
     operation.setPhase("running");
 
-    expect(queueReplyRunMessage("session-running", "hello")).toBe(false);
+    await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toMatchObject({
+      status: "rejected",
+      reason: "injection_unavailable",
+    });
     expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("requires a real injection capability", () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({ kind: "cli", runId: "run-a", cancel: vi.fn() });
+
+    expect(
+      replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: operation.key,
+        originatingLeafEntryId: "leaf-a",
+        expectedRunId: "run-a",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a different expected run id", () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+
+    expect(
+      replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: operation.key,
+        originatingLeafEntryId: "leaf-a",
+        expectedRunId: "run-b",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns synchronous and asynchronous queue failures as typed rejections", async () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    const synchronous = vi.fn(() => {
+      throw new Error("sync rejection");
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: synchronous },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+
+    const synchronousAttempt = beginReplyMessageInjectionTarget(target, "first");
+    expect(synchronous).toHaveBeenCalledOnce();
+    await expect(synchronousAttempt.acceptance).resolves.toBe(false);
+    await expect(synchronousAttempt.outcome).resolves.toMatchObject({
+      status: "rejected",
+      reason: "runtime_rejected",
+      errorMessage: "Error: sync rejection",
+    });
+
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn(async () => {
+          throw new Error("async rejection");
+        }),
+      },
+    });
+    const asynchronousAttempt = beginReplyMessageInjectionTarget(target, "second");
+    await expect(asynchronousAttempt.acceptance).resolves.toBe(false);
+    await expect(asynchronousAttempt.outcome).resolves.toMatchObject({
+      status: "rejected",
+      reason: "runtime_rejected",
+      errorMessage: "Error: async rejection",
+    });
+  });
+
+  it("reports callback acceptance before outcome and composes the caller callback", async () => {
+    const delivery = createDeferred();
+    const callerOnQueueAccepted = vi.fn();
+    let queueOptions: ReplyBackendQueueMessageOptions | undefined;
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn((_text, options) => {
+          queueOptions = options;
+          return delivery.promise;
+        }),
+      },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    const attempt = beginReplyMessageInjectionTarget(target, "accepted", {
+      onQueueAccepted: callerOnQueueAccepted,
+    });
+    let outcomeSettled = false;
+    void attempt.outcome.then(() => {
+      outcomeSettled = true;
+    });
+
+    queueOptions?.onQueueAccepted?.(true);
+
+    await expect(attempt.acceptance).resolves.toBe(true);
+    expect(callerOnQueueAccepted).toHaveBeenCalledWith(true);
+    expect(outcomeSettled).toBe(false);
+    delivery.resolve();
+    await expect(attempt.outcome).resolves.toEqual({ status: "accepted" });
+  });
+
+  it("falls back to queue settlement when the backend ignores acceptance callbacks", async () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    const accepted = beginReplyMessageInjectionTarget(target, "accepted");
+    await expect(accepted.acceptance).resolves.toBe(true);
+
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn(async () => {
+          throw new Error("rejected");
+        }),
+      },
+    });
+    const rejected = beginReplyMessageInjectionTarget(target, "rejected");
+    await expect(rejected.acceptance).resolves.toBe(false);
+  });
+
+  it("keeps callback acceptance authoritative over later queue rejection", async () => {
+    const delivery = createDeferred();
+    let queueOptions: ReplyBackendQueueMessageOptions | undefined;
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn((_text, options) => {
+          queueOptions = options;
+          return delivery.promise;
+        }),
+      },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    const attempt = beginReplyMessageInjectionTarget(target, "uncertain");
+
+    queueOptions?.onQueueAccepted?.(true);
+    delivery.reject(new Error("transcript unconfirmed"));
+
+    await expect(attempt.acceptance).resolves.toBe(true);
+    await expect(attempt.outcome).resolves.toMatchObject({ status: "rejected" });
+  });
+
+  it("rejects an ABA successor even when key and leaf are reused", async () => {
+    const first = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    first.setPhase("running");
+    first.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: first.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    first.complete();
+    const successorQueue = vi.fn(async () => {});
+    const successor = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    successor.setPhase("running");
+    successor.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
+    });
+
+    await expect(queueReplyMessageInjectionTarget(target, "must not move")).resolves.toMatchObject({
+      status: "rejected",
+      reason: "no_active_run",
+    });
+    expect(successorQueue).not.toHaveBeenCalled();
+  });
+
+  it("uses a replacement backend on the same operation", async () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    const firstQueue = vi.fn(async () => {});
+    const first = {
+      kind: "embedded" as const,
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: firstQueue },
+    };
+    operation.attachBackend(first);
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    const replacementQueue = vi.fn(async () => {});
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: replacementQueue },
+    });
+
+    await expect(queueReplyMessageInjectionTarget(target, "replacement")).resolves.toEqual({
+      status: "accepted",
+    });
+    expect(firstQueue).not.toHaveBeenCalled();
+    expect(replacementQueue).toHaveBeenCalledWith(
+      "replacement",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
+  });
+
+  it("keeps an invoked queue authoritative when the owner clears synchronously", async () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    const queueMessage = vi.fn(async () => {
+      operation.complete();
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+
+    await expect(queueReplyMessageInjectionTarget(target, "last input")).resolves.toEqual({
+      status: "accepted",
+    });
+    expect(replyRunRegistry.isActive(operation.key)).toBe(false);
   });
 
   it("aborts compacting runs through the registry compatibility helper", () => {

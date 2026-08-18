@@ -6,8 +6,14 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import type { SessionsRouteData } from "./sessions-page.ts";
+import type {
+  SessionCapability,
+  SessionListOptions,
+  SessionListSnapshot,
+} from "../../lib/sessions/index.ts";
+import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import type { SessionsRouteData } from "./route.ts";
 import type { TranscriptSearchState } from "./view.ts";
 import "./sessions-page.ts";
 
@@ -25,12 +31,12 @@ export type TestSessionsPage = HTMLElement & {
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
   checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
+  checkpointErrorByKey: Record<string, string>;
   checkpointLoadingKey: string | null;
   checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
   transcriptSearchQuery: string;
   transcriptSearch: TranscriptSearchState;
-  loadSessions: () => Promise<void>;
   updateTranscriptSearchQuery: (query: string) => void;
   runTranscriptSearch: () => Promise<void>;
   loadCheckpoint: (sessionKey: string) => Promise<void>;
@@ -38,15 +44,21 @@ export type TestSessionsPage = HTMLElement & {
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
   deleteAllArchived: () => Promise<void>;
   stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
-  rememberCustomGroup: (name: string) => Promise<void>;
+  rememberCustomGroup: (name: string) => Promise<unknown>;
+  requestNewCategory: (sessionKey?: string) => Promise<void>;
   openSessionMenu: (
     row: GatewaySessionRow,
     position: { x: number; y: number },
     trigger: HTMLElement | null,
   ) => void;
-  patchSession: (key: string, patch: { archived?: boolean; pinned?: boolean }) => Promise<unknown>;
+  patchSession: (
+    key: string,
+    patch: { archived?: boolean; pinned?: boolean; label?: string | null },
+    scope?: unknown,
+    expectedSessionId?: string,
+  ) => Promise<unknown>;
   archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
-  forkSession: (key: string) => Promise<void>;
+  forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   addToWorkboard: (session: GatewaySessionRow) => Promise<void>;
@@ -64,7 +76,7 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -98,8 +110,55 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
 }
 
 export function createSessions(overrides: Partial<SessionCapability> = {}): SessionCapability {
+  return createManagedSessions(overrides).sessions;
+}
+
+function sessionListKey(options: SessionListOptions | SessionRefreshOptions): string {
+  const {
+    force: _force,
+    backgroundHydrate: _backgroundHydrate,
+    offset: _offset,
+    append: _append,
+    ...scope
+  } = options as SessionRefreshOptions;
+  return JSON.stringify(scope);
+}
+
+export function createManagedSessions(overrides: Partial<SessionCapability> = {}) {
   const subscribe = () => () => undefined;
-  return {
+  const snapshots = new Map<string, SessionListSnapshot>();
+  const listeners = new Map<string, Set<(snapshot: SessionListSnapshot) => void>>();
+  const emptySnapshot = (): SessionListSnapshot => ({
+    result: null,
+    agentId: null,
+    loading: false,
+    error: null,
+  });
+  const publish = (options: SessionListOptions, snapshot: SessionListSnapshot) => {
+    const key = sessionListKey(options);
+    snapshots.set(key, snapshot);
+    listeners.get(key)?.forEach((listener) => listener(snapshot));
+  };
+  const listSnapshot = vi.fn((options: SessionListOptions) => {
+    return snapshots.get(sessionListKey(options)) ?? emptySnapshot();
+  });
+  const subscribeList = vi.fn(
+    (options: SessionListOptions, listener: (snapshot: SessionListSnapshot) => void) => {
+      const key = sessionListKey(options);
+      const scoped = listeners.get(key) ?? new Set();
+      scoped.add(listener);
+      listeners.set(key, scoped);
+      return () => {
+        scoped.delete(listener);
+      };
+    },
+  );
+  const refreshList = vi.fn(async (options: SessionRefreshOptions = {}) => {
+    const snapshot = listSnapshot(options);
+    publish(options, { ...snapshot, loading: true, error: null });
+    publish(options, { ...snapshot, loading: false, error: null });
+  });
+  const sessions = {
     state: {
       result: null,
       agentId: null,
@@ -107,8 +166,14 @@ export function createSessions(overrides: Partial<SessionCapability> = {}): Sess
       loading: false,
       error: null,
       deletedSessions: [],
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
     },
     list: vi.fn(async () => null),
+    listSnapshot,
+    subscribeList,
+    refreshList,
     listCheckpoints: vi.fn(async () => []),
     deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
     patch: vi.fn(async () => null),
@@ -118,6 +183,7 @@ export function createSessions(overrides: Partial<SessionCapability> = {}): Sess
     subscribe,
     ...overrides,
   } as unknown as SessionCapability;
+  return { sessions, publish, listSnapshot, subscribeList, refreshList };
 }
 
 export function createContext(
@@ -160,7 +226,9 @@ export async function createRenderedPage(
   page.routeData = {
     gateway: context.gateway,
     gatewaySnapshot: context.gateway.snapshot,
+    sessions: context.sessions,
     result,
+    loading: false,
     error: null,
     expandedSessionKey,
     statusFilter,

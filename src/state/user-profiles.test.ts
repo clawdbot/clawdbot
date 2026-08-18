@@ -2,24 +2,28 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
+  OPENCLAW_STATE_SCHEMA_VERSION,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   adoptTailscaleProfileAvatar,
+  clearGitHubIdentity,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   formatUserProfileAvatarEtag,
   getProfileAvatar,
+  getUserProfileDisplay,
   linkEmail,
   listProfiles,
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
+  setGitHubIdentity,
+  UserProfileGitHubIdentityConflictError,
 } from "./user-profiles.js";
 
 const statePaths: string[] = [];
@@ -73,7 +77,7 @@ describe("user profiles", () => {
     expect(
       openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version,
     ).toBe(versionBefore);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(6);
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(9);
     expect(second).toEqual(first);
     expect(ensureProfileForEmail("ADA@example.com", options)).toEqual(first);
     expect(listProfiles(options)).toEqual([
@@ -105,6 +109,75 @@ describe("user profiles", () => {
         )
         .all(),
     ).toEqual([{ provider: "github", subject: "ada", profile_id: first.id }]);
+  });
+
+  it("lazily adds canonical GitHub login storage without changing the schema version", () => {
+    const options = stateOptions();
+    const database = openOpenClawStateDatabase(options).db;
+    database.exec(`
+      CREATE TABLE user_profile_identities (
+        provider TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, subject)
+      ) STRICT;
+    `);
+    const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
+
+    ensureProfileForEmail("ada@example.com", options);
+
+    expect(tableHasColumn(database, "user_profile_identities", "canonical_login")).toBe(true);
+    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(versionBefore);
+  });
+
+  it("sets, changes, uniquely owns, and clears a derived GitHub attribution identity", () => {
+    const options = stateOptions();
+    const ada = ensureProfileForEmail("ada@example.com", options);
+    const grace = ensureProfileForEmail("grace@example.com", options);
+    const numericLogin = ensureProfileForTailscaleIdentity(
+      { login: "583231@github", name: "Numeric Login" },
+      options,
+    );
+
+    expect(
+      setGitHubIdentity(ada.id, { accountId: 583231, login: "octocat" }, options),
+    ).toMatchObject({
+      githubIdentity: {
+        login: "octocat",
+        profileUrl: "https://github.com/octocat",
+        avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+      },
+    });
+    expect(() =>
+      setGitHubIdentity(grace.id, { accountId: 583231, login: "octocat" }, options),
+    ).toThrow(UserProfileGitHubIdentityConflictError);
+    expect(
+      setGitHubIdentity(ada.id, { accountId: 9919, login: "Ada-L" }, options).githubIdentity,
+    ).toMatchObject({ login: "Ada-L" });
+    expect(clearGitHubIdentity(ada.id, options).githubIdentity).toBeNull();
+    expect(ensureProfileForTailscaleIdentity({ login: "583231@github" }, options).id).toBe(
+      numericLogin.id,
+    );
+  });
+
+  it("moves GitHub attribution to the merge head while preserving a target link", () => {
+    const options = stateOptions();
+    const source = ensureProfileForEmail("source@example.com", options);
+    const target = ensureProfileForEmail("target@example.com", options);
+    setGitHubIdentity(source.id, { accountId: 1, login: "source" }, options);
+
+    linkEmail("source@example.com", target.id, options);
+    expect(
+      listProfiles(options).find((profile) => profile.id === target.id)?.githubIdentity,
+    ).toMatchObject({ login: "source" });
+
+    const next = ensureProfileForEmail("next@example.com", options);
+    setGitHubIdentity(next.id, { accountId: 2, login: "next" }, options);
+    linkEmail("target@example.com", next.id, options);
+    expect(
+      listProfiles(options).find((profile) => profile.id === next.id)?.githubIdentity,
+    ).toMatchObject({ login: "next" });
   });
 
   it("keeps dotted Tailscale logins on the email alias path", () => {
@@ -463,10 +536,13 @@ describe("user profiles", () => {
 
     expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", options).ok).toBe(true);
     const first = getProfileAvatar(profile.id, options);
+    const firstDisplay = getUserProfileDisplay(profile.id, options);
     expect(setAvatar(profile.id, new Uint8Array([2]), "image/png", options).ok).toBe(true);
     const second = getProfileAvatar(profile.id, options);
+    const secondDisplay = getUserProfileDisplay(profile.id, options);
 
     expect(first?.updatedAt).toBe(second?.updatedAt);
+    expect(firstDisplay.avatarRevision).not.toBe(secondDisplay.avatarRevision);
     expect(formatUserProfileAvatarEtag(first?.sha256 ?? "", first?.mime ?? "image/png")).not.toBe(
       formatUserProfileAvatarEtag(second?.sha256 ?? "", second?.mime ?? "image/png"),
     );
@@ -479,9 +555,12 @@ describe("user profiles", () => {
 
     expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
     const png = getProfileAvatar(profile.id, options);
+    const pngDisplay = getUserProfileDisplay(profile.id, options);
     expect(setAvatar(profile.id, bytes, "image/webp", options).ok).toBe(true);
     const webp = getProfileAvatar(profile.id, options);
+    const webpDisplay = getUserProfileDisplay(profile.id, options);
 
+    expect(pngDisplay.avatarRevision).not.toBe(webpDisplay.avatarRevision);
     expect(formatUserProfileAvatarEtag(png?.sha256 ?? "", png?.mime ?? "image/png")).not.toBe(
       formatUserProfileAvatarEtag(webp?.sha256 ?? "", webp?.mime ?? "image/png"),
     );

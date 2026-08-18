@@ -1,20 +1,32 @@
 // Builds the status summary used by human and JSON status output.
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
-import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
+import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
 } from "../config/sessions/model-override-provenance.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  listSessionEntriesReadOnly,
+  loadExactSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionTotalTokens,
+  type SessionEntry,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
   listActiveDegradedPlugins,
@@ -31,6 +43,7 @@ import {
   summarizeActionableTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./types.js";
 
@@ -148,38 +161,6 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
   return !hasSessionAutoModelFallbackProvenance(entry);
 }
 
-function normalizeStatusModelPart(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function resolveTrustedSessionContextTokens(params: {
-  entry: SessionEntry | undefined;
-  provider: string | undefined;
-  model: string | null;
-}): number | undefined {
-  const contextTokens =
-    typeof params.entry?.contextTokens === "number" && params.entry.contextTokens > 0
-      ? params.entry.contextTokens
-      : undefined;
-  if (contextTokens === undefined) {
-    return undefined;
-  }
-  if (hasSessionAutoModelFallbackProvenance(params.entry)) {
-    return contextTokens;
-  }
-  const entryProvider = normalizeStatusModelPart(params.entry?.modelProvider);
-  const entryModel = normalizeStatusModelPart(params.entry?.model);
-  const resolvedProvider = normalizeStatusModelPart(params.provider);
-  const resolvedModel = normalizeStatusModelPart(params.model);
-  if (!entryModel || !resolvedModel || entryModel !== resolvedModel) {
-    return undefined;
-  }
-  if (entryProvider && resolvedProvider && entryProvider !== resolvedProvider) {
-    return undefined;
-  }
-  return contextTokens;
-}
-
 type SessionCandidate = {
   key: string;
   entry: SessionEntry;
@@ -255,14 +236,16 @@ export async function getStatusSummary(
     includeChannelSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
+    hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true, includeChannelSummary = true } = options;
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
+    resolveAuthoredModelContextTokens,
     resolveContextTokensForModel,
-    resolveSessionRuntimeLabel,
+    resolveSessionRuntime,
     resolveSessionModelRef,
     resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
@@ -270,10 +253,6 @@ export async function getStatusSummary(
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
   await waitForContextWindowCacheLoad();
-  const contextSourceConfig =
-    options.sourceConfig !== undefined
-      ? options.sourceConfig
-      : projectConfigOntoRuntimeSourceSnapshot(cfg);
   const { resolveManifestModel, createProviderContextResolver } =
     await loadStaticModelCatalogResolvers();
   const resolveProviderContext = createProviderContextResolver({ cfg });
@@ -326,11 +305,36 @@ export async function getStatusSummary(
   const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+    const heartbeatSession = resolveHeartbeatSessionKey(
+      cfg,
+      agent.id,
+      summary.session === undefined ? undefined : { session: summary.session },
+    );
+    // Status must not create, register, or migrate an absent session database.
+    const entry = loadExactSessionEntryReadOnly({
+      agentId: agent.id,
+      storePath: heartbeatSession.storePath,
+      sessionKey: heartbeatSession.sessionKey,
+    })?.entry;
+    const route = deliveryContextFromSession(entry);
+    const heartbeat = {
+      ...cfg.agents?.defaults?.heartbeat,
+      ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+    };
+    // Owner status uses the runner's synchronous stage-1 decision.
+    // The shared probe requires positive direct proof before reporting ready.
+    const hasDeliveryRoute =
+      summary.target === "last"
+        ? Boolean(route?.channel && route.to)
+        : summary.target === "owner"
+          ? hasResolvableHeartbeatOwnerRoute({ cfg, agentId: agent.id, entry, heartbeat })
+          : true;
     return {
       agentId: agent.id,
       enabled: summary.enabled,
       every: summary.every,
       everyMs: summary.everyMs,
+      waitingForRoute: summary.enabled && !hasDeliveryRoute,
     } satisfies HeartbeatStatus;
   });
   const channelSummary = needsChannelPlugins
@@ -342,17 +346,27 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  const mainSessionKey = resolveMainSessionKey(cfg);
+  const mainSessionKey = resolveSystemMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
-  taskMaintenanceModule.configureTaskRegistryMaintenance();
-  const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
+  // Status may overlap a live Gateway, so task inspection must not initialize
+  // the writable process registry or its schema-owning shared-state handle.
+  const taskInspection = taskMaintenanceModule.inspectTasksReadOnly();
+  const inspectableTasks = taskInspection.tasks;
   const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
   const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
   const now = Date.now();
   const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
   const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });
-  const tasks = discountRetainedLostTaskFailures(rawTasks, taskAuditRetainedLost.count);
+  const tasks: StatusSummary["tasks"] = {
+    ...discountRetainedLostTaskFailures(rawTasks, taskAuditRetainedLost.count),
+    ...(taskInspection.state === "migration-required"
+      ? {
+          warning:
+            "Task history is unavailable until Gateway startup or openclaw doctor --fix repairs the state database.",
+        }
+      : {}),
+  };
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -367,11 +381,9 @@ export async function getStatusSummary(
   const configContextTokens =
     resolveContextTokensForModel({
       cfg,
-      sourceCfg: contextSourceConfig,
       provider: resolved.provider ?? DEFAULT_PROVIDER,
       model: configModel,
       ...configModelContext,
-      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
       // Keep `status`/`status --json` startup read-only. These summary lookups
       // use offline static catalogs but never start live provider discovery.
@@ -442,31 +454,15 @@ export async function getStatusSummary(
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
-        const contextTokens =
-          resolveContextTokensForModel({
-            cfg,
-            sourceCfg: contextSourceConfig,
-            provider: lookupModel.provider,
-            model: lookupModelId,
-            ...modelContext,
-            contextTokensOverride: resolveTrustedSessionContextTokens({
-              entry,
-              provider: lookupModel.provider,
-              model: lookupModelId,
-            }),
-            fallbackContextTokens: configContextTokens ?? undefined,
-            allowAsyncLoad: false,
-          }) ?? null;
-        const total = resolveSessionTotalTokens(entry);
-        const totalTokensFresh =
-          typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
-        const remaining =
-          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
-        const pct =
-          contextTokens && contextTokens > 0 && total !== undefined
-            ? Math.min(999, Math.round((total / contextTokens) * 100))
-            : null;
-        const runtime = resolveSessionRuntimeLabel({
+        const resolvedContextTokens = resolveContextTokensForModel({
+          cfg,
+          provider: lookupModel.provider,
+          model: lookupModelId,
+          ...modelContext,
+          fallbackContextTokens: configContextTokens ?? undefined,
+          allowAsyncLoad: false,
+        });
+        const runtime = resolveSessionRuntime({
           cfg,
           entry,
           provider: lookupModel.provider,
@@ -474,7 +470,30 @@ export async function getStatusSummary(
           agentId,
           sessionKey: key,
         });
-
+        const contextTokens =
+          resolveProjectedSessionContextTokens({
+            entry,
+            provider: lookupModel.provider,
+            model: lookupModelId,
+            agentHarnessId: runtime.id,
+            resolvedContextTokens,
+            authoredContextTokens: resolveAuthoredModelContextTokens({
+              cfg,
+              provider: lookupModel.provider,
+              model: lookupModelId,
+            }),
+          }) ?? null;
+        const total = resolveSessionTotalTokens(entry);
+        const freshTotal = resolveFreshSessionTotalTokens(entry);
+        const totalTokensFresh = freshTotal !== undefined;
+        const remaining =
+          contextTokens != null && freshTotal !== undefined
+            ? Math.max(0, contextTokens - freshTotal)
+            : null;
+        const pct =
+          contextTokens && contextTokens > 0 && freshTotal !== undefined
+            ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
+            : null;
         return {
           agentId,
           key,
@@ -506,35 +525,40 @@ export async function getStatusSummary(
               ? "session override"
               : "fallback selected"
             : null,
-          runtime,
+          runtime: runtime.label,
           contextTokens,
           flags: buildFlags(entry),
         } satisfies SessionStatus;
       }),
     );
 
-  const storeSources = agentList.agents.map((agent) => ({
-    agentId: agent.id,
-    storePath: resolveStorePath(cfg.session?.store, { agentId: agent.id }),
-  }));
+  const storeSources = agentList.agents.map((agent) => {
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
+    return {
+      agentId: agent.id,
+      databasePath: resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: agent.id,
+      }).path,
+      storePath,
+    };
+  });
   const paths = new Set<string>();
   const pathCounts = new Map<string, number>();
   for (const source of storeSources) {
-    paths.add(source.storePath);
-    pathCounts.set(source.storePath, (pathCounts.get(source.storePath) ?? 0) + 1);
+    paths.add(source.databasePath);
+    pathCounts.set(source.databasePath, (pathCounts.get(source.databasePath) ?? 0) + 1);
   }
 
   const byAgent = await Promise.all(
-    agentList.agents.map(async (agent) => {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
-      const candidates = loadSessionCandidates(storePath, agent.id);
+    storeSources.map(async ({ agentId, databasePath, storePath }) => {
+      const candidates = loadSessionCandidates(storePath, agentId);
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
-        { agentIdOverride: agent.id },
+        { agentIdOverride: agentId },
       );
       return {
-        agentId: agent.id,
-        path: storePath,
+        agentId,
+        path: databasePath,
         count: candidates.length,
         recent: sessions,
       };
@@ -543,21 +567,30 @@ export async function getStatusSummary(
 
   const allSessions = storeSources
     .filter((source, index, sources) => {
-      return sources.findIndex((candidate) => candidate.storePath === source.storePath) === index;
+      return (
+        sources.findIndex((candidate) => candidate.databasePath === source.databasePath) === index
+      );
     })
     .flatMap((source) =>
       loadSessionCandidates(
         source.storePath,
-        pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
+        pathCounts.get(source.databasePath) === 1 ? source.agentId : undefined,
       ),
     );
   const recent = await buildSessionRows(
     selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
   );
   const totalSessions = allSessions.length;
-
+  const hostDesktopStatus =
+    options.hostDesktopStatus ??
+    (
+      await (
+        await import("../gateway/desktop/host-source.js")
+      ).inspectHostDesktop({ config: cfg.desktop?.host })
+    ).status;
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    hostDesktop: hostDesktopStatus,
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,

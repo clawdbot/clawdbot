@@ -251,7 +251,7 @@ function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasO
 
 describe("sendPoll channel normalization", () => {
   it("normalizes plugin aliases for gateway polls", async () => {
-    callGatewayMock.mockResolvedValueOnce({ messageId: "p1" });
+    callGatewayMock.mockResolvedValueOnce({ messageId: "p1", channelId: "channel-1" });
     setDemoPollRegistry({ deliveryMode: "gateway" });
 
     const result = await sendPoll({
@@ -260,16 +260,22 @@ describe("sendPoll channel normalization", () => {
       question: "Lunch?",
       options: ["Pizza", "Sushi"],
       channel: "Workspace-Chat",
+      idempotencyKey: "stable-poll-key",
     });
 
     expect(gatewayCall()?.params?.channel).toBe("demo-alias-channel");
+    expect(gatewayCall()?.params?.idempotencyKey).toBe("stable-poll-key");
     expect(result.channel).toBe("demo-alias-channel");
     expect(result.via).toBe("gateway");
+    expect(result.result).toEqual({
+      messageId: "p1",
+      target: { kind: "channel", id: "channel-1" },
+    });
   });
 
   it("uses direct poll fallback for direct channel plugins", async () => {
     const cfg = { channels: {} };
-    const sendPollMock = vi.fn(async () => ({ messageId: "p1" }));
+    const sendPollMock = vi.fn(async () => ({ messageId: "p1", conversationId: "conv-1" }));
     setDemoPollRegistry({ supportsAnonymousPolls: true, sendPoll: sendPollMock });
 
     const result = await sendPoll({
@@ -289,7 +295,10 @@ describe("sendPoll channel normalization", () => {
       channel: "demo-alias-channel",
       to: "conversation:demo-target",
       via: "direct",
-      result: { messageId: "p1" },
+      result: {
+        messageId: "p1",
+        target: { kind: "conversation", id: "conv-1" },
+      },
     });
     expect(sendPollMock).toHaveBeenCalledWith({
       cfg,
@@ -425,6 +434,17 @@ describe("gateway url override hardening", () => {
           forceDocument: true,
           silent: true,
           parseMode: "HTML",
+        },
+      },
+    },
+    {
+      name: "preserves an explicit send idempotency key",
+      params: {
+        idempotencyKey: "stable-send-key",
+      },
+      expected: {
+        params: {
+          idempotencyKey: "stable-send-key",
         },
       },
     },

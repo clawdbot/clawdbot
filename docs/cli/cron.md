@@ -18,6 +18,11 @@ Run `openclaw automations --help` for the full command surface. See [Automations
 All automation mutations (`add`/`create`, `update`/`edit`, `remove`, `run`) require `operator.admin`. Command-payload runs execute directly in the Gateway process, not as an agent `tools.exec` tool call; `tools.exec.*` and exec approvals still govern model-visible exec tools.
 </Note>
 
+Every automation subcommand accepts the shared Gateway connection options. Use
+`--port <port>` for a Gateway on a non-default local port, or `--url <url>` for
+an explicit WebSocket URL; do not combine them. Connection options such as
+`--port`, `--url`, and `--token` may appear before or after the subcommand.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:
@@ -51,6 +56,13 @@ openclaw automations create "*/15 * * * *" \
 ```
 
 `--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
+
+Use `--display-name <name>` when the list and detail views should show a
+human-readable label distinct from the automation's stable name. Set or update
+that label with `automations add|edit --display-name`. Use
+`automations edit <job-id> --clear-display-name` to remove the label and restore
+the stable name in list and detail views. The set and clear options cannot be
+combined.
 
 ## Sessions
 
@@ -188,7 +200,7 @@ Isolated automation runs resolve the active model in this order:
 
 ### Fast mode
 
-Isolated automation fast mode follows the resolved live model selection. Model config `params.fastMode` applies by default, but a stored session `fastMode` override still wins over config. When the resolved mode is `auto`, the cutoff uses the selected model's `params.fastAutoOnSeconds` value, defaulting to 60 seconds.
+Isolated automation fast mode follows the resolved live model selection. It resolves stored session `fastMode`, per-agent `agents.entries.*.fastModeDefault`, global `agents.defaults.fastModeDefault`, then selected-model `params.fastMode`. When the resolved mode is `auto`, the cutoff uses the selected model's `params.fastAutoOnSeconds` value, defaulting to 60 seconds.
 
 ### Live model switch retries
 
@@ -216,7 +228,7 @@ The scheduler does not classify final-output prose or approval-looking refusal p
 
 Retention behavior:
 
-- `cron.sessionRetention` (default `24h`, or `false` to disable) prunes completed isolated run sessions.
+- `cron.sessionRetention` (default `24h`, or `false` to disable; a zero duration such as `"0h"` also disables) prunes completed isolated run sessions.
 - Run history keeps the newest 2000 terminal rows per job. Lost rows retain the standard 24-hour lost-task cleanup window.
 
 ## Migrating older jobs
@@ -306,7 +318,9 @@ openclaw automations runs --id <job-id> --run-id <run-id>
 
 `openclaw automations list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
 
-`openclaw automations get <job-id>` returns the stored job JSON directly. `get` and `runs` accept `--json` as the explicit machine-output spelling. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
+`--json` always requests JSON output. Commands whose product is already a machine-readable result emit JSON results by default: `add`/`create`, `status`, `enable`, `disable`, `rm`/`remove`/`delete`, `run`, `edit`, `get`, and `runs`. They accept `--json` as the explicit machine-output spelling. `openclaw automations get <job-id>` returns the stored job JSON directly; use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
+
+`list` and `show` use human-readable output by default and switch to JSON with `--json`. `scratch` reads raw scratch content by default and prints the scratch plus revision metadata with `--json`; scratch writes return the revision result as JSON by default and accept `--json` as the explicit machine-output spelling.
 
 `automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated so external tooling can read job state without re-deriving it; human output may decorate repeated `error` statuses with a failure count.
 

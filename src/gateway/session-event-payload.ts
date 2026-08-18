@@ -6,11 +6,25 @@ import type { GatewaySessionRow } from "./session-utils.js";
  * Picker metadata comes from catalog-backed list/patch responses; emitting a
  * locally reconstructed subset here would replace richer client state.
  */
-export function buildGatewaySessionEventRow(sessionRow: GatewaySessionRow): GatewaySessionRow {
+export function buildGatewaySessionEventRow(
+  sessionRow: GatewaySessionRow,
+  options: { lifecycle?: boolean } = {},
+): GatewaySessionRow {
   const session = { ...sessionRow };
   delete session.thinkingLevels;
   delete session.thinkingOptions;
   delete session.thinkingDefault;
+  if (options.lifecycle) {
+    delete session.modelProvider;
+    delete session.model;
+    delete session.agentRuntime;
+    if (session.totalTokensFresh !== true) {
+      delete session.totalTokens;
+      delete session.totalTokensFresh;
+      delete session.contextTokens;
+      delete session.estimatedCostUsd;
+    }
+  }
   return session;
 }
 
@@ -20,6 +34,7 @@ export function buildGatewaySessionEventFields(params: {
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
+  status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
   activeRunIds?: string[];
 }): Record<string, unknown> {
@@ -29,6 +44,9 @@ export function buildGatewaySessionEventFields(params: {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
     createdActor: sessionRow.createdActor ?? null,
+    owner: sessionRow.owner ?? null,
+    participants: sessionRow.participants ?? [],
+    participantCount: sessionRow.participantCount ?? 0,
     kind: sessionRow.kind,
     visibility: sessionRow.visibility,
     channel: sessionRow.channel,
@@ -42,7 +60,6 @@ export function buildGatewaySessionEventFields(params: {
     archivedBy: sessionRow.archivedBy ?? null,
     pinned: sessionRow.pinned ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
-    icon: sessionRow.icon ?? null,
     unread: sessionRow.unread ?? false,
     lastReadAt: sessionRow.lastReadAt,
     agentStatus: sessionRow.agentStatus ?? null,
@@ -53,6 +70,10 @@ export function buildGatewaySessionEventFields(params: {
     swarmGroupId: sessionRow.swarmGroupId,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
+    permissionMode: sessionRow.permissionMode ?? null,
+    ...(sessionRow.permissionMode !== undefined && sessionRow.sessionRoot !== undefined
+      ? { sessionRoot: sessionRow.sessionRoot }
+      : {}),
     forkedFromParent: sessionEntryForkedFromParent(sessionRow) ? true : undefined,
     spawnDepth: sessionRow.spawnDepth,
     subagentRole: sessionRow.subagentRole,
@@ -62,6 +83,7 @@ export function buildGatewaySessionEventFields(params: {
     forkSource: sessionRow.forkSource,
     previousSessionId: sessionRow.previousSessionId,
     label: params.label ?? sessionRow.label ?? null,
+    icon: sessionRow.icon ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
@@ -78,6 +100,7 @@ export function buildGatewaySessionEventFields(params: {
     sendPolicy: sessionRow.sendPolicy,
     systemSent: sessionRow.systemSent,
     abortedLastRun: sessionRow.abortedLastRun,
+    restartRecoveryStatus: sessionRow.restartRecoveryStatus ?? null,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
     lastChannel: sessionRow.lastChannel,
@@ -94,7 +117,7 @@ export function buildGatewaySessionEventFields(params: {
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
     agentRuntime: sessionRow.agentRuntime,
-    status: sessionRow.status,
+    status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.

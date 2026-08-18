@@ -17,6 +17,7 @@ type QaSuiteScenarioResult = {
     details?: string;
   }>;
   details?: string;
+  modelSwitchEvidence?: Record<string, unknown>;
 };
 
 type QaFlowApi = Record<string, unknown> & {
@@ -369,5 +370,8 @@ export async function runScenarioFlow(params: {
       return formatFlowDetails(details);
     },
   }));
-  return await params.api.runScenario(params.scenarioTitle, steps);
+  const result = await params.api.runScenario(params.scenarioTitle, steps);
+  return isPlainObject(vars.modelSwitchEvidence)
+    ? { ...result, modelSwitchEvidence: vars.modelSwitchEvidence }
+    : result;
 }

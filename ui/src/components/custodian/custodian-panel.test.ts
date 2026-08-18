@@ -88,21 +88,55 @@ describe("custodian panel", () => {
     expect(panel.custodianPanelOpen).toBe(true);
   });
 
-  it("suppresses the dock on the full page and ignores explicit toggles there", async () => {
-    const { panel } = await mountPanel();
-
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-    await panel.updateComplete;
-    expect(panel.custodianPanelOpen).toBe(false);
+  it("hides and restores the dock across full-page suppression", async () => {
+    const { panel, store } = await mountPanel();
+    store.messages = [
+      { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
+    ];
 
     panel.suppressed = false;
-    await panel.updateComplete;
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+    panel.minimizeRequestId = 1;
     await panel.updateComplete;
     expect(panel.custodianPanelOpen).toBe(true);
 
     panel.suppressed = true;
     await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(false);
+
+    panel.suppressed = false;
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(true);
+
+    panel.suppressed = true;
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(false);
+  });
+
+  it("opens and closes from the global toggle event", async () => {
+    const { panel, store } = await mountPanel();
+    const refresh = vi.spyOn(store, "refreshTranscriptIfIdle");
+    panel.suppressed = false;
+    await panel.updateComplete;
+
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(true);
+    expect(refresh).toHaveBeenCalled();
+
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(false);
+  });
+
+  it("ignores toggle requests while unavailable", async () => {
+    const { panel } = await mountPanel();
+    panel.available = false;
+    panel.suppressed = false;
+    await panel.updateComplete;
+
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+    await panel.updateComplete;
+
     expect(panel.custodianPanelOpen).toBe(false);
   });
 
@@ -155,8 +189,11 @@ describe("custodian panel", () => {
 
   it("updates the panel mascot mood with shared sending state", async () => {
     const { panel, store } = await mountPanel();
+    store.messages = [
+      { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
+    ];
     panel.suppressed = false;
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+    panel.minimizeRequestId = 1;
     await panel.updateComplete;
 
     store.sending = true;

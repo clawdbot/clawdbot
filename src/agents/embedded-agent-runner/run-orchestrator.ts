@@ -15,20 +15,21 @@ import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
+import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -56,6 +57,7 @@ import {
   createEmbeddedRunStageTracker,
 } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
+import { buildEmbeddedFailureSuspension } from "./run/failure-suspension.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import type {
   RunEmbeddedAgentInternalParams,
@@ -100,6 +102,9 @@ export function runEmbeddedAgent(
 async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
+  const contextEngineAgentId =
+    normalizeOptionalString(paramsInput.sessionTarget?.agentId) ??
+    normalizeOptionalString(paramsInput.agentId);
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
     ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
@@ -117,6 +122,7 @@ async function runEmbeddedAgentInternal(
   assertAgentHarnessRunAdmission({ ...paramsBase, sessionKey: effectiveSessionKey });
   const runSessionTarget = await resolveAgentRunSessionTarget({
     ...paramsBase,
+    missingSessionKey: "create",
     sessionKey: effectiveSessionKey,
   });
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
@@ -133,8 +139,11 @@ async function runEmbeddedAgentInternal(
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
   const failureSuspension = resolveSessionSuspensionTarget();
-  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
-    const suspension = { ...suspensionParams, laneId: globalLane };
+  const suspendForFailure = (suspensionParams: SessionSuspensionParams) => {
+    const suspension = buildEmbeddedFailureSuspension({
+      suspension: suspensionParams,
+      runAgentId: params.agentId,
+    });
     if (failureSuspension.mode === "defer") {
       failureSuspension.defer(suspension);
       return;
@@ -221,8 +230,15 @@ async function runEmbeddedAgentInternal(
           agentId: requestedWorkspaceResolution.agentId,
           sessionKey: params.sessionKey,
         });
+      const currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        config,
+        workspaceDir: requestedWorkspaceResolution.workspaceDir,
+        env: process.env,
+        allowWorkspaceScopedSnapshot: true,
+      });
       const runtimePluginSelections = resolveModelCandidateChain({
         cfg: config,
+        manifestPlugins: currentPluginMetadataSnapshot?.plugins ?? [],
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",
@@ -245,10 +261,15 @@ async function runEmbeddedAgentInternal(
         config,
         agentId: requestedWorkspaceResolution.agentId,
         agentDir: requestedAgentDir,
-        inheritedAuthDir: resolveDefaultAgentDir(config),
+        // Shared credential inheritance stays anchored to its compatibility owner;
+        // the selected session agent already owns this prepared runtime.
+        inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
         workspaceDir: requestedWorkspaceResolution.workspaceDir,
         preserveWorkspaceDirOnRefresh: !requestedWorkspaceResolution.isCanonicalWorkspace,
         ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        ...(params.preparedModelRuntimeMode === "isolated-read-only"
+          ? { loadRuntimePlugins: true }
+          : {}),
         runtimePluginSelections,
       };
       startupStages.mark("harness-selection");
@@ -261,7 +282,12 @@ async function runEmbeddedAgentInternal(
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
             ? acquireReadOnlyPreparedModelRuntime(preparedInput)
-            : acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner }),
+            : acquireAgentRunPreparedModelRuntime(preparedInput, {
+                retainIdleRunOwner,
+                // Turns need only configured admission facts. Full live model inventory remains
+                // available through the snapshot's lazy control-plane loader.
+                catalogMode: "static",
+              }),
       );
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
@@ -341,8 +367,7 @@ async function runEmbeddedAgentInternal(
             sessionKey: normalizedSessionKey,
             modelFallbacksOverride: params.modelFallbacksOverride,
           });
-          const resolvedSessionKey =
-            normalizedSessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId;
+          const resolvedSessionKey = normalizedSessionKey ?? runSessionTarget.sessionKey;
           const hookRunner = getGlobalHookRunner();
           const hookCtx = {
             runId: params.runId,
@@ -390,11 +415,13 @@ async function runEmbeddedAgentInternal(
 
           return await executePreparedEmbeddedRun({
             runParams: params,
+            contextEngineAgentId,
             provider,
             modelId,
             agentDir,
             workspaceResolution,
             workspaceDir: resolvedWorkspace,
+            bootstrapWorkspaceDir: canonicalWorkspace,
             isCanonicalWorkspace,
             globalLane,
             hookRunner,
@@ -413,10 +440,7 @@ async function runEmbeddedAgentInternal(
             preparedModelRuntime,
           });
         };
-        return await withPluginRuntimeRegistryScope(
-          preparedModelRuntime.pluginRegistry,
-          runPrepared,
-        );
+        return await withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
       } finally {
         preparedModelRuntimeLease.release();
       }

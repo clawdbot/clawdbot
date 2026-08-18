@@ -1,4 +1,5 @@
 // Control UI tests cover cron filters behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -18,6 +19,7 @@ const suite = createControlUiE2eSuite({
 function cronJob(id: string, name: string, schedule: Record<string, unknown>, state = {}) {
   return {
     id,
+    configRevision: `config-revision-${id}`,
     name,
     enabled: true,
     createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
@@ -33,6 +35,7 @@ function cronJob(id: string, name: string, schedule: Record<string, unknown>, st
 function cronListResponse(jobs: unknown[], total = jobs.length) {
   return {
     jobs,
+    snapshotRevision: "cron-filters-fixture",
     total,
     offset: 0,
     limit: 50,
@@ -52,12 +55,7 @@ function cronRunsResponse(entries: unknown[], total = entries.length) {
   };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
@@ -824,11 +822,19 @@ suite.define(() => {
         await page.locator("#cron-name").fill("Model override task");
 
         const modelInput = page.locator("#cron-payload-model");
+        const modelPicker = page.locator("#cron-payload-model-picker");
+        const customValue = await modelPicker
+          .locator("wa-option", { hasText: "Custom model…" })
+          .getAttribute("value");
+        expect(customValue).not.toBeNull();
+        await modelPicker.evaluate((select, value) => {
+          (select as HTMLElement & { value: string }).value = String(value);
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        }, customValue);
         await modelInput.fill("openai/gpt-5.5");
-        expect(await modelInput.getAttribute("list")).toBe("cron-model-suggestions");
         expect(
-          await page
-            .locator("#cron-model-suggestions option")
+          await modelPicker
+            .locator("wa-option")
             .evaluateAll((options) => options.map((option) => option.getAttribute("value"))),
         ).toContain(configuredModel);
 
@@ -908,6 +914,7 @@ suite.define(() => {
         const updateRequest = await gateway.waitForRequest("cron.update");
         expect(requestParams(updateRequest)).toMatchObject({
           id: existingJob.id,
+          expectedConfigRevision: existingJob.configRevision,
           patch: {
             payload: {
               kind: "agentTurn",
@@ -966,6 +973,7 @@ suite.define(() => {
         const request = await gateway.waitForRequest("cron.update");
         const params = requestParams(request);
         expect(params.id).toBe(existingJob.id);
+        expect(params.expectedConfigRevision).toBe(existingJob.configRevision);
         expect(requireRecord(params.patch)).toMatchObject({
           deleteAfterRun: true,
           schedule: { kind: "at", at: expectedAt },

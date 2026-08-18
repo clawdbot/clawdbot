@@ -118,7 +118,7 @@ describe("telegram ingress spool mapping", () => {
         pollId: "poll-topic-order",
         chat: { id: -100123, type: "supergroup", title: "Reviewers", is_forum: true },
         messageId: 40,
-        messageThreadId: 99,
+        threadSpec: { scope: "forum", id: 99 },
         question: "Ready?",
         options: ["Yes", "No"],
       });
@@ -182,7 +182,7 @@ describe("telegram ingress spool mapping", () => {
           id: telegramQueueEventId(9),
           payload: expect.objectContaining({
             preparedPollAnswer: {
-              entry: expect.objectContaining({ messageThreadId: 99 }),
+              entry: expect.objectContaining({ threadSpec: { scope: "forum", id: 99 } }),
             },
           }),
         }),
@@ -215,7 +215,7 @@ describe("telegram ingress spool mapping", () => {
           is_forum: true as const,
         },
         messageId: 40,
-        messageThreadId: 99,
+        threadSpec: { scope: "forum" as const, id: 99 },
         question: "Ready?",
         options: ["Yes", "No"],
       };

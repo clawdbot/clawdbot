@@ -46,6 +46,27 @@ describe("followup delivery context", () => {
     );
   });
 
+  it("separates runs admitted under different conversation policies", () => {
+    const restricted = createQueueTestRun({ prompt: "restricted" });
+    restricted.run.conversationToolPolicy = { deny: ["exec"] };
+    const unrestricted = createQueueTestRun({ prompt: "unrestricted" });
+
+    expect(resolveFollowupDeliveryContextKey(restricted)).not.toBe(
+      resolveFollowupDeliveryContextKey(unrestricted),
+    );
+  });
+
+  it("canonicalizes equivalent conversation policies", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    first.run.conversationToolPolicy = { allow: ["read"], deny: ["exec"] };
+    const second = createQueueTestRun({ prompt: "second" });
+    second.run.conversationToolPolicy = { deny: ["exec"], allow: ["read"] };
+
+    expect(resolveFollowupDeliveryContextKey(first)).toBe(
+      resolveFollowupDeliveryContextKey(second),
+    );
+  });
+
   it("separates runs with different parent policy provenance", () => {
     const first = createQueueTestRun({ prompt: "first" });
     first.run.spawnedBy = "agent:main:telegram:group:first";

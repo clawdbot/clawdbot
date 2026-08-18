@@ -153,7 +153,6 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "tavily",
   "telegram",
   "tencent",
-  "thread-ownership",
   "tlon",
   "todoist",
   "together",

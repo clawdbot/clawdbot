@@ -93,6 +93,18 @@ describe("AgentsDeleteResultSchema", () => {
       removed: [{ path: "/state/agents/ops/agent", method: "trash" }],
       failed: [{ path: "/state/workspace-ops", reason: "trash unavailable" }],
     });
+    expectAccepted(AgentsDeleteResultSchema, {
+      ok: true,
+      agentId: "ops",
+      removedBindings: 1,
+      purgeFailed: true,
+    });
+    expectRejected(AgentsDeleteResultSchema, {
+      ok: true,
+      agentId: "ops",
+      removedBindings: 1,
+      purgeFailed: false,
+    });
   });
 });
 
@@ -136,6 +148,9 @@ describe("AgentsListResultSchema", () => {
         {
           id: "investment-master",
           kind: "agent",
+          createdVia: "agent",
+          creatorAgentId: "main",
+          createdAt: 42,
           name: "Investment Master",
           workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
@@ -150,6 +165,24 @@ describe("AgentsListResultSchema", () => {
     };
 
     expectAccepted(AgentsListResultSchema, result);
+  });
+
+  it("keeps the legacy default required while accepting additive ownership metadata", () => {
+    const legacy = {
+      defaultId: "ops",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "ops" }, { id: "research" }],
+    };
+    const current = {
+      ...legacy,
+      ownership: "explicit",
+      selectionRequired: true,
+    };
+
+    expect(Value.Check(AgentsListResultSchema, legacy)).toBe(true);
+    expect(Value.Check(AgentsListResultSchema, current)).toBe(true);
+    expect(Value.Check(AgentsListResultSchema, { ...current, defaultId: undefined })).toBe(false);
   });
 
   it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
@@ -181,11 +214,27 @@ describe("ModelsListParamsSchema", () => {
       ModelsListParamsSchema,
       { view: "provider-config" },
       {
+        agentId: "writer",
         view: "all",
+      },
+      {
+        agentId: "research",
         includeProviderCapabilities: true,
       },
+      {
+        preparedOnly: true,
+      },
+      {
+        refresh: true,
+        view: "all",
+      },
     );
-    expectRejected(ModelsListParamsSchema, { view: "provider-route" });
+    expectRejected(
+      ModelsListParamsSchema,
+      { view: "provider-route" },
+      { agentId: "" },
+      { preparedOnly: true, refresh: true },
+    );
   });
 });
 
@@ -217,17 +266,46 @@ describe("ModelsListResultSchema", () => {
       id: "gpt-image",
       name: "GPT Image",
       provider: "openai",
-      agentRuntime: { id: "codex", fallback: "openclaw", source: "model" },
+      agentRuntime: {
+        id: "codex",
+        fallback: "openclaw",
+        cloudPlacementSupported: true,
+        source: "model",
+      },
+      thinkingLevels: [
+        { id: "off", label: "Off" },
+        { id: "xhigh", label: "Extra high" },
+      ],
+      thinkingDefault: "xhigh",
       input: ["text", "image", "audio", "video", "document"],
     };
 
-    expectAccepted(ModelsListResultSchema, { models: [model] });
+    expectAccepted(
+      ModelsListResultSchema,
+      { models: [model] },
+      {
+        models: [],
+        providerOutcomes: [
+          {
+            provider: "openai",
+            profileId: "openai:chatgpt",
+            status: "auth-rejected",
+          },
+        ],
+      },
+    );
     expectRejected(
       ModelsListResultSchema,
       {
         models: [{ ...model, agentRuntime: { id: "codex", source: "unknown" } }],
       },
+      { models: [{ ...model, thinkingLevels: [{ id: "", label: "Off" }] }] },
       { models: [{ ...model, input: ["text", "binary"] }] },
+      { models: [], providerOutcomes: [{ provider: "openai", status: "unknown" }] },
+      {
+        models: [],
+        providerOutcomes: [{ provider: "openai", profileId: "", status: "auth-rejected" }],
+      },
     );
   });
 });

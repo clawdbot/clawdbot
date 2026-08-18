@@ -52,6 +52,7 @@ export type SkillWorkshopEvaluation = {
 
 export type SkillWorkshopProposal = {
   key: string;
+  kind: "create" | "update";
   slug: string;
   name: string;
   oneLine: string;
@@ -89,21 +90,86 @@ export type SkillWorkshopActionNotice = {
   slug: string;
 };
 
+type SkillWorkshopAppliedRevision = {
+  proposal: SkillWorkshopProposal;
+  version: number;
+  operation: SkillWorkshopProposal["kind"];
+};
+
+export type SkillWorkshopAppliedSkill = {
+  slug: string;
+  latest: SkillWorkshopProposal;
+  revisions: SkillWorkshopAppliedRevision[];
+};
+
+function compareWorkshopProposals(
+  left: SkillWorkshopProposal,
+  right: SkillWorkshopProposal,
+): number {
+  const timeDifference = (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt);
+  if (timeDifference !== 0) {
+    return timeDifference;
+  }
+  if (left.key === right.key) {
+    return 0;
+  }
+  return left.key < right.key ? 1 : -1;
+}
+
+function matchesWorkshopQuery(proposal: SkillWorkshopProposal, query: string): boolean {
+  return `${proposal.name} ${proposal.oneLine} ${proposal.slug}`.toLowerCase().includes(query);
+}
+
+function groupSkillWorkshopAppliedSkills(
+  proposals: SkillWorkshopProposal[],
+): SkillWorkshopAppliedSkill[] {
+  const revisionsBySlug = new Map<string, [SkillWorkshopProposal, ...SkillWorkshopProposal[]]>();
+  const applied = proposals
+    .filter((proposal) => proposal.status === "applied")
+    .toSorted(compareWorkshopProposals);
+  for (const proposal of applied) {
+    const revisions = revisionsBySlug.get(proposal.slug);
+    if (revisions) {
+      revisions.push(proposal);
+    } else {
+      revisionsBySlug.set(proposal.slug, [proposal]);
+    }
+  }
+  return Array.from(revisionsBySlug, ([slug, proposalsForSkill]) => ({
+    slug,
+    latest: proposalsForSkill[0],
+    revisions: proposalsForSkill.map((proposal, index) => {
+      const version = proposalsForSkill.length - index;
+      return { proposal, version, operation: proposal.kind };
+    }),
+  }));
+}
+
+export function filterSkillWorkshopAppliedSkills(
+  proposals: SkillWorkshopProposal[],
+  query: string,
+): SkillWorkshopAppliedSkill[] {
+  const q = query.trim().toLowerCase();
+  return groupSkillWorkshopAppliedSkills(proposals).filter(
+    (skill) => !q || skill.revisions.some(({ proposal }) => matchesWorkshopQuery(proposal, q)),
+  );
+}
+
 export function filterSkillWorkshopProposals(
   proposals: SkillWorkshopProposal[],
   statusFilter: SkillWorkshopStatusFilter,
   query: string,
 ): SkillWorkshopProposal[] {
   const q = query.trim().toLowerCase();
+  if (statusFilter === "applied") {
+    return filterSkillWorkshopAppliedSkills(proposals, query).map((skill) => skill.latest);
+  }
   return proposals.filter((p) => {
     if (statusFilter !== "all" && p.status !== statusFilter) {
       return false;
     }
-    if (q) {
-      const hay = `${p.name} ${p.oneLine} ${p.slug}`.toLowerCase();
-      if (!hay.includes(q)) {
-        return false;
-      }
+    if (q && !matchesWorkshopQuery(p, q)) {
+      return false;
     }
     return true;
   });

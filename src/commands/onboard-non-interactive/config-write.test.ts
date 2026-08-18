@@ -13,21 +13,14 @@ describe("commitNonInteractiveOnboardConfig", () => {
     writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
   });
 
-  it("keeps the verified config hash and pending-install owner on the canonical writer", async () => {
-    const baseConfig: OpenClawConfig = {
-      plugins: {
-        installs: { demo: { source: "npm", spec: "demo@1.0.0" } },
-      },
-    };
+  it("keeps the verified config hash on the canonical writer", async () => {
     const nextConfig: OpenClawConfig = {
-      ...baseConfig,
       gateway: { port: 19_001 },
     };
 
     await expect(
       commitNonInteractiveOnboardConfig({
         nextConfig,
-        baseConfig,
         baseHash: "verified-config-hash",
       }),
     ).resolves.toBe(nextConfig);
@@ -35,23 +28,19 @@ describe("commitNonInteractiveOnboardConfig", () => {
     expect(writeWizardConfigFile).toHaveBeenCalledWith(nextConfig, {
       allowConfigSizeDrop: false,
       baseHash: "verified-config-hash",
-      migrationBaseConfig: baseConfig,
     });
   });
 
   it("permits config size reduction only for an explicitly requested reset", async () => {
-    const baseConfig: OpenClawConfig = { gateway: { port: 19_001 } };
     const nextConfig: OpenClawConfig = {};
 
     await commitNonInteractiveOnboardConfig({
       nextConfig,
-      baseConfig,
       reset: true,
     });
 
     expect(writeWizardConfigFile).toHaveBeenCalledWith(nextConfig, {
       allowConfigSizeDrop: true,
-      migrationBaseConfig: baseConfig,
     });
   });
 });

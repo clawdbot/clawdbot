@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
@@ -54,6 +56,7 @@ import {
   type SessionIngestionSource,
   type SessionIngestionState,
 } from "./session-ingestion.js";
+import { compareStoreTimestampDesc } from "./short-term-promotion-utils.js";
 import {
   filterLiveShortTermRecallEntries,
   filterFreshLightDreamingEntries,
@@ -66,7 +69,6 @@ import {
 } from "./short-term-promotion.js";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
-type DreamingHostConfig = unknown;
 type DreamingPhaseStorageConfig = {
   timezone?: string;
   storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
@@ -556,22 +558,16 @@ function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
 }
 
 function resolveSessionAgentsForWorkspace(params: {
-  cfg: DreamingHostConfig;
+  cfg: OpenClawConfig;
   workspaceDir: string;
   primaryWorkspaceDir?: string;
 }): string[] {
   const { cfg, workspaceDir, primaryWorkspaceDir } = params;
-  if (!cfg) {
-    return [];
-  }
   const target = normalizeMemoryCoreWorkspaceKey(workspaceDir);
-  const workspaces = resolveMemoryDreamingWorkspaces(
-    cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
-    {
-      primaryWorkspaceDir,
-      primaryAgentId: "main",
-    },
-  );
+  const workspaces = resolveMemoryDreamingWorkspaces(cfg, {
+    primaryWorkspaceDir,
+    primaryAgentId: "main",
+  });
   const match = workspaces.find(
     (entry) => normalizeMemoryCoreWorkspaceKey(entry.workspaceDir) === target,
   );
@@ -583,7 +579,7 @@ function resolveSessionAgentsForWorkspace(params: {
 
 async function collectSessionIngestionBatches(params: {
   workspaceDir: string;
-  cfg?: DreamingHostConfig;
+  cfg?: OpenClawConfig;
   primaryWorkspaceDir?: string;
   lookbackDays: number;
   nowMs: number;
@@ -622,7 +618,7 @@ async function collectSessionIngestionBatches(params: {
       }
       if (
         // Dreaming learns only from the live corpus. Retained reset/delete
-        // archives stay in the shared corpus for QMD and memory_search.
+        // archives stay in the shared corpus for memory_search.
         entry.artifactKind !== "active-session" ||
         isCheckpointSessionTranscriptPath(entry.sessionFile)
       ) {
@@ -718,7 +714,7 @@ async function collectSessionIngestionBatches(params: {
 
 async function ingestSessionTranscriptSignals(params: {
   workspaceDir: string;
-  cfg?: DreamingHostConfig;
+  cfg?: OpenClawConfig;
   primaryWorkspaceDir?: string;
   lookbackDays: number;
   nowMs: number;
@@ -783,7 +779,7 @@ async function collectDailyIngestionBatches(params: {
   const memoryDir = path.join(params.workspaceDir, "memory");
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const entries = await fs.readdir(memoryDir, { withFileTypes: true }).catch((err: unknown) => {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+    if (extractErrorCode(err) === "ENOENT") {
       return [] as Dirent[];
     }
     throw err;
@@ -813,7 +809,7 @@ async function collectDailyIngestionBatches(params: {
     const relativePath = `memory/${file.fileName}`;
     const filePath = path.join(memoryDir, file.fileName);
     const stat = await fs.stat(filePath).catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      if (extractErrorCode(err) === "ENOENT") {
         return null;
       }
       throw err;
@@ -842,7 +838,7 @@ async function collectDailyIngestionBatches(params: {
     changed = true;
 
     const raw = await fs.readFile(filePath, "utf-8").catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      if (extractErrorCode(err) === "ENOENT") {
         return "";
       }
       throw err;
@@ -1007,7 +1003,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
       break;
     }
     const raw = await fs.readFile(entry.filePath, "utf-8").catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      if (extractErrorCode(err) === "ENOENT") {
         skippedPaths.push(entry.filePath);
         return "";
       }
@@ -1060,20 +1056,6 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
   return signalCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / signalCount)) : 0;
 }
 
-function parseDreamingTimestampMs(value: string): number {
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
-}
-
-function compareDreamingTimestampDesc(left: string, right: string): number {
-  const leftMs = parseDreamingTimestampMs(left);
-  const rightMs = parseDreamingTimestampMs(right);
-  if (leftMs === rightMs) {
-    return 0;
-  }
-  return rightMs > leftMs ? 1 : -1;
-}
-
 // Use the shared CJK-aware similarity helper so close-but-not-identical CJK
 // snippets do not slip past the dedupe threshold via the old ASCII-only path.
 function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): ShortTermRecallEntry[] {
@@ -1096,8 +1078,7 @@ function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): Shor
       ].toSorted();
       duplicate.conceptTags = uniqueStrings([...duplicate.conceptTags, ...entry.conceptTags]);
       duplicate.lastRecalledAt =
-        parseDreamingTimestampMs(entry.lastRecalledAt) >
-        parseDreamingTimestampMs(duplicate.lastRecalledAt)
+        compareStoreTimestampDesc(entry.lastRecalledAt, duplicate.lastRecalledAt) < 0
           ? entry.lastRecalledAt
           : duplicate.lastRecalledAt;
       continue;
@@ -1300,7 +1281,7 @@ export function previewRemDreaming(params: {
 async function runLightDreaming(params: {
   agentId?: string;
   workspaceDir: string;
-  cfg?: DreamingHostConfig;
+  cfg?: OpenClawConfig;
   primaryWorkspaceDir?: string;
   config: LightDreamingConfig;
   logger: Logger;
@@ -1308,7 +1289,8 @@ async function runLightDreaming(params: {
   detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<DreamNarrativeOutcome> {
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowMs =
+    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
     lookbackDays: dailyIngestionLookbackDays(params.config.lookbackDays),
@@ -1338,7 +1320,7 @@ async function runLightDreaming(params: {
   });
   const rankedEntries = dedupeEntries(
     recentEntries.toSorted((a, b) => {
-      const byTime = compareDreamingTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
+      const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
       if (byTime !== 0) {
         return byTime;
       }
@@ -1400,7 +1382,7 @@ async function runLightDreaming(params: {
 async function runRemDreaming(params: {
   agentId?: string;
   workspaceDir: string;
-  cfg?: DreamingHostConfig;
+  cfg?: OpenClawConfig;
   primaryWorkspaceDir?: string;
   config: RemDreamingConfig;
   logger: Logger;
@@ -1408,7 +1390,8 @@ async function runRemDreaming(params: {
   detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<DreamNarrativeOutcome> {
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowMs =
+    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
     lookbackDays: dailyIngestionLookbackDays(params.config.lookbackDays),
@@ -1518,14 +1501,15 @@ export async function runDreamingSweepPhases(params: {
   agentId?: string;
   workspaceDir: string;
   pluginConfig?: Record<string, unknown>;
-  cfg?: DreamingHostConfig;
+  cfg?: OpenClawConfig;
   logger: Logger;
   subagent?: DreamNarrativeRequest["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<DreamingSweepPhaseResult> {
   // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
-  const sweepNowMs: number = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const sweepNowMs =
+    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   let degradedPhases = 0;
   let pendingNarratives = 0;
   const recordNarrativeOutcome = (outcome: DreamNarrativeOutcome): void => {
@@ -1538,7 +1522,7 @@ export async function runDreamingSweepPhases(params: {
 
   const light = resolveMemoryLightDreamingConfig({
     pluginConfig: params.pluginConfig,
-    cfg: params.cfg as Parameters<typeof resolveMemoryLightDreamingConfig>[0]["cfg"],
+    cfg: params.cfg,
   });
   if (light.enabled && light.limit > 0) {
     try {
@@ -1569,7 +1553,7 @@ export async function runDreamingSweepPhases(params: {
 
   const rem = resolveMemoryRemDreamingConfig({
     pluginConfig: params.pluginConfig,
-    cfg: params.cfg as Parameters<typeof resolveMemoryRemDreamingConfig>[0]["cfg"],
+    cfg: params.cfg,
   });
   if (rem.enabled && rem.limit > 0) {
     try {

@@ -48,33 +48,22 @@ describe("config hooks module paths", () => {
     );
   });
 
-  it("rejects absolute hooks.internal.handlers[].module", () => {
+  it.each([
+    ["a former handler registration", [{ event: "command:new", module: "hooks/handler.mjs" }]],
+    ["an empty array", []],
+    ["a malformed value", "hooks/handler.mjs"],
+  ])("rejects retired hooks.internal.handlers for %s", (_label, handlers) => {
     expectRejectedIssuePath(
       {
         agents: { entries: { openclaw: {} } },
         hooks: {
           internal: {
             enabled: true,
-            handlers: [{ event: "command:new", module: "/tmp/handler.mjs" }],
+            handlers,
           },
         },
       },
-      "hooks.internal.handlers.0.module",
-    );
-  });
-
-  it("rejects escaping hooks.internal.handlers[].module", () => {
-    expectRejectedIssuePath(
-      {
-        agents: { entries: { openclaw: {} } },
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [{ event: "command:new", module: "../handler.mjs" }],
-          },
-        },
-      },
-      "hooks.internal.handlers.0.module",
+      "hooks.internal",
     );
   });
 

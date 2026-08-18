@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import {
   closeQaHttpServer,
+  dispatchQaHttpRequest,
   handleQaBusRequest,
   isQaMalformedJsonBodyError,
   readQaJsonBody,
@@ -18,6 +19,7 @@ import {
   writeQaRequestBodyLimitError,
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+import { toQaError } from "./errors.js";
 import {
   QaEvidenceGalleryError,
   buildQaEvidenceGalleryModel,
@@ -220,10 +222,6 @@ function createQaLabConfig(baseUrl: string): OpenClawConfig {
   return createQaChannelGatewayConfig({ baseUrl });
 }
 
-function normalizeQaLabCleanupError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
-}
-
 function detectQaEvidenceArtifactContentType(filePath: string): string {
   const lower = filePath.toLowerCase();
   if (lower.endsWith(".png")) {
@@ -304,8 +302,8 @@ export async function startQaLabServer(
 ): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const captureSettings = resolveDebugProxySettings();
-  const captureStoreLease = acquireDebugProxyCaptureStore();
-  const captureStore = captureStoreLease.store;
+  let captureStoreLease: ReturnType<typeof acquireDebugProxyCaptureStore> | undefined;
+  const getCaptureStore = () => (captureStoreLease ??= acquireDebugProxyCaptureStore()).store;
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -378,7 +376,6 @@ export async function startQaLabServer(
     | undefined;
   const embeddedGatewayEnabled = params?.embeddedGateway !== "disabled";
   let labHandle: QaLabServerHandle | null = null;
-  let captureStoreReleased = false;
   let serverListening = false;
 
   let listenUrl = "";
@@ -453,7 +450,7 @@ export async function startQaLabServer(
   }
 
   const server = createServer((req, res) => {
-    void (async () => {
+    dispatchQaHttpRequest(res, async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
       if (await handleQaBusRequest({ req, res, state })) {
@@ -589,13 +586,13 @@ export async function startQaLabServer(
             return;
           }
           fs.createReadStream(artifactFile)
-            .on("error", (error) => res.destroy(normalizeQaLabCleanupError(error)))
+            .on("error", (error) => res.destroy(toQaError(error)))
             .pipe(res);
           return;
         }
         if (req.method === "GET" && url.pathname === "/api/capture/sessions") {
           writeJson(res, 200, {
-            sessions: captureStore.listSessions(50),
+            sessions: getCaptureStore().listSessions(50),
           });
           return;
         }
@@ -629,7 +626,7 @@ export async function startQaLabServer(
           const sessionId = url.searchParams.get("sessionId")?.trim();
           writeJson(res, 200, {
             events: sessionId
-              ? captureStore.getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
+              ? getCaptureStore().getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
               : [],
           });
           return;
@@ -641,7 +638,7 @@ export async function startQaLabServer(
             return;
           }
           writeJson(res, 200, {
-            coverage: captureStore.summarizeSessionCoverage(sessionId),
+            coverage: getCaptureStore().summarizeSessionCoverage(sessionId),
           });
           return;
         }
@@ -657,7 +654,7 @@ export async function startQaLabServer(
             return;
           }
           writeJson(res, 200, {
-            rows: captureStore.queryPreset(preset, sessionId),
+            rows: getCaptureStore().queryPreset(preset, sessionId),
           });
           return;
         }
@@ -667,7 +664,7 @@ export async function startQaLabServer(
             writeError(res, 400, "Missing blob id");
             return;
           }
-          const content = captureStore.readBlob(blobId);
+          const content = getCaptureStore().readBlob(blobId);
           if (content == null) {
             writeError(res, 404, "Blob not found");
             return;
@@ -681,13 +678,13 @@ export async function startQaLabServer(
             ? body.sessionIds.filter((value): value is string => typeof value === "string")
             : [];
           writeJson(res, 200, {
-            result: captureStore.deleteSessions(sessionIds),
+            result: getCaptureStore().deleteSessions(sessionIds),
           });
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/capture/purge") {
           writeJson(res, 200, {
-            result: captureStore.purgeAll(),
+            result: getCaptureStore().purgeAll(),
           });
           return;
         }
@@ -937,27 +934,31 @@ export async function startQaLabServer(
       } catch (error) {
         writeQaLabServerError(res, error);
       }
-    })();
+    });
   });
 
   const releaseCaptureStore = () => {
-    if (captureStoreReleased) {
-      return;
-    }
-    captureStoreReleased = true;
-    captureStoreLease.release();
+    captureStoreLease?.release();
+    captureStoreLease = undefined;
   };
 
   const stopLabServerResources = async (): Promise<Error | undefined> => {
     runnerModelCatalogAbort?.abort();
     await runnerModelCatalogPromise?.catch(() => undefined);
+    let cleanupError: Error | undefined;
+    // Gateway shutdown can flush completed work through this server, so the
+    // bus must remain reachable until the gateway has fully stopped.
+    try {
+      await gateway?.stop();
+    } catch (error) {
+      cleanupError = toQaError(error);
+    }
     const results = await Promise.allSettled([
-      Promise.resolve().then(() => gateway?.stop()),
-      Promise.resolve().then(() => (serverListening ? closeQaHttpServer(server) : undefined)),
+      serverListening ? closeQaHttpServer(server, state) : undefined,
       Promise.resolve().then(releaseCaptureStore),
     ]);
     const failed = results.find((result) => result.status === "rejected");
-    return failed ? normalizeQaLabCleanupError(failed.reason) : undefined;
+    return cleanupError ?? (failed ? toQaError(failed.reason) : undefined);
   };
 
   try {

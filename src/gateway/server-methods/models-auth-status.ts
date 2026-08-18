@@ -4,7 +4,9 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { tryResolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -15,8 +17,6 @@ import {
 } from "../../agents/auth-health.js";
 import {
   type AuthProfileStore,
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
   listProfilesForProvider,
@@ -42,23 +42,23 @@ import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import {
+  type ProviderAuthAliasLookupParams,
+  resolveProviderIdForAuth,
+} from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef, hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
+import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  resolveModelAuthAgentScope,
-  unknownModelAuthAgentIdError,
-} from "./model-auth-agent-scope.js";
+import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
+import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import {
   clearModelAuthStatusUsageCache,
-  fingerprintProviderUsageCredentials,
   type ProviderUsageStatus,
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
@@ -67,7 +67,9 @@ import type {
   ModelAuthLogoutResult,
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
+  ModelProviderCapability,
 } from "./models-auth-status.types.js";
+import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 export type {
@@ -76,10 +78,43 @@ export type {
   ModelAuthStatusProfile,
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
+  ModelProviderCapability,
 } from "./models-auth-status.types.js";
 
 const log = createSubsystemLogger("models-auth-status");
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
+
+type PreparedAuthMetadataLookupParams = ProviderAuthAliasLookupParams & {
+  metadataSnapshot: NonNullable<
+    Awaited<ReturnType<typeof readPreparedCatalog>>
+  >["metadataSnapshot"];
+};
+
+function buildProviderCapabilities(params: {
+  config: OpenClawConfig;
+  workspaceDir: string;
+  metadataSnapshot: NonNullable<
+    Awaited<ReturnType<typeof readPreparedCatalog>>
+  >["metadataSnapshot"];
+}): ModelProviderCapability[] {
+  return resolveModelProviderCapabilities(params).capabilities;
+}
+
+function resolveAuthRefreshScope(cfg: OpenClawConfig): {
+  providerIds: string[];
+  profileIds?: string[];
+} {
+  const discovery = externalCliDiscoveryForConfigStatus({ cfg });
+  if (discovery.mode !== "scoped") {
+    return { providerIds: [] };
+  }
+  const providerIds = [...(discovery.providerIds ?? [])];
+  const profileIds = [...(discovery.profileIds ?? [])];
+  return {
+    providerIds,
+    ...(profileIds.length > 0 ? { profileIds } : {}),
+  };
+}
 
 /**
  * Invalidate auxiliary usage and prepared provider-auth state after an auth
@@ -97,21 +132,13 @@ export function invalidateModelAuthStatusCache(): void {
 }
 
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
-  // Keep same-credential usage visible while the explicit refresh replaces it.
-  // A changed credential/config produces a different cache key below; logout
-  // still uses invalidateModelAuthStatusCache() and clears usage immediately.
-  clearCurrentProviderAuthState();
+  // Durable and CLI auth refresh into the transient prepared owner below. Do not clear the
+  // process-wide warmed auth state for a read; mutations still invalidate it explicitly.
   try {
-    if (await refreshActiveProviderAuthRuntimeSnapshot()) {
-      return;
-    }
+    await refreshActiveProviderAuthRuntimeSnapshot();
   } catch (err) {
     log.warn(`runtime auth snapshot refresh before auth status failed: ${formatForLog(err)}`);
-    return;
   }
-  // Explicit status refresh follows CLI/doctor repairs. If no secrets runtime is
-  // active, drop runtime auth snapshots so the next status read observes disk.
-  clearRuntimeAuthProfileStoreSnapshots();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {
@@ -325,8 +352,13 @@ function resolveEnvVarName(source: string): string | undefined {
 function resolveProviderApiKeys(
   cfg: OpenClawConfig,
   store: AuthProfileStore,
+  authAliasLookupParams: PreparedAuthMetadataLookupParams,
 ): Map<string, ModelAuthStatusProvider["apiKey"]> {
-  const lookupMaps = resolveProviderEnvAuthLookupMaps({ config: cfg, env: process.env });
+  const lookupMaps = resolveProviderEnvAuthLookupMaps({
+    ...authAliasLookupParams,
+    config: cfg,
+    env: process.env,
+  });
   const providerIds = new Set<string>([
     ...Object.keys(cfg.models?.providers ?? {}),
     ...Object.values(cfg.auth?.profiles ?? {})
@@ -345,6 +377,7 @@ function resolveProviderApiKeys(
       const ref = coerceSecretRef(providerConfig?.apiKey, cfg.secrets?.defaults);
       const profileReference = resolveProviderEntryApiKeyProfileReference({
         cfg,
+        authAliasLookupParams,
         provider,
         store,
       });
@@ -392,10 +425,19 @@ function resolveProviderApiKeys(
   return apiKeys;
 }
 
-function resolveConfigBoundProfileIds(cfg: OpenClawConfig, store: AuthProfileStore): Set<string> {
+function resolveConfigBoundProfileIds(
+  cfg: OpenClawConfig,
+  store: AuthProfileStore,
+  authAliasLookupParams?: ProviderAuthAliasLookupParams,
+): Set<string> {
   const profileIds = new Set<string>();
   for (const provider of Object.keys(cfg.models?.providers ?? {})) {
-    const reference = resolveProviderEntryApiKeyProfileReference({ cfg, provider, store });
+    const reference = resolveProviderEntryApiKeyProfileReference({
+      cfg,
+      authAliasLookupParams,
+      provider,
+      store,
+    });
     if (reference.kind === "profile" || reference.kind === "profile-incompatible") {
       profileIds.add(reference.profileId);
     }
@@ -476,7 +518,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        respond(false, undefined, modelAuthAgentScopeError(scope));
         return;
       }
       const { agentDir } = scope;
@@ -565,29 +607,49 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   "models.authStatus": async ({ params, respond, context }) => {
     const now = Date.now();
     const refreshRequested = Boolean(params.refresh);
+    const resolveScope = (cfg: OpenClawConfig) =>
+      resolveModelAuthAgentScope(
+        cfg,
+        params.agentId === undefined || params.agentId === ""
+          ? tryResolveSystemAgentTargetAgentId(cfg)
+          : params.agentId,
+      );
     try {
       let cfg = context.getRuntimeConfig();
-      let scope = resolveModelAuthAgentScope(cfg, params.agentId);
+      let scope = resolveScope(cfg);
       if (!scope.ok) {
-        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        respond(false, undefined, modelAuthAgentScopeError(scope));
         return;
       }
       if (refreshRequested) {
         await refreshModelAuthStatusRuntimeState();
         cfg = context.getRuntimeConfig();
-        scope = resolveModelAuthAgentScope(cfg, params.agentId);
+        scope = resolveScope(cfg);
         if (!scope.ok) {
-          respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+          respond(false, undefined, modelAuthAgentScopeError(scope));
           return;
         }
       }
-      const { agentId, agentDir } = scope;
-      // Use the external-profile-aware store for status reads so the dashboard
-      // reflects CLI-discovered credentials without persisting them here.
-      const store = ensureAuthProfileStore(agentDir, {
-        externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
-      });
-      const apiKeys = resolveProviderApiKeys(cfg, store);
+      const preparedSnapshot = refreshRequested
+        ? await loadDeferredCatalog(context, scope.agentId, {
+            readOnly: true,
+            authScope: resolveAuthRefreshScope(cfg),
+            refreshAuth: true,
+          })
+        : await readPreparedCatalog(context, scope.agentId);
+      if (!preparedSnapshot) {
+        throw new Error(`prepared model auth owner is unavailable (${scope.agentId})`);
+      }
+      cfg = preparedSnapshot.config;
+      const { agentId, agentDir, authStore: store, workspaceDir } = preparedSnapshot;
+      // Generic auth helpers may consult provider metadata indirectly. Carry this owner's exact
+      // snapshot through them so a global miss cannot rediscover plugins on the event loop.
+      const authAliasLookupParams: PreparedAuthMetadataLookupParams = {
+        workspaceDir,
+        metadataSnapshot: preparedSnapshot.metadataSnapshot,
+        includeUntrustedWorkspacePlugins: false,
+      };
+      const apiKeys = resolveProviderApiKeys(cfg, store, authAliasLookupParams);
       const configured = resolveConfiguredProviders(cfg, apiKeys);
       const statusProviderIds = new Set(configured.providers);
       for (const provider of apiKeys.keys()) {
@@ -604,6 +666,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         cfg,
         providers: statusProviderIds.size > 0 ? [...statusProviderIds] : undefined,
         allowKeychainPrompt: false,
+        authAliasLookupParams,
       });
 
       // Usage queries usually need refreshable credentials. Keep API-key status
@@ -625,15 +688,18 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ),
       ];
 
+      const providerUsageRuntime = getProviderUsageRuntimeSnapshot({
+        config: cfg,
+        agentId,
+        agentDir,
+        store,
+      });
       const usageByProvider = readProviderUsageStaleWhileRevalidate({
         agentId,
         agentDir,
+        authStore: providerUsageRuntime.store,
         configRef: cfg,
-        credentialKey: fingerprintProviderUsageCredentials({
-          cfg,
-          directApiKeys: apiKeys,
-          store,
-        }),
+        credentialKey: providerUsageRuntime.credentialKey,
         forceRefresh: refreshRequested,
         providerIds: usageProviderIds,
         now,
@@ -649,7 +715,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           )
           .map(([profileId]) => profileId),
       );
-      const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store);
+      const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
       const providers = authHealth.providers.map((prov) =>
         mapProvider(
           prov,
@@ -660,7 +726,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           configBoundProfileIds,
         ),
       );
-      const result: ModelAuthStatusResult = { ts: now, providers };
+      const providerCapabilities = buildProviderCapabilities({
+        config: cfg,
+        workspaceDir,
+        metadataSnapshot: preparedSnapshot.metadataSnapshot,
+      });
+      const result: ModelAuthStatusResult = { ts: now, providers, providerCapabilities };
       respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));

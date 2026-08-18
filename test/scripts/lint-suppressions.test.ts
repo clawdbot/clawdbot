@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectLintDisableDirectives,
   isMaxLinesRule,
-} from "../../scripts/check-max-lines-ratchet.mjs";
+} from "../../scripts/check-max-lines-ratchet.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 
@@ -196,11 +196,11 @@ describe("production lint suppressions", () => {
         "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/qa-lab/src/gateway-child.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
-        "scripts/changed-lanes.mjs|typescript/no-base-to-string|2",
-        "scripts/changed-lanes.mjs|typescript/restrict-template-expressions|2",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
+        "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
         "src/audit/audit-event-writer.ts|unicorn/require-post-message-target-origin|2",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
@@ -209,6 +209,7 @@ describe("production lint suppressions", () => {
         "src/cli/cli-utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/cli/program/openclaw-command.ts|eslint/no-underscore-dangle|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
@@ -224,7 +225,6 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/facade-runtime.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/plugin-sdk/test-helpers/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
@@ -233,13 +233,14 @@ describe("production lint suppressions", () => {
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
+        // Raw PowerShell errors carry the -EncodedCommand argv; only the sanitized cause may escape.
+        "src/secrets/private-plan-file.ts|preserve-caught-error|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         "src/system-agent/setup-inference-activate.ts|no-unsafe-finally|1",
         "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/version.ts|eslint/no-underscore-dangle|1",
         "ui/public/sw.js|unicorn/require-post-message-target-origin|1",
         // oxlint misreads CanvasRenderingContext2D.fill(path) as Array.fill.
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",

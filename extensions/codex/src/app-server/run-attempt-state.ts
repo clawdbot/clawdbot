@@ -1,10 +1,16 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  asBoolean,
+  asFiniteNumber,
+  hasNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 import type {
   CodexAppServerBindingIdentity,
@@ -47,11 +53,17 @@ export async function markCodexAppServerBindingCoveredThroughTurn(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
   threadId: string;
+  continuityCalibration?: { promptChars: number; inputTokens: number };
 }): Promise<void> {
   await params.bindingStore.mutate(params.identity, {
     kind: "patch",
     threadId: params.threadId,
-    patch: { historyCoveredThrough: new Date().toISOString() },
+    patch: {
+      historyCoveredThrough: new Date().toISOString(),
+      ...(params.continuityCalibration
+        ? { continuityCalibration: params.continuityCalibration }
+        : {}),
+    },
   });
 }
 
@@ -131,8 +143,12 @@ export function prependCurrentInboundContext(
   prompt: string,
   context: EmbeddedRunAttemptParams["currentInboundContext"],
 ): string {
+  // Inbound context carries quoted replies and room backlog, not the raw
+  // current request; Codex must not resolve explicit mentions from it.
   const text = context?.text.trim();
-  return text ? [text, prompt].filter(Boolean).join("\n\n") : prompt;
+  return text
+    ? [neutralizeCodexExplicitMentionSigils(text), prompt].filter(Boolean).join("\n\n")
+    : prompt;
 }
 
 export function waitForCodexNotificationDispatchTurn(): Promise<void> {
@@ -147,54 +163,44 @@ export function buildCodexAppServerTimeoutDiagnostics(params: {
   lastActivityReason?: string;
   details?: Record<string, unknown>;
 }): NonNullable<EmbeddedRunAttemptResult["codexAppServerFailure"]>["diagnostics"] {
-  const readString = (key: string) => {
+  const readNonBlankDetailString = (key: string) => {
     const value = params.details?.[key];
-    return typeof value === "string" && value.trim() ? value : undefined;
+    return hasNonEmptyString(value) ? value : undefined;
   };
-  const readNumber = (key: string) => {
-    const value = params.details?.[key];
-    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-  };
-  const readBoolean = (key: string) => {
-    const value = params.details?.[key];
-    return typeof value === "boolean" ? value : undefined;
-  };
+  const activeAppServerTurnRequests = asFiniteNumber(params.details?.activeAppServerTurnRequests);
+  const activeTurnItemCount = asFiniteNumber(params.details?.activeTurnItemCount);
+  const terminalTurnNotificationQueued = asBoolean(params.details?.terminalTurnNotificationQueued);
+  const completionIdleWatchArmed = asBoolean(params.details?.completionIdleWatchArmed);
+  const assistantCompletionIdleWatchArmed = asBoolean(
+    params.details?.assistantCompletionIdleWatchArmed,
+  );
+  const terminalIdleWatchArmed = asBoolean(params.details?.terminalIdleWatchArmed);
   return {
     ...(params.idleMs !== undefined ? { idleMs: params.idleMs } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.lastActivityReason ? { lastActivityReason: params.lastActivityReason } : {}),
-    ...(readString("lastNotificationMethod")
-      ? { lastNotificationMethod: readString("lastNotificationMethod") }
+    ...(readNonBlankDetailString("lastNotificationMethod")
+      ? { lastNotificationMethod: readNonBlankDetailString("lastNotificationMethod") }
       : {}),
-    ...(readString("lastNotificationItemId")
-      ? { lastNotificationItemId: readString("lastNotificationItemId") }
+    ...(readNonBlankDetailString("lastNotificationItemId")
+      ? { lastNotificationItemId: readNonBlankDetailString("lastNotificationItemId") }
       : {}),
-    ...(readString("lastNotificationItemType")
-      ? { lastNotificationItemType: readString("lastNotificationItemType") }
+    ...(readNonBlankDetailString("lastNotificationItemType")
+      ? { lastNotificationItemType: readNonBlankDetailString("lastNotificationItemType") }
       : {}),
-    ...(readString("lastNotificationItemRole")
-      ? { lastNotificationItemRole: readString("lastNotificationItemRole") }
+    ...(readNonBlankDetailString("lastNotificationItemRole")
+      ? { lastNotificationItemRole: readNonBlankDetailString("lastNotificationItemRole") }
       : {}),
-    ...(readString("lastAssistantTextPreview")
-      ? { lastAssistantTextPreview: readString("lastAssistantTextPreview") }
+    ...(readNonBlankDetailString("lastAssistantTextPreview")
+      ? { lastAssistantTextPreview: readNonBlankDetailString("lastAssistantTextPreview") }
       : {}),
-    ...(readNumber("activeAppServerTurnRequests") !== undefined
-      ? { activeAppServerTurnRequests: readNumber("activeAppServerTurnRequests") }
+    ...(activeAppServerTurnRequests !== undefined ? { activeAppServerTurnRequests } : {}),
+    ...(activeTurnItemCount !== undefined ? { activeTurnItemCount } : {}),
+    ...(terminalTurnNotificationQueued !== undefined ? { terminalTurnNotificationQueued } : {}),
+    ...(completionIdleWatchArmed !== undefined ? { completionIdleWatchArmed } : {}),
+    ...(assistantCompletionIdleWatchArmed !== undefined
+      ? { assistantCompletionIdleWatchArmed }
       : {}),
-    ...(readNumber("activeTurnItemCount") !== undefined
-      ? { activeTurnItemCount: readNumber("activeTurnItemCount") }
-      : {}),
-    ...(readBoolean("terminalTurnNotificationQueued") !== undefined
-      ? { terminalTurnNotificationQueued: readBoolean("terminalTurnNotificationQueued") }
-      : {}),
-    ...(readBoolean("completionIdleWatchArmed") !== undefined
-      ? { completionIdleWatchArmed: readBoolean("completionIdleWatchArmed") }
-      : {}),
-    ...(readBoolean("assistantCompletionIdleWatchArmed") !== undefined
-      ? { assistantCompletionIdleWatchArmed: readBoolean("assistantCompletionIdleWatchArmed") }
-      : {}),
-    ...(readBoolean("terminalIdleWatchArmed") !== undefined
-      ? { terminalIdleWatchArmed: readBoolean("terminalIdleWatchArmed") }
-      : {}),
+    ...(terminalIdleWatchArmed !== undefined ? { terminalIdleWatchArmed } : {}),
   };
 }

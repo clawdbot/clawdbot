@@ -4,16 +4,24 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import {
+  createCronCreatorAuthorityRunScope,
+  mintCronCreatorAuthorityGrant,
+  revokeCronCreatorAuthorityRunScope,
+  type CronCreatorAuthorityGrant,
+} from "../cron-creator-authority-grant.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const getRuntimeConfig = vi.hoisted(() =>
   vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig),
@@ -32,6 +40,18 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
     } => ({ canonicalKey: sessionKey, entry: undefined }),
   ),
 );
+const cronTaskRunHistoryPageOverride = vi.hoisted(() => vi.fn());
+
+vi.mock("../../cron/task-run-history.js", async () => {
+  const actual = await vi.importActual<typeof import("../../cron/task-run-history.js")>(
+    "../../cron/task-run-history.js",
+  );
+  return {
+    ...actual,
+    readCronTaskRunHistoryPage: (...args: Parameters<typeof actual.readCronTaskRunHistoryPage>) =>
+      cronTaskRunHistoryPageOverride(...args) ?? actual.readCronTaskRunHistoryPage(...args),
+  };
+});
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -44,7 +64,7 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: loadGatewaySessionEntry,
-  loadSessionEntryReadOnly: loadGatewaySessionEntry,
+  loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
 }));
 
 import { cronHandlers } from "./cron.js";
@@ -124,17 +144,38 @@ function setCronValidationTestRegistry(): void {
 
 function createCronContext(currentJobs?: CronJob | CronJob[]) {
   const jobs = currentJobs ? (Array.isArray(currentJobs) ? currentJobs : [currentJobs]) : [];
-  const update = vi.fn(async (id: string, patch: Partial<CronJob>) =>
-    createCronJob({
+  const committedAdds: Partial<CronJob>[] = [];
+  const committedRuntimeAuthorities: Array<CronRuntimeAuthority | undefined> = [];
+  const committedRuntimeAuthorityCaptures: boolean[] = [];
+  const committedUpdates: Array<{ id: string; patch: Partial<CronJob> }> = [];
+  const update = vi.fn(async (id: string, patch: Partial<CronJob>) => {
+    committedUpdates.push({ id, patch });
+    return createCronJob({
       ...jobs.find((job) => job.id === id),
       ...patch,
       id,
-    }),
-  );
+    });
+  });
   return {
+    committedAdds,
+    committedRuntimeAuthorities,
+    committedRuntimeAuthorityCaptures,
+    committedUpdates,
     cron: {
-      add: vi.fn(async (input: Partial<CronJob>, _opts?: unknown) =>
-        createCronJob({ ...input, id: "cron-1" }),
+      add: vi.fn(
+        async (
+          input: Partial<CronJob>,
+          opts?: {
+            commitGuard?: () => void;
+            captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
+          },
+        ) => {
+          opts?.commitGuard?.();
+          committedRuntimeAuthorityCaptures.push(opts?.captureRuntimeAuthority !== undefined);
+          committedRuntimeAuthorities.push(opts?.captureRuntimeAuthority?.());
+          committedAdds.push(input);
+          return createCronJob({ ...input, id: "cron-1" });
+        },
       ),
       update,
       updateWithPrecondition: vi.fn(
@@ -142,23 +183,48 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
           id: string,
           patch: Partial<CronJob>,
           precondition: (job: CronJob, nowMs: number) => void | Promise<void>,
-          _opts?: unknown,
+          opts?: {
+            commitGuard?: () => void;
+            captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
+          },
         ) => {
           const job = jobs.find((candidate) => candidate.id === id);
           if (!job) {
             throw new Error(`unknown automation id: ${id}`);
           }
           await precondition(job, Date.now());
+          opts?.commitGuard?.();
+          committedRuntimeAuthorityCaptures.push(opts?.captureRuntimeAuthority !== undefined);
+          committedRuntimeAuthorities.push(opts?.captureRuntimeAuthority?.());
           return await update(id, patch);
         },
       ),
-      remove: vi.fn(async () => ({ ok: true, removed: true })),
-      enqueueRun: vi.fn(async () => ({ ok: true, enqueued: true, runId: "run-1" })),
+      remove: vi.fn(async (_id: string, opts?: { commitGuard?: () => void }) => {
+        opts?.commitGuard?.();
+        return { ok: true, removed: true };
+      }),
+      enqueueRun: vi.fn(
+        async (_id: string, _mode?: string, opts?: { commitGuard?: () => void }) => {
+          opts?.commitGuard?.();
+          return { ok: true, enqueued: true, runId: "run-1" };
+        },
+      ),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(() => ({ ok: true }) as const),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
+      readScratch: vi.fn(async () => ({ content: null, revision: 0 })),
+      writeScratch: vi.fn(
+        async (_id: string, params: { content: string | null; commitGuard?: () => void }) => {
+          params.commitGuard?.();
+          return {
+            ok: true as const,
+            scratch: { content: params.content, revision: 1 },
+            currentRevision: 1,
+          };
+        },
+      ),
       list: vi.fn(async () => jobs),
       listPage: vi.fn(async (opts?: { agentId?: string; limit?: number; offset?: number }) => {
         const requestedAgentId = opts?.agentId?.trim().toLowerCase();
@@ -187,6 +253,9 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
     },
     cronStorePath: "cron-validation-test.json",
     getRuntimeConfig: () => getRuntimeConfig(),
+    validateAgentRuntimeApprovalAuthority: undefined as
+      | GatewayRequestContext["validateAgentRuntimeApprovalAuthority"]
+      | undefined,
   };
 }
 
@@ -292,6 +361,7 @@ function callerClient(
   currentJobId?: string,
   currentJobExpiresAtMs = Date.now() + 60_000,
 ): GatewayClient {
+  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-validation");
   return {
     connect: {} as GatewayClient["connect"],
     internal: {
@@ -299,6 +369,13 @@ function callerClient(
         kind: "agentRuntime",
         agentId,
         sessionKey: sessionKey ?? `agent:${agentId}:main`,
+        operationalRunInstance,
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance,
+          lifecycleGeneration: "test-generation",
+          claimId: "test-claim",
+        },
         ...(accountId ? { turnSourceAccountId: accountId } : {}),
         ...(currentJobId
           ? {
@@ -311,6 +388,13 @@ function callerClient(
       },
     },
   };
+}
+
+function callerClientWithCronCreatorAuthority(grant: CronCreatorAuthorityGrant): GatewayClient {
+  const client = callerClient("ops");
+  client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
+  client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
+  return client;
 }
 
 function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {}): CronDelivery {
@@ -480,7 +564,7 @@ function expectCronUpdateDeliveryPatch(
 
 function expectResponseError(
   respond: ReturnType<typeof vi.fn>,
-  expected: { code?: string; messageIncludes?: string },
+  expected: { code?: string; messageIncludes?: string; details?: Record<string, unknown> },
 ) {
   const call = respond.mock.calls.at(0);
   if (!call) {
@@ -495,6 +579,9 @@ function expectResponseError(
   if (expected.messageIncludes) {
     expect(String(error.message)).toContain(expected.messageIncludes);
   }
+  if (expected.details) {
+    expect(error.details).toEqual(expected.details);
+  }
 }
 
 function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void {
@@ -504,6 +591,7 @@ function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void 
 describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    cronTaskRunHistoryPageOverride.mockReset().mockReturnValue(undefined);
     loadGatewaySessionEntry
       .mockReset()
       .mockImplementation((sessionKey: string) => ({ canonicalKey: sessionKey, entry: undefined }));
@@ -545,7 +633,8 @@ describe("cron method validation", () => {
     );
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.remove params: id not found",
+      messageIncludes: "Automation not found: missing-id",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-id" },
     });
   });
 
@@ -574,7 +663,7 @@ describe("cron method validation", () => {
     expect(context.cron.remove).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.remove params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -600,7 +689,7 @@ describe("cron method validation", () => {
     expect(context.cron.remove).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.remove params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -658,6 +747,7 @@ describe("cron method validation", () => {
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "cron job not found: cron-42",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "cron-42" },
     });
   });
 
@@ -1145,6 +1235,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.wake).toHaveBeenCalledWith({
+      agentId: "main",
       mode: "now",
       text: "ping",
       sessionKey,
@@ -1166,11 +1257,39 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.wake).toHaveBeenCalledWith({
+      agentId: "main",
       mode: "now",
       text: "ping",
       sessionKey,
     });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("keeps wake mutation at zero when delegated authority closes during preparation", async () => {
+    let authorityActive = true;
+    let releasePreparation: (() => void) | undefined;
+    const held = new Promise<undefined>((resolve) => {
+      releasePreparation = () => resolve(undefined);
+    });
+    const context = createCronContext();
+    context.cron.prepareWake.mockImplementationOnce(async () => await held);
+    context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
+
+    const invocation = invokeCron(
+      "wake",
+      { mode: "now", text: "ping", agentId: "ops" },
+      { context, client: callerClient("ops") },
+    );
+    await vi.waitFor(() => expect(context.cron.prepareWake).toHaveBeenCalledOnce());
+    authorityActive = false;
+    releasePreparation?.();
+    const { respond } = await invocation;
+
+    expect(context.cron.wake).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "agent runtime authority is no longer active",
+    });
   });
 
   it("stamps declaration ownership from the trusted caller and scopes key lookup", async () => {
@@ -1226,6 +1345,238 @@ describe("cron method validation", () => {
       accountId: "work",
     });
     expectCronSuccess(respond);
+  });
+
+  it("consumes an exact live configured-MCP grant once at cron.add commit", async () => {
+    const scope = createCronCreatorAuthorityRunScope("run-add");
+    const grant = mintCronCreatorAuthorityGrant(scope);
+    const context = createCronContext();
+    const client = callerClientWithCronCreatorAuthority(grant);
+
+    const first = await invokeCron("cron.add", agentTurnCronParams(), { context, client });
+    expectCronSuccess(first.respond);
+    expect(context.committedAdds).toHaveLength(1);
+
+    const replay = await invokeCron("cron.add", agentTurnCronParams(), { context, client });
+    expectResponseError(replay.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Configured MCP cron authority is no longer active",
+    });
+    expect(context.committedAdds).toHaveLength(1);
+    revokeCronCreatorAuthorityRunScope(scope);
+  });
+
+  it("preserves creator runtime authority while revalidating delegated authority at commit", async () => {
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const scope = createCronCreatorAuthorityRunScope("run-add-authority");
+    const grant = mintCronCreatorAuthorityGrant(scope, undefined, runtimeAuthority);
+    const context = createCronContext();
+    context.validateAgentRuntimeApprovalAuthority = () => true;
+
+    const result = await invokeCron("cron.add", agentTurnCronParams(), {
+      context,
+      client: callerClientWithCronCreatorAuthority(grant),
+    });
+
+    expectCronSuccess(result.respond);
+    expect(context.committedRuntimeAuthorityCaptures).toEqual([true]);
+    expect(context.committedRuntimeAuthorities).toEqual([runtimeAuthority]);
+    revokeCronCreatorAuthorityRunScope(scope);
+  });
+
+  it("keeps delegated liveness validation separate from runtime authority capture", async () => {
+    const currentJob = createCronJob({
+      agentId: "ops",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
+    });
+    const context = createCronContext(currentJob);
+    context.validateAgentRuntimeApprovalAuthority = () => true;
+
+    const result = await invokeCron(
+      "cron.update",
+      { jobId: currentJob.id, patch: { description: "routine edit" } },
+      { context, client: callerClient("ops") },
+    );
+
+    expectCronSuccess(result.respond);
+    expect(context.committedRuntimeAuthorityCaptures).toEqual([false]);
+    expect(context.committedRuntimeAuthorities).toEqual([undefined]);
+  });
+
+  it("rejects a mismatched cron.add runId without consuming the exact grant", async () => {
+    const scope = createCronCreatorAuthorityRunScope("run-add");
+    const grant = mintCronCreatorAuthorityGrant(scope);
+    const context = createCronContext();
+
+    const mismatch = await invokeCron("cron.add", agentTurnCronParams(), {
+      context,
+      client: callerClientWithCronCreatorAuthority({ ...grant, runId: "run-other" }),
+    });
+    expectResponseError(mismatch.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Configured MCP cron authority is no longer active",
+    });
+    expect(context.committedAdds).toHaveLength(0);
+
+    const exact = await invokeCron("cron.add", agentTurnCronParams(), {
+      context,
+      client: callerClientWithCronCreatorAuthority(grant),
+    });
+    expectCronSuccess(exact.respond);
+    expect(context.committedAdds).toHaveLength(1);
+    revokeCronCreatorAuthorityRunScope(scope);
+  });
+
+  it("keeps cron.add mutation at zero after the admitted run revokes its grant", async () => {
+    const scope = createCronCreatorAuthorityRunScope("run-add-revoked");
+    const grant = mintCronCreatorAuthorityGrant(scope);
+    revokeCronCreatorAuthorityRunScope(scope);
+    const context = createCronContext();
+
+    const result = await invokeCron("cron.add", agentTurnCronParams(), {
+      context,
+      client: callerClientWithCronCreatorAuthority(grant),
+    });
+
+    expectResponseError(result.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Configured MCP cron authority is no longer active",
+    });
+    expect(context.committedAdds).toHaveLength(0);
+  });
+
+  it("keeps cron.add mutation at zero when delegated runtime authority closes before commit", async () => {
+    const context = createCronContext();
+    context.validateAgentRuntimeApprovalAuthority = () => false;
+
+    const result = await invokeCron("cron.add", agentTurnCronParams(), {
+      context,
+      client: callerClient("ops"),
+    });
+
+    expectResponseError(result.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "agent runtime authority is no longer active",
+    });
+    expect(context.committedAdds).toHaveLength(0);
+  });
+
+  it.each([
+    ["cron.scratch.set", { id: "cron-1", content: "notes" }, "writeScratch"],
+    ["cron.remove", { id: "cron-1" }, "remove"],
+    ["cron.run", { id: "cron-1", mode: "force" }, "enqueueRun"],
+  ] as const)(
+    "revalidates delegated authority at the %s commit owner",
+    async (method, params, owner) => {
+      const context = createCronContext(createCronJob({ agentId: "ops" }));
+      let authorityActive = true;
+      context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
+      if (owner === "writeScratch") {
+        context.cron.writeScratch.mockImplementationOnce(async (_id, write) => {
+          authorityActive = false;
+          write.commitGuard?.();
+          throw new Error("unreachable");
+        });
+      } else if (owner === "remove") {
+        context.cron.remove.mockImplementationOnce(async (_id, options) => {
+          authorityActive = false;
+          options?.commitGuard?.();
+          throw new Error("unreachable");
+        });
+      } else {
+        context.cron.enqueueRun.mockImplementationOnce(async (_id, _mode, options) => {
+          authorityActive = false;
+          options?.commitGuard?.();
+          throw new Error("unreachable");
+        });
+      }
+
+      const { respond } = await invokeCron(method, params, {
+        context,
+        client: callerClient("ops"),
+      });
+
+      expect(context.cron[owner]).toHaveBeenCalledOnce();
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "agent runtime authority is no longer active",
+      });
+    },
+  );
+
+  it("keeps cron.update mutation at zero after resolution outlives its run", async () => {
+    const scope = createCronCreatorAuthorityRunScope("run-update-revoked");
+    const grant = mintCronCreatorAuthorityGrant(scope);
+    revokeCronCreatorAuthorityRunScope(scope);
+    const currentJob = createCronJob({
+      agentId: "ops",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:ops:main",
+        ownerAccountId: "default",
+      },
+    });
+    const context = createCronContext(currentJob);
+
+    const result = await invokeCron(
+      "cron.update",
+      {
+        jobId: currentJob.id,
+        patch: {
+          payload: { kind: "agentTurn", message: "updated", toolsAllow: ["read"] },
+        },
+      },
+      { context, client: callerClientWithCronCreatorAuthority(grant) },
+    );
+
+    expectResponseError(result.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Configured MCP cron authority is no longer active",
+    });
+    expect(context.committedUpdates).toHaveLength(0);
+  });
+
+  it("consumes an exact live configured-MCP grant once at cron.update commit", async () => {
+    const scope = createCronCreatorAuthorityRunScope("run-update");
+    const grant = mintCronCreatorAuthorityGrant(scope);
+    const currentJob = createCronJob({
+      agentId: "ops",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:ops:main",
+        ownerAccountId: "default",
+      },
+    });
+    const context = createCronContext(currentJob);
+    const client = callerClientWithCronCreatorAuthority(grant);
+    const params = {
+      jobId: currentJob.id,
+      patch: {
+        payload: { kind: "agentTurn", message: "updated", toolsAllow: ["read"] },
+      },
+    };
+
+    const first = await invokeCron("cron.update", params, { context, client });
+    expectCronSuccess(first.respond);
+    expect(context.committedUpdates).toHaveLength(1);
+    expect(context.committedRuntimeAuthorityCaptures).toEqual([true]);
+
+    const replay = await invokeCron("cron.update", params, { context, client });
+    expectResponseError(replay.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Configured MCP cron authority is no longer active",
+    });
+    expect(context.committedUpdates).toHaveLength(1);
+    revokeCronCreatorAuthorityRunScope(scope);
   });
 
   it("keeps scoped read access with the stamped owner after operator retargeting", async () => {
@@ -1357,7 +1708,7 @@ describe("cron method validation", () => {
     expect(siblingUpdate.respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: "invalid cron.update params: id not found" }),
+      expect.objectContaining({ message: expect.stringContaining("Automation not found: cron-1") }),
     );
     expect(context.cron.updateWithPrecondition).not.toHaveBeenCalled();
 
@@ -1462,13 +1813,13 @@ describe("cron method validation", () => {
     );
     expectResponseError(update.respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.update params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
 
     const run = await invokeCron("cron.run", { id: accountJob.id }, { context, client: runClient });
     expectResponseError(run.respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.run params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
   });
@@ -1976,7 +2327,7 @@ describe("cron method validation", () => {
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.update params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3285,7 +3636,7 @@ describe("cron method validation", () => {
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.update params: id not found",
+      messageIncludes: "Automation not found: missing",
     });
   });
 
@@ -3333,7 +3684,7 @@ describe("cron method validation", () => {
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.update params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3345,8 +3696,24 @@ describe("cron method validation", () => {
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.run params: id not found",
+      messageIncludes: "Automation not found: missing",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing" },
     });
+  });
+
+  it("keeps malformed cron.run params classified as invalid params", async () => {
+    const { context, respond } = await invokeCron(
+      "cron.run",
+      { id: 42 },
+      { context: createCronContext() },
+    );
+
+    expect(context.cron.readJob).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.run params",
+    });
+    expect(requireRecord(respond.mock.calls[0]?.[2], "response error").details).toBeUndefined();
   });
 
   it("allows caller-scoped cron.run for the same agent", async () => {
@@ -3403,7 +3770,7 @@ describe("cron method validation", () => {
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.run params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3430,7 +3797,7 @@ describe("cron method validation", () => {
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.run params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3471,6 +3838,14 @@ describe("cron method validation", () => {
   });
 
   it("preserves deleted-job history without listing unrelated cron jobs", async () => {
+    cronTaskRunHistoryPageOverride.mockReturnValue({
+      entries: [{ jobId: "deleted-cron", action: "finished", status: "ok", ts: 1 }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
     const context = createCronContext();
 
     const { respond } = await invokeCron("cron.runs", { id: "deleted-cron" }, { context });
@@ -3480,6 +3855,39 @@ describe("cron method validation", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ entries: expect.any(Array) }),
+      undefined,
+    );
+  });
+
+  it("returns a typed lookup miss when cron.runs has no live job or retained history", async () => {
+    const context = createCronContext();
+
+    const { respond } = await invokeCron("cron.runs", { id: "missing-cron" }, { context });
+
+    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("missing-cron");
+    expect(context.cron.list).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Automation not found: missing-cron",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-cron" },
+    });
+  });
+
+  it("keeps the exact empty cron.runs page for a live job with no history", async () => {
+    const context = createCronContext(createCronJob({ id: "empty-cron" }));
+
+    const { respond } = await invokeCron("cron.runs", { id: "empty-cron" }, { context });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        entries: [],
+        total: 0,
+        offset: 0,
+        limit: 50,
+        hasMore: false,
+        nextOffset: null,
+      },
       undefined,
     );
   });
@@ -3497,7 +3905,7 @@ describe("cron method validation", () => {
     expect(context.cron.list).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.runs params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3559,7 +3967,7 @@ describe("cron method validation", () => {
     expect(context.cron.list).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.runs params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3586,7 +3994,7 @@ describe("cron method validation", () => {
     expect(context.cron.list).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "invalid cron.runs params: id not found",
+      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -3614,6 +4022,14 @@ describe("cron method validation", () => {
   });
 
   describe("wake", () => {
+    beforeEach(() => {
+      setRuntimeConfig({
+        agents: {
+          entries: { main: {}, ops: {}, "agent-123": {}, "agent-456": {} },
+        },
+      });
+    });
+
     it("forwards sessionKey to context.cron.wake when provided", async () => {
       const { context, respond } = await invokeWake({
         mode: "now",
@@ -3621,6 +4037,7 @@ describe("cron method validation", () => {
         sessionKey: "agent:main:telegram:dm:42",
       });
       expect(context.cron.wake).toHaveBeenCalledWith({
+        agentId: "main",
         mode: "now",
         text: "ping",
         sessionKey: "agent:main:telegram:dm:42",
@@ -3672,7 +4089,10 @@ describe("cron method validation", () => {
         agentId: "ops",
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
-      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "contradicts" });
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "does not match session key agent",
+      });
     });
 
     it("accepts an explicit agentId matching the agent that owns the sessionKey", async () => {
@@ -3699,7 +4119,7 @@ describe("cron method validation", () => {
       {
         name: "sessionKey",
         params: { sessionKey: "agent:agent-456:discord:thread-xyz" },
-        message: "wake sessionKey outside caller scope",
+        message: "does not match session key agent",
       },
     ])("rejects a cross-agent $name for agent-runtime callers", async ({ params, message }) => {
       const { context, respond } = await invokeWake(

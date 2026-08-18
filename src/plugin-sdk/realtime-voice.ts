@@ -1,6 +1,7 @@
 /** Production-private runtime seam for bundled and separately published official plugins. */
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
+  OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBargeInOptions,
@@ -9,6 +10,7 @@ export type {
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceGatewayControl,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceCloseReason,
@@ -16,14 +18,19 @@ export type {
   RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
   RealtimeVoiceProviderResolveConfigContext,
+  RealtimeVoiceResponseError,
+  RealtimeVoiceResponseOutcome,
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
 export {
+  normalizeRealtimeVoiceResponseOutcome,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  realtimeVoiceAudioDurationMs,
+  toOpenAICompatibleRealtimeAudioFormat,
 } from "../talk/provider-types.js";
 export {
   createTalkEventSequencer,
@@ -104,6 +111,7 @@ export {
   buildRealtimeVoiceAgentConsultPolicyInstructions,
   buildRealtimeVoiceAgentConsultPrompt,
   buildRealtimeVoiceAgentConsultWorkingResponse,
+  buildRealtimeVoiceSessionInstructions,
   collectRealtimeVoiceAgentConsultVisibleText,
   isRealtimeVoiceAgentConsultToolPolicy,
   parseRealtimeVoiceAgentConsultArgs,
@@ -117,6 +125,20 @@ export {
   type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "../talk/agent-consult-tool.js";
+export {
+  buildRealtimeVoiceSpeakExactMessage,
+  classifyRealtimeVoiceConsultToolCall,
+  type RealtimeVoiceConsultToolCallOutcome,
+} from "../talk/exact-speech-protocol.js";
+export {
+  isRealtimeVoiceWakeNameRequired,
+  resolveRealtimeVoiceBargeIn,
+  resolveRealtimeVoiceInterruptResponseOnInputAudio,
+  resolveRealtimeVoiceMinBargeInAudioEndMs,
+  resolveRealtimeVoiceSessionPolicy,
+  type RealtimeVoiceSessionPolicy,
+  type RealtimeVoiceWakeNamePolicy,
+} from "../talk/realtime-session-policy.js";
 export {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
@@ -201,6 +223,7 @@ export {
 } from "../talk/audio-energy.js";
 export {
   convertPcmToMulaw8k,
+  createStreamingPcmResampler,
   mulawToPcm,
   pcmToMulaw,
   resamplePcm,

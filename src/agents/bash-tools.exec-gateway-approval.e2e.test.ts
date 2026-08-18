@@ -15,8 +15,9 @@ import { startGatewayServer } from "../gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../gateway/test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
@@ -25,10 +26,10 @@ import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PORT",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_CRON",
@@ -67,7 +68,7 @@ describe("gateway-hosted exec approvals", () => {
       const workspaceDir = path.join(tempHome, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const token = "exec-approval-e2e-token";
       const configPath = path.join(stateDir, "openclaw.json");
       await fs.mkdir(stateDir, { recursive: true });
@@ -151,7 +152,7 @@ describe("gateway-hosted exec approvals", () => {
       const pending = await tool.execute("exec-approval-e2e", {
         command: "printf 'smoke\\n'",
         workdir: workspaceDir,
-        timeout: 5,
+        timeoutSeconds: 5,
       });
 
       expect(pending.details.status).toBe("approval-pending");

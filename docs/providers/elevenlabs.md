@@ -60,9 +60,9 @@ Use Scribe v2 for inbound audio attachments and short recorded voice segments:
 {
   tools: {
     media: {
+      models: [{ provider: "elevenlabs", model: "scribe_v2", capabilities: ["audio"] }],
       audio: {
         enabled: true,
-        models: [{ provider: "elevenlabs", model: "scribe_v2" }],
       },
     },
   },

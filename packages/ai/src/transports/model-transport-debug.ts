@@ -4,6 +4,8 @@
  * Model adapters share these helpers so payload, SSE, and transport diagnostics
  * interpret OpenClaw debug environment variables consistently.
  */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 type SubsystemLogger = {
   info(message: string): void;
   debug(message: string): void;
@@ -16,12 +18,8 @@ type ModelPayloadDebugMode = "off" | "summary" | "tools" | "full-redacted";
 /** SSE debug detail levels accepted by `OPENCLAW_DEBUG_SSE`. */
 type ModelSseDebugMode = "off" | "events" | "peek";
 
-function normalizeEnv(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
 function isTruthyEnv(value: unknown): boolean {
-  const normalized = normalizeEnv(value);
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   return (
     normalized.length > 0 &&
     normalized !== "0" &&
@@ -35,7 +33,7 @@ function isTruthyEnv(value: unknown): boolean {
 export function resolveModelPayloadDebugMode(
   env: ModelTransportDebugEnv = process.env,
 ): ModelPayloadDebugMode {
-  const normalized = normalizeEnv(env.OPENCLAW_DEBUG_MODEL_PAYLOAD);
+  const normalized = normalizeLowercaseStringOrEmpty(env.OPENCLAW_DEBUG_MODEL_PAYLOAD);
   if (normalized === "tools" || normalized === "full-redacted") {
     return normalized;
   }
@@ -49,7 +47,7 @@ export function resolveModelPayloadDebugMode(
 export function resolveModelSseDebugMode(
   env: ModelTransportDebugEnv = process.env,
 ): ModelSseDebugMode {
-  const normalized = normalizeEnv(env.OPENCLAW_DEBUG_SSE);
+  const normalized = normalizeLowercaseStringOrEmpty(env.OPENCLAW_DEBUG_SSE);
   if (normalized === "peek") {
     return "peek";
   }

@@ -654,10 +654,14 @@ describe("gateway agent handler", () => {
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "requires target");
+    expect(error).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: expect.stringContaining("requires target"),
+    });
+    expect(error.message).not.toMatch(/^Error:/u);
   });
 
-  it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
+  it("preserves requested delivery when best effort has no external channel", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
     const respond = vi.fn();
@@ -687,7 +691,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await waitForAgentCommandCall();
+    const callArgs = await waitForAgentCommandCall<{ deliver?: boolean; channel?: string }>();
     const accepted = respond.mock.calls.find(
       (call: unknown[]) =>
         call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
@@ -697,9 +701,10 @@ describe("gateway agent handler", () => {
     });
     const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejected).toBeUndefined();
+    expect(callArgs).toMatchObject({ deliver: true, channel: "webchat" });
     expect(logInfo).toHaveBeenCalledTimes(1);
     expect(mockCallArg(logInfo)).toContain(
-      "agent delivery downgraded to session-only (bestEffortDeliver)",
+      "agent delivery unresolved (bestEffortDeliver); final delivery will report",
     );
   });
 
@@ -1071,6 +1076,62 @@ describe("gateway agent handler", () => {
 
     const callArgs = await waitForAgentCommandCall<{ bashElevated?: unknown }>();
     expect(callArgs.bashElevated).toEqual(bashElevated);
+  });
+
+  it("fails closed when an exec approval handoff expires during durable admission", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:telegram:direct:123";
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-expired-admission",
+      sessionKey,
+      bashElevated,
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    const persistTranscriptTurn = mocks.persistSessionTranscriptTurn.getMockImplementation();
+    if (!persistTranscriptTurn) {
+      throw new Error("expected transcript persistence implementation");
+    }
+    mocks.persistSessionTranscriptTurn.mockImplementationOnce(async (...args) => {
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+      return await persistTranscriptTurn(...args);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "must not dispatch" }],
+      meta: { durationMs: 100 },
+    });
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    const respond = await invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey,
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+      },
+      {
+        reqId: "exec-followup-expired-admission",
+        client: backendGatewayClient(),
+      },
+    );
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
+    expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
+      runId: registration.idempotencyKey,
+      status: "error",
+    });
   });
 
   it("materializes approved exec output only from an authenticated runtime handoff", async () => {

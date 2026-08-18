@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   catalogPage,
   createGatewayHarness,
@@ -8,6 +7,7 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
@@ -38,7 +38,12 @@ describe("AppSidebar section reordering", () => {
   async function mountWithGroups(
     groups: string[],
     sectionOrder: string[] = [],
-    options: { withCatalog?: boolean; scopes?: string[] } = {},
+    options: {
+      withCatalog?: boolean;
+      withBuiltinGroup?: boolean;
+      scopes?: string[];
+      groupSessionCategories?: readonly string[];
+    } = {},
   ) {
     const request = vi
       .fn()
@@ -46,22 +51,17 @@ describe("AppSidebar section reordering", () => {
     const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
     if (options.withCatalog || options.scopes) {
       gateway.publish({
-        hello: {
-          ...(options.scopes ? { auth: { role: "operator", scopes: options.scopes } } : {}),
-          features: {
-            methods: [
-              ...(options.withCatalog ? ["sessions.catalog.list"] : []),
-              "sessions.groups.put",
-            ],
-          },
-        } as ApplicationGatewaySnapshot["hello"],
+        hello: gatewayHelloForMethods(
+          [...(options.withCatalog ? ["sessions.catalog.list"] : []), "sessions.groups.put"],
+          options.scopes,
+        ),
       });
     }
     const harness = createSessionsHarness("main", [
       "agent:main:main",
       "agent:main:plain",
       "agent:main:thread",
-      "agent:main:builtin-group",
+      ...(options.withBuiltinGroup === false ? [] : ["agent:main:builtin-group"]),
       ...groups.map((_, index) => `agent:main:group-${index}`),
     ]);
     const result = harness.sessions.state.result;
@@ -73,19 +73,24 @@ describe("AppSidebar section reordering", () => {
       throw new Error("expected coding session fixture");
     }
     codingRow.worktree = { id: "worktree-1", branch: "feature", repoRoot: "/repo" };
-    const builtinGroupRow = result.sessions.find(
-      (entry) => entry.key === "agent:main:builtin-group",
-    );
-    if (!builtinGroupRow) {
-      throw new Error("expected built-in group session fixture");
+    if (options.withBuiltinGroup !== false) {
+      const builtinGroupRow = result.sessions.find(
+        (entry) => entry.key === "agent:main:builtin-group",
+      );
+      if (!builtinGroupRow) {
+        throw new Error("expected built-in group session fixture");
+      }
+      builtinGroupRow.kind = "group";
     }
-    builtinGroupRow.kind = "group";
     for (const [index, group] of groups.entries()) {
       const row = result.sessions.find((entry) => entry.key === `agent:main:group-${index}`);
       if (!row) {
         throw new Error(`expected session fixture for ${group}`);
       }
       row.category = group;
+      if (options.groupSessionCategories?.includes(group)) {
+        row.kind = "group";
+      }
     }
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
     sidebar.connected = true;
@@ -145,7 +150,7 @@ describe("AppSidebar section reordering", () => {
     expect(header.getAttribute("draggable")).toBe("false");
     expect(header.getAttribute("title")).toBeTruthy();
     expect(row?.getAttribute("draggable")).toBe("false");
-    expect(row?.getAttribute("title")).toBeTruthy();
+    expect(row?.hasAttribute("title")).toBe(false);
 
     const dataTransfer = createDataTransferStub();
     dispatchDragEvent(header, "dragstart", dataTransfer);
@@ -208,6 +213,32 @@ describe("AppSidebar section reordering", () => {
 
     await waitForFast(() =>
       expect(harness.groupsPut).toHaveBeenCalledWith([], ["work", "ungrouped", "groups"]),
+    );
+  });
+
+  it("clears a group session category when it drops onto Groups", async () => {
+    const { sidebar, harness } = await mountWithGroups(["Done"], [], {
+      withBuiltinGroup: false,
+      groupSessionCategories: ["Done"],
+    });
+    const source = sidebar.querySelector('[data-session-key="agent:main:group-0"]');
+    const groupsSection = sidebar.querySelector('[data-session-section="groups"]');
+    if (!source || !groupsSection) {
+      throw new Error("expected categorized group session and Groups section");
+    }
+    const dataTransfer = createDataTransferStub();
+
+    dispatchDragEvent(source, "dragstart", dataTransfer);
+    dispatchDragEvent(groupsSection, "dragover", dataTransfer);
+    expect(dataTransfer.dropEffect).toBe("move");
+    dispatchDragEvent(groupsSection, "drop", dataTransfer);
+
+    await waitForFast(() =>
+      expect(harness.patch).toHaveBeenCalledWith(
+        "agent:main:group-0",
+        { category: null },
+        { agentId: "main" },
+      ),
     );
   });
 

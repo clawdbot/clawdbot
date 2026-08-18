@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
+import { FAILOVER_REASONS } from "../failover-reasons.js";
 import {
   type WorkerAdmissionHandshake,
   WorkerAdmissionResponseFrameSchema,
@@ -9,16 +10,25 @@ import {
   WorkerLiveEventRequestFrameSchema,
   WorkerLiveEventResponseFrameSchema,
   WorkerProtocolCloseReasonSchema,
+  WorkerSessionsSendResponseFrameSchema,
+  WorkerSessionsSpawnResponseFrameSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
+  WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
+  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_RPC_SET_VERSION,
+  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
+  WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   validateWorkerAdmissionHandshake,
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
+  validateWorkerSessionsSendParams,
+  validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
 } from "../index.js";
 import {
@@ -161,12 +171,22 @@ const approval = (phase: string, status: string) =>
   event("approval", { phase, kind: "exec", status, title: "x" });
 const lifecycle = (phase: string, payload: Record<string, unknown> = {}) =>
   event("lifecycle", { phase, ...payload });
-const fallbackStep = (outcome: string) =>
+const fallbackStep = (outcome: string, reason?: string) =>
   lifecycle("fallback_step", {
     fallbackStepType: "fallback_step",
     fallbackStepFromModel: "p/m",
+    ...(reason === undefined ? {} : { fallbackStepFromFailureReason: reason }),
     fallbackStepFinalOutcome: outcome,
   });
+const fallbackReasonEvents = (reason: string) => [
+  lifecycle("fallback", {
+    ...models,
+    reasonSummary: "x",
+    attemptSummaries: ["x"],
+    attempts: [{ provider: "p", model: "m", error: "x", reason }],
+  }),
+  fallbackStep("next_fallback", reason),
+];
 const assistant = event("assistant", { text: "x", delta: "x" });
 const validateLive = validateWorkerLiveEventParams;
 const liveError = (details: Record<string, unknown>) => ({
@@ -253,6 +273,92 @@ describe("worker protocol schemas", () => {
     expect(Value.Check(WorkerHeartbeatResponseFrameSchema, response)).toBe(true);
   });
 
+  it("keeps worker session tools closed and payload-bounded", () => {
+    const spawn = { toolCallId: "call-spawn", task: "run the child" };
+    const send = {
+      toolCallId: "call-send",
+      sessionKey: "agent:main:dashboard:child",
+      message: "report status",
+    };
+    expect(validateWorkerSessionsSpawnParams(spawn)).toBe(true);
+    expect(validateWorkerSessionsSendParams(send)).toBe(true);
+    expect(validateWorkerSessionsSpawnParams({ ...spawn, unexpected: true })).toBe(false);
+    expect(validateWorkerSessionsSendParams({ ...send, message: "" })).toBe(false);
+    const escaped = "\0";
+    const requestBytes = (method: string, requestParams: object) =>
+      Buffer.byteLength(
+        JSON.stringify({
+          type: "req",
+          id: escaped.repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
+          method,
+          params: requestParams,
+        }),
+        "utf8",
+      );
+    const impossibleText = escaped.repeat(10_000);
+    const spawnEnvelope = {
+      toolCallId: escaped.repeat(256),
+      label: escaped.repeat(256),
+      agentId: escaped.repeat(256),
+      model: escaped.repeat(256),
+    };
+    const maximalSpawn = {
+      ...spawnEnvelope,
+      task: escaped.repeat(WORKER_SESSION_TOOL_MAX_TEXT_LENGTH),
+      runTimeoutSeconds: 86_400,
+    };
+    expect(validateWorkerSessionsSpawnParams(maximalSpawn)).toBe(true);
+    expect(requestBytes("worker.sessions.spawn", maximalSpawn)).toBeLessThanOrEqual(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    const impossibleSpawn = { ...spawnEnvelope, task: impossibleText };
+    expect(requestBytes("worker.sessions.spawn", impossibleSpawn)).toBeGreaterThan(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    expect(validateWorkerSessionsSpawnParams(impossibleSpawn)).toBe(false);
+
+    const sendEnvelope = {
+      toolCallId: escaped.repeat(256),
+      sessionKey: escaped.repeat(1_024),
+      timeoutSeconds: 86_400,
+    };
+    const maximalSend = {
+      ...sendEnvelope,
+      message: escaped.repeat(WORKER_SESSION_TOOL_MAX_TEXT_LENGTH),
+    };
+    expect(validateWorkerSessionsSendParams(maximalSend)).toBe(true);
+    expect(requestBytes("worker.sessions.send", maximalSend)).toBeLessThanOrEqual(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    const impossibleSend = { ...sendEnvelope, message: impossibleText };
+    expect(requestBytes("worker.sessions.send", impossibleSend)).toBeGreaterThan(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    expect(validateWorkerSessionsSendParams(impossibleSend)).toBe(false);
+    expect(
+      validateWorkerSessionsSpawnParams({
+        ...spawn,
+        runTimeoutSeconds: 86_401,
+      }),
+    ).toBe(false);
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE);
+
+    const response = {
+      type: "res" as const,
+      id: "session-tool-1",
+      ok: true as const,
+      payload: { resultJson: JSON.stringify({ content: [] }) },
+    };
+    expect(Value.Check(WorkerSessionsSpawnResponseFrameSchema, response)).toBe(true);
+    expect(Value.Check(WorkerSessionsSendResponseFrameSchema, response)).toBe(true);
+    expect(
+      Value.Check(WorkerSessionsSendResponseFrameSchema, {
+        ...response,
+        payload: { ...response.payload, extra: true },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts semantic transcript commits and generated-id responses", () => {
     const commitParams = transcriptCommit();
     expect(validateWorkerTranscriptCommitParams(commitParams)).toBe(true);
@@ -274,10 +380,79 @@ describe("worker protocol schemas", () => {
     expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
   });
 
+  it("accepts opaque provider replay state on assistant transcript messages", () => {
+    const assistantMessage = transcriptMessages[1];
+    if (!assistantMessage || assistantMessage.role !== "assistant") {
+      throw new Error("expected assistant transcript fixture");
+    }
+    const providerReplay = {
+      v: 1 as const,
+      type: "openai-responses-compaction",
+      id: "cmp_worker",
+      data: "opaque-worker-compaction",
+      replayIndex: 1,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    };
+    const candidate = transcriptCommit({
+      messages: [{ ...assistantMessage, providerReplay }],
+    });
+
+    expect(validateWorkerTranscriptCommitParams(candidate)).toBe(true);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: { ...providerReplay, privateScratch: "drop" },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: {
+              ...providerReplay,
+              data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES),
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: {
+              ...providerReplay,
+              data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("advertises only the current execution-context dialect", () => {
+    expect(WORKER_PROTOCOL_FEATURES).not.toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
+    expect(WORKER_PROTOCOL_FEATURES).not.toContain("worker-execution-context-v1");
+    expect(WORKER_PROTOCOL_FEATURES).toContain("worker-execution-context-v2");
+  });
+
   it("validates the additive live-event protocol", () => {
     expect(WORKER_RPC_SET_VERSION).toBe(1);
     expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");
-    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
     for (const validEvent of [
       assistant,
       event("thinking", { text: "x", delta: "x" }),
@@ -348,6 +523,18 @@ describe("worker protocol schemas", () => {
     ] as const) {
       expect(validateLive(params(tool("update", { partialResult: value })))).toBe(false);
       expect(validateLive.errors?.[0]).toMatchObject({ keyword });
+    }
+  });
+
+  it("keeps both worker fallback reason fields aligned with the canonical vocabulary", () => {
+    for (const reason of FAILOVER_REASONS) {
+      for (const fallbackEvent of fallbackReasonEvents(reason)) {
+        expect(validateLive(params(fallbackEvent))).toBe(true);
+      }
+    }
+
+    for (const fallbackEvent of fallbackReasonEvents("not-a-reason")) {
+      expect(validateLive(params(fallbackEvent))).toBe(false);
     }
   });
 
@@ -438,6 +625,7 @@ describe("worker protocol schemas", () => {
   });
 
   it("keeps worker close reasons closed", () => {
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "admission-rejected")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "placement-mismatch")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);

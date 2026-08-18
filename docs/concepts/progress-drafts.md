@@ -22,11 +22,11 @@ Working...
 ```
 
 <Note>
-  Discord and Telegram default to `streaming.mode: "progress"`, so progress
-  drafts show up there without any config. Set `mode: "partial"` on either to
-  stream answer text instead. Every other channel defaults to `partial` or
-  `off`; see [Streaming and chunking](/concepts/streaming#channel-mapping) for
-  the full per-channel default table.
+  Discord defaults preview streaming to `off`; set `streaming.mode: "progress"`
+  to opt in. Telegram defaults to `progress` without additional config. Set
+  `mode: "partial"` on either to stream answer text instead. See
+  [Streaming and chunking](/concepts/streaming#channel-mapping) for the full
+  per-channel default table.
 </Note>
 
 ## Quick start
@@ -225,9 +225,9 @@ OpenClaw uses the same formatter for progress drafts and `/verbose`:
 ```
 
 `"explain"` is the default and keeps drafts stable with concise labels.
-`"raw"` appends the underlying command when available, which is useful while
-debugging but noisier in chat. For example, a `node --check /tmp/app.js` call
-renders differently by mode:
+`"raw"` appends underlying tool detail when available. Command text also
+requires the explicit `streaming.progress.commandText: "raw"` opt-in below.
+With that opt-in, a `node --check /tmp/app.js` call renders differently by mode:
 
 | Mode      | Progress line                                                   |
 | --------- | --------------------------------------------------------------- |
@@ -236,10 +236,10 @@ renders differently by mode:
 
 ### Command/exec text
 
-`streaming.progress.commandText` (default `"raw"`) controls how much command
+`streaming.progress.commandText` (default `"status"`) controls how much command
 detail shows next to exec/bash progress lines, independent of the detail mode
-above. Set it to `"status"` to keep a tool-progress line visible while hiding
-the command text entirely:
+above. Set it to `"raw"` to opt into command text; keep `"status"` to show only
+the tool-progress status:
 
 ```json5
 {
@@ -248,7 +248,7 @@ the command text entirely:
       streaming: {
         mode: "progress",
         progress: {
-          commandText: "status",
+          commandText: "raw",
         },
       },
     },
@@ -278,7 +278,7 @@ enabling `streaming.progress.commentary` hands preambles to the interleaved
 commentary lane instead.
 
 On Discord, when a utility model resolves for the agent — an explicit
-[`utilityModel`](/gateway/config-agents#utilitymodel), or the primary
+[`utilityModel`](/gateway/config-agents#agents-defaults-model), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
 Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
 when the model emits no preamble or has been quiet for about 20 seconds
@@ -362,30 +362,6 @@ Tune the per-line budget:
 }
 ```
 
-### Rich rendering (Slack)
-
-Slack can render progress lines as structured Block Kit fields instead of
-plain text:
-
-```json5
-{
-  channels: {
-    slack: {
-      streaming: {
-        mode: "progress",
-        progress: {
-          render: "rich",
-        },
-      },
-    },
-  },
-}
-```
-
-Rich rendering always sends the same plain-text body alongside the Block Kit
-fields, so clients that cannot render the richer shape still show the compact
-progress text.
-
 ### Hide tool/task lines
 
 Keep the single progress draft but hide tool and task lines:
@@ -413,7 +389,7 @@ the final answer, except for the label if one is configured.
 
 | Channel         | Progress transport                     | Notes                                                                                                                                                     |
 | --------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Send one message, then edit it.        | Defaults to `progress` mode; the final answer carries a `-#` activity receipt and the status draft is deleted after the answer lands.                     |
+| Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                  |
 | Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                             |
 | Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
 | Slack           | Native stream or editable draft post.  | Needs a reply thread target; top-level DMs without one still get draft preview posts and edits.                                                           |
@@ -429,11 +405,9 @@ full runtime-behavior breakdown per channel.
 When the final answer is ready, OpenClaw tries to keep the chat clean:
 
 - In `progress` mode on Discord, the final answer is sent as a fresh message
-  with a small `-#` activity receipt appended (for example
-  `-# 🧠 2 thoughts · 🛠️ 5 tool calls · ⏱️ 12s`), and the status draft is
-  deleted once that answer is delivered. Busy channels keep no orphaned tool
-  log above the reply; error finals keep the draft as the visible record of
-  the failed turn.
+  and the status draft is deleted once that answer is delivered. Busy channels
+  keep no orphaned tool log above the reply; error finals keep the draft as the
+  visible record of the failed turn.
 - If the draft can safely become the final answer (`partial`/`block` modes),
   OpenClaw edits it in place.
 - If the channel uses native progress streaming, OpenClaw finalizes that

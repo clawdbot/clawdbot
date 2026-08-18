@@ -1,7 +1,9 @@
 /**
  * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
  */
-import { sha256HexPrefix } from "../../infra/crypto-digest.js";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 type OpenAIThinkingBlock = {
@@ -61,14 +63,7 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
 }
 
 function parseTimestampMs(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? null : parsed;
-  }
-  return null;
+  return parseDateFirstTimestampMs(value) ?? null;
 }
 
 function hasFollowingNonThinkingBlock(
@@ -106,7 +101,7 @@ function isOpenAIToolCallType(type: unknown): boolean {
 }
 
 function shortOpenAIResponsesIdHash(id: string): string {
-  return sha256HexPrefix(id, 10);
+  return sha256HexPrefixCore(id, 10);
 }
 
 function sanitizeOpenAIResponsesIdTail(value: string): string {
@@ -226,7 +221,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         }
         assistantChanged = true;
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: nextId,
         } as typeof block;
       });
@@ -236,7 +231,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         continue;
       }
       changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
       continue;
     }
 
@@ -338,7 +333,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         assistantChanged = true;
         localRewrittenIds.set(toolCallBlock.id, pairing.callId);
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: pairing.callId,
         } as typeof block;
       });
@@ -349,7 +344,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         continue;
       }
       changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
       continue;
     }
 
@@ -520,7 +515,7 @@ export function downgradeOpenAIReasoningBlocks(
         })
       : nextContent;
 
-    out.push({ ...assistantMsg, content: finalContent } as AgentMessage);
+    out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));
   }
 
   return anyChanged ? out : messages;

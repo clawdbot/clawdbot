@@ -4,8 +4,8 @@ import {
   resolveCompactionSuccessorTranscript,
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
-import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
+import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -34,6 +34,7 @@ export type EmbeddedRunCompactionRecoveryInput = {
   runtimeAuthPlan: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["runtimeAuthPlan"];
   resolvedSessionKey: string;
   sessionAgentId: string;
+  contextEngineAgentId?: string;
   agentDir: string;
   workspaceDir: string;
   provider: string;
@@ -63,6 +64,7 @@ export type EmbeddedRunCompactionRecoveryInput = {
     file: string;
     target?: ContextEngineSessionTarget;
   };
+  prepareCompactedTranscriptRetry: () => Promise<void>;
   armPostCompactionGuard: () => void;
 };
 
@@ -95,6 +97,7 @@ export async function compactEmbeddedRunForRecovery(
       authProfileIdSource: input.authProfileIdSource,
       runtimeAuthPlan: input.runtimeAuthPlan,
       workspaceDir: input.workspaceDir,
+      bootstrapWorkspaceDir: runParams.bootstrapWorkspaceDir,
       agentDir: input.agentDir,
       config: runParams.config,
       toolOverrides: runParams.toolOverrides,
@@ -122,7 +125,7 @@ export async function compactEmbeddedRunForRecovery(
     ...resolveContextEngineCapabilities({
       config: runParams.config,
       sessionKey: runParams.sessionKey,
-      agentId: input.sessionAgentId,
+      explicitAgentId: input.contextEngineAgentId,
       contextEnginePluginId: input.resolveContextEnginePluginId(),
       purpose:
         recovery.trigger === "overflow"

@@ -7,12 +7,11 @@ import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import {
-  asObject,
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
-import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { volcengineTTS, type VolcengineTtsEncoding } from "./tts.js";
 
 const DEFAULT_VOICE = "en_female_anna_mars_bigtts";
@@ -59,8 +58,8 @@ function normalizeSpeedRatio(value: unknown): number | undefined {
 function normalizeVolcengineProviderConfig(
   rawConfig: Record<string, unknown>,
 ): VolcengineTtsProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.volcengine) ?? asObject(rawConfig.volcengine);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.volcengine) ?? asOptionalRecord(rawConfig.volcengine);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,

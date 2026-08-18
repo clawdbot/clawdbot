@@ -9,9 +9,10 @@ import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { MediaFact } from "../media/media-facts.js";
 import { probeMediaFilesWithinBudget } from "../media/media-probe.js";
+import { parseInboundMediaUri } from "../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
+import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
 import { DEFAULT_CHAT_ATTACHMENT_MAX_BYTES } from "./chat-attachment-policy.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -30,6 +31,7 @@ export type ChatImageContent = {
   type: "image";
   data: string;
   mimeType: string;
+  sourceIndex: number;
 };
 
 export type OffloadedRef = {
@@ -40,10 +42,16 @@ export type OffloadedRef = {
   mimeType: string;
   label: string;
   sizeBytes: number;
+  sourceIndex: number;
   durationMs?: number;
   width?: number;
   height?: number;
 };
+
+/** Deletes prepared inbound files that never reached a durable owner. */
+export async function discardPreparedInboundMedia(refs: readonly OffloadedRef[]): Promise<void> {
+  await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+}
 
 type ParsedMessageWithImages = {
   message: string;
@@ -64,12 +72,18 @@ type NormalizedAttachment = {
   base64: string;
 };
 
-type SavedMediaRef = {
-  id: string;
-  path: string;
-  durationMs?: number;
-  width?: number;
-  height?: number;
+export const INLINE_IMAGE_DURABLE_OMISSION_MARKER =
+  "[image attachment omitted: durable managed media claim unavailable]";
+
+type PersistInboundImagesResult = {
+  entries: Array<{
+    id: string;
+    path: string;
+    sourceIndex: number;
+    imageKind?: PromptImageOrderEntry;
+    fact: MediaFact;
+  }>;
+  omission: "none" | "inline-image-save-failed";
 };
 
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
@@ -122,54 +136,62 @@ export function stripImageMediaMarkers(message: string, refs: readonly Offloaded
 
 export async function persistInboundImagesForTranscript(params: {
   images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
   offloadedRefs: OffloadedRef[];
   log: Pick<AttachmentLog, "warn">;
   logContext: string;
-}): Promise<SavedMedia[]> {
-  const inline: SavedMedia[] = [];
+}): Promise<PersistInboundImagesResult> {
+  const entries: PersistInboundImagesResult["entries"] = [];
+  let omission: PersistInboundImagesResult["omission"] = "none";
   for (const image of params.images) {
     try {
-      inline.push(
-        await saveMediaBuffer(Buffer.from(image.data, "base64"), image.mimeType, "inbound"),
+      const saved = await saveMediaBuffer(
+        Buffer.from(image.data, "base64"),
+        image.mimeType,
+        "inbound",
       );
+      const trusted = assertSavedMedia(saved, `inline image ${image.sourceIndex + 1}`);
+      entries.push({
+        id: trusted.id,
+        path: trusted.path,
+        sourceIndex: image.sourceIndex,
+        imageKind: "inline",
+        fact: {
+          url: trusted.mediaRef,
+          contentType: saved.contentType ?? image.mimeType,
+          kind: "image",
+          sizeBytes: saved.size,
+        },
+      });
     } catch (err) {
+      omission = "inline-image-save-failed";
       params.log.warn(
         `${params.logContext}: failed to persist inbound image (${image.mimeType}): ${formatErrorMessage(err)}`,
       );
     }
   }
 
-  const imageOffloaded: SavedMedia[] = [];
-  const nonImageOffloaded: SavedMedia[] = [];
   for (const ref of params.offloadedRefs) {
-    const saved = {
+    const fact: MediaFact = {
+      url: buildManagedInboundMediaRef(ref.id),
+      contentType: ref.mimeType,
+      kind: ref.kind,
+      fileName: ref.label,
+      sizeBytes: ref.sizeBytes,
+      ...(ref.durationMs !== undefined ? { durationMs: ref.durationMs } : {}),
+      ...(ref.width !== undefined ? { width: ref.width } : {}),
+      ...(ref.height !== undefined ? { height: ref.height } : {}),
+      ...(ref.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
+    };
+    entries.push({
       id: ref.id,
       path: ref.path,
-      size: ref.sizeBytes,
-      contentType: ref.mimeType,
-    };
-    (ref.mimeType.startsWith("image/") ? imageOffloaded : nonImageOffloaded).push(saved);
+      sourceIndex: ref.sourceIndex,
+      ...(ref.mimeType.startsWith("image/") ? { imageKind: "offloaded" as const } : {}),
+      fact,
+    });
   }
-  if (params.imageOrder.length === 0) {
-    return [...inline, ...imageOffloaded, ...nonImageOffloaded];
-  }
-
-  const ordered: SavedMedia[] = [];
-  let inlineIndex = 0;
-  let offloadedIndex = 0;
-  for (const entry of params.imageOrder) {
-    const media = entry === "inline" ? inline[inlineIndex++] : imageOffloaded[offloadedIndex++];
-    if (media) {
-      ordered.push(media);
-    }
-  }
-  ordered.push(
-    ...inline.slice(inlineIndex),
-    ...imageOffloaded.slice(offloadedIndex),
-    ...nonImageOffloaded,
-  );
-  return ordered;
+  entries.sort((left, right) => left.sourceIndex - right.sourceIndex);
+  return { entries, omission };
 }
 
 type UnsupportedAttachmentReason =
@@ -258,7 +280,7 @@ function isBase64DataCharCode(code: number): boolean {
   );
 }
 
-function isValidBase64(value: string): boolean {
+export function isValidAttachmentBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
@@ -299,7 +321,19 @@ function ensureExtension(label: string, mime: string): string {
   return ext ? `${label}${ext}` : label;
 }
 
-function assertSavedMedia(value: unknown, label: string): SavedMediaRef {
+function buildManagedInboundMediaRef(id: string): string {
+  const candidate = `media://inbound/${id}`;
+  const parsed = parseInboundMediaUri(candidate);
+  if (!parsed || parsed.id !== id) {
+    throw new Error("Saved media ID failed canonical validation");
+  }
+  return parsed.normalizedSource;
+}
+
+function assertSavedMedia(
+  value: unknown,
+  label: string,
+): { id: string; mediaRef: string; path: string } {
   if (
     value === null ||
     typeof value !== "object" ||
@@ -309,20 +343,11 @@ function assertSavedMedia(value: unknown, label: string): SavedMediaRef {
     throw new Error(`attachment ${label}: saveMediaBuffer returned an unexpected shape`);
   }
   const id = (value as Record<string, unknown>).id as string;
-  if (id.length === 0) {
-    throw new Error(`attachment ${label}: saveMediaBuffer returned an empty media ID`);
-  }
-  if (id.includes("/") || id.includes("\\") || id.includes("\0")) {
-    throw new Error(
-      `attachment ${label}: saveMediaBuffer returned an unsafe media ID ` +
-        `(contains path separator or null byte)`,
-    );
-  }
   const path = (value as Record<string, unknown>).path;
   if (typeof path !== "string" || path.length === 0) {
     throw new Error(`attachment ${label}: saveMediaBuffer returned no on-disk path`);
   }
-  return { id, path };
+  return { id, mediaRef: buildManagedInboundMediaRef(id), path };
 }
 
 function normalizeAttachment(
@@ -357,16 +382,26 @@ export async function parseMessageWithAttachments(
   opts?: {
     maxBytes?: number;
     log?: AttachmentLog;
-    supportsImages?: boolean;
+    supportsImages?: boolean | (() => Promise<boolean>);
     supportsInlineImages?: boolean;
     acceptNonImage?: boolean;
   },
 ): Promise<ParsedMessageWithImages> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
   const log = opts?.log;
-  const shouldForceImageOffload = opts?.supportsImages === false;
   const supportsInlineImages = opts?.supportsInlineImages !== false;
   const acceptNonImage = opts?.acceptNonImage !== false;
+  const supportsImagesOption = opts?.supportsImages;
+  let resolvedSupportsImages =
+    typeof supportsImagesOption === "boolean" ? supportsImagesOption : undefined;
+  const resolveSupportsImages = async (): Promise<boolean> => {
+    if (resolvedSupportsImages !== undefined) {
+      return resolvedSupportsImages;
+    }
+    resolvedSupportsImages =
+      typeof supportsImagesOption === "function" ? await supportsImagesOption() : true;
+    return resolvedSupportsImages;
+  };
 
   if (!attachments || attachments.length === 0) {
     return {
@@ -401,7 +436,7 @@ export async function parseMessageWithAttachments(
       if (b64.length === 0) {
         throw new UnsupportedAttachmentError("empty-payload", `attachment ${label}: empty payload`);
       }
-      if (!isValidBase64(b64)) {
+      if (!isValidAttachmentBase64(b64)) {
         throw new Error(`attachment ${label}: invalid base64 content`);
       }
 
@@ -440,6 +475,7 @@ export async function parseMessageWithAttachments(
       }
 
       const isImage = isImageMime(finalMime);
+      const shouldForceImageOffload = isImage && !(await resolveSupportsImages());
       if (isImage && !supportsInlineImages && !shouldForceImageOffload) {
         throw new UnsupportedAttachmentError(
           "text-only-image",
@@ -482,7 +518,7 @@ export async function parseMessageWithAttachments(
         shouldForceImageOffload || !isImage || sizeBytes > OFFLOAD_THRESHOLD_BYTES;
 
       if (!shouldOffload) {
-        images.push({ type: "image", data: b64, mimeType: finalMime });
+        images.push({ type: "image", data: b64, mimeType: finalMime, sourceIndex: idx });
         imageOrder.push("inline");
         continue;
       }
@@ -490,7 +526,7 @@ export async function parseMessageWithAttachments(
       const buffer = Buffer.from(b64, "base64");
       verifyDecodedSize(buffer, sizeBytes, label);
 
-      let savedMedia: SavedMediaRef;
+      let savedMedia: ReturnType<typeof assertSavedMedia>;
       try {
         const labelWithExt = ensureExtension(label, finalMime);
         const rawResult = await saveMediaBuffer(
@@ -510,7 +546,7 @@ export async function parseMessageWithAttachments(
 
       savedMediaIds.push(savedMedia.id);
 
-      const mediaRef = `media://inbound/${savedMedia.id}`;
+      const mediaRef = savedMedia.mediaRef;
       updatedMessage += `\n[media attached: ${mediaRef}]`;
       log?.info?.(
         shouldForceImageOffload && isImage
@@ -526,6 +562,7 @@ export async function parseMessageWithAttachments(
         mimeType: finalMime,
         label,
         sizeBytes,
+        sourceIndex: idx,
         ...(typeof att.durationMs === "number" &&
         Number.isFinite(att.durationMs) &&
         att.durationMs >= 0

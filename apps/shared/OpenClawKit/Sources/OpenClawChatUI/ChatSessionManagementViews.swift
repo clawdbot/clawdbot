@@ -137,6 +137,9 @@ struct ChatSessionInspectorDetails: Equatable {
     }
 
     private static func runState(for session: OpenClawChatSessionEntry) -> String? {
+        if self.normalized(session.status)?.lowercased() == "queued" {
+            return String(localized: "Queued")
+        }
         if session.hasActiveRun == true || session.hasActiveSubagentRun == true {
             return String(localized: "Running")
         }
@@ -200,7 +203,7 @@ struct ChatSessionInspectorSheet: View {
                         .font(OpenClawChatTypography.body)
                     Toggle("Archived", isOn: self.archivedBinding)
                         .font(OpenClawChatTypography.body)
-                        .disabled(!self.displayedSession.isArchived && !ChatSessionSidebarModel.canArchiveSession(
+                        .disabled(!ChatSessionSidebarModel.canArchiveSession(
                             self.displayedSession,
                             mainSessionKey: self.viewModel.resolvedMainSessionKey))
                 }
@@ -305,7 +308,7 @@ struct ChatSessionInspectorSheet: View {
             get: { self.displayedSession.isArchived },
             set: { archived in
                 self.displayedSession.archived = archived
-                self.viewModel.setSessionArchived(key: self.displayedSession.key, archived: archived)
+                self.viewModel.setSessionArchived(self.displayedSession, archived: archived)
             })
     }
 

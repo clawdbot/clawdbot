@@ -81,6 +81,16 @@ function isToolLoopRecoveryOutcome(context: AfterToolOutcomeContext): boolean {
   return details.status === "blocked" && details.deniedReason === "tool-loop";
 }
 
+function isSteeringSkippedOutcome(context: AfterToolOutcomeContext): boolean {
+  const details = isRecord(context.result.details) ? context.result.details : {};
+  return (
+    context.isError &&
+    !context.executionStarted &&
+    details.status === "skipped" &&
+    details.deniedReason === "steering"
+  );
+}
+
 function preserveOriginalDispatchEvidence(
   failure: CodeModeFailure | undefined,
   original: CodeModeFailure | undefined,
@@ -233,6 +243,9 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
     // pre-execution veto. Do not replace its guidance or spend Code Mode's
     // independent repair allowance.
     if (isToolLoopRecoveryOutcome(context)) {
+      return prior;
+    }
+    if (isSteeringSkippedOutcome(context)) {
       return prior;
     }
     if (signal?.aborted && !context.executionStarted) {

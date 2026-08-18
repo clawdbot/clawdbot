@@ -9,7 +9,6 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
@@ -24,7 +23,6 @@ type MemoryToolOptions = {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
 };
 
 export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
@@ -44,7 +42,7 @@ export const MemoryGetSchema = Type.Object({
 });
 
 function resolveMemoryToolContext(options: MemoryToolOptions) {
-  const cfg = options.getConfig?.() ?? options.config;
+  const cfg = options.getConfig ? options.getConfig() : options.config;
   if (!cfg) {
     return null;
   }
@@ -64,7 +62,6 @@ export async function getMemoryManagerContextWithPurpose(params: {
   agentId: string;
   purpose?: "default" | "status" | "cli";
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
@@ -81,13 +78,13 @@ export async function getMemoryManagerContextWithPurpose(params: {
     agentId: params.agentId,
     purpose: params.purpose,
     ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
-    ...(params.withLease ? { withLease: params.withLease } : {}),
   });
   return manager
     ? {
         manager,
         debug: {
-          ...debug,
+          backend: debug?.backend ?? "builtin",
+          purpose: debug?.purpose ?? params.purpose ?? "default",
           managerMs: debug?.managerMs ?? Math.max(0, Date.now() - startedAt),
         },
       }
@@ -112,7 +109,14 @@ export function createMemoryTool(params: {
     description: params.description,
     parameters: params.parameters,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
-      const latestCtx = resolveMemoryToolContext(params.options) ?? ctx;
+      const latestCtx = params.options.getConfig ? resolveMemoryToolContext(params.options) : ctx;
+      // A live getter makes missing or disabled current config a revocation.
+      // The captured context is valid only for fixed-snapshot callers.
+      if (!latestCtx) {
+        throw new Error(
+          "Memory is disabled for this agent. Enable memory search for this agent, then retry.",
+        );
+      }
       return await params.execute(latestCtx)(toolCallId, toolParams, signal, onUpdate);
     },
   };

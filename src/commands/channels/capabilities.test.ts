@@ -21,7 +21,7 @@ vi.mock("./shared.js", async () => {
   const actual = await vi.importActual<typeof import("./shared.js")>("./shared.js");
   return {
     ...actual,
-    requireValidConfig: vi.fn(async () => ({ channels: {} })),
+    requireValidChannelConfig: vi.fn(async () => ({ channels: {} })),
     formatChannelAccountLabel: vi.fn(
       ({ channel, accountId }: { channel: string; accountId: string }) => `${channel}:${accountId}`,
     ),

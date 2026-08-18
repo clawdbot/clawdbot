@@ -7,7 +7,10 @@ import {
   createSubsystemLogger,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { normalizeExtraMemoryPaths } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  matchesExtraMemoryPathEntry,
+  normalizeExtraMemoryPathEntries,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { MemoryManagerSyncBase } from "./manager-sync-base.js";
@@ -99,6 +102,11 @@ function shouldIgnoreMemoryWatchPath(
   return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
 }
 
+function isWithinMemoryWatchRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
   void sync().catch((err: unknown) => {
     log.warn(`memory sync failed (${reason}): ${String(err)}`);
@@ -123,30 +131,48 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       path.join(this.workspaceDir, "MEMORY.md"),
       path.join(this.workspaceDir, "USER.md"),
     ]);
-    const dirWatchPaths = new Set<string>([path.join(this.workspaceDir, "memory")]);
-    const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
+    const memoryDir = path.join(this.workspaceDir, "memory");
+    const dirWatchPaths = new Set<string>([memoryDir]);
+    const additionalPaths = normalizeExtraMemoryPathEntries(
+      this.workspaceDir,
+      this.settings.extraPaths,
+    );
     for (const entry of additionalPaths) {
       try {
-        const stat = fsSync.lstatSync(entry);
+        const stat = fsSync.lstatSync(entry.path);
         if (stat.isSymbolicLink()) {
           continue;
         }
         if (stat.isDirectory()) {
-          dirWatchPaths.add(entry);
+          dirWatchPaths.add(entry.path);
           continue;
         }
         if (
           stat.isFile() &&
-          (normalizeLowercaseStringOrEmpty(entry).endsWith(".md") ||
-            classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
+          (normalizeLowercaseStringOrEmpty(entry.path).endsWith(".md") ||
+            classifyMemoryMultimodalPath(entry.path, this.settings.multimodal) !== null)
         ) {
-          fileWatchPaths.add(entry);
+          fileWatchPaths.add(entry.path);
         }
       } catch {
         // Skip missing/unreadable additional paths.
       }
     }
     const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
+      if (watchPath && stats && !stats.isDirectory?.()) {
+        const normalizedWatchPath = path.resolve(watchPath);
+        const matchingEntries = isWithinMemoryWatchRoot(memoryDir, normalizedWatchPath)
+          ? []
+          : additionalPaths.filter((entry) =>
+              isWithinMemoryWatchRoot(entry.path, normalizedWatchPath),
+            );
+        if (
+          matchingEntries.length > 0 &&
+          !matchingEntries.some((entry) => matchesExtraMemoryPathEntry(entry, normalizedWatchPath))
+        ) {
+          return;
+        }
+      }
       recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
       this.dirty = true;
       this.scheduleWatchSync();

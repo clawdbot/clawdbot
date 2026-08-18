@@ -2,7 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
-  classifyConfigPathMigrationOwnership,
+  classifyOtelGrpcMigrationOwnership,
   isSingleTopLevelIncludeMigration,
 } from "./include-migration-ownership.js";
 
@@ -17,42 +17,40 @@ describe("include migration ownership", () => {
   const configDir = path.resolve("/tmp/openclaw-config");
   const configPath = path.join(configDir, "openclaw.json");
   const diagnosticsPath = path.join(configDir, "diagnostics.json5");
+  const classifyOtelOwnership = (
+    includeProvenance: NonNullable<
+      Parameters<typeof classifyOtelGrpcMigrationOwnership>[0]["snapshot"]["includeProvenance"]
+    >,
+  ) =>
+    classifyOtelGrpcMigrationOwnership({
+      snapshot: { path: configPath, includeProvenance },
+      authoredConfig: { diagnostics: { otel: { protocol: "grpc" } } },
+      resolvedConfig: { diagnostics: { otel: { protocol: "grpc" } } },
+    });
 
   it("classifies direct config even when an unrelated include exists", () => {
     expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: {
-          path: configPath,
-          includeProvenance: [
-            {
-              path: ["agents"],
-              kind: "single",
-              hasSiblingOverrides: false,
-              targetPath: path.join(configDir, "agents.json5"),
-            },
-          ],
+      classifyOtelOwnership([
+        {
+          path: ["agents"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          targetPath: path.join(configDir, "agents.json5"),
         },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
+      ]),
     ).toEqual({ kind: "direct" });
   });
 
   it("allows one internal top-level include that solely owns diagnostics", () => {
     expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: {
-          path: configPath,
-          includeProvenance: [
-            {
-              path: ["diagnostics"],
-              kind: "single",
-              hasSiblingOverrides: false,
-              targetPath: diagnosticsPath,
-            },
-          ],
+      classifyOtelOwnership([
+        {
+          path: ["diagnostics"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          targetPath: diagnosticsPath,
         },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
+      ]),
     ).toEqual({ kind: "single-top-level-include", targetPath: diagnosticsPath });
   });
 
@@ -124,12 +122,7 @@ describe("include migration ownership", () => {
       targetPaths: [path.resolve(configDir, "..", "external-diagnostics.json5")],
     },
   ])("requires manual repair for $name ownership", ({ includeProvenance, targetPaths }) => {
-    expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: { path: configPath, includeProvenance },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
-    ).toEqual({ kind: "manual", targetPaths });
+    expect(classifyOtelOwnership(includeProvenance)).toEqual({ kind: "manual", targetPaths });
   });
 
   it("allows one isolated direct top-level string include", () => {

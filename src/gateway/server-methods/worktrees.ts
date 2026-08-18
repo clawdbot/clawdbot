@@ -1,5 +1,3 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import {
   ErrorCodes,
   errorShape,
@@ -10,7 +8,6 @@ import {
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { createManagedWorktreeOwnerProtection } from "../../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -18,8 +15,10 @@ import {
   WorktreeSnapshotError,
 } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 type WorktreeService = Pick<
   ManagedWorktreeService,
@@ -28,6 +27,35 @@ type WorktreeService = Pick<
 
 function invalidParams(respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"]): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid worktrees parameters"));
+}
+
+async function resolveAuthorizedRepoRoot(
+  method: string,
+  repoRoot: string,
+  opts: Parameters<GatewayRequestHandlers[string]>[0],
+): Promise<string | undefined> {
+  const scopes = Array.isArray(opts.client?.connect.scopes) ? opts.client.connect.scopes : [];
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return repoRoot;
+  }
+  const containment = await resolveWorkspacePathContainment(
+    repoRoot,
+    opts.context.getRuntimeConfig(),
+  );
+  // A stored project row authorizes its canonical repo root for write-scoped clients.
+  const authorizedRoot = containment?.path ?? (await resolveRecordedProjectRoot(repoRoot));
+  if (authorizedRoot) {
+    return authorizedRoot;
+  }
+  opts.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `${method} outside configured agent workspaces requires gateway scope: ${ADMIN_SCOPE}`,
+    ),
+  );
+  return undefined;
 }
 
 export function createWorktreesHandlers(service: WorktreeService): GatewayRequestHandlers {
@@ -39,18 +67,26 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       }
       respond(true, { worktrees: await service.list() }, undefined);
     },
-    "worktrees.create": async ({ params, respond }) => {
+    "worktrees.create": async (opts) => {
+      const { params, respond } = opts;
       if (!validateWorktreesCreateParams(params)) {
         invalidParams(respond);
         return;
       }
+      const repoRoot = await resolveAuthorizedRepoRoot("worktrees.create", params.repoRoot, opts);
+      if (!repoRoot) {
+        return;
+      }
+      const scopes = Array.isArray(opts.client?.connect.scopes) ? opts.client.connect.scopes : [];
       respond(
         true,
         await service.create({
-          repoRoot: params.repoRoot,
+          repoRoot,
           name: params.name,
           baseRef: params.baseRef,
           ownerKind: "manual",
+          // Repository hooks and .openclaw/worktree-setup.sh execute repo code.
+          runSetupScript: scopes.includes(ADMIN_SCOPE),
         }),
         undefined,
       );
@@ -92,43 +128,21 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       }
       respond(true, await service.restore({ id: params.id }), undefined);
     },
-    "worktrees.branches": async ({ params, respond, context, client }) => {
+    "worktrees.branches": async (opts) => {
+      const { params, respond } = opts;
       if (!validateWorktreesBranchesParams(params)) {
         invalidParams(respond);
         return;
       }
-      // Write scope may only enumerate configured agent workspaces; arbitrary
-      // host paths stay behind the same admin bar as sessions.create cwd.
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      if (!scopes.includes(ADMIN_SCOPE)) {
-        const cfg = context.getRuntimeConfig();
-        const requested = await fs.realpath(params.repoRoot).catch(() => null);
-        const allowed =
-          requested !== null &&
-          listAgentIds(cfg).some((agentId) => {
-            try {
-              return fsSync.realpathSync(resolveAgentWorkspaceDir(cfg, agentId)) === requested;
-            } catch {
-              return false;
-            }
-          });
-        if (!allowed) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `worktrees.branches outside configured agent workspaces requires gateway scope: ${ADMIN_SCOPE}`,
-            ),
-          );
-          return;
-        }
+      const repoRoot = await resolveAuthorizedRepoRoot("worktrees.branches", params.repoRoot, opts);
+      if (!repoRoot) {
+        return;
       }
       const result = params.includeRepositoryStatus
-        ? await service.listRepositoryBranches(params.repoRoot, {
+        ? await service.listRepositoryBranches(repoRoot, {
             includeRepositoryStatus: true,
           })
-        : await service.listRepositoryBranches(params.repoRoot);
+        : await service.listRepositoryBranches(repoRoot);
       respond(true, result, undefined);
     },
     "worktrees.gc": async ({ params, respond, context }) => {

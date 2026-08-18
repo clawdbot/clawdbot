@@ -1,6 +1,7 @@
 import type { SessionEvent } from "@github/copilot-sdk";
 // Copilot tests cover event bridge plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 
@@ -40,24 +41,6 @@ type FakeSession = SessionLike & {
   emit: (eventType: string, event: SessionEvent) => void;
   listenerCount: (eventType: string) => number;
 };
-
-function createDeferred<T>() {
-  let rejectPromise: ((reason?: unknown) => void) | undefined;
-  let resolvePromise: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return {
-    promise,
-    reject(reason?: unknown) {
-      rejectPromise?.(reason);
-    },
-    resolve(value: T) {
-      resolvePromise?.(value);
-    },
-  };
-}
 
 function flushAsync() {
   const tick = () => Promise.resolve();
@@ -195,7 +178,9 @@ describe("attachEventBridge", () => {
 
     expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
     expect(bridge.snapshot().startedCount).toBe(0);
-    expect(bridge.snapshot().toolMetas).toEqual([{ meta: "child write", toolName: "write" }]);
+    expect(bridge.snapshot().toolMetas).toEqual([
+      { meta: "child write", toolName: "write", isError: false },
+    ]);
     expect(
       bridge.recordSendResult({
         ...makeAssistantMessageEvent("child final"),
@@ -797,7 +782,7 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().toolMetas).toEqual([
-      { meta: "details", toolName: "bash" },
+      { meta: "details", toolName: "bash", isError: false },
       { meta: "failed", toolName: "read", isError: true },
     ]);
   });

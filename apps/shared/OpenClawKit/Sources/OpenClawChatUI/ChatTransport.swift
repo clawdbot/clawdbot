@@ -9,10 +9,43 @@ public enum OpenClawChatTransportEvent: Sendable {
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
+    case progressCardChanged(ProgressCardChangedEvent)
+    case task(OpenClawChatTaskEvent)
     case questionRequested(QuestionRecord)
     case questionResolved(OpenClawQuestionResolvedEvent)
     case routeChanged
     case seqGap
+}
+
+public enum OpenClawChatTaskEvent: Sendable, Decodable {
+    case upserted(TaskSummary)
+    case deleted(taskID: String)
+    case restored
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let action = try container.decode(Action.self, forKey: .action)
+        switch action {
+        case .upserted:
+            self = try .upserted(container.decode(TaskSummary.self, forKey: .task))
+        case .deleted:
+            self = try .deleted(taskID: container.decode(String.self, forKey: .taskID))
+        case .restored:
+            self = .restored
+        }
+    }
+
+    private enum Action: String, Decodable {
+        case upserted
+        case deleted
+        case restored
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case task
+        case taskID = "taskId"
+    }
 }
 
 public struct OpenClawQuestionResolvedEvent: Codable, Sendable {
@@ -320,6 +353,7 @@ public struct OpenClawChatSessionSettingsRouteLease: Sendable {
 public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public typealias PatchSession = @Sendable (
         _ key: String,
+        _ expectedSessionID: String?,
         _ label: String??,
         _ category: String??,
         _ pinned: Bool?,
@@ -340,13 +374,21 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
 
     public func patchSession(
         key: String,
+        expectedSessionID: String? = nil,
         label: String??,
         category: String??,
         pinned: Bool?,
         archived: Bool?,
         unread: Bool?) async throws
     {
-        try await self.patchSessionImpl(key, label, category, pinned, archived, unread)
+        try await self.patchSessionImpl(
+            key,
+            expectedSessionID,
+            label,
+            category,
+            pinned,
+            archived,
+            unread)
     }
 
     public func deleteSession(key: String) async throws {
@@ -654,6 +696,8 @@ public protocol OpenClawChatTransport: Sendable {
         worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
+    func gatewayAdvertisesProgressCardStore() async -> Bool?
+    func fetchProgressCard(sessionKey: String) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels() async throws -> [OpenClawChatModelChoice]
     func isSwarmEnabled(sessionKey: String) async throws -> Bool
@@ -695,6 +739,7 @@ public protocol OpenClawChatTransport: Sendable {
     func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease?
     func patchSession(
         key: String,
+        expectedSessionID: String?,
         label: String??,
         category: String??,
         pinned: Bool?,
@@ -703,6 +748,7 @@ public protocol OpenClawChatTransport: Sendable {
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease?
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
+    func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String
     func rewindSession(sessionKey: String, entryId: String) async throws -> OpenClawChatRewindResponse
     func forkSessionAtMessage(
         sessionKey: String,
@@ -727,6 +773,7 @@ public protocol OpenClawChatTransport: Sendable {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
     func listQuestions() async throws -> [QuestionRecord]
+    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary]
     func getQuestion(id: String) async throws -> QuestionRecord
     func resolveQuestion(id: String, answers: [String: [String]]) async throws
     func cancelQuestion(id: String) async throws
@@ -748,6 +795,14 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func gatewayAdvertisesProgressCardStore() async -> Bool? {
+        nil
+    }
+
+    public func fetchProgressCard(sessionKey _: String) async throws -> ProgressCard? {
+        nil
+    }
+
     public func loadMediaArtifact(
         sessionKey _: String,
         artifactId _: String,
@@ -769,6 +824,10 @@ extension OpenClawChatTransport {
     }
 
     public func listQuestions() async throws -> [QuestionRecord] {
+        []
+    }
+
+    public func listTasks(sessionKey _: String, agentID _: String?) async throws -> [TaskSummary] {
         []
     }
 
@@ -842,9 +901,10 @@ extension OpenClawChatTransport {
     public func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, label, category, pinned, archived, unread in
+            patchSession: { key, expectedSessionID, label, category, pinned, archived, unread in
                 try await transport.patchSession(
                     key: key,
+                    expectedSessionID: expectedSessionID,
                     label: label,
                     category: category,
                     pinned: pinned,
@@ -1023,6 +1083,7 @@ extension OpenClawChatTransport {
 
     public func patchSession(
         key _: String,
+        expectedSessionID _: String?,
         label _: String?? = nil,
         category _: String?? = nil,
         pinned _: Bool? = nil,
@@ -1047,6 +1108,10 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.create fork not supported by this transport"])
+    }
+
+    public func forkSession(parentKey: String, fromLastCompleted _: Bool) async throws -> String {
+        try await self.forkSession(parentKey: parentKey)
     }
 
     public func rewindSession(

@@ -340,6 +340,7 @@ describe("Control UI plugin and catalog icon routes", () => {
       const response = await request(pathname, { method: "HEAD" });
 
       expect(response.status).toBe(404);
+      expect(response.headers.get("content-length")).toBe("9");
       expect((await response.arrayBuffer()).byteLength).toBe(0);
       expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
     },

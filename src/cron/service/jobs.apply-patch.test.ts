@@ -1,4 +1,5 @@
 // Cron job patch tests cover applying partial updates to scheduled jobs.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
@@ -125,6 +126,19 @@ describe("schedule activation ownership", () => {
 
     expect(job.state.scheduleActivatedAtMs).toBe(456);
   });
+
+  it.each(["nextRunAtMs", "startupCatchupAtMs", "pacedNextRunAtMs"] as const)(
+    "rejects out-of-Date-range caller state for %s",
+    (field) => {
+      const job = makeJob({ enabled: false });
+      const patch = {
+        state: { [field]: MAX_DATE_TIMESTAMP_MS + 1 },
+      } as CronJobPatch;
+
+      expect(() => applyJobPatch(job, patch)).toThrow(`cron state.${field}`);
+      expect(job.state[field]).toBeUndefined();
+    },
+  );
 });
 
 describe("applyJobPatch delivery merge", () => {

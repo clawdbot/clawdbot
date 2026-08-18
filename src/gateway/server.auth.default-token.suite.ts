@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   GATEWAY_SERVER_CAPS,
+  type HelloOk,
   MIN_NODE_PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -11,7 +12,7 @@ import {
   ConnectErrorDetailCodes,
   createSignedDevice,
   expectHelloOkServerVersion,
-  getFreePort,
+  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -24,7 +25,7 @@ import {
   resolvePreauthHandshakeTimeoutMs,
   rpcReq,
   sendRawConnectReq,
-  startGatewayServer,
+  startTestGatewayServer,
   TEST_OPERATOR_CLIENT,
   waitForWsClose,
   withGatewayServer,
@@ -33,12 +34,12 @@ import {
 
 export function registerDefaultAuthTokenSuite(): void {
   describe("default auth (token)", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let port: number;
 
     beforeAll(async () => {
-      port = await getFreePort();
-      server = await startGatewayServer(port);
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port);
     });
 
     afterAll(async () => {
@@ -86,24 +87,8 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(health.ok).toBe(true);
     }
 
-    function readHelloOkAuth(payload: unknown):
-      | {
-          role?: unknown;
-          scopes?: unknown;
-          deviceToken?: unknown;
-        }
-      | undefined {
-      return (
-        payload as
-          | {
-              auth?: {
-                role?: unknown;
-                scopes?: unknown;
-                deviceToken?: unknown;
-              };
-            }
-          | undefined
-      )?.auth;
+    function readHelloOkAuth(payload: unknown): HelloOk["auth"] | undefined {
+      return (payload as { auth?: HelloOk["auth"] } | undefined)?.auth;
     }
 
     test("closes silent handshakes after timeout", async () => {
@@ -175,7 +160,22 @@ export function registerDefaultAuthTokenSuite(): void {
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
       );
       expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
+      );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
+      );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+      );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
+      );
+      expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
+      );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
       );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
@@ -216,7 +216,6 @@ export function registerDefaultAuthTokenSuite(): void {
         {
           env: {
             OPENCLAW_VERSION: " ",
-            OPENCLAW_SERVICE_VERSION: "2.4.6-service",
             npm_package_version: "1.0.0-package",
           },
           expectedVersion: VERSION,
@@ -224,7 +223,6 @@ export function registerDefaultAuthTokenSuite(): void {
         {
           env: {
             OPENCLAW_VERSION: "9.9.9-cli",
-            OPENCLAW_SERVICE_VERSION: "2.4.6-service",
             npm_package_version: "1.0.0-package",
           },
           expectedVersion: "9.9.9-cli",
@@ -232,7 +230,6 @@ export function registerDefaultAuthTokenSuite(): void {
         {
           env: {
             OPENCLAW_VERSION: " ",
-            OPENCLAW_SERVICE_VERSION: "\t",
             npm_package_version: "1.0.0-package",
           },
           expectedVersion: VERSION,
@@ -326,7 +323,7 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
-    test("hello-ok reports persisted token scopes when reusing an existing device token", async () => {
+    test("hello-ok separates effective scopes from a reused device token grant", async () => {
       const { randomUUID } = await import("node:crypto");
       const os = await import("node:os");
       const path = await import("node:path");
@@ -337,7 +334,7 @@ export function registerDefaultAuthTokenSuite(): void {
       );
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
-      let pairedDeviceScopes: unknown;
+      let recoveryScope: string | undefined;
       try {
         const initial = await connectReq(wsInitial, {
           token,
@@ -347,10 +344,20 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(initial.ok).toBe(true);
         const auth = readHelloOkAuth(initial.payload);
         expect(auth?.role).toBe("operator");
-        expect(Array.isArray(auth?.scopes)).toBe(true);
+        expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
+        expect(auth?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
+        expect(auth?.recoveryMigrationAllowed).toBe(true);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
+          "deviceToken",
+          "issuedAtMs",
+          "recoveryMigrationAllowed",
+          "recoveryScope",
+          "role",
+          "scopes",
+        ]);
         pairedDeviceToken = auth?.deviceToken as string | undefined;
-        pairedDeviceScopes = auth?.scopes;
+        recoveryScope = auth?.recoveryScope;
       } finally {
         wsInitial.close();
       }
@@ -366,8 +373,20 @@ export function registerDefaultAuthTokenSuite(): void {
         const auth = readHelloOkAuth(reconnect.payload);
         expect(auth?.role).toBe("operator");
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
-        expect(auth?.scopes).toEqual(pairedDeviceScopes);
-        expect(auth?.scopes).not.toEqual(["operator.read"]);
+        expect(auth?.recoveryScope).toBe(recoveryScope);
+        expect(auth?.recoveryMigrationAllowed).toBe(true);
+        expect(auth?.scopes).toEqual(["operator.read"]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
+          "deviceToken",
+          "issuedAtMs",
+          "recoveryMigrationAllowed",
+          "recoveryScope",
+          "role",
+          "scopes",
+        ]);
+        const admin = await rpcReq(wsReconnect, "config.schema");
+        expect(admin.ok).toBe(false);
+        expect(admin.error?.message).toBe("missing scope: operator.admin");
       } finally {
         wsReconnect.close();
       }
@@ -502,7 +521,7 @@ export function registerDefaultAuthTokenSuite(): void {
       ws.close();
     });
 
-    test("allows authenticated previous-protocol nodes to register for maintenance", async () => {
+    test("retains authenticated previous-protocol node-host maintenance commands", async () => {
       const nodeWs = await openWs(port);
       const operatorWs = await openWs(port);
       try {
@@ -511,23 +530,35 @@ export function registerDefaultAuthTokenSuite(): void {
           minProtocol: MIN_NODE_PROTOCOL_VERSION,
           maxProtocol: MIN_NODE_PROTOCOL_VERSION,
           role: "node",
-          client: { ...NODE_CLIENT, version: legacyVersion },
+          client: { ...NODE_CLIENT, version: legacyVersion, platform: "linux" },
+          caps: ["system"],
+          commands: ["system.which"],
         });
         expect(nodeRes.ok).toBe(true);
 
         const operatorRes = await connectReq(operatorWs);
         expect(operatorRes.ok).toBe(true);
-        const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean; version?: string }> }>(
-          operatorWs,
-          "node.list",
-          {},
+        type LegacyNodeStatus = {
+          commands?: string[];
+          connected?: boolean;
+          deviceFamily?: string;
+          pendingDeclaredCommands?: string[];
+          pendingRequestId?: string;
+          platform?: string;
+          version?: string;
+        };
+        const pendingList = await rpcReq<{
+          nodes?: LegacyNodeStatus[];
+        }>(operatorWs, "node.list", {});
+        const pendingNode = pendingList.payload?.nodes?.find(
+          (node) => node.connected === true && node.version === legacyVersion,
         );
-        expect(listRes.ok).toBe(true);
-        expect(
-          listRes.payload?.nodes?.some(
-            (node) => node.connected === true && node.version === legacyVersion,
-          ),
-        ).toBe(true);
+        expect(pendingNode).toMatchObject({
+          deviceFamily: "Linux",
+          pendingDeclaredCommands: ["system.which"],
+          platform: "linux",
+        });
+        expect(pendingNode?.pendingRequestId).toBeTypeOf("string");
       } finally {
         nodeWs.close();
         operatorWs.close();

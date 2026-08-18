@@ -17,7 +17,6 @@ describe("createChatRunState", () => {
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
       bufferUpdatedAt: 1,
       deltaSentAt: 2,
-      deltaLastBroadcastLen: 9,
       deltaLastBroadcastText: "projected",
       agentText: { assistant: { lastSentAt: 3 } },
       abortMarker: createChatAbortMarker(4),
@@ -73,27 +72,54 @@ describe("createChatRunState", () => {
       args: { path: "a" },
     });
     event(3, "tool", {
+      phase: "input_delta",
+      name: "edit",
+      toolCallId: "active",
+      diff: { added: 3, removed: 1 },
+    });
+    event(4, "tool", {
       phase: "update",
       name: "read",
       toolCallId: "active",
       partialResult: "halfway",
     });
-    event(4, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
-    event(5, "tool", {
+    event(5, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
+    event(6, "tool", {
       phase: "result",
       name: "exec",
       toolCallId: "done",
       result: "x".repeat(256_000),
     });
-    event(3, "tool", { phase: "result", name: "read", toolCallId: "active" });
+    event(7, "item", {
+      kind: "preamble",
+      itemId: "p-1",
+      progressText: "Inspection complete",
+    });
+    event(8, "item", {
+      kind: "preamble",
+      itemId: "p-2",
+      progressText: "Running autoreview",
+    });
+    event(4, "tool", { phase: "result", name: "read", toolCallId: "active" });
 
     expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
-      { seq: 1, stream: "item", data: { itemId: "p-1", progressText: "Inspecting" } },
       { seq: 2, stream: "tool", data: { phase: "start", toolCallId: "active" } },
-      { seq: 3, stream: "tool", data: { phase: "update", toolCallId: "active" } },
+      {
+        seq: 3,
+        stream: "tool",
+        data: { phase: "input_delta", toolCallId: "active", diff: { added: 3, removed: 1 } },
+      },
+      { seq: 4, stream: "tool", data: { phase: "update", toolCallId: "active" } },
+      {
+        seq: 7,
+        stream: "item",
+        ts: 1_001,
+        data: { itemId: "p-1", progressText: "Inspection complete" },
+      },
+      { seq: 8, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
     ]);
 
-    for (let seq = 6; seq <= 70; seq += 1) {
+    for (let seq = 9; seq <= 71; seq += 1) {
       event(seq, "tool", {
         phase: "start",
         name: "read",
@@ -107,7 +133,7 @@ describe("createChatRunState", () => {
     expect(snapshot?.events.at(-1)?.data).toEqual({
       phase: "start",
       name: "read",
-      toolCallId: "tool-70",
+      toolCallId: "tool-71",
     });
   });
 });
@@ -142,15 +168,10 @@ describe("createSessionMessageSubscriberRegistry", () => {
     subscribers.subscribe("conn-other", "agent:main:child", { includeApprovals: true });
 
     subscribers.unsubscribeAll("conn-reviewer");
-    expect([...subscribers.getForConnection("conn-reviewer")]).toEqual([]);
     expect([...subscribers.get("agent:main:main")]).toEqual([]);
     expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
     expect([...subscribers.get("agent:main:child")]).toEqual(["conn-other"]);
     expect([...subscribers.getApprovals("agent:main:child")]).toEqual(["conn-other"]);
-
-    subscribers.clear();
-    expect([...subscribers.get("agent:main:child")]).toEqual([]);
-    expect([...subscribers.getApprovals("agent:main:child")]).toEqual([]);
   });
 
   it.each(["first", "second"])(
@@ -169,7 +190,6 @@ describe("createSessionMessageSubscriberRegistry", () => {
       }
 
       expect([...subscribers.get("agent:main:main")]).toEqual([]);
-      expect([...subscribers.getForConnection("conn")]).toEqual([]);
     },
   );
 
@@ -189,10 +209,8 @@ describe("createSessionMessageSubscriberRegistry", () => {
         first();
       }
 
-      expect([...subscribers.getForConnection("conn")]).toEqual([
-        "agent:main:other",
-        "agent:main:main",
-      ]);
+      expect([...subscribers.get("agent:main:other")]).toEqual(["conn"]);
+      expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
     },
   );
 
@@ -204,10 +222,8 @@ describe("createSessionMessageSubscriberRegistry", () => {
 
     rollback();
 
-    expect([...subscribers.getForConnection("conn")]).toEqual([
-      "agent:main:main",
-      "agent:main:child",
-    ]);
+    expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
+    expect([...subscribers.get("agent:main:child")]).toEqual(["conn"]);
   });
 
   it("does not restore a replay invalidated by unsubscribe", () => {
@@ -219,7 +235,6 @@ describe("createSessionMessageSubscriberRegistry", () => {
     subscribers.unsubscribe("conn", "agent:main:main");
     subscription.commit();
 
-    expect([...subscribers.getForConnection("conn")]).toEqual([]);
     expect([...subscribers.get("agent:main:main")]).toEqual([]);
   });
 });

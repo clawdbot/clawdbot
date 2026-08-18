@@ -164,6 +164,15 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
+            "agents.list": {
+              agents: [
+                { id: "main", name: "Main" },
+                { id: "writer", name: "Writer" },
+              ],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
             "sessions.usage": {
               updatedAt: Date.now(),
               startDate: dayOffset(-89),

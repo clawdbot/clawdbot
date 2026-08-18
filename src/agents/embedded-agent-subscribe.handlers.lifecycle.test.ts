@@ -66,6 +66,7 @@ function createContext(
     },
     state: {
       lastAssistant: lastAssistant as EmbeddedAgentSubscribeContext["state"]["lastAssistant"],
+      liveEditDiffStateById: new Map(),
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolMediaTrustByUrl: new Map(),
@@ -727,7 +728,10 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("marks token-limited terminal text as abandoned before runner finalization", async () => {
+  it("keeps token-limited terminal text replayable before runner finalization", async () => {
+    // The partial answer is delivered, so the turn must not be abandoned or
+    // marked replay-invalid — that is what lets the user ask to continue it
+    // instead of restarting the work.
     const onAgentEvent = vi.fn();
     const ctx = createContext(
       {
@@ -747,8 +751,92 @@ describe("handleAgentEnd", () => {
       data: {
         phase: "end",
         stopReason: "length",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("keeps token-limited text replayable when it was never streamed", async () => {
+    // Non-streaming routes can end the turn with empty streamed assistant texts
+    // while the completed assistant message still carries the visible answer.
+    // Payload building falls back to that message, so the reply is delivered and
+    // classification must not call the turn abandoned.
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [{ type: "text", text: "Partial answer" }],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("marks a token-limited turn with nothing to deliver as abandoned", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
         livenessState: "abandoned",
         replayInvalid: true,
+      },
+    });
+  });
+
+  it("keeps a recovery-only token-limited terminal working", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeTerminalDelivery = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [],
+      },
+      { onAgentEvent, onBeforeTerminalDelivery },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+    ctx.state.lastToolRecovery = { toolName: "write" };
+
+    await handleAgentEnd(ctx);
+
+    expect(onBeforeTerminalDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ incompleteTerminalAssistant: false }),
+    );
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
       },
     });
   });

@@ -691,6 +691,31 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       "chat.history",
     ]);
   });
+
+  it("returns an authoritative visible terminal reply without reading history", async () => {
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "ok",
+          terminalReply: { disposition: "visible", text: "authoritative reply" },
+        };
+      }
+      throw new Error("history unavailable");
+    });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-visible-terminal-reply",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      terminalReply: { disposition: "visible", text: "authoritative reply" },
+      replyText: "authoritative reply",
+    });
+    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
+  });
 });
 
 describe("waitForAgentRunsToDrain", () => {
@@ -838,6 +863,7 @@ describe("isRecoverableAgentWaitError", () => {
     "EHOSTUNREACH",
     "ENETUNREACH",
     "EAI_AGAIN",
+    "UND_ERR_SOCKET",
   ])("recovers from %s connection failures", (code) => {
     expect(isRecoverableAgentWaitError(`connect ${code} 127.0.0.1:443`)).toBe(true);
   });
@@ -846,6 +872,7 @@ describe("isRecoverableAgentWaitError", () => {
     undefined,
     "",
     "gateway timeout",
+    "gateway request timeout for agent.wait",
     "ENOENT: no such file",
     "getaddrinfo ENOTFOUND gateway.example.com",
   ])("does not recover from %s", (error) => {

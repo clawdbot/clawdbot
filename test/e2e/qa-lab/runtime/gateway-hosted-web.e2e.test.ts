@@ -13,8 +13,9 @@ import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import {
   registerPluginHttpRoute,
   withPluginHttpRouteRegistry,
@@ -58,7 +59,12 @@ function waitForWebSocketMessage(ws: WebSocket, expected: string): Promise<void>
       5_000,
     );
     ws.on("message", (data) => {
-      if (data.toString() !== expected) {
+      const message = Array.isArray(data)
+        ? Buffer.concat(data).toString("utf8")
+        : Buffer.isBuffer(data)
+          ? data.toString("utf8")
+          : Buffer.from(data).toString("utf8");
+      if (message !== expected) {
         return;
       }
       clearTimeout(timer);
@@ -139,6 +145,7 @@ describe("Gateway hosted web surfaces", () => {
 
       await withEnvAsync(
         {
+          ...snapshotGatewayStartupEnv(),
           HOME: root,
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -153,13 +160,16 @@ describe("Gateway hosted web surfaces", () => {
         async () => {
           clearConfigCache();
           clearRuntimeConfigSnapshot();
-          const port = await getFreeGatewayPort();
+          const port = await getGatewayE2ePortBlock();
           const server = await startGatewayServer(port, {
             auth: { mode: "token", token: TOKEN },
             bind: "loopback",
             controlUiEnabled: true,
             sidecarStartup: "defer",
           });
+          // Deferred startup replaces the bootstrap registry; register routes only after the
+          // server publishes the settled runtime so requests do not target a retired registry.
+          await server.startupSettled;
           const registry = getActivePluginRegistry();
           if (!registry) {
             throw new Error("gateway did not publish an active plugin registry");
@@ -171,7 +181,7 @@ describe("Gateway hosted web surfaces", () => {
 
           const registerEntry = (
             pluginId: string,
-            entry: typeof adminHttpRpcPlugin | typeof canvasPlugin,
+            entry: typeof adminHttpRpcPlugin,
             pluginConfig: Record<string, unknown> = {},
           ) => {
             entry.register(

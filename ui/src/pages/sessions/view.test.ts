@@ -227,8 +227,8 @@ describe("sessions view", () => {
       ...container.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]'),
     ];
     expect(checkboxes.map((checkbox) => checkbox.getAttribute("aria-label"))).toEqual([
-      "Select thread: agent:main:first",
-      "Select thread: agent:main:second",
+      "Select session: agent:main:first",
+      "Select session: agent:main:second",
     ]);
 
     checkboxes[0]?.dispatchEvent(new Event("change", { bubbles: true }));
@@ -423,18 +423,20 @@ describe("sessions view", () => {
     expect(container.querySelectorAll(".session-data-row--archived")).toHaveLength(1);
   });
 
-  it("groups sessions by channel with section headers and no pagination", async () => {
+  it("paginates grouped sessions while preserving full group counts", async () => {
     const container = document.createElement("div");
+    const onPageChange = vi.fn();
+    const result = buildMultiResult([
+      { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 3 },
+      { key: "agent:main:telegram:direct:2", kind: "direct", updatedAt: 2 },
+      { key: "agent:main:discord:channel:3", kind: "group", updatedAt: 1 },
+    ]);
     render(
       renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 3 },
-            { key: "agent:main:telegram:direct:2", kind: "direct", updatedAt: 2 },
-            { key: "agent:main:discord:channel:3", kind: "group", updatedAt: 1 },
-          ]),
-        ),
+        ...buildProps(result),
         groupBy: "channel",
+        pageSize: 2,
+        onPageChange,
       }),
       container,
     );
@@ -443,12 +445,41 @@ describe("sessions view", () => {
     const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
       el.textContent?.trim(),
     );
-    expect(headers).toEqual(["discord", "telegram"]);
+    expect(headers).toEqual(["discord"]);
     const counts = Array.from(container.querySelectorAll(".session-group-row__count")).map((el) =>
       el.textContent?.trim(),
     );
-    expect(counts).toEqual(["2 threads", "1 thread"]);
-    expect(container.querySelector(".data-table-pagination")).toBeNull();
+    expect(counts).toEqual(["2 sessions"]);
+    expect(container.querySelectorAll(".session-data-row")).toHaveLength(2);
+    expect(container.querySelector(".data-table-pagination")?.textContent).toContain(
+      "1-2 of 3 rows",
+    );
+
+    const next = Array.from(container.querySelectorAll(".data-table-pagination button")).find(
+      (button) => button.textContent?.trim() === "Next",
+    );
+    expect(next).toBeInstanceOf(HTMLButtonElement);
+    next!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPageChange).toHaveBeenCalledWith(1);
+
+    render(
+      renderSessions({
+        ...buildProps(result),
+        groupBy: "channel",
+        page: 1,
+        pageSize: 2,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".session-group-row__label")?.textContent?.trim()).toBe(
+      "telegram",
+    );
+    expect(container.querySelector(".session-group-row__count")?.textContent?.trim()).toBe(
+      "1 session",
+    );
+    expect(container.querySelectorAll(".session-data-row")).toHaveLength(1);
   });
 
   it("selects and names the current page size on first render", async () => {
@@ -518,7 +549,7 @@ describe("sessions view", () => {
 
     // Rows render in group order: Research (agent:main:main) first, then Ungrouped (discord).
     const select = container.querySelectorAll<HTMLSelectElement>(
-      'select[aria-label="Move thread to a group"]',
+      'select[aria-label="Move session to a group"]',
     )[1];
     if (!select) {
       throw new Error("Expected group select");
@@ -570,7 +601,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const select = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Move thread to a group"]',
+      'select[aria-label="Move session to a group"]',
     );
     expect(select?.disabled).toBe(true);
     expect(select?.title).toBe(reason);
@@ -592,7 +623,7 @@ describe("sessions view", () => {
     expect(onAssignCategory).not.toHaveBeenCalled();
   });
 
-  it("opens the session menu from the kebab and row context menu", async () => {
+  it("opens the session menu from the kebab and row context-menu shortcuts", async () => {
     const container = document.createElement("div");
     const onOpenSessionMenu = vi.fn();
     const session = {
@@ -610,7 +641,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Open thread menu"]',
+      'button[aria-label="Open session menu"]',
     );
     if (!button) {
       throw new Error("Expected session menu button");
@@ -642,6 +673,21 @@ describe("sessions view", () => {
       null,
     );
     expect(contextMenu.defaultPrevented).toBe(true);
+
+    const keyboardContextMenu = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "F10",
+      shiftKey: true,
+    });
+    row.dispatchEvent(keyboardContextMenu);
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ key: session.key }),
+      { x: expect.any(Number), y: expect.any(Number) },
+      button,
+    );
+    expect(keyboardContextMenu.defaultPrevented).toBe(true);
   });
 
   it("keeps pinned sessions above newer unpinned sessions", async () => {
@@ -684,10 +730,10 @@ describe("sessions view", () => {
 
     expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
     expect(tooltips).toEqual([
-      "Loads threads updated in the last 120 minutes.",
-      "Max threads to load.",
-      "Include global threads.",
-      "Include unknown threads.",
+      "Loads sessions updated in the last 120 minutes.",
+      "Max sessions to load.",
+      "Include global sessions.",
+      "Include unknown sessions.",
     ]);
   });
 
@@ -714,7 +760,7 @@ describe("sessions view", () => {
 
     const toggleGroup = container.querySelector(".session-filter-toggle-group");
     expect(toggleGroup?.getAttribute("role")).toBe("group");
-    expect(toggleGroup?.getAttribute("aria-label")).toBe("Thread source filters");
+    expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
     expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(2);
     expect(
       Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
@@ -953,12 +999,19 @@ describe("sessions view", () => {
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
-  it("renders live and terminal run status badges", async () => {
+  it("renders queued, live, and terminal run status badges", async () => {
     const container = document.createElement("div");
     render(
       renderSessions(
         buildProps(
           buildMultiResult([
+            {
+              key: "agent:main:queued",
+              kind: "direct",
+              updatedAt: 40,
+              hasActiveRun: true,
+              status: "queued",
+            },
             {
               key: "agent:main:live",
               kind: "direct",
@@ -996,12 +1049,14 @@ describe("sessions view", () => {
     expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     const badges = Array.from(container.querySelectorAll(".settings-status"));
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
+      "Queued",
       "Live",
       "Idle",
       "Failed",
       "Done",
     ]);
     expect(badges.map((badge) => [...badge.classList])).toEqual([
+      ["settings-status", "settings-status--warn"],
       ["settings-status", "settings-status--ok"],
       ["settings-status"],
       ["settings-status", "settings-status--danger"],
@@ -1011,7 +1066,7 @@ describe("sessions view", () => {
       badges.map(
         (badge) => (badge.parentElement as (HTMLElement & { content: string }) | null)?.content,
       ),
-    ).toEqual(["Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
+    ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
   });
 
   it("renders session goals in the status cell and search index", async () => {
@@ -1185,7 +1240,7 @@ describe("sessions view", () => {
 
     expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
-    expect(tokenCell?.textContent?.trim()).toBe("123k / 200k");
+    expect(tokenCell?.textContent?.trim()).toBe("123.5k / 200k");
   });
 
   it("renders the checkpoint count on the details disclosure", async () => {
@@ -1303,7 +1358,7 @@ describe("sessions view", () => {
 
     const details = container.querySelector(".session-details-panel");
     expect(details?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim()).toBe(
-      "Thread details",
+      "Session details",
     );
     expect(details?.querySelector(".session-details-panel__title")?.textContent?.trim()).toBe(
       "agent:main:main",
@@ -1546,7 +1601,7 @@ describe("sessions view", () => {
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.getAttribute("role")).toBe("status");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      "No threads match your filters.",
+      "No sessions match your filters.",
     );
     const showAll = emptyState?.querySelector<HTMLButtonElement>("button");
     if (!(showAll instanceof HTMLButtonElement)) {
@@ -1597,7 +1652,7 @@ describe("sessions view", () => {
 
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      testCase.filtered ? "No threads match your filters." : "No archived sessions.",
+      testCase.filtered ? "No sessions match your filters." : "No archived sessions.",
     );
     expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
   });
@@ -1636,7 +1691,7 @@ describe("sessions view", () => {
       tile.querySelector(".sessions-overview__value")?.textContent?.trim(),
     ];
     expect(tiles.map(readTile)).toEqual([
-      ["Threads", "2"],
+      ["Sessions", "2"],
       ["Live", "1"],
       ["Unread", "1"],
       ["Tokens", "1.5k"],

@@ -1,4 +1,5 @@
 // Reset preservation keeps user-selected model/auth overrides while dropping automatic fallbacks.
+import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "./model-override-provenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -51,9 +52,10 @@ export function resolveResetPreservedSelection(params: {
     }
   }
 
-  if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
+  const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(entry);
+  if (authProfileOverrideSource === "user" && entry.authProfileOverride) {
     preserved.authProfileOverride = entry.authProfileOverride;
-    preserved.authProfileOverrideSource = entry.authProfileOverrideSource;
+    preserved.authProfileOverrideSource = authProfileOverrideSource;
     if (entry.authProfileOverrideCompactionCount !== undefined) {
       preserved.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     }

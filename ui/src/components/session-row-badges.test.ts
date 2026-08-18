@@ -18,12 +18,17 @@ afterEach(() => {
   container.remove();
 });
 
-function renderBadges(placementState?: SessionPlacementState, workspaceConflictCount?: number) {
+function renderBadges(
+  placementState?: SessionPlacementState,
+  workspaceConflictCount?: number,
+  diskSpaceStatus?: "ok" | "warning" | "critical",
+) {
   render(
     renderSessionRowBadges({
       hasAutomation: false,
       placementState,
       workspaceConflictCount,
+      diskSpaceStatus,
     }),
     container,
   );
@@ -47,26 +52,34 @@ describe("session row placement badges", () => {
     );
 
     const badge = container.querySelector(".session-row-badge--incognito");
-    expect(badge?.getAttribute("aria-label")).toBe("Incognito thread");
-    expectTooltipText(badge, "Incognito thread");
+    expect(badge?.getAttribute("aria-label")).toBe("Incognito session");
+    expectTooltipText(badge, "Incognito session");
   });
 
-  it("renders the durable outbox count and stays quiet when empty", () => {
+  it("renders outbox attention and stays quiet when empty", () => {
     render(
       renderSessionRowBadges({
         hasAutomation: false,
-        outboxCount: 3,
+        hasApproval: true,
+        outboxAttentionCount: 3,
       }),
       container,
     );
 
-    const badge = container.querySelector<HTMLElement>(".session-row-badge--queued");
-    expect(badge?.getAttribute("aria-label")).toBe("3 messages queued to send");
-    expectTooltipText(badge, "3 messages queued to send");
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--attention");
+    expect(badge?.getAttribute("aria-label")).toBe("3 messages need attention");
+    expectTooltipText(badge, "3 messages need attention");
     expect(badge?.textContent).toContain("3");
-    expect(badge?.querySelector("svg")).not.toBeNull();
+    const attentionIcon = badge?.querySelector("svg");
+    const approvalIcon = container.querySelector(".session-row-badge--approval svg");
+    expect(attentionIcon?.isEqualNode(approvalIcon ?? null)).toBe(true);
 
-    render(renderSessionRowBadges({ hasAutomation: false, outboxCount: 0 }), container);
+    render(renderSessionRowBadges({ hasAutomation: false, outboxAttentionCount: 1 }), container);
+    expect(
+      container.querySelector(".session-row-badge--attention")?.getAttribute("aria-label"),
+    ).toBe("1 message needs attention");
+
+    render(renderSessionRowBadges({ hasAutomation: false, outboxAttentionCount: 0 }), container);
     expect(container.querySelector(".session-row-badges")).toBeNull();
   });
 
@@ -213,6 +226,18 @@ describe("session row placement badges", () => {
       container.querySelector(".session-row-badge--cloud"),
       "Cloud worker: active · 1 workspace conflict",
     );
+  });
+
+  it.each([
+    { status: "warning" as const, label: "Cloud session disk space is low" },
+    { status: "critical" as const, label: "Cloud session disk space is critically low" },
+  ])("uses the cloud badge's $status tone for background pressure", ({ status, label }) => {
+    renderBadges("active", undefined, status);
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
+    expect(badge?.dataset.diskSpaceStatus).toBe(status);
+    expectTooltipText(badge, `Cloud worker: active · ${label}`);
+    expect(container.querySelectorAll(".session-row-badge--cloud")).toHaveLength(1);
   });
 
   it("keeps retained workspace conflicts visible after reclaim", () => {

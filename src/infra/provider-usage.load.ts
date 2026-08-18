@@ -1,18 +1,20 @@
 // Loads provider usage snapshots from built-in and plugin providers.
+import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
   listProviderUsagePluginDescriptors,
   resolveProviderUsageSnapshotWithPlugin,
   type ProviderUsagePluginDescriptor,
 } from "../plugins/provider-runtime.js";
+import { formatErrorMessage } from "./errors.js";
 import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
-  DEFAULT_TIMEOUT_MS,
+  PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
-  resolveProviderUsageDisplayName,
-  withTimeout,
+  providerUsageLabel,
+  raceUsageTimeout,
 } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -30,7 +32,7 @@ async function fetchProviderUsageSnapshotFallback(params: {
   void params.fetchFn;
   return {
     provider: params.auth.provider,
-    displayName: resolveProviderUsageDisplayName(params.auth.provider),
+    displayName: providerUsageLabel(params.auth.provider) ?? params.auth.provider,
     windows: [],
     error: "Unsupported provider",
   };
@@ -41,6 +43,7 @@ type UsageSummaryOptions = {
   timeoutMs?: number;
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
+  authStore?: AuthProfileStore;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
@@ -94,7 +97,7 @@ export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
   const fetchFn = opts.fetch
@@ -107,12 +110,12 @@ export async function loadProviderUsageSummary(
   const descriptors: ProviderUsagePluginDescriptor[] = opts.providers
     ? opts.providers.map((provider) => ({
         provider,
-        displayName: resolveProviderUsageDisplayName(provider),
+        displayName: providerUsageLabel(provider) ?? provider,
       }))
     : opts.auth
       ? opts.auth.map((auth) => ({
           provider: auth.provider,
-          displayName: resolveProviderUsageDisplayName(auth.provider),
+          displayName: providerUsageLabel(auth.provider) ?? auth.provider,
         }))
       : listProviderUsagePluginDescriptors({
           config,
@@ -122,51 +125,68 @@ export async function loadProviderUsageSummary(
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
-  const auths = await resolveProviderAuths({
-    providers: descriptors.map((descriptor) => descriptor.provider),
-    auth: opts.auth,
-    agentDir: opts.agentDir,
-    config,
-    env,
-    skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
+  const providerOrder = new Map(descriptors.map(({ provider }, index) => [provider, index]));
+  const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
+    provider,
+    displayName: displayNames.get(provider) ?? providerUsageLabel(provider) ?? provider,
+    windows: [],
+    error,
   });
-  if (auths.length === 0) {
-    return { updatedAt: now, providers: [] };
-  }
-
-  const tasks = auths.map((auth) => {
-    const failureSnapshot = (error: string): ProviderUsageSnapshot => ({
-      provider: auth.provider,
-      displayName:
-        displayNames.get(auth.provider) ?? resolveProviderUsageDisplayName(auth.provider),
-      windows: [],
-      error,
-    });
-    return withTimeout(
-      fetchProviderUsageSnapshot({
-        auth,
-        config,
-        env,
-        agentDir: opts.agentDir,
-        workspaceDir: opts.workspaceDir,
-        timeoutMs,
-        fetchFn,
-      }),
-      timeoutMs + 1000,
-      {
-        provider: auth.provider,
-        displayName:
-          displayNames.get(auth.provider) ?? resolveProviderUsageDisplayName(auth.provider),
-        windows: [],
-        error: "Timeout",
-      },
+  let authStore = opts.authStore;
+  const getAuthStore = () =>
+    (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
+  const tasks = descriptors.map(({ provider }) => {
+    return raceUsageTimeout(
+      (async () => {
+        let authError: unknown;
+        const auth =
+          opts.auth?.find((candidate) => candidate.provider === provider) ??
+          (
+            await resolveProviderAuths({
+              providers: [provider],
+              agentDir: opts.agentDir,
+              config,
+              env,
+              getStore: getAuthStore,
+              store: opts.authStore,
+              skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
+              onError: (_provider, error) => {
+                authError = error;
+              },
+            })
+          )[0];
+        if (authError) {
+          const message = formatErrorMessage(authError);
+          return failureSnapshot(provider, message.trim() || "Auth failed");
+        }
+        if (!auth) {
+          return undefined;
+        }
+        return await fetchProviderUsageSnapshot({
+          auth,
+          config,
+          env,
+          agentDir: opts.agentDir,
+          workspaceDir: opts.workspaceDir,
+          timeoutMs,
+          fetchFn,
+        });
+      })(),
+      timeoutMs,
+      failureSnapshot(provider, "Timeout"),
     ).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      return failureSnapshot(message.trim() || "Fetch failed");
+      return failureSnapshot(provider, message.trim() || "Fetch failed");
     });
   });
 
-  const snapshots = await Promise.all(tasks);
+  const snapshots = (await Promise.all(tasks))
+    .filter((snapshot): snapshot is ProviderUsageSnapshot => snapshot !== undefined)
+    .toSorted(
+      (left, right) =>
+        (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
+        (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
+    );
   const providers = snapshots.filter((entry) => {
     if (entry.windows.length > 0) {
       return true;

@@ -9,7 +9,7 @@ import type { AssembleResult, ContextEngine, ContextEngineInfo } from "./types.j
  *
  * - ingest: no-op (SessionManager handles message persistence)
  * - assemble: pass-through (existing sanitize/validate/limit pipeline in attempt.ts handles this)
- * - compact: delegates to compactEmbeddedAgentSessionDirect
+ * - compact: delegates to the built-in compaction runtime
  */
 export class LegacyContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {

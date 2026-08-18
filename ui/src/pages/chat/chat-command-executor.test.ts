@@ -1,46 +1,39 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
-import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
+import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createResolvedModelPatch,
   createModelCatalog,
   DEEPSEEK_CHAT_MODEL,
   OPENAI_GPT5_MINI_MODEL,
 } from "../../test-helpers/chat-model.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
 
-function createSessionCapability(client: GatewayBrowserClient): SessionCapability {
-  const request = client.request.bind(client);
-  return {
-    state: {
-      result: null,
-      agentId: null,
-      loading: false,
-      error: null,
-    },
-    list: (options = {}) => request("sessions.list", options),
-    refresh: async () => undefined,
-    create: async () => null,
-    patch: (key: string, patch: SessionPatch, options: SessionPatchOptions = {}) =>
-      request("sessions.patch", { key, agentId: options.agentId, ...patch }),
-    setModelOverride: () => undefined,
-    delete: async () => false,
-    deleteMany: async () => ({ deleted: [], errors: [], preservedWorktrees: [] }),
-    reset: async () => true,
-    compact: (key: string, options: { agentId?: string | null } = {}) =>
-      request("sessions.compact", { key, ...options }),
-    steer: (key: string, message: string, options: { agentId?: string | null } = {}) =>
-      request("sessions.steer", { key, ...options, message }),
-    listFiles: async () => null,
-    getFile: async () => null,
+function createTestSessionCapability(client: GatewayBrowserClient): SessionCapability {
+  const sessions = createSessionCapability({
+    snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
-    dispose: () => undefined,
-  } as unknown as SessionCapability;
+    subscribeEvents: () => () => undefined,
+  });
+  const list: SessionCapability["list"] = async (options = {}) =>
+    (await client.request<SessionsListResult | undefined>("sessions.list", options)) ?? null;
+  const patch: SessionCapability["patch"] = async (key, sessionPatch, options) =>
+    await client.request<SessionsPatchResult>("sessions.patch", {
+      key,
+      ...(options?.agentId ? { agentId: options.agentId } : {}),
+      ...sessionPatch,
+    });
+  return Object.assign(sessions, { list, patch });
 }
 
 function executeSlashCommand(
@@ -58,13 +51,13 @@ function executeSlashCommand(
   const {
     sessionAccessSnapshot = {
       client,
-      hello: null,
+      hello: sessionMutationGatewayHello(),
       phase: "connected",
     },
     ...rest
   } = context;
   return executeSlashCommandImpl(client, sessionKey, commandName, args, {
-    sessions: createSessionCapability(client),
+    sessions: createTestSessionCapability(client),
     ...rest,
     sessionAccessSnapshot,
   });
@@ -73,23 +66,32 @@ function executeSlashCommand(
 function restrictedSnapshot(
   client: GatewayBrowserClient,
   methods: string[],
+  scopes = ["operator.read"],
 ): Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> {
   return {
     client,
     phase: "connected",
     hello: {
-      auth: { role: "operator", scopes: ["operator.read"] },
+      auth: { role: "operator", scopes },
       features: { methods },
     } as ApplicationGatewaySnapshot["hello"],
   };
 }
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
+  const active = overrides?.status === "running" || overrides?.hasActiveRun === true;
   return {
     key,
     spawnedBy: overrides?.spawnedBy,
     kind: "direct",
     updatedAt: null,
+    ...(active
+      ? {
+          hasActiveRun: true,
+          activeRunIds: ["active-run"],
+          activeLeafEntryId: "leaf-active",
+        }
+      : {}),
     ...overrides,
   };
 }
@@ -122,7 +124,7 @@ function expectNoRequestCall(request: ReturnType<typeof vi.fn>, method: string) 
 describe("executeSlashCommand directives", () => {
   it("does not compact a session without operator.admin", async () => {
     const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(request);
 
     const result = await executeSlashCommand(client, "main", "compact", "", {
       sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.compact"]),
@@ -132,21 +134,31 @@ describe("executeSlashCommand directives", () => {
     expectNoRequestCall(request, "sessions.compact");
   });
 
-  it("does not patch session settings without operator.admin", async () => {
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
+  it.each([
+    { name: "allows /model with operator.write", scopes: ["operator.write"], allowed: true },
+    { name: "rejects /model without operator.write", scopes: ["operator.read"], allowed: false },
+  ])("$name", async ({ scopes, allowed }) => {
+    const request = vi.fn(async () => createResolvedModelPatch("gpt-5-mini", "openai"));
+    const client = createTestGatewayClient(request);
 
     const result = await executeSlashCommand(client, "main", "model", "gpt-5-mini", {
-      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.patch"]),
+      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.patch"], scopes),
       chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
     });
 
-    expect(result.failed).toBe(true);
-    expectNoRequestCall(request, "sessions.patch");
+    expect(result.failed === true).toBe(!allowed);
+    if (allowed) {
+      expect(requireRequestCall(request, "sessions.patch").payload).toMatchObject({
+        key: "main",
+        model: "gpt-5-mini",
+      });
+    } else {
+      expectNoRequestCall(request, "sessions.patch");
+    }
   });
 
   it("defers slash-command model cache publication to the captured chat owner", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(vi.fn());
     const patch = vi
       .fn()
       .mockResolvedValue(
@@ -155,7 +167,7 @@ describe("executeSlashCommand directives", () => {
     const setModelOverride = vi.fn();
     const ownsModelOverride = vi.fn(() => true);
     const sessions = {
-      ...createSessionCapability(client),
+      ...createTestSessionCapability(client),
       patch,
       setModelOverride,
     } as SessionCapability;
@@ -164,7 +176,7 @@ describe("executeSlashCommand directives", () => {
       sessions,
       sessionAccessSnapshot: {
         client,
-        hello: null,
+        hello: sessionMutationGatewayHello(),
         phase: "connected",
       },
       agentId: "work",
@@ -186,10 +198,10 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("does not publish a slash-command model cache value after its owner retires", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(vi.fn());
     const setModelOverride = vi.fn();
     const sessions = {
-      ...createSessionCapability(client),
+      ...createTestSessionCapability(client),
       patch: vi
         .fn()
         .mockResolvedValue(
@@ -202,7 +214,7 @@ describe("executeSlashCommand directives", () => {
       sessions,
       sessionAccessSnapshot: {
         client,
-        hello: null,
+        hello: sessionMutationGatewayHello(),
         phase: "connected",
       },
       agentId: "work",
@@ -228,7 +240,7 @@ describe("executeSlashCommand directives", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(request);
     let current = true;
 
     const pending = executeSlashCommand(client, "agent:main:main", "think", "high", {
@@ -262,7 +274,7 @@ describe("executeSlashCommand directives", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(request);
     let snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> = {
       client,
       phase: "connected" as const,
@@ -311,12 +323,7 @@ describe("executeSlashCommand directives", () => {
       throw new Error(`unexpected method: ${method}`);
     });
 
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "main",
-      "model",
-      "",
-    );
+    const result = await executeSlashCommand(createTestGatewayClient(request), "main", "model", "");
 
     expect(result.content).toBe(
       [
@@ -328,7 +335,10 @@ describe("executeSlashCommand directives", () => {
       ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", { view: "configured" });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      agentId: "main",
+      view: "configured",
+    });
   });
 
   it("omits unavailable catalog entries from bare /model output", async () => {
@@ -343,7 +353,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "main",
       "model",
       "",
@@ -387,19 +397,21 @@ describe("executeSlashCommand directives", () => {
           ],
         };
       }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
+        };
+      }
       throw new Error(`unexpected method: ${method}`);
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:work:main",
       "model",
       "",
       {
         agentId: "work",
-        chatModelCatalog: [
-          { id: "work-model", name: "Work Model", provider: "openai", available: true },
-        ],
       },
     );
 
@@ -407,6 +419,10 @@ describe("executeSlashCommand directives", () => {
       t("chat.commandResults.model.current", { model: "`work-model`" }),
     );
     expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
+    expect(request).toHaveBeenCalledWith("models.list", {
+      agentId: "work",
+      view: "configured",
+    });
   });
 
   it("does not report global model defaults for an agent without a session row", async () => {
@@ -421,7 +437,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:work:main",
       "model",
       "",
@@ -453,7 +469,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:work:main",
       "model",
       "",
@@ -505,7 +521,7 @@ describe("executeSlashCommand directives", () => {
     };
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:work:main",
       "model",
       "",
@@ -539,7 +555,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "main",
       "model",
       "gpt-5-mini",
@@ -566,16 +582,10 @@ describe("executeSlashCommand directives", () => {
       throw new Error(`unexpected method: ${method}`);
     });
 
-    await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "global",
-      "model",
-      "gpt-5-mini",
-      {
-        agentId: "work",
-        chatModelCatalog: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }],
-      },
-    );
+    await executeSlashCommand(createTestGatewayClient(request), "global", "model", "gpt-5-mini", {
+      agentId: "work",
+      chatModelCatalog: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }],
+    });
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "global",
@@ -592,13 +602,9 @@ describe("executeSlashCommand directives", () => {
       throw new Error(`unexpected method: ${method}`);
     });
 
-    await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "global",
-      "compact",
-      "",
-      { agentId: "work" },
-    );
+    await executeSlashCommand(createTestGatewayClient(request), "global", "compact", "", {
+      agentId: "work",
+    });
 
     expect(request).toHaveBeenCalledWith("sessions.compact", {
       key: "global",
@@ -619,7 +625,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "main",
       "compact",
       "",
@@ -648,7 +654,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "main",
       "model",
       "gpt-5-mini",
@@ -675,7 +681,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "main",
       "model",
       "deepseek-chat",
@@ -696,7 +702,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "main",
       "model",
       "google/gemma-4-26b-a4b-it",
@@ -730,7 +736,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "main",
       "model",
       "gpt-5-mini",
@@ -754,7 +760,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "main",
       "model",
       "nvidia/moonshotai/kimi-k2.5",
@@ -775,7 +781,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "main",
       "model",
       "gpt-5-mini",
@@ -807,12 +813,7 @@ describe("executeSlashCommand directives", () => {
       throw new Error(`unexpected method: ${method}`);
     });
 
-    const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "main",
-      "usage",
-      "",
-    );
+    const result = await executeSlashCommand(createTestGatewayClient(request), "main", "usage", "");
 
     expect(result.content).toBe(
       [
@@ -847,7 +848,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "usage",
       "",
@@ -884,7 +885,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "usage",
       "",
@@ -919,7 +920,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "",
@@ -962,23 +963,17 @@ describe("executeSlashCommand directives", () => {
       throw new Error(`unexpected method: ${method}`);
     });
 
-    await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:work:main",
-      "think",
-      "",
-      {
-        agentId: "work",
-        chatModelCatalog: [
-          {
-            id: "work-model",
-            name: "Work Model",
-            provider: "openai",
-            reasoning: true,
-          },
-        ],
-      },
-    );
+    await executeSlashCommand(createTestGatewayClient(request), "agent:work:main", "think", "", {
+      agentId: "work",
+      chatModelCatalog: [
+        {
+          id: "work-model",
+          name: "Work Model",
+          provider: "openai",
+          reasoning: true,
+        },
+      ],
+    });
 
     expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
   });
@@ -1000,7 +995,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:work:main",
       "think",
       "",
@@ -1039,7 +1034,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:work:main",
       "think",
       "",
@@ -1078,13 +1073,13 @@ describe("executeSlashCommand directives", () => {
     });
 
     const minimal = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "minimal",
     );
     const xhigh = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "xhigh",
@@ -1113,7 +1108,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "default",
@@ -1171,31 +1166,31 @@ describe("executeSlashCommand directives", () => {
     });
 
     const status = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "",
     );
     const setXhigh = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "xhigh",
     );
     const setMax = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "max",
     );
     const setMaximum = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "maximum",
     );
     const setAdaptive = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "auto",
@@ -1275,13 +1270,13 @@ describe("executeSlashCommand directives", () => {
     });
 
     const status = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "",
     );
     const setMax = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "max",
@@ -1338,7 +1333,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const status = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "",
@@ -1380,7 +1375,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const status = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "think",
       "",
@@ -1407,7 +1402,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "verbose",
       "",
@@ -1433,7 +1428,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "fast",
       "",
@@ -1463,7 +1458,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "fast",
       "",
@@ -1498,7 +1493,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "fast",
       "",
@@ -1520,7 +1515,7 @@ describe("executeSlashCommand directives", () => {
     const request = vi.fn().mockResolvedValue({ ok: true });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "fast",
       "on",
@@ -1537,7 +1532,7 @@ describe("executeSlashCommand directives", () => {
     const request = vi.fn().mockResolvedValue({ ok: true });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "fast",
       "auto",
@@ -1559,7 +1554,7 @@ describe("executeSlashCommand directives", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "fast",
       "default",
@@ -1587,7 +1582,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "try a different approach",
@@ -1602,10 +1597,18 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(chatSend.payload.queueMode).toBe("steer");
   });
 
-  it("uses canonical active-run state when the session row only reports hasActiveRun", async () => {
+  it("uses a unique run id when a real session row omits active leaf context", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main", { hasActiveRun: true })] };
+        return {
+          sessions: [
+            row("agent:main:main", {
+              hasActiveRun: true,
+              activeRunIds: ["active-run"],
+              activeLeafEntryId: undefined,
+            }),
+          ],
+        };
       }
       if (method === "chat.send") {
         return { status: "started", runId: "run-active-flag", messageSeq: 2 };
@@ -1614,7 +1617,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "continue with the smaller fix",
@@ -1627,7 +1630,39 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       sessionKey: "agent:main:main",
       message: "continue with the smaller fix",
       deliver: false,
+      expectedRunId: "active-run",
     });
+    expect(chatSend.payload).not.toHaveProperty("expectedLeafEntryId");
+  });
+
+  it.each([
+    ["zero", []],
+    ["multiple", ["run-a", "run-b"]],
+  ] as const)("refuses %s authoritative active run ids", async (_label, activeRunIds) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              hasActiveRun: true,
+              activeRunIds: [...activeRunIds],
+              activeLeafEntryId: undefined,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      createTestGatewayClient(request),
+      "agent:main:main",
+      "steer",
+      "continue safely",
+    );
+
+    expect(result.content).toBe(t("chat.commandResults.steer.noActiveRun"));
+    expectNoRequestCall(request, "chat.send");
   });
 
   it("does not mark the current run pending when chat.send returns terminal ok", async () => {
@@ -1642,7 +1677,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "try a different approach",
@@ -1671,7 +1706,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       });
 
       const result = await executeSlashCommand(
-        { request } as unknown as GatewayBrowserClient,
+        createTestGatewayClient(request),
         "agent:main:main",
         "steer",
         "try a different approach",
@@ -1697,7 +1732,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "global",
       "steer",
       "try a different approach",
@@ -1727,7 +1762,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:work:main",
       "steer",
       "try the alias",
@@ -1753,7 +1788,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "researcher try a different approach",
@@ -1790,7 +1825,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "all good now",
@@ -1820,7 +1855,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "main refine the plan",
@@ -1853,7 +1888,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "researcher try again",
@@ -1875,7 +1910,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "try again",
@@ -1890,7 +1925,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     const request = vi.fn();
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "",
@@ -1909,14 +1944,14 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "steer",
       "try again",
     );
 
     expect(result.content).toBe(
-      t("chat.commandResults.steer.requestFailed", { error: "Error: connection lost" }),
+      t("chat.commandResults.steer.requestFailed", { error: "connection lost" }),
     );
   });
 });
@@ -1934,7 +1969,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "redirect",
       "start over with a new plan",
@@ -1957,7 +1992,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "redirect",
       "start over with a new plan",
@@ -1979,7 +2014,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "redirect",
       "start over with a new plan",
@@ -1998,7 +2033,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "global",
       "redirect",
       "start over",
@@ -2023,7 +2058,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "redirect",
       "researcher start over completely",
@@ -2041,7 +2076,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     const request = vi.fn();
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "redirect",
       "",
@@ -2060,14 +2095,14 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
 
     const result = await executeSlashCommand(
-      { request } as unknown as GatewayBrowserClient,
+      createTestGatewayClient(request),
       "agent:main:main",
       "redirect",
       "try again",
     );
 
     expect(result.content).toBe(
-      t("chat.commandResults.redirect.requestFailed", { error: "Error: connection lost" }),
+      t("chat.commandResults.redirect.requestFailed", { error: "connection lost" }),
     );
   });
 });

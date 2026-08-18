@@ -11,7 +11,7 @@ import {
   isBundledManifestOwner,
 } from "../../plugins/manifest-owner-policy.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRecord,
 } from "../../plugins/manifest-registry.js";
 import { staticModelIdMatches } from "./model.static-id.js";
@@ -310,7 +310,7 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
       : undefined;
   const plugins =
     currentPlugins ??
-    loadPluginManifestRegistry({
+    loadPluginManifestRegistryCore({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env,

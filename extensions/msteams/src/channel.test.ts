@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
+import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsPlugin } from "./channel.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
@@ -19,8 +20,26 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
 }
 
 describe("msteamsPlugin", () => {
-  it("shares account and metadata contracts with the lightweight setup plugin", () => {
+  it("distinguishes users from channel and group conversations", () => {
+    const infer = msteamsPlugin.messaging?.inferTargetChatType;
+    const ownerId = "00000000-0000-0000-0000-000000000001";
+    expect(infer?.({ to: ownerId })).toBe("direct");
+    expect(infer?.({ to: "19:channel@thread.tacv2" })).toBe("channel");
+    expect(infer?.({ to: "19:group@thread.v2" })).toBe("group");
+    expect(
+      msteamsPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {},
+        agentId: "main",
+        target: ownerId,
+      }),
+    ).toMatchObject({ chatType: "direct" });
+  });
+
+  it("shares setup and directory contracts with the lightweight artifacts", () => {
     expect(msteamsSetupPlugin.meta).toEqual(msteamsPlugin.meta);
+    expect(msteamsPlugin.capabilities).toBe(msteamsSetupPlugin.capabilities);
+    expect(msteamsPlugin.reload).toBe(msteamsSetupPlugin.reload);
+    expect(msteamsPlugin.configSchema).toBe(msteamsSetupPlugin.configSchema);
 
     for (const key of [
       "listAccountIds",
@@ -34,6 +53,14 @@ describe("msteamsPlugin", () => {
     ] as const) {
       expect(msteamsSetupPlugin.config[key]).toBe(msteamsPlugin.config[key]);
     }
+
+    expect(msteamsPlugin.directory?.self).toBe(msteamsDirectoryContractPlugin.directory.self);
+    expect(msteamsPlugin.directory?.listPeers).toBe(
+      msteamsDirectoryContractPlugin.directory.listPeers,
+    );
+    expect(msteamsPlugin.directory?.listGroups).toBe(
+      msteamsDirectoryContractPlugin.directory.listGroups,
+    );
   });
 
   it("preserves the default account and allowlist across runtime and setup", () => {

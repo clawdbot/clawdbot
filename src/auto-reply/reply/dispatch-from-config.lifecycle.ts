@@ -1,9 +1,16 @@
 import crypto from "node:crypto";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/run-state.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  resolveWorkerPlacementArchiveRestoreError,
+  type SessionWorkerPlacementContext,
+} from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import { isNativeCommandTurn } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
   createAbortAwareDispatcher,
@@ -31,6 +38,69 @@ type DispatchReplyOperationAcquisition =
   | { status: "ready" }
   | { status: "busy" }
   | { status: "aborted" };
+
+async function restoreArchivedDispatchSession(params: {
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  hasPluginOwnedBinding: boolean;
+  sessionKey?: string;
+  storePath?: string;
+}): Promise<SessionEntry | undefined> {
+  const { ctx, entry, hasPluginOwnedBinding, sessionKey, storePath } = params;
+  if (
+    !entry ||
+    !sessionKey ||
+    !storePath ||
+    entry.archivedAt === undefined ||
+    hasPluginOwnedBinding ||
+    ctx.InboundAccessAuthorized !== true ||
+    ctx.InboundEventKind === "room_event" ||
+    isNativeCommandTurn(ctx.CommandTurn) ||
+    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType !== "human"
+  ) {
+    return entry;
+  }
+  let placementContext: SessionWorkerPlacementContext;
+  try {
+    placementContext = (
+      await import("../../gateway/session-worker-placement-context.js")
+    ).resolveSessionWorkerPlacementContext();
+  } catch {
+    return entry;
+  }
+  const snapshotSessionId = entry.sessionId;
+  const snapshotArchivedAt = entry.archivedAt;
+  // Admission must see the current owner: a rebound, re-archive, or unsafe placement stays untouched.
+  return (
+    (await updateSessionEntry({ sessionKey, storePath }, (currentEntry) => {
+      if (
+        currentEntry.sessionId !== snapshotSessionId ||
+        currentEntry.archivedAt !== snapshotArchivedAt
+      ) {
+        return null;
+      }
+      try {
+        const placement = currentEntry.sessionId
+          ? placementContext.workerSessionPlacementService
+              ?.getMany([currentEntry.sessionId])
+              .get(currentEntry.sessionId)
+          : undefined;
+        if (
+          resolveWorkerPlacementArchiveRestoreError({
+            context: placementContext,
+            key: sessionKey,
+            placement,
+          })
+        ) {
+          return null;
+        }
+      } catch {
+        return null;
+      }
+      return { archivedAt: undefined, archivedBy: undefined };
+    })) ?? undefined
+  );
+}
 
 export function createDispatchReplyOperationCoordinator(params: {
   ctx: FinalizedMsgContext;
@@ -123,7 +193,18 @@ export function createDispatchReplyOperationCoordinator(params: {
 
   const ensureDispatchReplyOperation = async (
     phase: "pre_dispatch" | "dispatch",
+    hasPluginOwnedBinding = false,
   ): Promise<DispatchReplyOperationAcquisition> => {
+    // Archive restoration belongs to pre-dispatch ownership resolution. Later calls only upgrade admission.
+    if (phase === "pre_dispatch") {
+      params.operationSessionStoreEntry.entry = await restoreArchivedDispatchSession({
+        ctx: params.ctx,
+        entry: params.operationSessionStoreEntry.entry,
+        hasPluginOwnedBinding,
+        sessionKey: params.dispatchOperationSessionKey,
+        storePath: params.operationSessionStoreEntry.storePath,
+      });
+    }
     if (phase === "dispatch") {
       // The next full reply operation revalidates the persisted session. Drop
       // the hook-only lease after its queued delivery settles so a waiting
@@ -178,7 +259,8 @@ export function createDispatchReplyOperationCoordinator(params: {
       phase === "dispatch" &&
       replyTurnKind === "visible" &&
       params.replyOptions?.turnAdoptionLifecycle !== undefined &&
-      activeReplyOperation !== undefined;
+      activeReplyOperation !== undefined &&
+      activeReplyOperation.turnKind !== "heartbeat";
     if (allowGatewayQueueResolution) {
       // Gateway turns need to reach getReplyFromConfig while the owner is active;
       // that layer applies the session's steer/followup/collect/drop policy.
@@ -211,7 +293,6 @@ export function createDispatchReplyOperationCoordinator(params: {
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
       onLifecycleInterrupt,
-      onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
     });
     if (
       admission.status === "skipped" &&
@@ -260,7 +341,6 @@ export function createDispatchReplyOperationCoordinator(params: {
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
           onLifecycleInterrupt,
-          onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
         });
       }
     }
@@ -371,6 +451,7 @@ export function createDispatchReplyOperationCoordinator(params: {
   const getQueuedFollowupAbortSignal = () =>
     dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
+  let agentRunTerminalOutcome: "completed" | "failed" | undefined;
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -378,17 +459,15 @@ export function createDispatchReplyOperationCoordinator(params: {
     observedReplyDelivery = true;
     await params.replyOptions?.onObservedReplyDelivery?.();
   };
-  const getReplyOptions = () => {
+  const getReplyOptions = (): DispatchFromConfigParams["replyOptions"] => {
     const abortSignal = getDispatchAbortSignal();
-    const onAgentRunStart = params.messageAuditTerminal
-      ? (runId: string) => {
-          params.messageAuditTerminal?.observeRunId(runId);
-          params.replyOptions?.onAgentRunStart?.(runId);
-        }
-      : undefined;
-    if (!abortSignal && !onAgentRunStart) {
-      return params.replyOptions;
-    }
+    const onAgentRunStart: NonNullable<
+      NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunStart"]
+    > = (runId, executionIdentityToken) => {
+      agentRunTerminalOutcome = "completed";
+      params.messageAuditTerminal?.observeRunId(runId);
+      params.replyOptions?.onAgentRunStart?.(runId, executionIdentityToken);
+    };
     return {
       ...params.replyOptions,
       ...(abortSignal
@@ -397,7 +476,7 @@ export function createDispatchReplyOperationCoordinator(params: {
             queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
           }
         : {}),
-      ...(onAgentRunStart ? { onAgentRunStart } : {}),
+      onAgentRunStart,
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
     };
   };
@@ -413,7 +492,10 @@ export function createDispatchReplyOperationCoordinator(params: {
     }
   };
 
-  const failDispatchReplyOperation = (error: unknown) => {
+  const failDispatchReplyOperation = (error: unknown, terminalOutcome?: "failed") => {
+    if (terminalOutcome === "failed" && agentRunTerminalOutcome === "completed") {
+      agentRunTerminalOutcome = "failed";
+    }
     const completionBarrier = waitForDispatchLifecycleWorkAndDelivery();
     void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
     if (!dispatchReplyOperation) {
@@ -454,6 +536,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     turnLedger,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome: () => agentRunTerminalOutcome,
     getDispatchAbortOperation: () => dispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation: () => dispatchReplyOperation,

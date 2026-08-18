@@ -147,7 +147,7 @@ describe("heartbeat cadence cron migration", () => {
     );
   });
 
-  it("keeps multi-agent updates and creates scoped to their declared monitors", async () => {
+  it("keeps ownerless multi-agent updates scoped to their declared monitors", async () => {
     const fixture = await createFixture();
     const initialCfg = {
       agents: {

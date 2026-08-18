@@ -1,5 +1,8 @@
 // Matrix helper module supports handler helpers behavior.
-import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  type PreparedInboundReply,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { vi, type Mock } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
@@ -22,6 +25,19 @@ type MatrixDispatchInboundMessage = (params: {
 }) => Promise<{
   queuedFinal: boolean;
   counts: { final: number; block: number; tool: number };
+  settledReceipt?: {
+    anyVisibleDelivered: boolean;
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+  };
 }>;
 
 const DEFAULT_ROUTE = {
@@ -309,6 +325,7 @@ export function createMatrixHandlerTestHarness(
           },
         },
         inbound: {
+          buildContext: buildChannelInboundEventContext,
           run,
         },
         reactions: {

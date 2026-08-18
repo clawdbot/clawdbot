@@ -6,7 +6,9 @@ import { pathForRoute, pathForWorkboardBoard } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { icons } from "../../components/icons.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
+import { t } from "../../i18n/index.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -22,6 +24,8 @@ import {
   stopWorkboardLifecycleRefresh,
   stopWorkboardLiveRefresh,
   syncWorkboardLifecycle,
+  type WorkboardCard,
+  type WorkboardUiState,
   WORKBOARD_CHANGED_EVENT,
 } from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -30,6 +34,23 @@ import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import type { WorkboardRouteData } from "./route.ts";
 import { renderWorkboard } from "./view.ts";
+
+function reconcileCardOverlays(
+  state: WorkboardUiState,
+  isVisible: (card: WorkboardCard) => boolean,
+) {
+  const remainsVisible = (cardId: string) => {
+    const card = state.cards.find((entry) => entry.id === cardId);
+    return Boolean(card && isVisible(card));
+  };
+  if (state.detailCardId && !remainsVisible(state.detailCardId)) {
+    state.detailCardId = null;
+    state.detailCommentBody = "";
+  }
+  if (state.editingCardId && !remainsVisible(state.editingCardId)) {
+    resetDraftState(state);
+  }
+}
 
 class WorkboardPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -205,8 +226,6 @@ class WorkboardPage extends OpenClawLightDomElement {
       void syncWorkboardLifecycle({
         host: context.workboard,
         client: gateway.client,
-        sessions: context.sessions.state.result?.sessions ?? [],
-        canWrite: access.canWrite,
         requestUpdate: this.requestPageUpdate,
       });
     }
@@ -230,20 +249,10 @@ class WorkboardPage extends OpenClawLightDomElement {
       this.observedAgentScopeId = nextScopeId;
       const state = context.workboard.state;
       const agentsList = context.agents.state.agentsList;
-      const remainsVisible = (cardId: string) => {
-        const card = state.cards.find((entry) => entry.id === cardId);
-        return Boolean(card && matchesAgentScope(card, agentsList, nextScopeId));
-      };
       // The board's richer agent filter is a secondary control available only
       // in all-agent scope; a chip switch must not retain a hidden subfilter.
       state.agentFilter = "all";
-      if (state.detailCardId && !remainsVisible(state.detailCardId)) {
-        state.detailCardId = null;
-        state.detailCommentBody = "";
-      }
-      if (state.editingCardId && !remainsVisible(state.editingCardId)) {
-        resetDraftState(state);
-      }
+      reconcileCardOverlays(state, (card) => matchesAgentScope(card, agentsList, nextScopeId));
       context.workboard.notify();
     }
   }
@@ -255,17 +264,7 @@ class WorkboardPage extends OpenClawLightDomElement {
       return;
     }
     const state = context.workboard.state;
-    const remainsVisible = (cardId: string) => {
-      const card = state.cards.find((entry) => entry.id === cardId);
-      return Boolean(card && matchesBoardFilter(card, boardFilter));
-    };
-    if (state.detailCardId && !remainsVisible(state.detailCardId)) {
-      state.detailCardId = null;
-      state.detailCommentBody = "";
-    }
-    if (state.editingCardId && !remainsVisible(state.editingCardId)) {
-      resetDraftState(state);
-    }
+    reconcileCardOverlays(state, (card) => matchesBoardFilter(card, boardFilter));
     state.boardFilter = boardFilter;
     context.workboard.notify();
   }
@@ -369,6 +368,16 @@ class WorkboardPage extends OpenClawLightDomElement {
                 ? workboardBoardName(selectedBoard)
                 : titleForRoute("workboard")}</span
             >
+            ${selectedBoard?.automationJobId
+              ? html`<a
+                  class="chip workboard-automation-chip"
+                  href=${pathForRoute("cron", context.basePath)}
+                  title=${t("workboard.automationAttachedTitle")}
+                  aria-label=${t("workboard.automationAttachedTitle")}
+                >
+                  ${icons.calendarClock}<span>${t("workboard.automationAttached")}</span>
+                </a>`
+              : nothing}
           </div>
           ${selectedBoard
             ? html`<div class="page-subtitle">${titleForRoute("workboard")}</div>`

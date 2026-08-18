@@ -37,6 +37,44 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes static doctor session route-state owners", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "doctor-owners",
+        configSchema: { type: "object" },
+        sessionRouteStateOwners: [
+          {
+            id: " demo ",
+            label: " Demo owner ",
+            providerIds: [" demo ", "", "demo"],
+          },
+          { id: "blank-list", label: "Blank list", runtimeIds: [" "] },
+          { id: " ", label: "Missing id" },
+          null,
+        ],
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.sessionRouteStateOwners).toEqual([
+        {
+          id: "demo",
+          label: "Demo owner",
+          providerIds: ["demo", "demo"],
+          runtimeIds: [],
+          cliSessionKeys: [],
+          authProfilePrefixes: [],
+        },
+      ]);
+    }
+  });
+
   it("uses native JSON parsing for standard JSON manifests", () => {
     const json5Parse = vi.spyOn(JSON5, "parse");
     const dir = makeTempDir();
@@ -304,6 +342,11 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     onConfigPaths: ["browser", ""],
     onCapabilities: ["provider", "tool", "wat"]
   },
+  cliCommands: [
+    { name: "models", description: "Inspect provider models", hasSubcommands: true },
+    { name: "bad command", description: "ignored", hasSubcommands: false },
+    { name: "models", description: "duplicate", hasSubcommands: false }
+  ],
   setup: {
     providers: [
       { id: "openai", authMethods: ["api-key", ""], envVars: ["OPENAI_API_KEY", ""] },
@@ -328,6 +371,13 @@ describe("loadPluginManifest JSON5 tolerance", () => {
         onConfigPaths: ["browser"],
         onCapabilities: ["provider", "tool"],
       });
+      expect(result.manifest.cliCommands).toEqual([
+        {
+          name: "models",
+          description: "Inspect provider models",
+          hasSubcommands: true,
+        },
+      ]);
       expect(result.manifest.setup).toEqual({
         providers: [
           {

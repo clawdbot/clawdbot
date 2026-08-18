@@ -1,29 +1,26 @@
-import { normalizeAgentId } from "../routing/session-key.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import { sessionObserverScopeKey } from "./session-observer-model.js";
+import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 
 export function createSessionObserverAudience(params: {
   subscribers: SessionMessageSubscriberRegistry;
   sessionEventSubscribers?: SessionEventSubscriberRegistry;
   isVisible: (connId: string) => boolean;
-  getDefaultAgentId: () => string;
+  getConfig: () => OpenClawConfig;
 }) {
   const messageSubscriberKeys = (sessionKey: string, agentId: string): string[] => {
-    // sessions.messages.subscribe canonicalizes selected-agent global aliases
-    // to this same qualified key before registering the connection.
-    const scopedKey = sessionObserverScopeKey(sessionKey, agentId);
-    if (
-      sessionKey === "global" &&
-      normalizeAgentId(agentId) === normalizeAgentId(params.getDefaultAgentId())
-    ) {
-      // Keep legacy default-agent global subscribers while non-default global
-      // sessions remain confined to their agent-qualified stream.
-      return [scopedKey, sessionKey];
-    }
-    return [scopedKey];
+    const config = params.getConfig();
+    const persistedOwner = resolvePersistedSessionStoreOwnerForKey(config, sessionKey);
+    const compatibilityAgentId =
+      persistedOwner.kind === "configured"
+        ? persistedOwner.agentId
+        : tryResolveLegacyCompatibilityAgentId(config);
+    return resolveSessionSubscriptionKeys(sessionKey, agentId, compatibilityAgentId);
   };
 
   const messageRecipients = (sessionKey: string, agentId: string): Set<string> => {
@@ -37,6 +34,15 @@ export function createSessionObserverAudience(params: {
   };
 
   return {
+    deliveryOptions(sessionKey: string, agentId: string) {
+      return {
+        agentId,
+        dropIfSlow: true,
+        sessionKeys: messageSubscriberKeys(sessionKey, agentId),
+        sessionSubscriptionVerified: true,
+      };
+    },
+
     has(sessionKey: string, agentId: string): boolean {
       for (const connId of messageRecipients(sessionKey, agentId)) {
         if (params.isVisible(connId)) {

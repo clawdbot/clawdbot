@@ -2,6 +2,7 @@
 import {
   buildChannelInboundEventContext,
   formatInboundEnvelope,
+  formatInboundMediaUnavailableText,
   resolveEnvelopeFormatOptions,
   toHistoryMediaEntries,
   toInboundMediaFactsWithMetadata,
@@ -103,6 +104,7 @@ export async function buildDiscordMessageProcessContext(params: {
     boundSessionKey,
     route,
     commandAuthorized,
+    resolveChannelIngress,
   } = ctx;
 
   const fromLabel = isDirectMessage
@@ -167,11 +169,24 @@ export async function buildDiscordMessageProcessContext(params: {
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
   let visibleChannelHistory: DiscordHistoryEntry[] | undefined;
+  // Failed downloads (CDN error, SSRF block, size cap, timeout) produce
+  // path-less facts that core drops from the media projection. Record the
+  // outcome in the body like sibling channels so the turn never silently
+  // ignores an attachment the user sent.
+  const unavailableMediaCount = mediaList.filter((media) => !media.path).length;
+  const appendMediaUnavailableNotice = (body: string | undefined) =>
+    unavailableMediaCount > 0
+      ? formatInboundMediaUnavailableText({
+          body,
+          notice: `[discord ${unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"} unavailable]`,
+        })
+      : body;
+  const bodyWithMediaNotice = appendMediaUnavailableNotice(text) ?? text;
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
     timestamp: resolveTimestampMs(message.timestamp),
-    body: text,
+    body: bodyWithMediaNotice,
     chatType: isDirectMessage ? "direct" : "channel",
     senderLabel,
     previousTimestamp,
@@ -272,14 +287,14 @@ export async function buildDiscordMessageProcessContext(params: {
     if (threadParentId) {
       parentSessionKey = buildAgentSessionKey({
         agentId: route.agentId,
+        mainKey: cfg.session?.mainKey,
         channel: route.channel,
         peer: { kind: "channel", id: threadParentId },
+        groupScope: route.groupScope,
       });
-      modelParentSessionKey = parentSessionKey;
+      modelParentSessionKey = parentSessionKey === baseSessionKey ? undefined : parentSessionKey;
     }
-    if (!threadParentInheritanceEnabled) {
-      parentSessionKey = undefined;
-    }
+    parentSessionKey = threadParentInheritanceEnabled ? modelParentSessionKey : undefined;
   }
   const preflightAudioIndex =
     preflightAudioTranscript === undefined
@@ -307,6 +322,8 @@ export async function buildDiscordMessageProcessContext(params: {
     agentId: route.agentId,
     channel: route.channel,
     cfg,
+    parentSessionKey: route.sessionKey,
+    groupScope: route.groupScope,
     threadParentInheritanceEnabled,
   });
   const deliverTarget = replyPlan.deliverTarget;
@@ -346,7 +363,22 @@ export async function buildDiscordMessageProcessContext(params: {
           sessionKey: effectiveSessionKey,
         });
 
-  const ctxPayload = await buildChannelInboundEventContext({
+  // Auto-threading owns the dispatch session, so bind admission only after that session is final.
+  const channelIngress = await resolveChannelIngress(
+    {
+      agentId: route.agentId,
+      sessionKey: effectiveSessionKey,
+      messageId: canonicalMessageId ?? message.id,
+      inboundEventKind: ctx.inboundEventKind,
+    },
+    {
+      parentId: threadChannel ? threadParentId : undefined,
+      threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
+    },
+  );
+
+  const ctxPayload = await (ctx.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress,
     channel: "discord",
     resolveSupplementalMedia: true,
     contextVisibility: contextVisibilityMode,
@@ -370,7 +402,9 @@ export async function buildDiscordMessageProcessContext(params: {
       id: messageChannelId,
       nativeChannelId: messageChannelId,
       label: fromLabel,
-      spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+      spaceId: isGuildMessage
+        ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined
+        : undefined,
       parentId: threadChannel ? threadParentId : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },
@@ -392,7 +426,9 @@ export async function buildDiscordMessageProcessContext(params: {
       inboundEventKind: ctx.inboundEventKind,
       body: combinedBody,
       rawBody: preflightAudioTranscript ?? baseText,
-      bodyForAgent: preflightAudioTranscript ?? baseText ?? text,
+      // BodyForAgent wins over Body for the model's text, so the notice has to
+      // ride the agent-facing source too — keeping transcript precedence.
+      bodyForAgent: appendMediaUnavailableNotice(preflightAudioTranscript ?? baseText ?? text),
       commandBody: preflightAudioTranscript ?? baseText,
       inboundHistory,
     },

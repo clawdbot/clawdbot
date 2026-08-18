@@ -1,19 +1,34 @@
 /** Mutates and persists isolated cron session state around one run. */
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
-import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "../scheduled-tool-policy.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "../scheduled-tool-policy.js";
+import { setSessionRuntimeModel } from "./run.runtime.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
+
+function clearCronContextOwnerState(entry: SessionEntry) {
+  delete entry.contextTokens;
+  delete entry.contextTokensSource;
+  delete entry.contextBudgetStatus;
+}
 
 /** Mutable cron session entry updated by an isolated run before persistence. */
 type MutableCronSessionEntry = SessionEntry;
@@ -227,6 +242,7 @@ export function createCronRunContinuationSession(params: {
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -234,16 +250,20 @@ export function createCronRunContinuationSession(params: {
   };
   persistSessionEntry: PersistSessionEntry;
 }): CronRunContinuationSession {
-  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
-    toolsAllow: params.toolsAllow,
-    scheduledToolPolicy: params.scheduledToolPolicy,
-  });
+  const scheduledToolPolicy =
+    params.toolsAllow === undefined
+      ? undefined
+      : normalizeCronScheduledToolPolicy(params.scheduledToolPolicy);
+  const scheduledToolCallerOrigin = normalizeCronScheduledToolCallerOrigin(
+    params.scheduledToolCallerOrigin,
+  );
   const continuation: NonNullable<SessionEntry["cronRunContinuation"]> = {
     lifecycleRevision: params.cronSession.lifecycleRevision,
     phase: "running" as const,
     ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
     ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
     ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
+    ...(scheduledToolPolicy?.mode === "account" ? { scheduledToolCallerOrigin } : {}),
     ...(params.cliSessionBindingFacts
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
       : {}),
@@ -368,14 +388,50 @@ export async function persistCronSkillsSnapshotIfChanged(params: {
   await params.persistSessionEntry();
 }
 
+/**
+ * Updates the cron selection and drops facts produced by the previous model.
+ * Keeping those facts after the owner tuple changes lets a later run relabel stale telemetry.
+ */
+export function setCronSessionRuntimeModel(params: {
+  entry: MutableCronSessionEntry;
+  provider: string;
+  model: string;
+}) {
+  const provider = params.provider.trim();
+  const model = params.model.trim();
+  if (!provider || !model) {
+    return false;
+  }
+  const selectionChanged =
+    params.entry.modelProvider?.trim() !== provider || params.entry.model?.trim() !== model;
+  if (selectionChanged) {
+    clearCronContextOwnerState(params.entry);
+  }
+  setSessionRuntimeModel(params.entry, { provider, model });
+  return selectionChanged;
+}
+
+/** Updates the producing harness and drops context facts owned by the previous runtime. */
+export function setCronSessionAgentHarnessId(params: {
+  entry: MutableCronSessionEntry;
+  agentHarnessId: string | undefined;
+}) {
+  const previousRuntime = normalizeOptionalAgentRuntimeId(params.entry.agentHarnessId);
+  const nextRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
+  if (previousRuntime !== nextRuntime) {
+    clearCronContextOwnerState(params.entry);
+  }
+  params.entry.agentHarnessId = params.agentHarnessId;
+  return previousRuntime !== nextRuntime;
+}
+
 /** Records the selected provider/model before a cron run starts. */
 export function markCronSessionPreRun(params: {
   entry: MutableCronSessionEntry;
   provider: string;
   model: string;
 }) {
-  params.entry.modelProvider = params.provider;
-  params.entry.model = params.model;
+  setCronSessionRuntimeModel(params);
   params.entry.systemSent = true;
 }
 
@@ -384,19 +440,31 @@ export function syncCronSessionLiveSelection(params: {
   entry: MutableCronSessionEntry;
   liveSelection: CronLiveSelection;
 }) {
-  params.entry.modelProvider = params.liveSelection.provider;
-  params.entry.model = params.liveSelection.model;
+  const previousRuntime = normalizeOptionalAgentRuntimeId(params.entry.agentRuntimeOverride);
+  const nextRuntime = normalizeOptionalAgentRuntimeId(params.liveSelection.agentRuntimeOverride);
+  setCronSessionRuntimeModel({
+    entry: params.entry,
+    provider: params.liveSelection.provider,
+    model: params.liveSelection.model,
+  });
+  if (previousRuntime !== nextRuntime) {
+    clearCronContextOwnerState(params.entry);
+  }
   if (params.liveSelection.agentRuntimeOverride) {
     params.entry.agentRuntimeOverride = params.liveSelection.agentRuntimeOverride;
   } else {
     delete params.entry.agentRuntimeOverride;
   }
   if (params.liveSelection.authProfileId) {
+    const source =
+      params.liveSelection.authProfileIdSource ??
+      (params.entry.authProfileOverride?.trim() === params.liveSelection.authProfileId.trim()
+        ? resolveSessionAuthProfileOverrideSource(params.entry)
+        : "user");
     params.entry.authProfileOverride = params.liveSelection.authProfileId;
-    params.entry.authProfileOverrideSource = params.liveSelection.authProfileIdSource;
-    if (params.liveSelection.authProfileIdSource === "auto") {
-      // Auto-selected profiles are tied to the compaction generation that
-      // resolved them; manual overrides should survive later compactions.
+    params.entry.authProfileOverrideSource = source;
+    if (source === "auto") {
+      // Auto pins track their compaction generation; manual pins do not.
       params.entry.authProfileOverrideCompactionCount = params.entry.compactionCount ?? 0;
     } else {
       delete params.entry.authProfileOverrideCompactionCount;

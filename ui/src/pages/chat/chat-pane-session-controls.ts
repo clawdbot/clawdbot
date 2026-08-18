@@ -1,14 +1,22 @@
+import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
-import { renderChatControls } from "./components/chat-controls.ts";
+import {
+  renderChatModelControls,
+  type ChatModelCatalogState,
+} from "./components/chat-model-controls.ts";
+import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
@@ -22,9 +30,17 @@ export function readChatPaneMutationAccess(
   sessionKey: string,
 ) {
   return {
-    runtimePatch: readSessionMethodAccess(snapshot, {
+    model: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, model: null },
+    }),
+    effort: readSessionMethodAccess(snapshot, {
+      method: "sessions.patch",
+      params: { key: sessionKey, thinkingLevel: null },
+    }),
+    permission: readSessionMethodAccess(snapshot, {
+      method: "sessions.patch",
+      params: { key: sessionKey, permissionMode: "guarded" },
     }),
     unarchive: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
@@ -33,63 +49,118 @@ export function readChatPaneMutationAccess(
   };
 }
 
+export function resolveChatModelCatalogState(
+  state: Pick<
+    ChatPageHost,
+    "chatModelCatalog" | "chatModelCatalogError" | "chatModelsLoading" | "connected"
+  >,
+): ChatModelCatalogState {
+  const hasSnapshot =
+    state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
+  return {
+    hasSnapshot,
+    status: !state.connected
+      ? "offline"
+      : state.chatModelCatalogError
+        ? "error"
+        : state.chatModelsLoading
+          ? hasSnapshot
+            ? "refreshing"
+            : "loading"
+          : "ready",
+  };
+}
+
 export function renderChatPaneComposerControls(params: {
-  paneId: string;
   state: ChatPageHost;
   selectedSession: GatewaySessionRow | undefined;
   agentDefaultModel: string | undefined;
-  mutationAccess: SessionMethodAccess;
-  preferencesBrowserOnly: boolean;
-}) {
+  modelAccess: SessionMethodAccess;
+  effortAccess: SessionMethodAccess;
+  permissionAccess: SessionMethodAccess;
+  canSelectFull: boolean;
+  onModelSetup: () => void;
+}): {
+  composerControls: NonNullable<ChatProps["composerControls"]>;
+  permissionPicker: ChatPermissionPickerProps;
+} {
   const {
-    paneId,
     state,
     selectedSession,
     agentDefaultModel,
-    mutationAccess,
-    preferencesBrowserOnly,
+    modelAccess,
+    effortAccess,
+    permissionAccess,
+    canSelectFull,
+    onModelSetup,
   } = params;
-  const mutationAllowed = () => mutationAccess.allowed;
-  return renderChatControls({
-    paneId,
-    model: {
-      activeRunId: state.chatRunId,
-      agentDefaultModel,
-      connected: state.connected,
-      gatewayAvailable: Boolean(state.client),
-      loading: state.chatLoading,
-      modelCatalog: state.chatModelCatalog,
-      modelOverrides: state.sessions.state.modelOverrides,
-      modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
-      modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
-      modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-      modelsLoading: state.chatModelsLoading,
-      mutationDisabledReason: mutationAccess.allowed ? undefined : mutationAccess.reason,
-      sending: state.chatSending,
-      sessionKey: state.sessionKey,
-      sessionsResult: state.sessionsResult,
-      stream: state.chatStream,
-      onRequestUpdate: () => state.requestUpdate?.(),
-      onFastModeSelect: (next, targetSessionKey) =>
-        mutationAllowed()
-          ? switchChatFastMode(state, next, targetSessionKey)
-          : Promise.resolve(false),
-      onModelSelect: (next, targetSessionKey) =>
-        mutationAllowed() ? switchChatModel(state, next, targetSessionKey) : Promise.resolve(false),
-      onThinkingSelect: (next, targetSessionKey) =>
-        mutationAllowed()
-          ? switchChatThinkingLevel(state, next, targetSessionKey)
-          : Promise.resolve(false),
+  const modelCatalogState = resolveChatModelCatalogState(state);
+  return {
+    composerControls: html`
+      <div class="chat-composer-model-control">
+        ${renderChatModelControls({
+          activeRunId: state.chatRunId,
+          agentDefaultModel,
+          connected: state.connected,
+          gatewayAvailable: Boolean(state.client),
+          loading: state.chatLoading,
+          modelCatalog: state.chatModelCatalog,
+          modelCatalogState,
+          modelOverrides: state.sessions.state.modelOverrides,
+          modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
+          modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
+          modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
+          modelsLoading: state.chatModelsLoading,
+          modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
+          effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
+          sending: state.chatSending,
+          sessionKey: state.sessionKey,
+          sessionsResult: state.sessionsResult,
+          stream: state.chatStream,
+          onRequestUpdate: () => state.requestUpdate?.(),
+          onModelSetup,
+          onFastModeSelect: (next, targetSessionKey) =>
+            effortAccess.allowed
+              ? switchChatFastMode(state, next, targetSessionKey)
+              : Promise.resolve(false),
+          onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
+          onModelSelect: (next, targetSessionKey) =>
+            modelAccess.allowed
+              ? switchChatModel(state, next, targetSessionKey)
+              : Promise.resolve(false),
+          onThinkingSelect: (next, targetSessionKey) =>
+            effortAccess.allowed
+              ? switchChatThinkingLevel(state, next, targetSessionKey)
+              : Promise.resolve(false),
+        })}
+      </div>
+    `,
+    permissionPicker: {
+      canSelectFull,
+      disabled: !permissionAccess.allowed,
+      disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
+      mode: selectedSession?.permissionMode,
+      sessionRoot: selectedSession?.sessionRoot,
+      onSelect: async (permissionMode) => {
+        if (!permissionAccess.allowed) {
+          return;
+        }
+        try {
+          state.chatError = null;
+          await state.sessions.patch(
+            state.sessionKey,
+            { permissionMode },
+            scopedAgentParamsForSession(state, state.sessionKey),
+          );
+        } catch (error) {
+          state.chatError = t("chat.permissionControls.updateFailed", {
+            error: String(error),
+          });
+          state.requestUpdate?.();
+        }
+      },
     },
-    onboarding: state.onboarding,
-    preferencesBrowserOnly,
-    settings: state.settings,
-    viewMenuOpen: state.chatViewMenuOpen,
-    onSettingsChange: state.applySettings,
-    onViewMenuOpenChange: (open, options) => {
-      state.setChatViewMenuOpen(open, options);
-    },
-  });
+  };
 }
 
 export function createChatPaneSessionActionCallbacks(params: {

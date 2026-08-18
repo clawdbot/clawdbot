@@ -129,14 +129,6 @@ describe("isVolatileBackupPath", () => {
 
 describe("isTransientSqliteBackupPath", () => {
   it.each([
-    "tmp/openclaw-502/gateway.12345678.lock.sqlite",
-    "tmp/openclaw-502/gateway.12345678.lock.sqlite-wal",
-    "tmp/openclaw-502/device-identity.12345678.lock.sqlite-journal",
-  ])("classifies transient coordinator state: %s", (filePath) => {
-    expect(isTransientSqliteBackupPath(filePath, ["tmp/openclaw-502"])).toBe(true);
-  });
-
-  it.each([
     "memory/main.sqlite.reindex-lock.sqlite",
     "memory/main.sqlite.reindex-lock.sqlite-shm",
     "memory/main.sqlite.tmp-11111111-2222-3333-4444-555555555555",
@@ -145,19 +137,15 @@ describe("isTransientSqliteBackupPath", () => {
   });
 
   it.each([
+    "tmp/openclaw-502/gateway.state.lock.sqlite",
+    "tmp/openclaw-502/gateway.12345678.lock.sqlite-wal",
+    "tmp/openclaw-502/device-identity.12345678.lock.sqlite-journal",
     "tmp/openclaw-502/retained.sqlite",
     "plugins/dedicated/durable.sqlite",
     "plugins/dedicated/cache.lock.sqlite",
     "plugins/dedicated/durable.locked.sqlite",
     "plugins/dedicated/lock.sqlite",
   ])("preserves durable SQLite state: %s", (filePath) => {
-    expect(isTransientSqliteBackupPath(filePath, ["tmp/openclaw-502"])).toBe(false);
-  });
-
-  it.each([
-    "plugins/dedicated/gateway.12345678.lock.sqlite",
-    "plugins/dedicated/device-identity.12345678.lock.sqlite",
-  ])("preserves coordinator-shaped databases outside the lock directory: %s", (filePath) => {
-    expect(isTransientSqliteBackupPath(filePath, ["tmp/openclaw-502"])).toBe(false);
+    expect(isTransientSqliteBackupPath(filePath)).toBe(false);
   });
 });

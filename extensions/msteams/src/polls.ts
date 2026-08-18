@@ -1,6 +1,9 @@
 // Msteams plugin module implements polls behavior.
 import crypto from "node:crypto";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  parseDateStringTimestampMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeOptionalString,
@@ -262,11 +265,7 @@ function createPollVoteBucketStateStore(params?: MSTeamsPollStoreStateOptions) {
 }
 
 function parseTimestamp(value?: string): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return parseDateStringTimestampMs(value) ?? null;
 }
 
 function pruneExpired<T extends { createdAt: string; updatedAt?: string }>(
@@ -302,8 +301,8 @@ function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[])
     .filter((value): value is number => value !== undefined)
     .filter((value) => value >= 0 && value < poll.options.length)
     .map((value) => String(value));
-  const limited = maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);
-  return uniqueStrings(limited);
+  // Deduplicate first so repeats do not consume selection slots.
+  return uniqueStrings(mapped).slice(0, maxSelections);
 }
 
 export function splitMSTeamsPoll(poll: MSTeamsPoll): {

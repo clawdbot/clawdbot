@@ -1,5 +1,5 @@
 // Hermes environment interpolation shared by provider and MCP config.
-import { isRecord } from "./helpers.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const MCP_ENV_REFERENCE_RE = /\$\{([^}]+)\}/gu;
 

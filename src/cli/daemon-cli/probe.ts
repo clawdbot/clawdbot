@@ -1,4 +1,10 @@
 // Gateway status probe helper used by `gateway status` service diagnostics.
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import {
+  classifyGatewayConnectFailure,
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -13,6 +19,9 @@ type GatewayStatusRequireRpcProbeResult = {
 type GatewayStatusProbeResult = GatewayProbeResult | GatewayStatusRequireRpcProbeResult;
 
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../../gateway/probe.js"));
+const CONNECT_ERROR_DETAIL_CODE_VALUES: ReadonlySet<string> = new Set(
+  Object.values(ConnectErrorDetailCodes),
+);
 
 async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
   return await probeGatewayModuleLoader.load();
@@ -33,6 +42,21 @@ function resolveProbeFailureMessage(result: {
 
 function resolveGatewayStatusProbeDetails(result: GatewayStatusProbeResult) {
   return "authProbe" in result ? result.authProbe : result;
+}
+
+function projectGatewayConnectFailure(params: {
+  details?: unknown;
+  message: string;
+  reason?: string;
+}) {
+  // Daemon status is serialized for diagnostics, so raw gateway details must
+  // stop here; only closed classification facts may cross this boundary.
+  const failure = classifyGatewayConnectFailure(params);
+  const detailCode = readConnectErrorDetailCode(params.details);
+  return {
+    kind: failure.kind,
+    ...(detailCode && CONNECT_ERROR_DETAIL_CODE_VALUES.has(detailCode) ? { detailCode } : {}),
+  };
 }
 
 function readRuntimeVersionFromStatusPayload(payload: unknown): string | null {
@@ -72,6 +96,7 @@ export async function probeGatewayStatus(opts: {
         const { probeGateway } = await loadProbeGatewayModule();
         const probeOpts = {
           url: opts.url,
+          ...(opts.config ? { config: opts.config } : {}),
           auth: {
             token: opts.token,
             password: opts.password,
@@ -99,6 +124,7 @@ export async function probeGatewayStatus(opts: {
             ...(allowRpcConfigCredentials && opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
+            sharedStateMode: "read-only",
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
           statusRuntimeVersion = readRuntimeVersionFromStatusPayload(statusPayload);
@@ -128,6 +154,7 @@ export async function probeGatewayStatus(opts: {
         ...(version != null ? { version } : {}),
       } as const;
     }
+    const error = redactSensitiveUrlLikeString(resolveProbeFailureMessage(result));
     return {
       ok: false,
       kind,
@@ -135,13 +162,22 @@ export async function probeGatewayStatus(opts: {
       auth,
       ...serverSummary,
       ...(version != null ? { version } : {}),
-      error: resolveProbeFailureMessage(result),
+      connectFailure: projectGatewayConnectFailure({
+        details: probeDetails?.connectErrorDetails,
+        message: error,
+        reason: probeDetails?.close?.reason,
+      }),
+      // Probe failure text can echo the credential-bearing target URL (close
+      // reasons, transport errors); status renderers print it verbatim.
+      error,
     } as const;
   } catch (err) {
+    const error = redactSensitiveUrlLikeString(formatErrorMessage(err));
     return {
       ok: false,
       kind,
-      error: formatErrorMessage(err),
+      connectFailure: projectGatewayConnectFailure({ message: error }),
+      error,
     } as const;
   }
 }

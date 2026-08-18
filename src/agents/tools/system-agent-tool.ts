@@ -13,9 +13,9 @@ import {
   isPersistentSystemAgentOperation,
   type SystemAgentOperation,
 } from "../../system-agent/operations.js";
-import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install.js";
+import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install-spec.js";
 import { stringEnum } from "../schema/typebox.js";
-import { textResult, ToolInputError, readStringParam, type AnyAgentTool } from "./common.js";
+import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
 
 export type SystemAgentToolOptions = {
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
@@ -245,7 +245,7 @@ function createCaptureRuntime(): RuntimeEnv & { read: () => string } {
 }
 
 function requireParam(params: Record<string, unknown>, name: string): string {
-  const value = readStringParam(params, name);
+  const value = readToolStringParam(params, name);
   if (!value?.trim()) {
     throw new ToolInputError(`openclaw: "${name}" is required for this action`);
   }
@@ -255,7 +255,7 @@ function requireParam(params: Record<string, unknown>, name: string): string {
 function readSetupTarget(
   params: Record<string, unknown>,
 ): "guided" | "classic" | "channels" | "search" | "gateway" {
-  const target = readStringParam(params, "target")?.trim() ?? "guided";
+  const target = readToolStringParam(params, "target")?.trim() ?? "guided";
   if (
     target === "guided" ||
     target === "classic" ||
@@ -269,7 +269,7 @@ function readSetupTarget(
 }
 
 function operationForAction(params: Record<string, unknown>): SystemAgentOperation {
-  const action = readStringParam(params, "action", { required: true });
+  const action = readToolStringParam(params, "action", { required: true });
   switch (action) {
     case "status":
       return { kind: "status" };
@@ -290,7 +290,7 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
     case "config_schema": {
-      const path = readStringParam(params, "path")?.trim();
+      const path = readToolStringParam(params, "path")?.trim();
       return { kind: "config-schema", ...(path ? { path } : {}) };
     }
     case "gateway_status":
@@ -306,12 +306,12 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     case "import_memory":
       return { kind: "memory-import" };
     case "configure_model_provider": {
-      const workspace = readStringParam(params, "workspace")?.trim();
+      const workspace = readToolStringParam(params, "workspace")?.trim();
       return { kind: "model-setup", ...(workspace ? { workspace } : {}) };
     }
     case "open_agent": {
-      const agentId = readStringParam(params, "agentId")?.trim();
-      const workspace = readStringParam(params, "workspace")?.trim();
+      const agentId = readToolStringParam(params, "agentId")?.trim();
+      const workspace = readToolStringParam(params, "workspace")?.trim();
       return {
         kind: "open-tui",
         ...(agentId ? { agentId } : {}),
@@ -320,7 +320,7 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     }
     case "open_setup": {
       const target = readSetupTarget(params);
-      const channel = readStringParam(params, "channel")?.trim().toLowerCase();
+      const channel = readToolStringParam(params, "channel")?.trim().toLowerCase();
       return {
         kind: "open-setup",
         target,
@@ -346,8 +346,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     case "plugin_uninstall":
       return { kind: "plugin-uninstall", pluginId: requireParam(params, "pluginId") };
     case "setup": {
-      const workspace = readStringParam(params, "workspace")?.trim();
-      const model = readStringParam(params, "model")?.trim();
+      const workspace = readToolStringParam(params, "workspace")?.trim();
+      const model = readToolStringParam(params, "model")?.trim();
       return {
         kind: "setup",
         ...(workspace ? { workspace } : {}),
@@ -355,7 +355,7 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       };
     }
     case "set_default_model": {
-      const agentId = readStringParam(params, "agentId")?.trim();
+      const agentId = readToolStringParam(params, "agentId")?.trim();
       return {
         kind: "set-default-model",
         model: requireParam(params, "model"),
@@ -363,8 +363,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       };
     }
     case "create_agent": {
-      const workspace = readStringParam(params, "workspace")?.trim();
-      const model = readStringParam(params, "model")?.trim();
+      const workspace = readToolStringParam(params, "workspace")?.trim();
+      const model = readToolStringParam(params, "model")?.trim();
       return {
         kind: "create-agent",
         agentId: requireParam(params, "agentId"),

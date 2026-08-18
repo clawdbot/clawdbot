@@ -95,6 +95,20 @@ async function executeWidget(params: {
 }
 
 describe("show_widget", () => {
+  it("tells the agent to use widgets proactively", () => {
+    expect(createShowWidgetTool().description).toMatch(
+      /^Visual helps\? Make widget\. Do not wait for ask\./,
+    );
+  });
+
+  it("keeps widget documents from duplicating host-owned metadata and controls", () => {
+    const description = createShowWidgetTool().description;
+
+    expect(description).toContain("`title` is host metadata");
+    expect(description).toContain("Start directly with content");
+    expect(description).toContain("do not repeat the title");
+  });
+
   it("uses flat provider-safe enums for dashboard options", () => {
     const tool = createShowWidgetTool();
     const properties = (
@@ -296,7 +310,10 @@ describe("show_widget", () => {
         client: null,
         isWebchatConnect: () => false,
         respond,
-        context: { broadcast } as unknown as GatewayRequestContext,
+        context: {
+          broadcast,
+          getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+        } as unknown as GatewayRequestContext,
       });
       if (failure) {
         throw failure;
@@ -355,7 +372,10 @@ describe("show_widget", () => {
             failure = new Error(error?.message ?? "board request failed");
           }
         },
-        context: { broadcast: vi.fn() } as unknown as GatewayRequestContext,
+        context: {
+          broadcast: vi.fn(),
+          getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+        } as unknown as GatewayRequestContext,
       });
       if (failure) {
         throw failure;
@@ -484,7 +504,10 @@ describe("show_widget", () => {
             failure = new Error(error?.message ?? "board request failed");
           }
         },
-        context: { broadcast: vi.fn() } as unknown as GatewayRequestContext,
+        context: {
+          broadcast: vi.fn(),
+          getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+        } as unknown as GatewayRequestContext,
       });
       if (failure) {
         throw failure;

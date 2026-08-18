@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { saveTaskRegistryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -9,9 +11,11 @@ import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
 import {
+  cronQuietTriggerTaskDetail,
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronTaskRecordToRunLogEntry,
+  cronTaskRecordToTriggerEval,
   parseCronRunLogEntryObject,
 } from "./task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "./task-run-event-codec.js";
@@ -440,16 +444,47 @@ describe("cron task run history", () => {
     );
   });
 
-  it("keeps the internal store key out of the legacy wire record", () => {
+  it("allowlists the legacy wire record", () => {
     const storeKey = "/internal/cron/store";
     const task = taskFromEntry(
       { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
       1,
       storeKey,
     );
+    task.detail = {
+      ...(task.detail as Record<string, TaskRecord["detail"]>),
+      internalFutureField: "secret",
+      triggerState: { secret: true },
+      delivery: "malformed",
+      failureNotificationDelivery: { status: "invalid", internal: "secret" },
+    };
     const entry = cronTaskRecordToRunLogEntry(task);
     expect(entry).not.toBeNull();
     expect(Object.hasOwn(entry ?? {}, "storeKey")).toBe(false);
+    expect(Object.hasOwn(entry ?? {}, "internalFutureField")).toBe(false);
+    expect(Object.hasOwn(entry ?? {}, "triggerState")).toBe(false);
+    expect(entry?.delivery).toBeUndefined();
+    expect(entry?.failureNotificationDelivery).toBeUndefined();
+  });
+
+  it("keeps quiet-trigger recovery detail out of run history", () => {
+    const task = taskFromEntry(
+      { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
+      1,
+      "/internal/cron/store",
+    );
+    task.detail = cronQuietTriggerTaskDetail("/internal/cron/store", {
+      fired: false,
+      stateChanged: true,
+      state: { ready: false },
+    });
+
+    expect(cronTaskRecordToTriggerEval(task)).toEqual({
+      fired: false,
+      stateChanged: true,
+      state: { ready: false },
+    });
+    expect(cronTaskRecordToRunLogEntry(task)).toBeNull();
   });
 
   it("locks the serialized detail shape: kind first, status second", () => {
@@ -493,15 +528,63 @@ describe("cron task run history", () => {
     ).toBeUndefined();
   });
 
-  it("preserves TLS certificate failures in stored run history", () => {
-    const entry = {
-      ts: 100,
-      jobId: JOB_ID,
-      action: "finished",
-      status: "error",
-      errorReason: "tls_certificate",
-    } as const;
+  it("rejects invalid legacy run-history scalar and timestamp fields", () => {
+    const base = { ts: 100, jobId: JOB_ID, action: "finished" } as const;
+    expect(
+      parseCronRunLogEntryObject({
+        ...base,
+        status: "invalid",
+        summary: 42,
+        runAtMs: -1,
+        durationMs: 1.5,
+        nextRunAtMs: MAX_DATE_TIMESTAMP_MS + 1,
+        delivery: [],
+        usage: { input_tokens: Number.NaN, output_tokens: -1 },
+      }),
+    ).toEqual({
+      ...base,
+      status: undefined,
+      error: undefined,
+      errorReason: undefined,
+      summary: undefined,
+      runId: undefined,
+      diagnostics: undefined,
+      runAtMs: undefined,
+      durationMs: undefined,
+      nextRunAtMs: undefined,
+      triggerFired: undefined,
+      model: undefined,
+      provider: undefined,
+      usage: undefined,
+    });
+    expect(parseCronRunLogEntryObject({ ...base, usage: [] })?.usage).toBeUndefined();
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0, future_tokens: 1 } })?.usage,
+    ).toEqual({
+      input_tokens: 0,
+      output_tokens: undefined,
+      total_tokens: undefined,
+      cache_read_tokens: undefined,
+      cache_write_tokens: undefined,
+    });
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { future_tokens: 1 } })?.usage,
+    ).toBeUndefined();
+    expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS })).not.toBeNull();
+    expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS + 1 })).toBeNull();
+  });
 
-    expect(parseCronRunLogEntryObject(entry)?.errorReason).toBe("tls_certificate");
+  it("preserves every canonical failover reason in stored run history", () => {
+    for (const errorReason of FAILOVER_REASONS) {
+      const entry = {
+        ts: 100,
+        jobId: JOB_ID,
+        action: "finished",
+        status: "error",
+        errorReason,
+      } as const;
+
+      expect(parseCronRunLogEntryObject(entry)?.errorReason).toBe(errorReason);
+    }
   });
 });

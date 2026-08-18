@@ -5,35 +5,46 @@ import type {
   SessionAcpIdentity,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionRow, SessionRunStatus } from "../../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
-import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
+import type {
+  PendingDeliveryNoticeState,
+  PendingFinalDeliveryState,
+} from "./pending-final-delivery-types.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
   SessionEntryProvenance,
+  SessionOwnerAssignment,
+  SessionParticipant,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
+import type { SessionSkillSnapshot } from "./session-prompt-types.js";
+import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
+import type { SessionToolOverrides } from "./session-tool-overrides.js";
+
+export type { SessionToolOverrides } from "./session-tool-overrides.js";
+export type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
+export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
-
-export type SessionToolOverrides = {
-  mcpServers?: Record<string, boolean>;
-  mcpToolsDeny?: Record<string, string[]>;
-  skills?: Record<string, boolean>;
-  webSearch?: boolean;
-};
 
 export type SessionOrigin = {
   label?: string;
@@ -58,12 +69,6 @@ export type SessionDeliveryState =
       context: DeliveryContext;
       origin: SessionOrigin;
     };
-
-type PendingFinalDeliveryState = {
-  createdAt: number;
-  context?: DeliveryContext;
-  intentId?: string;
-} & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 
 /**
  * Durable transcript-repair record: an assistant final that was delivered to
@@ -161,6 +166,7 @@ export type SessionCompactionCheckpoint = {
   reason: SessionCompactionCheckpointReason;
   tokensBefore?: number;
   tokensAfter?: number;
+  tokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
   summary?: string;
   firstKeptEntryId?: string;
   preCompaction: SessionCompactionTranscriptReference;
@@ -257,7 +263,10 @@ export interface QuotaSuspension {
   summary?: string;
   /** Opaque pointer to an external snapshot blob (path/key); not the briefing text itself. */
   snapshotRef?: string;
-  /** Lane that was set to concurrency=0 when this suspension was issued. */
+  /**
+   * @deprecated Lane suspension was removed; nothing writes this anymore. Kept only to
+   * hold the shipped SDK surface stable; drop at the next surface window.
+   */
   laneId?: string;
   expectedResumeBy?: number; // Reaper TTL (e.g. 30min)
   state: LaneExecutionState; // State machine check for hot-path
@@ -297,7 +306,8 @@ export type RestartRecoveryRun = {
 };
 
 type SessionEntryCore = SessionRestartRecoveryState &
-  SessionEntryProvenance & {
+  SessionEntryProvenance &
+  Pick<SessionRow, "permissionMode" | "sessionRoot"> & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: SessionVisibility;
     /**
@@ -340,8 +350,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
-    /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
-    icon?: string;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */
@@ -366,13 +374,29 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
      */
-    worktree?: { id: string; branch: string; repoRoot: string };
+    worktree?: {
+      id: string;
+      branch: string;
+      repoRoot: string;
+      /** Durable skill workspace prepared when this session runs from a managed worktree. */
+      canonicalWorkspaceDir?: string;
+    };
+    /** Project registry id selected when this logical session node was created. */
+    projectId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
+    /** Exact parent incarnation captured when this child was created. */
+    parentSessionId?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
+    /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
+    owner?: SessionOwnerAssignment;
+    /** Earliest external prompt actors, projected from the participant table. */
+    participants?: SessionParticipant[];
+    /** Total external prompt actors after excluding the effective owner. */
+    participantCount?: number;
     /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
     createdAt?: number;
     /** Exact source generation and optional cut entry for an actual transcript-copy fork. */
@@ -420,7 +444,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
     runtimeMs?: number;
     /** Final persisted subagent run status, used after in-memory run archival. */
-    status?: "running" | "done" | "failed" | "killed" | "timeout";
+    status?: SessionRunStatus;
     /** Compact user-facing reason for the latest failed or timed-out run. */
     lastRunError?: string;
     /**
@@ -451,6 +475,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
       toolsAllowIsDefault?: boolean;
       /** Exact server-stamped authority provenance copied from the owning cron job. */
       scheduledToolPolicy?: CronScheduledToolPolicy;
+      /** Store-private origin paired with an account scheduled-tool policy. */
+      scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
       cliSessionBindingFacts?: {
         extraSystemPromptStatic?: string;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -512,7 +538,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     groupActivation?: "mention" | "always";
     groupActivationNeedsSystemIntro?: boolean;
     sendPolicy?: "allow" | "deny";
-    queueMode?: "steer" | "followup" | "collect" | "interrupt";
+    queueMode?: QueueMode;
     queueDebounceMs?: number;
     queueCap?: number;
     queueDrop?: "old" | "new" | "summarize";
@@ -520,6 +546,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     outputTokens?: number;
     totalTokens?: number;
     pendingFinalDelivery?: PendingFinalDeliveryState;
+    pendingDeliveryNotice?: PendingDeliveryNoticeState;
     /**
      * Ordered durable backlog of delivered assistant finals that failed to
      * reach the canonical transcript. Session admission restores each item
@@ -533,6 +560,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * totalTokens as stale/unknown for context-utilization displays.
      */
     totalTokensFresh?: boolean;
+    /** Version 1 records totalTokens as the current prompt/context snapshot only. */
+    totalTokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
     estimatedCostUsd?: number;
     cacheRead?: number;
     cacheWrite?: number;
@@ -551,6 +580,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     agentHarnessId?: string;
     fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
+    /** Origin of the persisted context window; absent on legacy/unproven rows. */
+    contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
@@ -561,6 +592,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
+    /** Persistent operator/agent-set sidebar emoji icon (single grapheme). */
+    icon?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
     /** Preferred Control UI face when a caller opens this session without explicit face intent. */
@@ -590,6 +623,10 @@ export interface SessionEntry extends SessionEntryCore {}
 export type InternalSessionEntryCore = SessionEntryCore & {
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
+  activeWriterRunId?: string;
+  /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
+  sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 
@@ -755,6 +792,9 @@ function mergeSessionEntryWithPolicy(
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
   }
+  if (existing.projectId !== undefined) {
+    next.projectId = existing.projectId;
+  }
   if (existing.forkSource !== undefined) {
     next.forkSource = existing.forkSource;
   }
@@ -794,24 +834,21 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): number | undefined {
-  const total = entry?.totalTokens;
-  if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
-    return undefined;
-  }
-  return total;
+export function resolveSessionTotalTokens(entry?: Pick<SessionEntry, "totalTokens"> | null) {
+  return asNonNegativeFiniteNumber(entry?.totalTokens);
 }
 
 export function resolveFreshSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion"> | null,
 ): number | undefined {
   const total = resolveSessionTotalTokens(entry);
   if (total === undefined) {
     return undefined;
   }
-  if (entry?.totalTokensFresh === false) {
+  if (
+    entry?.totalTokensFresh !== true ||
+    entry.totalTokensVersion !== SESSION_TOTAL_TOKENS_VERSION
+  ) {
     return undefined;
   }
   return total;
@@ -824,96 +861,6 @@ export type GroupKeyResolution = {
   chatType?: SessionChatType;
 };
 
-export type SessionSkillPromptRef = {
-  version: 1;
-  algorithm: "sha256";
-  hash: string;
-  bytes: number;
-};
-
-export type SessionSkillSnapshot = {
-  prompt: string;
-  /** Persisted stores may replace large duplicate prompts with a content-addressed blob ref. */
-  promptRef?: SessionSkillPromptRef;
-  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
-  /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
-  skillFilter?: string[];
-  /** Effective node-exec eligibility used to select connected node-hosted skills. */
-  nodeSkillsEligibility?: { canExec: boolean; node?: string };
-  /**
-   * Runtime-only, never persisted. Carries the full parsed Skill[] (including
-   * each SKILL.md body) so the embedded runner can skip a workspace skill
-   * scan within a turn. Persistence projections strip it before committing
-   * session state. On a cold session resume this is undefined and
-   * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
-   */
-  resolvedSkills?: Skill[];
-  version?: number;
-};
-
-export type SessionSystemPromptReport = {
-  source: "run" | "estimate";
-  generatedAt: number;
-  sessionId?: string;
-  sessionKey?: string;
-  provider?: string;
-  model?: string;
-  workspaceDir?: string;
-  bootstrapMaxChars?: number;
-  bootstrapTotalMaxChars?: number;
-  bootstrapTruncation?: {
-    warningMode?: "off" | "once" | "always";
-    warningShown?: boolean;
-    promptWarningSignature?: string;
-    warningSignaturesSeen?: string[];
-    truncatedFiles?: number;
-    nearLimitFiles?: number;
-    totalNearLimit?: boolean;
-  };
-  sandbox?: {
-    mode?: string;
-    sandboxed?: boolean;
-  };
-  systemPrompt: {
-    chars: number;
-    projectContextChars: number;
-    nonProjectContextChars: number;
-    hash?: string;
-  };
-  currentTurn?: {
-    kind?: "user_request" | "room_event";
-    promptChars: number;
-    runtimeContextChars: number;
-    // Hook prepend/append context sent to the model but absent from the
-    // persisted transcript prompt; consumers add it on top of transcript sums.
-    modelOnlyPromptChars?: number;
-  };
-  injectedWorkspaceFiles: Array<{
-    name: string;
-    path: string;
-    missing: boolean;
-    rawChars: number;
-    injectedChars: number;
-    truncated: boolean;
-  }>;
-  skills: {
-    promptChars: number;
-    hash?: string;
-    entries: Array<{ name: string; blockChars: number }>;
-  };
-  tools: {
-    listChars: number;
-    schemaChars: number;
-    entries: Array<{
-      name: string;
-      summaryChars: number;
-      summaryHash?: string;
-      schemaChars: number;
-      schemaHash?: string;
-      propertiesCount?: number | null;
-    }>;
-  };
-};
+export type { SessionSkillPromptRef, SessionSkillSnapshot } from "./session-prompt-types.js";
 
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
-export const DEFAULT_IDLE_MINUTES = 0;

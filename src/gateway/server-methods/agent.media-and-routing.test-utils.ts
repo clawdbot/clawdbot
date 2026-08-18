@@ -12,7 +12,7 @@ import {
   resetGatewayWorkAdmission,
   waitForActiveGatewayRootWork,
 } from "../../process/gateway-work-admission.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import {
   getAgentTestMocks,
@@ -57,7 +57,7 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir({ prefix: "openclaw-gateway-failed-default-session-file-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-failed-default-session-file-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
       mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
@@ -126,7 +126,7 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir({ prefix: "openclaw-gateway-stale-failed-session-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-stale-failed-session-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       const storePath = `${sessionsDir}/sessions.json`;
       await fs.mkdir(sessionsDir, { recursive: true });
@@ -202,7 +202,7 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir({ prefix: "openclaw-gateway-failed-session-file-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-failed-session-file-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
       mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
@@ -926,7 +926,7 @@ describe("gateway agent handler", () => {
 
   it("recovers terminal failed agent API sessions with SQLite transcript rows", async () => {
     const sessionId = "failed-agent-session";
-    await withTempDir({ prefix: "openclaw-gateway-terminal-recovery-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-terminal-recovery-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
       mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
@@ -1204,6 +1204,7 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
+      status: "queued",
       task: "follow-up",
     });
   });
@@ -1293,10 +1294,13 @@ describe("gateway agent handler", () => {
       lastAccountId: "acct-1",
       lastThreadId: 42,
       totalTokens: 12,
-      status: "running",
+      status: "queued",
     });
     expect(mockCallArg(broadcastToConnIds, 0, 2)).toEqual(new Set(["conn-1"]));
-    expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({ dropIfSlow: true });
+    expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({
+      agentId: "main",
+      dropIfSlow: true,
+    });
   });
 
   it("passes the raw user message to agentCommand for LLM-boundary timestamping", async () => {

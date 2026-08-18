@@ -26,12 +26,38 @@ export const LogsTailResultSchema = closedObject({
 export const ChatHistoryParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  cursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/**
+ * Bounded forward catch-up response. Clients replay `messages` as `session.message`
+ * payloads. There is no continuation loop: more than 200 raw events or the byte
+ * budget returns `reset`, and the client fetches a fresh tail page.
+ */
+export const ChatHistoryDeltaResultSchema = closedObject({
+  kind: Type.Literal("delta"),
+  messages: Type.Array(Type.Unknown()),
+  deltaCursor: Type.String(),
+  sessionInfo: Type.Unknown(),
+  agentsList: Type.Optional(Type.Unknown()),
+  metadata: Type.Optional(Type.Unknown()),
+});
+
+/** Normal cursor discontinuity; clients recover with a fresh tail request. */
+export const ChatHistoryResetResultSchema = closedObject({
+  kind: Type.Literal("reset"),
+});
+
+/** Closed cursor outcome union. */
+export const ChatHistoryCursorResultSchema = Type.Union([
+  ChatHistoryDeltaResultSchema,
+  ChatHistoryResetResultSchema,
+]);
 
 /** Lightweight chat metadata request; optional agent scope keeps selector state explicit. */
 export const ChatMetadataParamsSchema = closedObject({
@@ -109,6 +135,9 @@ const RunToolBindingsSchema = Type.Record(
   { maxProperties: 16 },
 );
 
+const QUEUE_MODES = ["steer", "followup", "collect", "interrupt"] as const;
+export type QueueMode = (typeof QUEUE_MODES)[number];
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
@@ -120,7 +149,7 @@ export const ChatSendParamsSchema = closedObject({
   // One-turn override for auto fast-mode cutoff seconds.
   fastAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
   // One-turn override for active-run queue admission.
-  queueMode: Type.Optional(Type.String({ enum: ["steer", "followup", "collect", "interrupt"] })),
+  queueMode: Type.Optional(Type.String({ enum: [...QUEUE_MODES] })),
   deliver: Type.Optional(Type.Boolean()),
   originatingChannel: Type.Optional(Type.String()),
   originatingTo: Type.Optional(Type.String()),
@@ -135,9 +164,13 @@ export const ChatSendParamsSchema = closedObject({
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
   suppressCommandInterpretation: Type.Optional(Type.Boolean()),
-  // Client's believed active-branch leaf entry id. A mismatch with the
-  // session's current active leaf rejects the send so stale views cannot post elsewhere.
+  // Transcript-branch CAS for non-steer interactive sends: the client's displayed
+  // branch leaf (null = authoritative empty transcript). Steer sends ignore it;
+  // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  // Optional exact-run fence for steer sends; on mismatch the send rejects
+  // instead of reaching a same-key successor run.
+  expectedRunId: Type.Optional(NonEmptyString),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
 });

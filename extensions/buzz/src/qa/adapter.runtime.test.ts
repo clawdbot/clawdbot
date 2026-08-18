@@ -1,6 +1,7 @@
-import type {
-  QaBusInboundMessageInput,
-  QaBusMessage,
+import {
+  parseQaTarget,
+  type QaBusInboundMessageInput,
+  type QaBusMessage,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseBuzzQaCredentialPayload } from "./credentials.js";
@@ -179,7 +180,13 @@ describe("Buzz QA transport adapter", () => {
       ...input,
       id: `bus-outbound-${++outboundIndex}`,
       direction: "outbound" as const,
-      conversation: { id: "main", kind: "group" as const },
+      conversation: (() => {
+        const target = parseQaTarget(input.to);
+        return {
+          id: target.conversationId,
+          kind: target.chatType,
+        };
+      })(),
     }));
     sendMessage
       .mockResolvedValueOnce({ eventId: "native-root", timestamp: 1_750_000_000_000 })
@@ -199,7 +206,7 @@ describe("Buzz QA transport adapter", () => {
 
     const root = await adapter.sendInbound({
       accountId: "sut",
-      conversation: { id: "main", kind: "group" },
+      conversation: { id: "main", kind: "channel" },
       senderId: "driver",
       senderName: "QA Driver",
       text: "@openclaw root",
@@ -216,7 +223,7 @@ describe("Buzz QA transport adapter", () => {
     });
     const followUp = await adapter.sendInbound({
       accountId: "sut",
-      conversation: { id: "main", kind: "group" },
+      conversation: { id: "main", kind: "channel" },
       senderId: "driver",
       senderName: "QA Driver",
       text: "@openclaw follow-up",
@@ -240,6 +247,7 @@ describe("Buzz QA transport adapter", () => {
     });
     expect(addOutboundMessage).toHaveBeenLastCalledWith(
       expect.objectContaining({
+        to: "channel:main",
         threadId: root.id,
         replyToId: followUp.id,
       }),

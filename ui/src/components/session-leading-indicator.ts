@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -12,7 +12,7 @@ import {
   renderSessionUnreadBadge,
   type SessionGlyphContent,
 } from "./session-glyph.ts";
-import { resolveSessionIcon } from "./session-icon-registry.ts";
+import { resolveSessionIconGlyph } from "./session-icon-glyph-registry.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
 
@@ -59,7 +59,7 @@ function renderPullRequestIndicator(
     role="img"
     aria-label=${label}
     title=${showTitle ? label : nothing}
-    >${icons.gitBranch}</span
+    >${pullRequestState === "open" ? icons.gitPullRequest : icons.gitMerge}</span
   >`;
 }
 
@@ -70,22 +70,21 @@ function renderSessionTrailingState(
   const sessionState = renderSessionState(session, false);
   const concurrentUnreadState = session.hasActiveRun ? renderSessionUnreadState(session) : nothing;
   if (
-    !session.forkSource &&
     pullRequestState === "none" &&
     sessionState === nothing &&
     concurrentUnreadState === nothing
   ) {
     return nothing;
   }
-  const forkLabel = t("sessionsView.forkedSession");
-  return html`
-    ${session.forkSource
-      ? html`<span class="session-row-fork-indicator" role="img" aria-label=${forkLabel}
-          >${icons.gitFork}</span
-        >`
-      : nothing}
-    ${renderPullRequestIndicator(pullRequestState, false)} ${sessionState} ${concurrentUnreadState}
-  `;
+  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}
+  ${concurrentUnreadState}`;
+}
+
+function renderPersistentSessionIcon(icon: string) {
+  const glyph = resolveSessionIconGlyph(icon);
+  return glyph
+    ? html`<span class="session-glyph__icon" aria-hidden="true">${glyph}</span>`
+    : html`<span class="session-glyph__emoji" aria-hidden="true">${icon}</span>`;
 }
 
 export function describeSessionTrailingState(
@@ -95,7 +94,9 @@ export function describeSessionTrailingState(
   return [
     session.forkSource ? t("sessionsView.forkedSession") : "",
     pullRequestState === "none" ? "" : pullRequestStateLabel(pullRequestState),
-    session.hasActiveRun ? t("sessionsView.activeRun") : "",
+    session.hasActiveRun
+      ? t(session.status === "queued" ? "sessionsView.statusQueued" : "sessionsView.activeRun")
+      : "",
     session.unread ? t("sessionsView.unread") : "",
   ]
     .filter(Boolean)
@@ -106,12 +107,21 @@ export function renderSessionLeadingState(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
   ownerActor: SessionCreatedActor | null | undefined,
-  attribution: "created" | "archived",
-) {
+  attribution: "created" | "owned" | "archived",
+  ownerViewing?: boolean,
+  participants?: readonly SessionCreatedActor[],
+  participantCount?: number,
+): {
+  running: boolean;
+  leadingIndicator: TemplateResult | typeof nothing;
+  trailingIndicator: TemplateResult | typeof nothing;
+  renderedOwnerId?: string;
+} {
   const running = session.hasActiveRun;
   const trailingIndicator = session.isChild
     ? nothing
     : renderSessionTrailingState(session, pullRequestState);
+  // Transient attention always outranks the persistent decorative icon.
   if (session.isChild) {
     if (session.attention.kind !== "none") {
       return {
@@ -124,13 +134,11 @@ export function renderSessionLeadingState(
         trailingIndicator,
       };
     }
-    if (session.pinned) {
+    if (session.icon) {
       return {
         running,
         leadingIndicator: renderSessionGlyph({
-          content: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
-            >${resolveSessionIcon(session.icon)}</span
-          >`,
+          content: renderPersistentSessionIcon(session.icon),
           running,
           badge: renderGlyphBadge(session, pullRequestState),
         }),
@@ -154,10 +162,7 @@ export function renderSessionLeadingState(
     const sessionState = renderSessionState(session);
     return {
       running,
-      leadingIndicator:
-        sessionState !== nothing
-          ? sessionState
-          : html`<span class="sidebar-session-indicator__dot" aria-hidden="true"></span>`,
+      leadingIndicator: sessionState,
       trailingIndicator,
     };
   }
@@ -172,13 +177,11 @@ export function renderSessionLeadingState(
       trailingIndicator,
     };
   }
-  if (session.pinned) {
+  if (session.icon) {
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
-          >${resolveSessionIcon(session.icon)}</span
-        >`,
+        content: renderPersistentSessionIcon(session.icon),
         running: false,
       }),
       trailingIndicator,
@@ -188,11 +191,21 @@ export function renderSessionLeadingState(
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: renderSessionOwnerChip(ownerActor, "row", attribution),
+        content: renderSessionOwnerChip(
+          ownerActor,
+          "row",
+          attribution,
+          ownerViewing,
+          participants,
+          participantCount,
+        ),
         running: false,
         circular: true,
       }),
       trailingIndicator,
+      // Single source for facepile dedup: only the identity actually shown in
+      // the lead may be excluded, else attention/archived rows hide a viewer.
+      renderedOwnerId: ownerActor.id,
     };
   }
   return {

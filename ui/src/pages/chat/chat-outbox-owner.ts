@@ -1,3 +1,4 @@
+import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { subscribeStoredChatOutboxChanges } from "../../lib/chat/outbox-store.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
@@ -14,7 +15,11 @@ type HostProjection = {
   durableSeen: Set<string>;
   retryable: Set<string>;
 };
-type LiveProjection = { item: ChatQueueItem; owner: Host };
+type LiveProjection = {
+  confirmationGrace?: { deadlineMs: number; deliveryVersion: string };
+  item: ChatQueueItem;
+  owner: Host;
+};
 const LIVE_VERSION_KEYS = ["sendRunId", "sendAttempts", "sendState", "sendError"] as const;
 const routePresentation = new WeakSet<ChatQueueItem>();
 const storageIds = new WeakMap<Storage, number>();
@@ -102,7 +107,7 @@ class ChatOutboxGatewayOwner {
     const durableIds = new Set(durable.map((item) => item.id));
     visible.push(...local.filter((item) => !durableIds.has(item.id) && isActiveLocal(state, item)));
     this.prune(host);
-    return visible.toSorted((left, right) => left.createdAt - right.createdAt);
+    return visible.toSorted(compareChatQueueOrder);
   }
   syncHost(host: Host, options: { requestUpdate?: boolean } = {}): void {
     host.chatQueue = this.snapshot(host, resolveStoredChatOutboxScope(host, host.sessionKey));
@@ -177,7 +182,7 @@ class ChatOutboxGatewayOwner {
     const key = storedChatOutboxScopeKey(scope);
     const queue = (state.byScope.get(key) ?? []).filter((entry) => entry.id !== item.id);
     queue.push(item);
-    queue.sort((left, right) => left.createdAt - right.createdAt);
+    queue.sort(compareChatQueueOrder);
     state.byScope.set(key, queue);
     routePresentation.add(item);
     if (retryable) {
@@ -232,6 +237,40 @@ class ChatOutboxGatewayOwner {
   hasVolatile(host: Host, id: string): boolean {
     return this.hosts.get(host)?.retryable.has(id) ?? false;
   }
+  confirmationDeadline(
+    scope: Scope,
+    itemId: string,
+    deliveryVersion: string,
+    now: number,
+    graceMs: number,
+  ): number | null {
+    const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(itemId);
+    if (!live) {
+      return null;
+    }
+    if (live.confirmationGrace?.deliveryVersion === deliveryVersion) {
+      return live.confirmationGrace.deadlineMs;
+    }
+    const deadlineMs = now + graceMs;
+    live.confirmationGrace = { deadlineMs, deliveryVersion };
+    return deadlineMs;
+  }
+  clearConfirmationGrace(scope: Scope, itemId: string): void {
+    const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(itemId);
+    if (live) {
+      delete live.confirmationGrace;
+    }
+  }
+  // Panes share this outbox and its drain while composer state stays per pane, so
+  // a pane-local fact that blocks delivery has to be answerable from any of them.
+  anyPane(matches: (host: Host) => boolean): boolean {
+    for (const pane of this.panes) {
+      if (matches(pane)) {
+        return true;
+      }
+    }
+    return false;
+  }
   mayRemove(host: Host, scope: Scope, id: string): boolean {
     const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(id);
     const local = host.chatQueue.find((item) => item.id === id);
@@ -246,7 +285,7 @@ class ChatOutboxGatewayOwner {
     const key = storedChatOutboxScopeKey(scope);
     const live = this.live.get(key) ?? new Map<string, LiveProjection>();
     if (item) {
-      live.set(id, { item, owner: host });
+      live.set(id, { confirmationGrace: live.get(id)?.confirmationGrace, item, owner: host });
       this.live.set(key, live);
     } else {
       live.delete(id);

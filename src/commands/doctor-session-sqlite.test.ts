@@ -8,11 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../agents/sessions/session-manager.js";
 import {
-  loadExactSqliteSessionEntry,
-  loadSqliteTranscriptEventsSync,
-  readSqliteTranscriptStatsSync,
-  upsertSqliteSessionEntry,
-} from "../config/sessions/session-accessor.sqlite.js";
+  loadExactSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  loadTranscriptEventsSync,
+  readTranscriptStatsSync,
+} from "../config/sessions/session-accessor.sqlite-read.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -257,7 +259,7 @@ describe("runDoctorSessionSqlite", () => {
       const stateDir = path.join(tempDir, "state");
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      await upsertSqliteSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", env, sessionKey: "agent:main:main", storePath },
         { sessionId: "sqlite-session", updatedAt: Date.now() },
       );
@@ -438,14 +440,14 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
-    const imported = loadExactSqliteSessionEntry({
+    const imported = loadExactSessionEntry({
       agentId: "main",
       sessionKey: "agent:main:main",
       storePath: store.storePath,
     });
     // The SQLite runtime does no read repair, so import must store canonical shapes.
     expect(typeof sessionDeliveryRoute(imported?.entry)).not.toBe("string");
-    const events = loadSqliteTranscriptEventsSync({
+    const events = loadTranscriptEventsSync({
       agentId: "main",
       sessionId: "session-1",
       sessionKey: "agent:main:main",
@@ -546,6 +548,33 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
+  it("aborts a batch when a prepared transcript changes before import", async () => {
+    const store = createLegacyStore();
+    const realStatSync = fs.statSync.bind(fs);
+    let changed = false;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((candidate, options) => {
+      const stat = realStatSync(candidate, options as never);
+      if (
+        !changed &&
+        path.resolve(String(candidate)) === path.resolve(store.transcriptPath) &&
+        !(options as { bigint?: boolean } | undefined)?.bigint
+      ) {
+        changed = true;
+        fs.appendFileSync(store.transcriptPath, '{"type":"custom","customType":"late"}\n');
+      }
+      return stat;
+    }) as typeof fs.statSync);
+
+    try {
+      await expect(
+        runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath }),
+      ).rejects.toThrow(/stop active session writers and rerun `openclaw doctor --fix`/);
+      expect(fs.existsSync(store.transcriptPath)).toBe(true);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
   it("preserves the legacy transcript mtime as the SQLite mutation watermark", async () => {
     const store = createLegacyStore();
     const transcriptMtimeMs = 1_700_000_000_000;
@@ -560,7 +589,7 @@ describe("runDoctorSessionSqlite", () => {
 
     expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
     expect(
-      readSqliteTranscriptStatsSync({
+      readTranscriptStatsSync({
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:main",
@@ -573,7 +602,7 @@ describe("runDoctorSessionSqlite", () => {
     const store = createLegacyStore({
       entryOverrides: { lifecycleRevision: "rev-1" },
     });
-    await upsertSqliteSessionEntry(
+    await upsertSessionEntryCore(
       {
         agentId: "main",
         env: store.env,
@@ -596,7 +625,7 @@ describe("runDoctorSessionSqlite", () => {
 
     expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
     expect(
-      loadExactSqliteSessionEntry({
+      loadExactSessionEntry({
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
@@ -682,20 +711,77 @@ describe("runDoctorSessionSqlite", () => {
     expect(inspect.totals.sqliteEntries).toBe(1);
     expect(inspect.totals.unreferencedJsonlFiles).toBe(0);
     expect(
-      loadExactSqliteSessionEntry({
+      loadExactSessionEntry({
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
       })?.entry,
     ).not.toHaveProperty("sessionFile");
     expect(
-      loadSqliteTranscriptEventsSync({
+      loadTranscriptEventsSync({
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
       }),
     ).toHaveLength(2);
+  });
+
+  it("uses target-bounded validation reads for multi-session imports", async () => {
+    const countTargetReads = async (sessionCount: number) => {
+      const store = createLegacyStore();
+      const sessions = Object.fromEntries(
+        Array.from({ length: sessionCount }, (_, offset) => {
+          const index = offset + 1;
+          return [
+            index === 1 ? "agent:main:main" : `agent:main:session-${index}`,
+            {
+              sessionFile: `session-${index}.jsonl`,
+              sessionId: `session-${index}`,
+              updatedAt: 2000 + index,
+            },
+          ];
+        }),
+      );
+      fs.writeFileSync(store.storePath, `${JSON.stringify(sessions)}\n`, { mode: 0o600 });
+      for (let index = 2; index <= sessionCount; index += 1) {
+        fs.writeFileSync(
+          path.join(store.sessionDir, `session-${index}.jsonl`),
+          `{"type":"session","sessionId":"session-${index}"}\n{"type":"event","id":"evt-${index}"}\n`,
+          { mode: 0o600 },
+        );
+      }
+
+      const sqlitePath = path.resolve(
+        resolveTargetSqlitePath({ agentId: "main", storePath: store.storePath }),
+      );
+      const openSqlite = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      try {
+        const report = await runDoctorSessionSqlite({
+          env: store.env,
+          mode: "import",
+          store: store.storePath,
+        });
+        expect(report.totals).toMatchObject({
+          importedEntries: sessionCount,
+          importedTranscriptEvents: sessionCount * 2,
+          issues: 0,
+          sqliteEntries: sessionCount,
+        });
+        return openSqlite.mock.calls.filter(
+          ([location, options]) =>
+            path.resolve(location) === sqlitePath && options?.readOnly === true,
+        ).length;
+      } finally {
+        openSqlite.mockRestore();
+      }
+    };
+
+    const singleSessionReads = await countTargetReads(1);
+    const multiSessionReads = await countTargetReads(3);
+
+    expect(singleSessionReads).toBeGreaterThan(0);
+    expect(multiSessionReads).toBe(singleSessionReads);
   });
 
   it("archives legacy stores with valid sessions and invalid cron stubs without failing", async () => {
@@ -1083,7 +1169,7 @@ describe("runDoctorSessionSqlite", () => {
       validatedTranscriptEvents: 0,
     });
     expect(
-      loadExactSqliteSessionEntry({
+      loadExactSessionEntry({
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
@@ -1142,13 +1228,32 @@ describe("runDoctorSessionSqlite", () => {
     ]);
   });
 
-  it("checkpoints bulk unreferenced archive moves without per-file manifest rewrites", async () => {
+  it("checkpoints bulk archive moves without per-file manifest rewrites", async () => {
     const store = createLegacyStore();
+    const sessions = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
     for (let index = 0; index < 64; index += 1) {
+      const sessionId = `bulk-session-${index}`;
+      const sessionFile = `${sessionId}.jsonl`;
+      sessions[`agent:main:bulk:${index}`] = {
+        channel: "cli",
+        chatType: "direct",
+        sessionFile,
+        sessionId,
+        updatedAt: 2000 + index,
+      };
+      fs.writeFileSync(
+        path.join(store.sessionDir, sessionFile),
+        `${JSON.stringify({ type: "session", sessionId })}\n`,
+        { mode: 0o600 },
+      );
       fs.writeFileSync(path.join(store.sessionDir, `orphan-${index}.jsonl`), "{}\n", {
         mode: 0o600,
       });
     }
+    fs.writeFileSync(store.storePath, JSON.stringify(sessions, null, 2), { mode: 0o600 });
     fs.writeFileSync(path.join(store.sessionDir, "orphan collision.jsonl"), "{}\n", {
       mode: 0o600,
     });
@@ -1170,12 +1275,18 @@ describe("runDoctorSessionSqlite", () => {
       const plannedUnreferencedMoves =
         manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "unreferenced-jsonl") ??
         [];
+      const plannedTranscriptMoves =
+        manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "transcript") ?? [];
 
       expect(plannedUnreferencedMoves).toHaveLength(67);
       expect(new Set(plannedUnreferencedMoves.map((move) => move.archivePath)).size).toBe(67);
+      expect(plannedTranscriptMoves).toHaveLength(65);
       expect(
         manifest.targets[0]?.completedMoves.filter((move) => move.kind === "unreferenced-jsonl"),
       ).toHaveLength(67);
+      expect(
+        manifest.targets[0]?.completedMoves.filter((move) => move.kind === "transcript"),
+      ).toHaveLength(65);
       expect(manifestWrites).toBeLessThan(20);
       expect(replaceFileAtomicSync).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -2464,14 +2575,14 @@ describe("runDoctorSessionSqlite", () => {
     });
     expect(fs.existsSync(store.transcriptPath)).toBe(false);
     expect(
-      loadExactSqliteSessionEntry({
+      loadExactSessionEntry({
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
       })?.entry.sessionId,
     ).toBe("session-1");
     expect(
-      loadExactSqliteSessionEntry({
+      loadExactSessionEntry({
         agentId: "main",
         sessionKey: "agent:main:alias",
         storePath: store.storePath,
@@ -2520,7 +2631,7 @@ describe("runDoctorSessionSqlite", () => {
       sqliteEntries: 1,
     });
     expect(
-      loadSqliteTranscriptEventsSync({
+      loadTranscriptEventsSync({
         agentId: "codex-proof",
         sessionId: "session-1",
         sessionKey: "agent:main:main",
@@ -2550,14 +2661,14 @@ describe("runDoctorSessionSqlite", () => {
       sessionKey: "agent:main:main",
     });
     expect(
-      loadExactSqliteSessionEntry({
+      loadExactSessionEntry({
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
       })?.entry.sessionId,
     ).toBe("session-1");
     expect(
-      loadSqliteTranscriptEventsSync({
+      loadTranscriptEventsSync({
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:main",
@@ -2618,14 +2729,14 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.existsSync(mainTranscriptPath)).toBe(true);
       expect(fs.existsSync(workTranscriptPath)).toBe(true);
       expect(
-        loadExactSqliteSessionEntry({
+        loadExactSessionEntry({
           agentId: "main",
           sessionKey: "agent:main:main",
           storePath,
         })?.entry.sessionId,
       ).toBe("main-session");
       expect(
-        loadExactSqliteSessionEntry({
+        loadExactSessionEntry({
           agentId: "work",
           sessionKey: "agent:work:main",
           storePath,
@@ -2634,6 +2745,96 @@ describe("runDoctorSessionSqlite", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("partitions the retired top-level store without guessing unscoped ownership", async () => {
+    const stateDir = autoCleanupTempDirs.make("openclaw-doctor-retired-sessions-");
+    const sessionDir = path.join(stateDir, "sessions");
+    const storePath = path.join(sessionDir, "sessions.json");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionFile: "/retired/home/.openclaw/sessions/main-session.jsonl",
+          sessionId: "main-会議",
+          updatedAt: 20,
+        },
+        "agent:ops:main": {
+          sessionFile: "ops-session.jsonl",
+          sessionId: "ops-session",
+          updatedAt: 30,
+        },
+        "voice:ambiguous": { sessionId: "ambiguous-session", updatedAt: 40 },
+      }),
+      { mode: 0o600 },
+    );
+    fs.writeFileSync(
+      path.join(sessionDir, "main-session.jsonl"),
+      '{"type":"session","sessionId":"main-会議"}\n',
+      { mode: 0o600 },
+    );
+    fs.writeFileSync(
+      path.join(sessionDir, "ops-session.jsonl"),
+      '{"type":"session","sessionId":"ops-session"}\n',
+      { mode: 0o600 },
+    );
+
+    const cfg = {
+      agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } },
+    };
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg,
+      env,
+      mode: "import",
+    });
+
+    expect(report.targets.map((target) => target.agentId)).toEqual(["main", "ops"]);
+    expect(report.totals).toMatchObject({
+      archivedLegacyStoreFiles: 0,
+      importedEntries: 2,
+      importedTranscriptEvents: 2,
+      legacyEntries: 2,
+      sqliteEntries: 2,
+    });
+    for (const [agentId, sessionId] of [
+      ["main", "main-会議"],
+      ["ops", "ops-session"],
+    ] as const) {
+      const agentStorePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+      expect(
+        loadExactSessionEntry({
+          agentId,
+          sessionKey: `agent:${agentId}:main`,
+          storePath: agentStorePath,
+        })?.entry.sessionId,
+      ).toBe(sessionId);
+      expect(
+        loadExactSessionEntry({
+          agentId,
+          sessionKey: "voice:ambiguous",
+          storePath: agentStorePath,
+        }),
+      ).toBeUndefined();
+    }
+    expect(fs.existsSync(storePath)).toBe(true);
+    expect(fs.existsSync(path.join(sessionDir, "main-session.jsonl"))).toBe(true);
+    expect(fs.existsSync(path.join(sessionDir, "ops-session.jsonl"))).toBe(true);
+
+    const owned = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: {
+        ...cfg,
+        agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "main" } } },
+      },
+      env,
+      mode: "import",
+    });
+    expect(owned.totals.archivedLegacyStoreFiles).toBe(1);
+    expect(owned.totals.importedEntries).toBe(3);
+    expect(fs.existsSync(storePath)).toBe(false);
   });
 
   it("imports shared custom stores into per-agent SQLite targets", async () => {
@@ -2701,14 +2902,14 @@ describe("runDoctorSessionSqlite", () => {
         expect(target.completedMoves.some((move) => move.kind === "legacy-store")).toBe(true);
       }
       expect(
-        loadExactSqliteSessionEntry({
+        loadExactSessionEntry({
           agentId: "main",
           sessionKey: "agent:main:main",
           storePath,
         })?.entry.sessionId,
       ).toBe("main-session");
       expect(
-        loadExactSqliteSessionEntry({
+        loadExactSessionEntry({
           agentId: "work",
           sessionKey: "agent:work:main",
           storePath,
@@ -2733,7 +2934,7 @@ describe("runDoctorSessionSqlite", () => {
     fs.writeFileSync(store.transcriptPath, '{"type":"event","id":"heartbeat"}\n', {
       mode: 0o600,
     });
-    await upsertSqliteSessionEntry(
+    await upsertSessionEntryCore(
       {
         agentId: "main",
         env: store.env,
@@ -3026,7 +3227,7 @@ describe("runDoctorSessionSqlite", () => {
       issues: 0,
     });
     expect(
-      loadSqliteTranscriptEventsSync({
+      loadTranscriptEventsSync({
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:main",
@@ -3056,7 +3257,7 @@ describe("runDoctorSessionSqlite", () => {
       ),
     ).toBe(true);
     expect(
-      loadSqliteTranscriptEventsSync({
+      loadTranscriptEventsSync({
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:main",
@@ -3065,7 +3266,7 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
-  it("imports valid transcript rows when only the final JSONL line is crash-truncated", async () => {
+  it("reports a malformed non-newline-terminated final JSONL record", async () => {
     const store = createLegacyStore();
     fs.writeFileSync(
       store.transcriptPath,
@@ -3082,11 +3283,12 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.totals).toMatchObject({
       importedEntries: 1,
       importedTranscriptEvents: 1,
-      issues: 0,
+      issues: 1,
       sqliteEntries: 1,
     });
+    expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
     expect(
-      loadSqliteTranscriptEventsSync({
+      loadTranscriptEventsSync({
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:main",
@@ -3127,7 +3329,7 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(false);
     expect(inspect.totals.sqliteEntries).toBe(1);
     expect(
-      loadSqliteTranscriptEventsSync({
+      loadTranscriptEventsSync({
         agentId: "token-supersecret",
         sessionId: "session-1",
         sessionKey: "agent:main:main",
@@ -3148,7 +3350,7 @@ describe("runDoctorSessionSqlite", () => {
 
   it("reports malformed selected legacy transcripts during validation", async () => {
     const store = createLegacyStore({ transcriptLines: ['{"type":"session"}', "{bad"] });
-    await upsertSqliteSessionEntry(
+    await upsertSessionEntryCore(
       {
         agentId: "main",
         env: store.env,

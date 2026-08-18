@@ -58,7 +58,7 @@ describe("video generation invocation QA", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("selects image-to-video fallback, forwards declared options, and persists video bytes", async () => {
-    const root = await fs.realpath(tempDirs.make("openclaw-qa-video-invocation-"));
+    const root = tempDirs.make("openclaw-qa-video-invocation-");
     const referenceBytes = createSolidPngBuffer(2, 2, { r: 32, g: 112, b: 224 });
     const referencePath = path.join(root, "reference.png");
     await fs.writeFile(referencePath, referenceBytes);

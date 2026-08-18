@@ -19,114 +19,20 @@ import {
   workboardBoardIdFromPath,
 } from "./app-route-paths.ts";
 import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
-import { pathForSession } from "./app-session-path-builder.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
-type SessionUrlContractCase = {
-  sessionKey: string;
-  agentId: string;
-  mainKey: string | undefined;
-  expectedPath: string | null;
-};
-
-// Keep in sync with extensions/clickclack/src/discussions/service.test.ts.
-// The publishable plugin cannot import this workspace package or its test fixtures.
-const SESSION_URL_CONTRACT_CASES = [
-  {
-    sessionKey: "agent:main:main",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main",
-  },
-  { sessionKey: "main", agentId: "research", mainKey: undefined, expectedPath: "/chat/research" },
-  {
-    sessionKey: "main",
-    agentId: "research",
-    mainKey: "workspace",
-    expectedPath: "/chat/research",
-  },
-  { sessionKey: "main", agentId: "..", mainKey: undefined, expectedPath: "/chat/main" },
-  {
-    sessionKey: "agent:research:workspace",
-    agentId: "main",
-    mainKey: "workspace",
-    expectedPath: "/chat/research",
-  },
-  {
-    sessionKey: "agent:research:main",
-    agentId: "main",
-    mainKey: "workspace",
-    expectedPath: "/chat/research/main",
-  },
-  {
-    sessionKey: "telegram:12345",
-    agentId: "research",
-    mainKey: undefined,
-    expectedPath: "/chat/research/telegram/12345",
-  },
-  {
-    // Dots must be percent-escaped or the server treats the URL as a static asset
-    // request and it never reaches the SPA on refresh or via an external link.
-    sessionKey: "channel:release.js",
-    agentId: "research",
-    mainKey: undefined,
-    expectedPath: "/chat/research/channel/release%2Ejs",
-  },
-  {
-    sessionKey: "agent:main:control-link",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/control-link",
-  },
-  {
-    sessionKey: "agent:main:12345678",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/~key/12345678",
-  },
-  {
-    sessionKey: "agent:main:release-deadbeef",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/~key/release-deadbeef",
-  },
-  {
-    sessionKey: "agent:main:telegram:12345",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/telegram/12345",
-  },
-  {
-    sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/12345678",
-  },
-  {
-    sessionKey: "agent:main:dashboard:deadbeef-0aaa-4000-8000-000000000001",
-    agentId: "main",
-    mainKey: "deadbeef",
-    expectedPath: "/chat/main/deadbeef0",
-  },
-  {
-    sessionKey: "agent:main:cron:..:run",
-    agentId: "main",
-    mainKey: undefined,
-    expectedPath: "/chat/main/cron/~dotdot/run",
-  },
-] satisfies readonly SessionUrlContractCase[];
-
 /**
- * All route identifiers derived from sidebar nav routes plus routed settings
- * slices and the Plugins hub tabs, which route without their own sidebar item.
+ * All route identifiers derived from core sidebar routes, plugin-owned native
+ * routes, routed settings slices, and hub tabs without their own sidebar item.
  */
 const ALL_ROUTES: RouteId[] = Array.from(
   new Set<RouteId>([
     "chat",
     "custodian",
     ...SIDEBAR_NAV_ROUTES,
+    "workboard",
     "skills",
     "skill-workshop",
     // Hub tabs and settings subpages route without their own nav entry.
@@ -159,7 +65,7 @@ const SETTINGS_ROUTE_PATHS = [
   },
   { routeId: "worktrees", path: "/worktrees", alias: "/settings/worktrees" },
   { routeId: "sessions", path: "/sessions", alias: "/settings/sessions" },
-  { routeId: "nodes", path: "/settings/devices", alias: "/nodes" },
+  { routeId: "devices", path: "/settings/devices", alias: "/nodes" },
   { routeId: "cron", path: "/automations", alias: "/cron" },
   { routeId: "agents", path: "/settings/agents", alias: "/agents" },
   {
@@ -189,6 +95,7 @@ describe("navigationIconForRoute", () => {
       custodian: "lobster",
       activity: "activity",
       apps: "layoutGrid",
+      portals: "monitor",
       approvals: "badgeCheck",
       workboard: "kanban",
       dashboards: "layoutDashboard",
@@ -203,7 +110,8 @@ describe("navigationIconForRoute", () => {
       skills: "zap",
       plugins: "puzzle",
       "skill-workshop": "wrench",
-      nodes: "monitorSmartphone",
+      devices: "monitorSmartphone",
+      "cloud-workers": "server",
       profile: "circleUser",
       communications: "send",
       appearance: "palette",
@@ -214,6 +122,7 @@ describe("navigationIconForRoute", () => {
       talk: "mic",
       infrastructure: "globe",
       labs: "flaskConical",
+      updates: "download",
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
@@ -221,6 +130,7 @@ describe("navigationIconForRoute", () => {
       "memory-import": "download",
       notifications: "bell",
       security: "shieldCheck",
+      secrets: "key",
       advanced: "fileCode",
       debug: "bug",
       logs: "scrollText",
@@ -309,13 +219,14 @@ describe("titleForRoute", () => {
       custodian: "OpenClaw",
       activity: "Activity",
       apps: "Apps",
+      portals: "Portals",
       approvals: "Approvals",
       workboard: "Workboard",
       dashboards: "Dashboards",
       worktrees: "Worktrees",
       channels: "Channels",
       connection: "Gateway",
-      sessions: "Threads",
+      sessions: "Sessions",
       usage: "Usage",
       cron: "Automations",
       tasks: "Tasks",
@@ -323,7 +234,8 @@ describe("titleForRoute", () => {
       skills: "Skills",
       plugins: "Plugins",
       "skill-workshop": "Skill Workshop",
-      nodes: "Devices",
+      devices: "Devices",
+      "cloud-workers": "Cloud workers",
       profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
@@ -334,6 +246,7 @@ describe("titleForRoute", () => {
       talk: "Talk",
       infrastructure: "Infrastructure",
       labs: "Labs",
+      updates: "Updates",
       about: "About",
       "ai-agents": "Agent Defaults",
       "model-setup": "Model Setup",
@@ -341,6 +254,7 @@ describe("titleForRoute", () => {
       "memory-import": "Import Memory",
       notifications: "Notifications",
       security: "Privacy & Security",
+      secrets: "Secrets",
       advanced: "Advanced",
       debug: "Debug",
       logs: "Logs",
@@ -355,15 +269,16 @@ describe("subtitleForRoute", () => {
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
       custodian: "System setup and care.",
-      activity: "Browser-local tool activity summaries.",
+      activity: "Recent sessions across people using this gateway.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
+      portals: "Live previews from agent-run applications.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
-      workboard: "Agent work queue and thread handoff.",
-      dashboards: "Threads that open on their dashboard face.",
+      workboard: "Agent work queue and session handoff.",
+      dashboards: "Sessions that open on their dashboard face.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       connection: "Gateway endpoint, credentials, and handshake status.",
-      sessions: "Active threads and defaults.",
+      sessions: "Active sessions and defaults.",
       usage: "API usage and costs.",
       cron: "Scheduled tasks and recurring agent runs.",
       tasks: "Background tasks: subagents, automation runs, CLI.",
@@ -371,17 +286,19 @@ describe("subtitleForRoute", () => {
       skills: "Skills and API keys.",
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
-      nodes: "Paired devices, pairing approvals, and exec bindings.",
+      devices: "Paired devices, pairing approvals, and exec bindings.",
+      "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
       communications: "Messages and text-to-speech settings.",
       appearance: "Theme, UI, and setup wizard settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, automations, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
-      memory: "Memory engine, backend, search, and dreaming.",
+      memory: "Memory engine, search, and dreaming.",
       talk: "Realtime voice: provider, model, and speaker voice.",
       infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
       labs: "Experimental agent and tool capabilities.",
+      updates: "Release channel, automatic updates, and current update status.",
       about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Global agent defaults: skills, tools, and session.",
       "model-setup": "Connect a verified AI model",
@@ -389,6 +306,7 @@ describe("subtitleForRoute", () => {
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       notifications: "Browser push notifications from your gateway.",
       security: "Gateway auth, exec policy, tool profile, and approvals.",
+      secrets: "Secret values are hidden after saving. Env var values stay visible here.",
       advanced: "Every remaining config section, plus the raw file editor.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
@@ -408,6 +326,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
     expect(pathForRoute("labs")).toBe("/settings/labs");
+    expect(pathForRoute("cloud-workers")).toBe("/settings/cloud-workers");
   });
 
   it("prepends base path", () => {
@@ -472,181 +391,21 @@ describe("routeIdFromPath", () => {
     expect(inferBasePathFromPathname("/ui/workboard/ops")).toBe("/ui");
   });
 
-  it("builds canonical chat and dashboard session paths", () => {
-    const key = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
-    expect(
-      pathForSession("chat", "main", key, "", {
-        displayName: "Deploy Monitor",
-      }),
-    ).toBe("/chat/main/deploy-monitor-12345678");
-    expect(
-      pathForSession("dashboard", "ops", key, "/ui", {
-        displayName: "",
-      }),
-    ).toBe("/ui/dashboard/main/12345678");
-    expect(pathForSession("chat", "main", "agent:main:main")).toBe("/chat/main");
-    expect(pathForSession("chat", "main", "agent:main:telegram:12345")).toBe(
-      "/chat/main/telegram/12345",
-    );
-    expect(pathForSession("chat", "main", "dashboard:12345678-90ab-cdef-1234-567890abcdef")).toBe(
-      "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
-    );
-  });
-
-  it("requires an explicit agent fallback for unscoped session keys", () => {
+  it("round-trips session navigation through the lazy contract seam", () => {
     const pathname = sessionNavigationTarget({
       face: "chat",
       sessionKey: "telegram:12345",
       fallbackAgentId: "research",
+      basePath: "/ui",
     }).options.pathname;
-    expect(pathname).toBe("/chat/research/telegram/12345");
-    expect(sessionRefFromPath(pathname)).toMatchObject({
+
+    expect(pathname).toBe("/ui/chat/research/telegram/12345");
+    expect(sessionRefFromPath(pathname, "/ui")).toMatchObject({
       kind: "literal",
       sessionKey: "agent:research:telegram:12345",
     });
-  });
-
-  it("matches the publishable ClickClack session URL vectors", () => {
-    for (const testCase of SESSION_URL_CONTRACT_CASES) {
-      expect(
-        pathForSession("chat", testCase.agentId, testCase.sessionKey, "", {
-          mainKey: testCase.mainKey,
-        }),
-      ).toBe(testCase.expectedPath);
-    }
-  });
-
-  it("keeps scoped main distinct from a configured custom main key", () => {
-    expect(sessionRefFromPath("/chat/research", "", "workspace")).toEqual({
-      namespace: "chat",
-      kind: "main",
-      agentId: "research",
-    });
-    expect(sessionRefFromPath("/chat/research/main", "", "workspace")).toEqual({
-      namespace: "chat",
-      kind: "literal",
-      agentId: "research",
-      sessionKey: "agent:research:main",
-    });
-  });
-
-  it("keeps trailing hex tokens out of decorative slugs", () => {
-    expect(
-      pathForSession(
-        "chat",
-        "main",
-        "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
-        "",
-        {
-          displayName: "Deploy face deadbeef",
-        },
-      ),
-    ).toBe("/chat/main/deploy-12345678");
-  });
-
-  it("parses short refs and literal key segments in both namespaces", () => {
-    expect(sessionRefFromPath("/chat/main")).toEqual({
-      namespace: "chat",
-      kind: "main",
-      agentId: "main",
-    });
-    expect(sessionRefFromPath("/dashboard/main/12345678")).toEqual({
-      namespace: "dashboard",
-      kind: "short",
-      agentId: "main",
-      shortId: "12345678",
-    });
-    // The slug is captured so it can settle a tie between ids sharing this prefix, but it
-    // never changes the parsed id: a wrong agent and a wrong slug both stay decorative.
-    expect(sessionRefFromPath("/chat/wrong/wrong-slug-1234567890ab")).toEqual({
-      namespace: "chat",
-      kind: "short",
-      agentId: "wrong",
-      shortId: "1234567890ab",
-      slugHint: "wrong-slug",
-    });
-    expect(sessionRefFromPath("/chat/main/telegram/12345")).toEqual({
-      namespace: "chat",
-      kind: "literal",
-      agentId: "main",
-      sessionKey: "agent:main:telegram:12345",
-    });
-    expect(sessionRefFromPath("/chat/ops/cron/nightly/run/8821")).toEqual({
-      namespace: "chat",
-      kind: "literal",
-      agentId: "ops",
-      sessionKey: "agent:ops:cron:nightly:run:8821",
-    });
-    for (const reserved of ["main", "global", "boot", "sessions"]) {
-      expect(sessionRefFromPath(`/chat/main/${reserved}`)).toMatchObject({
-        kind: "literal",
-        sessionKey: `agent:main:${reserved}`,
-      });
-    }
-    expect(sessionRefFromPath("/chat/main/workspace", "", "workspace")).toMatchObject({
-      kind: "literal",
-      sessionKey: "agent:main:workspace",
-    });
-    expect(sessionRefFromPath("/chat/main/not-a-short-id")).toMatchObject({
-      kind: "literal",
-      sessionKey: "agent:main:not-a-short-id",
-    });
-    expect(pathForSession("chat", "main", "agent:main:not-reserved")).toBe(
-      "/chat/main/not-reserved",
-    );
-    expect(pathForSession("chat", "main", "agent:main:12345678")).toBe("/chat/main/~key/12345678");
-    expect(sessionRefFromPath("/chat/main/~key/12345678")).toMatchObject({
-      kind: "literal",
-      sessionKey: "agent:main:12345678",
-    });
-    expect(pathForSession("chat", "main", "agent:main:release-deadbeef")).toBe(
-      "/chat/main/~key/release-deadbeef",
-    );
-    expect(sessionRefFromPath("/chat/main/~key/release-deadbeef")).toMatchObject({
-      kind: "literal",
-      sessionKey: "agent:main:release-deadbeef",
-    });
-    const collidingMainKey = "deadbeef";
-    const collisionPath = pathForSession(
-      "chat",
-      "main",
-      "agent:main:dashboard:deadbeef-0aaa-4000-8000-000000000001",
-      "",
-      { mainKey: collidingMainKey },
-    );
-    expect(collisionPath).toBe("/chat/main/deadbeef0");
-    expect(sessionRefFromPath(collisionPath ?? "", "", collidingMainKey)).toMatchObject({
-      kind: "short",
-      shortId: "deadbeef0",
-    });
-    expect(
-      pathForSession("chat", "main", "agent:main:workspace", "", { mainKey: "workspace" }),
-    ).toBe("/chat/main");
-    expect(sessionRefFromPath("/chat/main/deadbeef/child")).toMatchObject({
-      kind: "literal",
-      sessionKey: "agent:main:deadbeef:child",
-    });
-    expect(pathForSession("chat", "main", "agent:main:cron:..:run")).toBe(
-      "/chat/main/cron/~dotdot/run",
-    );
-    expect(sessionRefFromPath("/chat/main/cron/~dotdot/run")).toMatchObject({
-      kind: "literal",
-      sessionKey: "agent:main:cron:..:run",
-    });
-    expect(pathForSession("chat", "main", "agent:main:channel:~dot")).toBe(
-      "/chat/main/channel/~~dot",
-    );
-    expect(sessionRefFromPath("/chat/main/channel/~~dot")).toMatchObject({
-      kind: "literal",
-      sessionKey: "agent:main:channel:~dot",
-    });
-    expect(pathForSession("chat", "main", "agent:main:~key")).toBe("/chat/main/~~key");
-    expect(sessionRefFromPath("/chat/main/~~key")).toMatchObject({
-      kind: "literal",
-      sessionKey: "agent:main:~key",
-    });
-    expect(routeIdFromPath("/dashboard/main/deploy-12345678")).toBe("dashboard");
-    expect(inferBasePathFromPathname("/ui/chat/main/deploy-12345678")).toBe("/ui");
+    expect(routeIdFromPath(pathname, "/ui")).toBe("chat");
+    expect(inferBasePathFromPathname(pathname)).toBe("/ui");
   });
 
   it("keeps dotted board IDs from resembling static asset paths", () => {
@@ -670,9 +429,9 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/instances")).toBeNull();
   });
 
-  it("matches canonical route casing exactly", () => {
-    expect(routeIdFromPath("/CHAT")).toBeNull();
-    expect(routeIdFromPath("/Sessions")).toBeNull();
+  it("matches static routes case-insensitively like the uirouter path key", () => {
+    expect(routeIdFromPath("/CHAT")).toBe("chat");
+    expect(routeIdFromPath("/Sessions")).toBe("sessions");
   });
 });
 
@@ -752,32 +511,32 @@ describe("plugin tabs route", () => {
     // Distinct plugins with the same local tab id stay distinct.
     expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
   });
-
-  it("stays out of the customizable static sidebar routes", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("plugin");
-    expect(SIDEBAR_NAV_ROUTES).toContain("plugins");
-    expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
-    expect(routeIdFromPath("/plugins")).toBeNull();
-  });
 });
 
 describe("SIDEBAR_NAV_ROUTES", () => {
-  it("all routes are unique", () => {
-    expect(new Set(SIDEBAR_NAV_ROUTES).size).toBe(SIDEBAR_NAV_ROUTES.length);
+  it("keeps the canonical sidebar route order", () => {
+    expect(SIDEBAR_NAV_ROUTES).toEqual([
+      "dashboards",
+      "usage",
+      "cron",
+      "tasks",
+      "sessions",
+      "activity",
+      "plugins",
+      "apps",
+      "portals",
+    ]);
   });
 
-  it("collapses the plugins hub to a single sidebar entry", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("skills");
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("skill-workshop");
+  it("recognizes plugin hub routes", () => {
     expect(isPluginsHubRoute("plugins")).toBe(true);
     expect(isPluginsHubRoute("skills")).toBe(true);
     expect(isPluginsHubRoute("skill-workshop")).toBe(true);
     expect(isPluginsHubRoute("sessions")).toBe(false);
   });
 
-  it("keeps detailed settings slices routed but out of the customizable sidebar", () => {
+  it("keeps the canonical settings navigation order", () => {
     const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(settingsRoutes).toEqual([
       "custodian",
       "profile",
@@ -787,7 +546,8 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "channels",
       "communications",
       "talk",
-      "nodes",
+      "devices",
+      "cloud-workers",
       "agents",
       "labs",
       "model-providers",
@@ -795,18 +555,18 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "memory",
       "automation",
       "security",
+      "secrets",
       "approvals",
       "infrastructure",
       "advanced",
       "debug",
       "logs",
+      "updates",
       "about",
     ]);
   });
 
-  it("keeps settings sidebar groups unique with personal settings first", () => {
-    const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-    expect(new Set(settingsRoutes).size).toBe(settingsRoutes.length);
+  it("keeps personal settings first and labels remaining groups", () => {
     const [firstGroup] = SETTINGS_NAVIGATION_GROUPS;
     expect(firstGroup?.labelKey).toBeNull();
     expect(firstGroup?.routes).toEqual(["custodian", "profile", "appearance", "notifications"]);

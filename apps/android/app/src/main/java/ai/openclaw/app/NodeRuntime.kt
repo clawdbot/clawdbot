@@ -11,7 +11,7 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -122,6 +122,7 @@ import ai.openclaw.app.wear.WearProxyGatewayException
 import ai.openclaw.app.wear.WearProxyModel
 import ai.openclaw.app.wear.WearRealtimeAttemptOwner
 import ai.openclaw.app.wear.WearRealtimeTalkController
+import ai.openclaw.app.wear.projectWearAgentPulse
 import ai.openclaw.app.wear.wearConnectionFailure
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
@@ -141,6 +142,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -151,6 +153,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -158,6 +161,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -182,6 +186,39 @@ private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGE
 private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
 private const val OperatorAdminScope = "operator.admin"
 private const val OperatorPairingScope = "operator.pairing"
+
+internal const val WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS = 8_000L
+
+internal data class WearAgentPulseReads<Tasks, Swarm>(
+  val tasks: Tasks?,
+  val swarm: Swarm?,
+)
+
+internal suspend fun <Tasks, Swarm> readWearAgentPulseConcurrently(
+  readTasks: suspend () -> Tasks,
+  readSwarm: suspend () -> Swarm,
+  budgetMillis: Long = WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS,
+): WearAgentPulseReads<Tasks, Swarm> =
+  coroutineScope {
+    val tasks = async { readWearAgentPulseComponent(budgetMillis, readTasks) }
+    val swarm = async { readWearAgentPulseComponent(budgetMillis, readSwarm) }
+    WearAgentPulseReads(
+      tasks = tasks.await(),
+      swarm = swarm.await(),
+    )
+  }
+
+private suspend fun <T> readWearAgentPulseComponent(
+  budgetMillis: Long,
+  read: suspend () -> T,
+): T? =
+  try {
+    withTimeoutOrNull(budgetMillis) { read() }
+  } catch (err: CancellationException) {
+    throw err
+  } catch (_: Throwable) {
+    null
+  }
 
 private fun execApprovalOutcomeUnknownMessage(): String = nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.").source
 
@@ -1118,6 +1155,8 @@ class NodeRuntime private constructor(
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
   private val _gatewayControlPage = MutableStateFlow<GatewayControlPage?>(null)
   val gatewayControlPage: StateFlow<GatewayControlPage?> = _gatewayControlPage.asStateFlow()
+  private val _desktopObserveAvailable = MutableStateFlow(false)
+  val desktopObserveAvailable: StateFlow<Boolean> = _desktopObserveAvailable.asStateFlow()
   private val _nodeConnected = MutableStateFlow(false)
   val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
   private val _nodeCapabilityApproval = MutableStateFlow<GatewayNodeCapabilityApproval>(GatewayNodeCapabilityApproval.Loading)
@@ -1307,6 +1346,7 @@ class NodeRuntime private constructor(
   val execApprovalsNotice: StateFlow<GatewayExecApprovalNotice?> = _execApprovalsNotice.asStateFlow()
   private val execApprovalsRefreshSeq = AtomicLong(0)
   private val execApprovalsStateLock = Any()
+  private var execApprovalsSnapshotReady = false
   private val resolvedExecApprovalIds = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
   private val pendingExecApprovalWrites = mutableMapOf<String, PendingExecApprovalWrite>()
 
@@ -1314,6 +1354,7 @@ class NodeRuntime private constructor(
   // response from publishing into a replacement socket on the same stable endpoint.
   private val gatewayMethodsLock = Any()
   private var gatewayApprovalRpcFamily = GatewayApprovalRpcFamily.Unavailable
+  private var gatewayProgressCardAdvertised: Boolean? = null
   private var gatewayMethodsEpoch = 0L
 
   @Volatile internal var gatewayDataRequestOverrideForTests: GatewayDataRequestOverride? = null
@@ -1514,9 +1555,8 @@ class NodeRuntime private constructor(
       requestGateway = ::requestWearGateway,
       isGatewayConnected = operatorSession::isReady,
       gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
-      activeAgentId = {
-        resolveAgentIdFromMainSessionKey(mainSessionKey.value) ?: gatewayDefaultAgentId.value
-      },
+      hasOperatorAdminScope = { OperatorAdminScope in _operatorScopes.value },
+      activeAgentId = ::currentWearAgentId,
       activeSessionKey = { chatSessionKey.value },
       selectedModelRef = { chatSelectedModelRef.value },
       agents = {
@@ -1556,6 +1596,7 @@ class NodeRuntime private constructor(
       },
       connectGateway = { refreshGatewayConnection() },
       disconnectGateway = { disconnect() },
+      loadAgentPulse = ::loadWearAgentPulse,
       startRealtimeTalk = { nodeId, sessionKey, attemptId, language, attemptScopedAudio ->
         if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language, attemptScopedAudio)) wearRealtimeTalkSnapshot.value else null
       },
@@ -1564,6 +1605,67 @@ class NodeRuntime private constructor(
       },
     )
   }
+
+  private fun currentWearAgentId(): String? = resolveAgentIdFromMainSessionKey(mainSessionKey.value) ?: gatewayDefaultAgentId.value
+
+  private suspend fun loadWearAgentPulse(requestedSessionKey: String?): JsonObject {
+    val gatewayScope = captureGatewayDataScope()
+    val agentId = currentWearAgentId()
+    val connected = gatewayScope != null && operatorSession.isReady()
+    val reads =
+      if (connected && agentId != null) {
+        readWearAgentPulseConcurrently(
+          readTasks = { listBackgroundTasks(agentId) },
+          readSwarm = {
+            requestedSessionKey?.let { sessionKey ->
+              chat.readSwarmSnapshotFor(sessionKey, agentId)
+            }
+          },
+        )
+      } else {
+        null
+      }
+    val tasks = reads?.tasks
+    val swarmSnapshot = reads?.swarm
+    // Capture every projection input before the final route check so a route
+    // change cannot mix a current task result with later-route aggregates.
+    val approvals = currentWearAgentPulseApprovals()
+    val routeStillCurrent =
+      gatewayScope?.let { capturedScope ->
+        connected &&
+          isGatewayDataScopeCurrent(capturedScope) &&
+          operatorSession.isReady() &&
+          currentWearAgentId() == agentId
+      } == true
+    val swarmAvailable =
+      routeStillCurrent &&
+        requestedSessionKey != null &&
+        swarmSnapshot?.isAvailableFor(requestedSessionKey) == true
+    return projectWearAgentPulse(
+      gatewayConnected = routeStillCurrent,
+      tasks = tasks.takeIf { routeStillCurrent },
+      swarmAvailable = swarmAvailable,
+      swarmGroups = if (swarmAvailable) swarmSnapshot.groups else emptyList(),
+      pendingApprovalCount = approvals.pendingCount,
+      approvalsAvailable = routeStillCurrent && approvals.available,
+      approvalsRefreshing = approvals.refreshing,
+    )
+  }
+
+  private fun currentWearAgentPulseApprovals(): WearAgentPulseApprovalSnapshot =
+    synchronized(execApprovalsStateLock) {
+      WearAgentPulseApprovalSnapshot(
+        pendingCount = _execApprovals.value.size,
+        available = execApprovalsSnapshotReady && _execApprovalsErrorText.value == null,
+        refreshing = _execApprovalsRefreshing.value,
+      )
+    }
+
+  private data class WearAgentPulseApprovalSnapshot(
+    val pendingCount: Int,
+    val available: Boolean,
+    val refreshing: Boolean,
+  )
 
   internal suspend fun handleWearProxyRequest(
     sourceNodeId: String,
@@ -1602,7 +1704,7 @@ class NodeRuntime private constructor(
     _remoteAddress.value = null
     _gatewayVersion.value = null
     _gatewayUpdateAvailable.value = null
-    replaceGatewayMethods(emptySet())
+    replaceGatewayMethods(null)
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
@@ -1664,8 +1766,11 @@ class NodeRuntime private constructor(
     }
     invalidateExecApprovalRefreshes()
     resolvedExecApprovalIds.clear()
-    if (retirePendingCronRuns) {
-      synchronized(execApprovalsStateLock) { pendingExecApprovalWrites.clear() }
+    synchronized(execApprovalsStateLock) {
+      execApprovalsSnapshotReady = false
+      if (retirePendingCronRuns) {
+        pendingExecApprovalWrites.clear()
+      }
     }
     _execApprovals.value = emptyList()
     _execApprovalsRefreshing.value = false
@@ -1855,16 +1960,23 @@ class NodeRuntime private constructor(
           cacheScope = ::chatCacheScope,
           currentDefaultAgentId = { gatewayDefaultAgentId.value },
           currentDefaultAgentRevision = gatewayDefaultAgentRevision::get,
+          gatewayAdvertisesProgressCard = ::gatewayAdvertisesProgressCard,
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
           onOfflineDefaultAgentRestored = ::syncMainSessionKey,
+          onAssistantReplyFinalized = { owner, runId, text ->
+            if (!_isForeground.value) {
+              ConversationReplyNotifier(appContext).show(owner, runId, text)
+            }
+          },
         )
       NodeRuntimeMode.ScreenshotFixture ->
         ChatController(
           scope = scope,
           json = json,
           requestGateway = AndroidScreenshotFixture::request,
+          gatewayAdvertisesProgressCard = { true },
         )
     }.also {
       it.applyMainSessionKey(_mainSessionKey.value)
@@ -2525,9 +2637,18 @@ class NodeRuntime private constructor(
     scope.launch { searchClawHubSkillsFromGateway(query) }
   }
 
+  /**
+   * Routes a row to the only action its source supports. Install-only results skip review and
+   * install the exact reference search returned, so the picked source is the installed source.
+   */
   fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary) {
     if (skill.slug.isBlank()) return
-    scope.launch { reviewClawHubSkillInstallFromGateway(skill.copy(slug = skill.slug.trim())) }
+    val normalized = skill.copy(slug = skill.slug.trim())
+    if (!normalized.canReadDetails) {
+      installClawHubSkill(normalized.reference)
+      return
+    }
+    scope.launch { reviewClawHubSkillInstallFromGateway(normalized) }
   }
 
   fun dismissClawHubSkillInstallReview() {
@@ -2872,8 +2993,9 @@ class NodeRuntime private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
+  val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> = chat.subagentActivities
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
-  val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
+  val chatProgressCard: StateFlow<ChatProgressCard?> = chat.progressCard
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val chatSwarmGroups: StateFlow<List<ChatSwarmGroup>> = chat.swarmGroups
   val chatSessionBranches: StateFlow<List<SessionBranch>> = chat.sessionBranches
@@ -2906,6 +3028,14 @@ class NodeRuntime private constructor(
     _serverName.value = "OpenClaw Gateway"
     _remoteAddress.value = "Mac Studio on local network"
     _gatewayVersion.value = BuildConfig.VERSION_NAME
+    replaceGatewayMethods(setOf(GatewayMethod.DesktopObserve.rawValue))
+    _gatewayControlPage.value =
+      GatewayControlPage(
+        baseUrl = AndroidScreenshotFixture.controlUiBaseUrl,
+        token = null,
+        password = null,
+        tlsFingerprintSha256 = null,
+      )
     updateGatewayDefaultAgentId("main")
     _gatewayAgents.value = AndroidScreenshotFixture.agents
     _modelCatalog.value = AndroidScreenshotFixture.models
@@ -5047,6 +5177,7 @@ class NodeRuntime private constructor(
   suspend fun patchChatSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -5058,6 +5189,7 @@ class NodeRuntime private constructor(
     chat.patchSession(
       key = key,
       ownerAgentId = ownerAgentId,
+      expectedSessionId = expectedSessionId,
       label = label,
       clearLabel = clearLabel,
       category = category,
@@ -5087,7 +5219,8 @@ class NodeRuntime private constructor(
   suspend fun forkChatSession(
     parentKey: String,
     ownerAgentId: String? = null,
-  ): String? = chat.forkSession(parentKey, ownerAgentId)
+    fromLastCompleted: Boolean = false,
+  ): String? = chat.forkSession(parentKey, ownerAgentId, fromLastCompleted)
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chatSessionKey.value, entryId)
 
@@ -5200,6 +5333,13 @@ class NodeRuntime private constructor(
 
   internal fun canSendForOwner(owner: ChatComposerOwner): Boolean = chat.canSendForOwner(owner)
 
+  private suspend fun awaitConnectedGateway(stableId: String): Boolean {
+    _isConnected.first { connected ->
+      connected && connectedEndpoint?.stableId == stableId
+    }
+    return true
+  }
+
   internal suspend fun sendChatForOwnerAwaitAcceptance(
     owner: ChatComposerOwner,
     message: String,
@@ -5213,6 +5353,40 @@ class NodeRuntime private constructor(
       attachments = attachments,
       expectedOwner = owner,
       idempotencyKey = idempotencyKey,
+    )
+
+  internal suspend fun openConversationNotificationTarget(
+    target: ConversationNotificationTarget,
+  ): Boolean =
+    routeConversationNotificationTarget(
+      target = target,
+      activeGatewayStableId = { prefs.gatewayRegistry.activeStableId.value },
+      switchGateway = ::switchToGateway,
+      switchSession = { sessionKey, agentId -> switchChatSession(sessionKey, agentId) },
+    )
+
+  internal suspend fun sendConversationNotificationReply(
+    target: ConversationNotificationTarget,
+    reply: String,
+    idempotencyKey: String,
+  ): Boolean =
+    routeConversationNotificationReply(
+      target = target,
+      reply = reply,
+      idempotencyKey = idempotencyKey,
+      activeGatewayStableId = { prefs.gatewayRegistry.activeStableId.value },
+      switchGateway = ::switchToGateway,
+      awaitGatewayReady = ::awaitConnectedGateway,
+      switchSession = { sessionKey, agentId -> switchChatSession(sessionKey, agentId) },
+      send = { owner, message, commandId ->
+        sendChatForOwnerAwaitAcceptance(
+          owner = owner,
+          message = message,
+          thinking = chatThinkingLevel.value,
+          attachments = emptyList(),
+          idempotencyKey = commandId,
+        )
+      },
     )
 
   internal suspend fun wasChatOutboxCommandAdmitted(id: String): Boolean = chat.wasOutboxCommandAdmitted(id)
@@ -6311,7 +6485,7 @@ class NodeRuntime private constructor(
     publishGatewayData(gatewayScope) {
       _clawHubSkillSearchState.value =
         _clawHubSkillSearchState.value.copy(
-          reviewingSlug = skill.slug,
+          reviewingSlug = skill.reference,
           installReview = null,
           acknowledgeSlug = null,
           acknowledgeVersion = null,
@@ -6320,7 +6494,7 @@ class NodeRuntime private constructor(
         )
     }
     try {
-      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.slug))
+      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.reference))
       val review = parseClawHubInstallReview(response, skill, json)
       publishGatewayData(gatewayScope) {
         if (clawHubSkillReviewSeq.get() == reviewSeq) {
@@ -6330,7 +6504,7 @@ class NodeRuntime private constructor(
               installReview = review,
               errorText =
                 if (review == null) {
-                  "ClawHub did not return an installable version for ${skill.slug}."
+                  "ClawHub did not return an installable version for ${skill.reference}."
                 } else {
                   null
                 },
@@ -6346,7 +6520,7 @@ class NodeRuntime private constructor(
             _clawHubSkillSearchState.value.copy(
               reviewingSlug = null,
               errorText =
-                nativeString("Could not load ClawHub details for \${skill.slug}.", skill.slug),
+                nativeString("Could not load ClawHub details for \${skill.reference}.", skill.reference),
             )
         }
       }
@@ -6488,9 +6662,12 @@ class NodeRuntime private constructor(
     slug: String,
     version: String?,
   ): Boolean {
-    val exactVersion = version ?: return false
     if (!refreshSkillsFromGateway() || !isGatewayDataScopeCurrent(gatewayScope)) return false
-    return isClawHubSkillInstalled(_skillsSummary.value.skills, slug, exactVersion)
+    val skills = _skillsSummary.value.skills
+    // Only an install-only source installs without a version. Its reference is not a `@owner/slug`
+    // spelling, so the slug comparison never matches it; the Gateway records the exact reference.
+    return version?.let { isClawHubSkillInstalled(skills, slug, it) }
+      ?: isClawHubSkillInstalledByReference(skills, slug)
   }
 
   private suspend fun releaseClawHubInstallClaim(
@@ -6995,7 +7172,9 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope() ?: return
     val refreshGeneration =
       synchronized(execApprovalsStateLock) {
-        execApprovalsRefreshSeq.incrementAndGet()
+        val nextGeneration = execApprovalsRefreshSeq.incrementAndGet()
+        execApprovalsSnapshotReady = false
+        nextGeneration
       }
     publishGatewayData(gatewayScope) {
       _execApprovalsRefreshing.value = true
@@ -7468,14 +7647,19 @@ class NodeRuntime private constructor(
       ?: error("Malformed approval.get response")
   }
 
-  private fun replaceGatewayMethods(methods: Set<String>) {
+  private fun replaceGatewayMethods(methods: Set<String>?) {
     synchronized(gatewayMethodsLock) {
-      gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(methods)
-      _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(methods)
-      systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in methods
+      val advertisedMethods = methods.orEmpty()
+      gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(advertisedMethods)
+      gatewayProgressCardAdvertised = methods?.let { GatewayMethod.ProgressCardGet.rawValue in it }
+      _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(advertisedMethods)
+      _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in advertisedMethods
+      systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in advertisedMethods
       gatewayMethodsEpoch += 1
     }
   }
+
+  private fun gatewayAdvertisesProgressCard(): Boolean? = synchronized(gatewayMethodsLock) { gatewayProgressCardAdvertised }
 
   private fun captureGatewayMethods(): GatewayMethodsSnapshot =
     synchronized(gatewayMethodsLock) {
@@ -7561,6 +7745,7 @@ class NodeRuntime private constructor(
           resolvedExecApprovalIds.addAll(terminalIds)
           terminalIds.forEach(pendingExecApprovalWrites::remove)
           val nextRows = rows.filterNot { it.id in resolvedExecApprovalIds }.filterActiveExecApprovals()
+          execApprovalsSnapshotReady = true
           _execApprovals.value = nextRows
           scheduleExecApprovalExpiryPrune(nextRows)
         }
@@ -7807,6 +7992,12 @@ class NodeRuntime private constructor(
               ?.trim()
               ?.takeIf(String::isNotEmpty),
           clawHubValid = clawHub?.boolean("valid") == true,
+          clawHubRequestedReference =
+            clawHub
+              ?.get("requestedReference")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf(String::isNotEmpty),
           clawHubOwnerHandle =
             clawHub
               ?.get("ownerHandle")
@@ -8479,6 +8670,7 @@ internal fun manualGatewayEndpoint(entry: GatewayRegistryEntry): GatewayEndpoint
     host = normalizedHost,
     port = normalizedPort,
     tlsEnabled = entry.tls,
+    contextPath = entry.contextPath,
   )
 }
 
@@ -8494,6 +8686,7 @@ internal fun gatewayRegistryEntry(
       host = endpoint.host,
       port = endpoint.port,
       tls = endpoint.tlsEnabled,
+      contextPath = endpoint.contextPath,
       lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
     )
   } else {
@@ -8657,6 +8850,8 @@ data class GatewaySkillSummary(
   val installCount: Int,
   val clawHubSlug: String? = null,
   val clawHubValid: Boolean = false,
+  /** Exact reference this skill was installed from; an install-only source keeps its identity. */
+  val clawHubRequestedReference: String? = null,
   val clawHubOwnerHandle: String? = null,
   val clawHubInstalledVersion: String? = null,
 )

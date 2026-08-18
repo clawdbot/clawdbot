@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { t } from "../i18n/index.ts";
 import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
@@ -28,6 +29,7 @@ export function resolveSidebarSessionSubtitle(params: {
   // explicit message to the user, not ambient activity.
   const agentStatus = session.agentStatusNote || undefined;
   const running = session.hasActiveRun;
+  const queued = session.status === "queued" ? t("sessionsView.waitingForConcurrency") : undefined;
   const activeRunIds = session.activeRunIds ?? [];
   const digestMatchesActiveRun = (
     digest: typeof params.observerDigest,
@@ -57,7 +59,12 @@ export function resolveSidebarSessionSubtitle(params: {
     : session.subtitle && session.workSession && session.subtitle !== session.label
       ? session.subtitle
       : undefined;
-  return { subtitle: attention ?? agentStatus ?? observer ?? narration ?? workSubtitle, narration };
+  const finalReply =
+    !running && !params.hasDisplay ? session.lastMessagePreview?.trim() || undefined : undefined;
+  const subtitle = running
+    ? (attention ?? agentStatus ?? queued ?? observer ?? narration ?? workSubtitle)
+    : (attention ?? agentStatus ?? observer ?? finalReply ?? workSubtitle);
+  return { subtitle, narration };
 }
 
 export function renderSidebarSessionSubtitle(value: SidebarSessionSubtitle) {

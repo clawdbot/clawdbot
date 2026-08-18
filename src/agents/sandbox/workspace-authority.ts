@@ -15,7 +15,7 @@ import { isToolAllowedByPolicies } from "../tool-policy-match.js";
 import {
   expandToolGroups,
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -28,7 +28,7 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "apply_patch",
   "edit",
   "exec",
-  "image",
+  "view_image",
   "process",
   "read",
   "session_status",
@@ -36,7 +36,7 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "sessions_list",
   "sessions_search",
   "sessions_yield",
-  "update_plan",
+  "progress_card",
   "web_fetch",
   "web_search",
   "write",
@@ -54,7 +54,7 @@ function findUnconfinedAllowedTool(
   }
   for (const entry of candidatePolicy.allow) {
     for (const candidate of expandToolGroups([entry])) {
-      const normalized = normalizeToolName(candidate);
+      const normalized = normalizeToolPolicyName(candidate);
       if (!isToolAllowedByPolicies(normalized, policies)) {
         continue;
       }
@@ -216,14 +216,14 @@ export function resolveSandboxWorkspaceAuthority(params: {
         sandboxPolicy: sandbox.tools,
       });
       const unavailableTool = (params.requiredToolNames ?? [])
-        .map(normalizeToolName)
+        .map(normalizeToolPolicyName)
         .find((name) => !isToolAllowedByPolicies(name, policies));
       if (unavailableTool) {
         confinementError = `target tool policy blocks required tool ${unavailableTool}.`;
       } else {
         const unsafeTool = findUnconfinedAllowedTool(
           policies,
-          new Set((params.confinedToolNames ?? []).map(normalizeToolName)),
+          new Set((params.confinedToolNames ?? []).map(normalizeToolPolicyName)),
         );
         if (unsafeTool) {
           confinementError = `target sandbox allows unclassified tool surface ${unsafeTool}.`;
