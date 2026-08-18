@@ -17,6 +17,13 @@ export function detailSlotOpen(layout: SidebarLayout): boolean {
   return layout.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"));
 }
 
+export function openTaskDetailId(
+  content: SidebarContent | null | undefined,
+  layout: SidebarLayout,
+): string | undefined {
+  return content?.kind === "task" && detailSlotOpen(layout) ? content.taskId : undefined;
+}
+
 export function renderChatDetailSlot(params: {
   backgroundTasks: BackgroundTasksProps;
   chat: ChatProps;
@@ -27,38 +34,43 @@ export function renderChatDetailSlot(params: {
   transcript: ChatTranscriptController;
 }): TemplateResult {
   const { content, host } = params;
-  if (content.kind === "task") {
-    if (!detailSlotOpen(params.layout)) {
-      resetTaskDetail(host);
-      return html``;
-    }
-    return renderTaskDetailPanel({
-      backgroundTasks: params.backgroundTasks,
-      chat: params.chat,
-      host,
-      task: params.backgroundTasks.tasks?.find((task) => task.id === content.taskId) ?? undefined,
-      transcript: params.transcript,
-    });
+  const taskId = openTaskDetailId(content, params.layout);
+  if (taskId === undefined) {
+    resetTaskDetail(host);
   }
-  resetTaskDetail(host);
-  return html`<openclaw-chat-detail-panel
-    class="chat-sidebar"
-    .content=${content}
-    .basePath=${params.chat.basePath ?? ""}
-    .loadFullMessage=${params.fullMessageLoader}
-    .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
-    .embedSandboxMode=${host.embedSandboxMode}
-    .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
-    .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
-      openSessionWorkspaceFile(host, target)}
-    .onOpenSessionLink=${params.chat.onOpenSessionLink}
-    .onRevealInWorkspace=${(path: string) => {
-      revealSessionWorkspaceFile(host, path);
-      host.updateSidebarLayout(openSlot(host.sidebarLayout, "workspace"));
-    }}
-    .onOpenImage=${(item: Parameters<typeof host.handleOpenImage>[0]) =>
-      host.handleOpenImage(item, host.beginImageOpen())}
-    .embedded=${true}
-    @chat-detail-panel-close=${() => host.handleCloseSidebar()}
-  ></openclaw-chat-detail-panel>`;
+  const documents: Partial<Record<SidebarContent["kind"], TemplateResult>> = {
+    task:
+      taskId === undefined
+        ? html``
+        : renderTaskDetailPanel({
+            backgroundTasks: params.backgroundTasks,
+            chat: params.chat,
+            host,
+            task: params.backgroundTasks.tasks?.find((task) => task.id === taskId) ?? undefined,
+            transcript: params.transcript,
+          }),
+  };
+  return (
+    documents[content.kind] ??
+    html`<openclaw-chat-detail-panel
+      class="chat-sidebar"
+      .content=${content}
+      .basePath=${params.chat.basePath ?? ""}
+      .loadFullMessage=${params.fullMessageLoader}
+      .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
+      .embedSandboxMode=${host.embedSandboxMode}
+      .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
+      .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
+        openSessionWorkspaceFile(host, target)}
+      .onOpenSessionLink=${params.chat.onOpenSessionLink}
+      .onRevealInWorkspace=${(path: string) => {
+        revealSessionWorkspaceFile(host, path);
+        host.updateSidebarLayout(openSlot(host.sidebarLayout, "workspace"));
+      }}
+      .onOpenImage=${(item: Parameters<typeof host.handleOpenImage>[0]) =>
+        host.handleOpenImage(item, host.beginImageOpen())}
+      .embedded=${true}
+      @chat-detail-panel-close=${() => host.handleCloseSidebar()}
+    ></openclaw-chat-detail-panel>`
+  );
 }
