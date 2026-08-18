@@ -80,6 +80,8 @@ Keep the token out of repository config and shell arguments.
 
 ## Configuration
 
+Manage profiles in the Control UI under **Settings → Connections → Cloud workers**, or edit `cloudWorkers.profiles` directly in `openclaw.json` — both write the same config keys. The settings page lists each profile's backend, class, lifetime, and idle-stop in plain language, and shows whether it is advertised to `environments.list` or waiting on a Gateway restart. With no profiles configured it explains the feature, links back to this page, and starts the add flow.
+
 Add a profile under `cloudWorkers.profiles` in `openclaw.json`:
 
 ```json
@@ -179,7 +181,7 @@ openclaw gateway call sessions.dispatch \
 
 ### Choose a machine class per session
 
-A worker profile's `settings.class` remains its default. To choose a different size for one new placement, pass `machineClass` with `profileId`:
+A worker profile's `settings.class` remains its default. In the Control UI, selecting a **Cloud · profile** destination in the Place picker reveals a machine section listing the profile's advertised classes, each with a one-line description and the default marked; picking one updates the place chip (for example `hetzner · Fast`) and carries the choice into dispatch. To choose a different size for one new placement over RPC instead, pass `machineClass` with `profileId`:
 
 ```bash
 openclaw gateway call sessions.dispatch \
