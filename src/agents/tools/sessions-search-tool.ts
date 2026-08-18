@@ -50,6 +50,8 @@ const SESSIONS_SEARCH_MAX_SESSION_KEYS = 200;
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 const SESSIONS_SEARCH_MAX_BYTES = 32 * 1024;
 const SESSIONS_SEARCH_SNIPPET_MAX_CHARS = 300;
+const SESSIONS_SEARCH_INDEXING_WARNING =
+  "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
   query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
@@ -80,6 +82,7 @@ const SessionsSearchOutputSchema = Type.Union([
         }),
       ),
       indexing: Type.Optional(Type.Literal(true)),
+      warning: Type.Optional(Type.String()),
       truncated: Type.Optional(Type.Literal(true)),
     },
     { additionalProperties: false },
@@ -600,7 +603,7 @@ export function createSessionsSearchTool(opts?: {
         ...(opts?.sessionLinkBase
           ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
           : {}),
-        ...(indexing ? { indexing: true } : {}),
+        ...(indexing ? { indexing: true, warning: SESSIONS_SEARCH_INDEXING_WARNING } : {}),
         ...(backendTruncated || visibleHits.length > limit || capped.truncated
           ? { truncated: true }
           : {}),
