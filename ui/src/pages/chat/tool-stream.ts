@@ -1019,7 +1019,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (phase === "start" && payload.runId === host.chatRunId) {
     host.chatRunStartup = { state: "activity", runId: payload.runId };
   }
-  const args = phase === "start" ? data.args : undefined;
+  const args = phase === "start" || phase === "update" ? data.args : undefined;
   const output =
     phase === "update"
       ? formatToolOutput(data.partialResult)

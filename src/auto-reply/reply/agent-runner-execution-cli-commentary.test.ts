@@ -51,6 +51,43 @@ process.stdin.on("end", () => {
 });
 `;
 
+const scriptedCliBackfillProgram = String.raw`
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  if (!input.trim()) process.exit(2);
+  const events = [
+    { type: "init", session_id: "scripted-backfill" },
+    {
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "tool-backfill", name: "Bash", input: {} },
+      },
+    },
+    { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+    {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "tool_use", id: "tool-backfill", name: "Bash", input: { command: "ls -la" } },
+        ],
+      },
+    },
+    {
+      type: "user",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "tool-backfill", content: "ok" }],
+      },
+    },
+    { type: "result", session_id: "scripted-backfill", result: "Subprocess final answer." },
+  ];
+  process.stdout.write(events.map((event) => JSON.stringify(event)).join("\\n") + "\\n");
+});
+`;
+
 function useClaudeCliFallback() {
   state.isCliProviderMock.mockReturnValue(true);
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -61,7 +98,7 @@ function useClaudeCliFallback() {
   }));
 }
 
-function useScriptedClaudeCliBackend() {
+function useScriptedClaudeCliBackend(program = scriptedCliProgram) {
   const backend = {
     id: "claude-cli",
     modelProvider: "anthropic",
@@ -70,7 +107,7 @@ function useScriptedClaudeCliBackend() {
     contextEngineHostCapabilities: ["thread-bootstrap-projection"] as const,
     config: {
       command: process.execPath,
-      args: ["-e", scriptedCliProgram],
+      args: ["-e", program],
       input: "stdin" as const,
       output: "jsonl" as const,
       jsonlDialect: "claude-stream-json" as const,
@@ -158,6 +195,84 @@ describe("executeAgentTurn: CLI durable commentary", () => {
     expect(onBlockReply).toHaveBeenCalledExactlyOnceWith({
       text: "The subprocess findings are durable.",
     });
+  });
+
+  it("traces recovered CLI args through the real subprocess boundary", async () => {
+    useClaudeCliFallback();
+    useScriptedClaudeCliBackend(scriptedCliBackfillProgram);
+
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const toolEvents: Array<{
+      phase: string;
+      name: string;
+      toolCallId?: string;
+      args?: unknown;
+      result?: unknown;
+    }> = [];
+    const dispose = realAgentEvents.onAgentEvent((event) => {
+      if (event.stream !== "tool") {
+        return;
+      }
+      const data = event.data as {
+        phase: string;
+        name: string;
+        toolCallId?: string;
+        args?: unknown;
+        result?: unknown;
+      };
+      toolEvents.push({
+        phase: data.phase,
+        name: data.name,
+        toolCallId: data.toolCallId,
+        ...(data.args !== undefined ? { args: data.args } : {}),
+        ...(data.result !== undefined ? { result: data.result } : {}),
+      });
+    });
+
+    const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
+    try {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(createTurnParams({ onToolStart }, false));
+
+      expect(result.kind).toBe("success");
+      expect(toolEvents).toEqual([
+        { phase: "start", name: "Bash", toolCallId: "tool-backfill", args: {} },
+        {
+          phase: "update",
+          name: "Bash",
+          toolCallId: "tool-backfill",
+          args: { command: "ls -la" },
+        },
+        {
+          phase: "result",
+          name: "Bash",
+          toolCallId: "tool-backfill",
+          args: { command: "ls -la" },
+          result: "ok",
+        },
+      ]);
+      const completionReceiptCount = onToolStart.mock.calls.filter(
+        ([payload]) => payload.phase === "start",
+      ).length;
+      expect(completionReceiptCount).toBe(1);
+      expect(onToolStart.mock.calls.map(([payload]) => [payload.phase, payload.args])).toEqual([
+        ["start", {}],
+        ["update", { command: "ls -la" }],
+      ]);
+
+      process.stdout.write(
+        `[cli-backfill-proof] ${JSON.stringify({
+          source: "real-jsonl-cli-subprocess",
+          phases: toolEvents.map((event) => event.phase),
+          recoveredArgs: { command: "ls -la" },
+          completionReceiptCount,
+        })}\n`,
+      );
+    } finally {
+      dispose();
+    }
   });
 
   it("delivers completed CLI commentary through block streaming", async () => {

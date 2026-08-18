@@ -547,13 +547,19 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         onToolResult: params.onToolResult,
       });
     }
-    if (claudeStreamJson || params.onToolUseStart || params.onToolResult) {
+    if (
+      claudeStreamJson ||
+      params.onToolUseStart ||
+      params.onToolUseUpdate ||
+      params.onToolResult
+    ) {
       dispatchClaudeCliStreamingToolEvent({
         backend: params.backend,
         providerId: params.providerId,
         parsed,
         tracker: toolTracker,
         onToolUseStart: params.onToolUseStart,
+        onToolUseUpdate: params.onToolUseUpdate,
         onToolResult: params.onToolResult,
       });
     }

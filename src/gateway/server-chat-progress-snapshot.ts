@@ -56,6 +56,16 @@ export function updateChatRunProgressSnapshot(
     });
   };
 
+  const previousUpdate =
+    isTool && phase === "update"
+      ? next.events.find(
+          (candidate) =>
+            candidate.stream === "tool" &&
+            candidate.data?.toolCallId === toolCallId &&
+            candidate.data?.phase === "update",
+        )
+      : undefined;
+
   if (isTool) {
     removeWhere((candidate) => {
       if (candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
@@ -79,7 +89,19 @@ export function updateChatRunProgressSnapshot(
         phase,
         ...(typeof data.name === "string" ? { name: data.name } : {}),
         toolCallId,
+        ...(phase === "update" &&
+        previousUpdate?.data !== undefined &&
+        Object.hasOwn(previousUpdate.data, "args")
+          ? { args: previousUpdate.data.args }
+          : {}),
         ...(phase === "start" && Object.hasOwn(data, "args") ? { args: data.args } : {}),
+        ...(phase === "update" && Object.hasOwn(data, "args") ? { args: data.args } : {}),
+        ...(phase === "update" &&
+        previousUpdate?.data !== undefined &&
+        Object.hasOwn(previousUpdate.data, "partialResult") &&
+        !Object.hasOwn(data, "partialResult")
+          ? { partialResult: previousUpdate.data.partialResult }
+          : {}),
         ...(phase === "update" && Object.hasOwn(data, "partialResult")
           ? { partialResult: data.partialResult }
           : {}),

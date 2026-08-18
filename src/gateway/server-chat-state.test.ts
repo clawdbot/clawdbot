@@ -81,21 +81,27 @@ describe("createChatRunState", () => {
       phase: "update",
       name: "read",
       toolCallId: "active",
+      args: { path: "a" },
+    });
+    event(5, "tool", {
+      phase: "update",
+      name: "read",
+      toolCallId: "active",
       partialResult: "halfway",
     });
-    event(5, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
-    event(6, "tool", {
+    event(6, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
+    event(7, "tool", {
       phase: "result",
       name: "exec",
       toolCallId: "done",
       result: "x".repeat(256_000),
     });
-    event(7, "item", {
+    event(8, "item", {
       kind: "preamble",
       itemId: "p-1",
       progressText: "Inspection complete",
     });
-    event(8, "item", {
+    event(9, "item", {
       kind: "preamble",
       itemId: "p-2",
       progressText: "Running autoreview",
@@ -109,17 +115,26 @@ describe("createChatRunState", () => {
         stream: "tool",
         data: { phase: "input_delta", toolCallId: "active", diff: { added: 3, removed: 1 } },
       },
-      { seq: 4, stream: "tool", data: { phase: "update", toolCallId: "active" } },
       {
-        seq: 7,
+        seq: 5,
+        stream: "tool",
+        data: {
+          phase: "update",
+          toolCallId: "active",
+          args: { path: "a" },
+          partialResult: "halfway",
+        },
+      },
+      {
+        seq: 8,
         stream: "item",
         ts: 1_001,
         data: { itemId: "p-1", progressText: "Inspection complete" },
       },
-      { seq: 8, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
+      { seq: 9, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
     ]);
 
-    for (let seq = 9; seq <= 71; seq += 1) {
+    for (let seq = 10; seq <= 72; seq += 1) {
       event(seq, "tool", {
         phase: "start",
         name: "read",
@@ -133,7 +148,7 @@ describe("createChatRunState", () => {
     expect(snapshot?.events.at(-1)?.data).toEqual({
       phase: "start",
       name: "read",
-      toolCallId: "tool-71",
+      toolCallId: "tool-72",
     });
   });
 });

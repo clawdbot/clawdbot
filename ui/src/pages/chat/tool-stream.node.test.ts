@@ -234,6 +234,39 @@ describe("app-tool-stream throttled projections", () => {
       vi.useRealTimers();
     }
   });
+
+  it("adopts recovered arguments from a tool update", () => {
+    useToolStreamFakeTimers();
+    try {
+      const host = createHost();
+      const toolCallId = "call-recovered";
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase: "start",
+          name: "exec",
+          toolCallId,
+          args: {},
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "tool", {
+          phase: "update",
+          name: "exec",
+          toolCallId,
+          args: { command: "ls -la" },
+        }),
+      );
+      vi.advanceTimersByTime(80);
+
+      expect(host.chatToolMessages[0]?.content).toEqual([
+        { type: "toolcall", name: "exec", arguments: { command: "ls -la" } },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("app-tool-stream result blocks", () => {

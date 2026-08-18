@@ -152,7 +152,7 @@ async function runEmbeddedAgentViaCliBackend(
       return;
     }
     const phase = evt.data.phase;
-    if (phase !== "start" && phase !== "result") {
+    if (phase !== "start" && phase !== "update" && phase !== "result") {
       return;
     }
     const rawName = typeof evt.data.name === "string" ? evt.data.name : "";
@@ -161,7 +161,7 @@ async function runEmbeddedAgentViaCliBackend(
     }
     const toolName = normalizeToolPolicyName(stripOpenClawMcpToolPrefix(rawName));
     const toolCallId = typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined;
-    if (phase === "start") {
+    if (phase === "start" || phase === "update") {
       transcript.noteToolEvent({
         phase,
         toolName,

@@ -9,7 +9,14 @@
  * session accessor: the user turn at start, tool calls/results as they
  * stream, and the final assistant snapshot at run end.
  */
-import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  appendTranscriptMessage,
+  publishTranscriptUpdate,
+  readTranscriptEventAtSeqSync,
+  rewriteTranscriptEventRowsExact,
+} from "../../config/sessions/session-accessor.js";
+import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -22,13 +29,28 @@ type ToolResultContent =
   | { type: "image"; data: string; mimeType: string };
 
 type CliDispatchTranscriptToolEvent = {
-  phase: "start" | "result";
+  phase: "start" | "update" | "result";
   toolName: string;
   toolCallId?: string;
   args?: Record<string, unknown>;
   result?: unknown;
   isError?: boolean;
   resultContentSource?: "network";
+};
+
+type PendingToolCall = {
+  toolName: string;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  tainted: boolean;
+  anchor?: TranscriptEntryAnchor;
+  messageId?: string;
+  writtenArgsJson?: string;
+};
+
+type TranscriptAppendResult = {
+  anchor?: TranscriptEntryAnchor;
+  messageId: string;
 };
 
 type CliDispatchTranscriptRecorder = {
@@ -73,6 +95,7 @@ export function createCliDispatchTranscriptRecorder(params: {
   let finalized = false;
   let turnTainted = false;
   let toolRecordSequence = 0;
+  const pendingToolCalls = new Map<string, PendingToolCall>();
 
   const scope = {
     sessionId: params.sessionId,
@@ -83,20 +106,28 @@ export function createCliDispatchTranscriptRecorder(params: {
     expectedWriterRunId: params.expectedWriterRunId,
   };
 
-  const enqueue = (build: () => AgentMessage) => {
-    tail = tail.then(async () => {
-      await appendTranscriptMessage(scope, {
+  const enqueue = (operation: () => Promise<void> | void, label = "append") => {
+    tail = tail.then(operation);
+    // Transcript mirroring is best-effort; a failed operation must not fail the
+    // run or poison later appends in the chain.
+    tail = tail.catch((error: unknown) => {
+      log.warn(
+        `cli dispatch transcript ${label} failed: runId=${params.runId} error=${String(error)}`,
+      );
+    });
+  };
+
+  const enqueueAppend = (
+    build: () => AgentMessage,
+    onAppended?: (result: TranscriptAppendResult | undefined) => void,
+  ) => {
+    enqueue(async () => {
+      const result = await appendTranscriptMessage(scope, {
         message: build(),
         config: params.config,
         cwd: params.cwd,
       });
-    });
-    // Transcript mirroring is best-effort; a failed append must not fail the
-    // run or poison later appends in the chain.
-    tail = tail.catch((error: unknown) => {
-      log.warn(
-        `cli dispatch transcript append failed: runId=${params.runId} error=${String(error)}`,
-      );
+      onAppended?.(result);
     });
   };
 
@@ -123,7 +154,7 @@ export function createCliDispatchTranscriptRecorder(params: {
     return tainted ? ({ ...message, __openclaw: { turnTainted: true } } as AgentMessage) : message;
   };
 
-  enqueue(() => ({
+  enqueueAppend(() => ({
     role: "user",
     content: [{ type: "text", text: params.prompt }],
     timestamp: Date.now(),
@@ -131,6 +162,97 @@ export function createCliDispatchTranscriptRecorder(params: {
       ? { __openclaw: { senderIsOwner: params.senderIsOwner } }
       : {}),
   }));
+
+  const enqueueToolCall = (tool: PendingToolCall) => {
+    // Capture the start payload before later updates replace tool.args. The
+    // empty start is visible immediately; recovered args are applied by an
+    // exact-row rewrite instead of appending a second tool-call message.
+    const initialArgs = tool.args;
+    enqueueAppend(
+      () =>
+        buildZeroUsageAssistantMessage(
+          [
+            {
+              type: "toolCall",
+              id: tool.toolCallId,
+              name: tool.toolName,
+              arguments: initialArgs,
+            },
+          ],
+          "toolUse",
+          tool.tainted,
+        ),
+      (result) => {
+        tool.anchor = result?.anchor;
+        tool.messageId = result?.messageId;
+        tool.writtenArgsJson = JSON.stringify(initialArgs);
+      },
+    );
+  };
+
+  const enqueueToolCallArgumentsRewrite = (tool: PendingToolCall) => {
+    const args = tool.args;
+    const argsJson = JSON.stringify(args);
+    if (argsJson === undefined) {
+      return;
+    }
+    enqueue(async () => {
+      const anchor = tool.anchor;
+      const messageId = tool.messageId;
+      if (!anchor || !messageId || tool.writtenArgsJson === argsJson) {
+        return;
+      }
+      const current = readTranscriptEventAtSeqSync(scope, anchor.rawSeq);
+      if (
+        !current ||
+        current.seq !== anchor.rawSeq ||
+        !isRecord(current.event) ||
+        current.event.id !== messageId
+      ) {
+        return;
+      }
+      const expectedEventJson = JSON.stringify(current.event);
+      const rewrittenEvent = replaceTranscriptToolCallArguments(
+        current.event,
+        tool.toolCallId,
+        args,
+      );
+      if (!rewrittenEvent || expectedEventJson === undefined) {
+        return;
+      }
+      const rewritten = await rewriteTranscriptEventRowsExact(scope, {
+        expectedGeneration: anchor.generation,
+        rows: [
+          {
+            event: rewrittenEvent,
+            expectedEventJson,
+            seq: anchor.rawSeq,
+          },
+        ],
+      });
+      if (!rewritten) {
+        return;
+      }
+      tool.anchor = { ...anchor, generation: rewritten.generation };
+      if (tool.args === args) {
+        tool.writtenArgsJson = argsJson;
+      }
+      await publishTranscriptUpdate(scope, { messageId });
+    }, "rewrite");
+  };
+  const flushPendingToolCall = (toolCallId: string) => {
+    const pending = pendingToolCalls.get(toolCallId);
+    if (!pending) {
+      return;
+    }
+    pendingToolCalls.delete(toolCallId);
+    enqueueToolCallArgumentsRewrite(pending);
+  };
+  const flushPendingToolCalls = () => {
+    for (const toolCallId of pendingToolCalls.keys()) {
+      flushPendingToolCall(toolCallId);
+    }
+  };
 
   return {
     noteToolEvent: (event) => {
@@ -141,25 +263,32 @@ export function createCliDispatchTranscriptRecorder(params: {
       const toolCallId =
         event.toolCallId?.trim() || `${params.runId}-tool-${String(toolRecordSequence)}`;
       if (event.phase === "start") {
-        const taintedAtStart = turnTainted;
-        enqueue(() =>
-          buildZeroUsageAssistantMessage(
-            [
-              {
-                type: "toolCall",
-                id: toolCallId,
-                name: event.toolName,
-                arguments: event.args ?? {},
-              },
-            ],
-            "toolUse",
-            taintedAtStart,
-          ),
-        );
+        const tool = {
+          toolName: event.toolName,
+          toolCallId,
+          args: event.args ?? {},
+          tainted: turnTainted,
+        };
+        enqueueToolCall(tool);
+        if (Object.keys(tool.args).length === 0) {
+          pendingToolCalls.set(toolCallId, tool);
+        }
         return;
       }
+      if (event.phase === "update") {
+        const pending = pendingToolCalls.get(toolCallId);
+        if (pending && event.args && Object.keys(event.args).length > 0) {
+          pending.args = event.args;
+          enqueueToolCallArgumentsRewrite(pending);
+        }
+        return;
+      }
+      const pending = pendingToolCalls.get(toolCallId);
+      if (pending) {
+        flushPendingToolCall(toolCallId);
+      }
       turnTainted ||= event.resultContentSource === "network";
-      enqueue(() => ({
+      enqueueAppend(() => ({
         role: "toolResult",
         toolCallId,
         toolName: event.toolName,
@@ -181,27 +310,51 @@ export function createCliDispatchTranscriptRecorder(params: {
       if (finalized) {
         return;
       }
+      flushPendingToolCalls();
       const text = lastAssistantText.trim();
       if (!text || text === lastWrittenAssistantText) {
         return;
       }
       lastWrittenAssistantText = text;
-      enqueue(() => buildZeroUsageAssistantMessage([{ type: "text", text }], "aborted"));
+      enqueueAppend(() => buildZeroUsageAssistantMessage([{ type: "text", text }], "aborted"));
     },
     finalize: async (finalText) => {
       if (finalized) {
         await tail;
         return;
       }
+      flushPendingToolCalls();
       finalized = true;
       const text = finalText?.trim() || lastAssistantText.trim();
       if (text && text !== lastWrittenAssistantText) {
         lastWrittenAssistantText = text;
-        enqueue(() => buildZeroUsageAssistantMessage([{ type: "text", text }], "stop"));
+        enqueueAppend(() => buildZeroUsageAssistantMessage([{ type: "text", text }], "stop"));
       }
       await tail;
     },
   };
+}
+
+function replaceTranscriptToolCallArguments(
+  event: unknown,
+  toolCallId: string,
+  args: Record<string, unknown>,
+): unknown {
+  if (!isRecord(event) || event.type !== "message" || !isRecord(event.message)) {
+    return undefined;
+  }
+  if (!Array.isArray(event.message.content)) {
+    return undefined;
+  }
+  let replaced = false;
+  const content = event.message.content.map((block) => {
+    if (!isRecord(block) || block.type !== "toolCall" || block.id !== toolCallId) {
+      return block;
+    }
+    replaced = true;
+    return { ...block, arguments: args };
+  });
+  return replaced ? { ...event, message: { ...event.message, content } } : undefined;
 }
 
 /** Maps a sanitized CLI tool result onto transcript content blocks. */

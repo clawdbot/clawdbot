@@ -325,6 +325,19 @@ export function createCliToolSummaryTracker(params: {
         }
         return false;
       }
+      if (payload.phase === "update") {
+        const tracked = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
+        if (tracked && payload.name) {
+          const meta = inferToolMetaFromArgs(payload.name, payload.args, {
+            detailMode: params.detailMode ?? "explain",
+          });
+          if (meta !== undefined) {
+            tracked.meta = meta;
+          }
+          tracked.commandBearing ||= isCommandBearingToolCall(payload.name, payload.args);
+        }
+        return false;
+      }
       if (payload.phase !== "result") {
         return false;
       }

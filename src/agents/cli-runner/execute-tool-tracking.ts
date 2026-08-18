@@ -460,12 +460,21 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
   const handleCliToolUseStart = (event: CliToolUseStartDelta) => {
     if (event.kind !== "server_tool_use") {
-      const activeTool: ActiveCliTool = {
+      const existing = activeCliTools.get(event.toolCallId);
+      const activeTool: ActiveCliTool = existing ?? {
         toolName: event.name,
         args: event.args,
         loopbackAmbiguous: cliLoopbackCorrelationOverflowed && event.name.startsWith("mcp__"),
       };
-      activeCliTools.set(event.toolCallId, activeTool);
+      // A later resolved-args update (e.g. the #120306 backfill when a CLI
+      // provider skips input_json_delta and the final assistant snapshot carries
+      // the args) must refresh the canonical args in place and re-run loopback
+      // correlation, without dropping an already-bound loopback call or ambiguity
+      // group established at start.
+      activeTool.args = event.args;
+      if (!existing) {
+        activeCliTools.set(event.toolCallId, activeTool);
+      }
       const admittedCall = {
         toolName: normalizeCliMessagingToolName(event.name),
         args: event.args,
@@ -497,6 +506,15 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       event.args.dryRun === true ||
       !isMessagingToolDeliveryAction(toolName, event.args)
     ) {
+      return;
+    }
+    // Refresh an already-tracked messaging send in place (backfill) instead of
+    // creating a second entry; this keeps the delivery target correct without
+    // duplicating evidence. See #120306.
+    const existingPending = pendingMessagingCalls.get(event.toolCallId);
+    if (existingPending) {
+      existingPending.args = event.args;
+      existingPending.target = extractCliMessagingTarget(context, toolName, event.args);
       return;
     }
     if (pendingMessagingCalls.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {

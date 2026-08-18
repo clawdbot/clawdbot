@@ -24,6 +24,13 @@ function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number)
   });
 }
 
+function claudeBlockStop(index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_stop",
+    ...(index === undefined ? {} : { index }),
+  });
+}
+
 function claudeTextDelta(text: string, index?: number | string) {
   return claudeStreamEvent({
     type: "content_block_delta",
@@ -378,6 +385,90 @@ describe("createCliJsonlStreamingParser events", () => {
     ]);
     expect(results).toEqual([
       { toolCallId: "toolu_1", name: "Bash", isError: false, result: "total 0\n" },
+    ]);
+  });
+
+  it("backfills resolved args as an update after an empty streamed start", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const updates: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolUseUpdate: (delta) => updates.push(delta),
+    });
+
+    parser.push(
+      [
+        claudeBlockStart({ type: "tool_use", id: "toolu_backfill", name: "Bash", input: {} }, 0),
+        claudeBlockStop(0),
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_backfill",
+                name: "Bash",
+                input: { command: "ls -la" },
+              },
+            ],
+          },
+        },
+      ]
+        .map((frame) => JSON.stringify(frame))
+        .join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_backfill", name: "Bash", kind: "tool_use", args: {} },
+    ]);
+    expect(updates).toEqual([
+      {
+        toolCallId: "toolu_backfill",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "ls -la" },
+      },
+    ]);
+  });
+
+  it("prefers explicit streamed empty args over the initial block snapshot", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "local-cli", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        claudeBlockStart(
+          { type: "tool_use", id: "toolu_empty", name: "Bash", input: { command: "stale" } },
+          0,
+        ),
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: "{}" },
+        }),
+        claudeBlockStop(0),
+      ]
+        .map((frame) => JSON.stringify(frame))
+        .join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_empty", name: "Bash", kind: "tool_use", args: {} },
     ]);
   });
 

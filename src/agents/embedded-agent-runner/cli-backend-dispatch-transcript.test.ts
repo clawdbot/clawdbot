@@ -2,9 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 
 const appendTranscriptMessage = vi.hoisted(() => vi.fn());
+const publishTranscriptUpdate = vi.hoisted(() => vi.fn());
+const readTranscriptEventAtSeqSync = vi.hoisted(() => vi.fn());
+const rewriteTranscriptEventRowsExact = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   appendTranscriptMessage,
+  publishTranscriptUpdate,
+  readTranscriptEventAtSeqSync,
+  rewriteTranscriptEventRowsExact,
 }));
 
 type AppendedRecord = {
@@ -38,6 +44,12 @@ function recorderParams() {
 beforeEach(() => {
   appendTranscriptMessage.mockReset();
   appendTranscriptMessage.mockResolvedValue({ appended: true, message: {}, messageId: "m" });
+  publishTranscriptUpdate.mockReset();
+  publishTranscriptUpdate.mockResolvedValue(undefined);
+  readTranscriptEventAtSeqSync.mockReset();
+  readTranscriptEventAtSeqSync.mockReturnValue(undefined);
+  rewriteTranscriptEventRowsExact.mockReset();
+  rewriteTranscriptEventRowsExact.mockResolvedValue(null);
 });
 
 describe("createCliDispatchTranscriptRecorder", () => {
@@ -103,6 +115,114 @@ describe("createCliDispatchTranscriptRecorder", () => {
       role: "assistant",
       content: [{ type: "text", text: "Lemon pepper." }],
       stopReason: "stop",
+    });
+  });
+
+  it("keeps an empty start visible and rewrites recovered arguments in place", async () => {
+    appendTranscriptMessage.mockImplementation(async (_scope, options) => {
+      const message = (options as { message: Record<string, unknown> }).message;
+      const content = Array.isArray(message.content) ? message.content : [];
+      const toolCall = content[0] as Record<string, unknown> | undefined;
+      if (message.role === "assistant" && toolCall?.type === "toolCall") {
+        return {
+          appended: true,
+          message,
+          messageId: "tool-message",
+          anchor: {
+            agentId: "main",
+            sessionId: "recall-session",
+            sessionKey: "agent:main:recall",
+            storePath: "sqlite://agents/main/recall-session",
+            generation: "generation-1",
+            entryId: "tool-message",
+            rawSeq: 2,
+            effectiveParentId: null,
+            activeMessagePosition: 1,
+          },
+        };
+      }
+      return { appended: true, message, messageId: "user-message" };
+    });
+    readTranscriptEventAtSeqSync.mockReturnValue({
+      seq: 2,
+      event: {
+        type: "message",
+        id: "tool-message",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-recovered", name: "exec", arguments: {} }],
+        },
+      },
+    });
+    rewriteTranscriptEventRowsExact.mockResolvedValue({ generation: "generation-2" });
+
+    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
+    recorder.noteToolEvent({
+      phase: "start",
+      toolName: "exec",
+      toolCallId: "call-recovered",
+      args: {},
+    });
+    await vi.waitFor(() => {
+      expect(appendedRecords()[1]?.message).toMatchObject({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-recovered", arguments: {} }],
+      });
+    });
+    recorder.noteToolEvent({
+      phase: "update",
+      toolName: "exec",
+      toolCallId: "call-recovered",
+      args: { command: "jj rebase -s abc -d main" },
+    });
+    recorder.noteToolEvent({
+      phase: "result",
+      toolName: "exec",
+      toolCallId: "call-recovered",
+      result: "ok",
+      isError: false,
+    });
+    await recorder.finalize();
+
+    const messages = appendedRecords().map((record) => record.message);
+    expect(messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+    expect(messages[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-recovered",
+          arguments: {},
+        },
+      ],
+    });
+    expect(messages[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-recovered",
+    });
+    expect(rewriteTranscriptEventRowsExact).toHaveBeenCalledOnce();
+    expect(rewriteTranscriptEventRowsExact.mock.calls[0]?.[1]).toMatchObject({
+      expectedGeneration: "generation-1",
+      rows: [
+        {
+          seq: 2,
+          event: {
+            id: "tool-message",
+            message: {
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-recovered",
+                  arguments: { command: "jj rebase -s abc -d main" },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+    expect(publishTranscriptUpdate).toHaveBeenCalledWith(expect.anything(), {
+      messageId: "tool-message",
     });
   });
 

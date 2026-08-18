@@ -158,4 +158,58 @@ describe("cli tool result events", () => {
       dispose();
     }
   });
+
+  it("backfills resolved args as one update, not a second start (one Discord receipt) (#120306)", () => {
+    const runId = "run-tool-start-update";
+    const toolTracking = buildToolTracking();
+    const handlers = createCliEventHandlers({
+      context: buildContext(runId),
+      toolTracking,
+      getRunState: () => ({ failed: false, error: undefined }),
+    });
+    const { events, dispose } = collectToolEvents(runId);
+
+    try {
+      // Provider streamed an empty tool start...
+      handlers.emitParsedToolUseStart({
+        toolCallId: "call-2",
+        name: "Bash",
+        kind: "tool_use",
+        args: {},
+      });
+      // ...then the final assistant snapshot carries the resolved args.
+      handlers.emitParsedToolUseUpdate({
+        toolCallId: "call-2",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "ls -la" },
+      });
+
+      const starts = events.filter((event) => event.data.phase === "start");
+      const updates = events.filter((event) => event.data.phase === "update");
+      // Exactly one start (the empty one) and exactly one update. The absent
+      // second start is what keeps the Discord progress completion receipt from
+      // being counted twice and the tool duration from being reset.
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.data.args).toEqual({});
+      expect(updates).toHaveLength(1);
+      expect(updates[0]?.data.args).toEqual({ command: "ls -la" });
+
+      // The recovered args must also refresh the canonical tool-tracking state
+      // (loopback correlation + message-delivery evidence), not just the visible
+      // row. handleCliToolUseStart is the non-lifecycle tracking owner; it must
+      // be invoked on the update path with the populated args.
+      const startCalls = (toolTracking.handleCliToolUseStart as ReturnType<typeof vi.fn>).mock
+        .calls;
+      expect(
+        startCalls.some(
+          ([delta]) =>
+            delta.toolCallId === "call-2" &&
+            (delta.args as { command?: string }).command === "ls -la",
+        ),
+      ).toBe(true);
+    } finally {
+      dispose();
+    }
+  });
 });

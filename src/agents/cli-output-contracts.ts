@@ -111,6 +111,7 @@ export type CliJsonlStreamingParserOptions = {
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolUseUpdate?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;

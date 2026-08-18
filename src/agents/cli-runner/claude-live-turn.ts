@@ -545,6 +545,7 @@ export function createClaudeTurn(params: {
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolUseUpdate?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   resolveToolResultTerminalOutcome?: (
     delta: CliToolResultDelta,
@@ -595,6 +596,7 @@ export function createClaudeTurn(params: {
         markClaudeLiveToolStarted(turn, delta);
         params.onToolUseStart?.(delta);
       },
+      onToolUseUpdate: params.onToolUseUpdate,
       onToolResult: (delta) => {
         markClaudeLiveToolCompleted(turn, delta, params.resolveToolResultTerminalOutcome?.(delta));
         params.onToolResult?.(delta);

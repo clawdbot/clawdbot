@@ -66,6 +66,7 @@ type RunClaudeTurnParams = {
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolUseUpdate?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   resolveToolResultTerminalOutcome?: (
     delta: CliToolResultDelta,
@@ -523,6 +524,7 @@ async function runSerializedClaudeTurn(
     onThinkingDelta: params.onThinkingDelta,
     onThinkingProgress: params.onThinkingProgress,
     onToolUseStart: params.onToolUseStart,
+    onToolUseUpdate: params.onToolUseUpdate,
     onToolResult: params.onToolResult,
     resolveToolResultTerminalOutcome: params.resolveToolResultTerminalOutcome,
     onCommentaryText: params.onCommentaryText,

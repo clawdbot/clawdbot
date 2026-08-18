@@ -133,6 +133,7 @@ export async function executeCliProcess(params: {
       onThinkingDelta: params.events.emitCliThinkingDelta,
       onThinkingProgress: params.events.emitCliThinkingProgress,
       onToolUseStart: params.events.emitCliToolUseStart,
+      onToolUseUpdate: params.events.emitCliToolUseUpdate,
       onToolResult: params.events.emitCliToolResult,
       resolveToolResultTerminalOutcome: (event) => {
         const outcome = params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId);
@@ -172,6 +173,7 @@ export async function executeCliProcess(params: {
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
         onToolUseStart: params.events.emitParsedToolUseStart,
+        onToolUseUpdate: params.events.emitParsedToolUseUpdate,
         onToolResult: params.events.emitParsedToolResult,
         onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
         onDisplayToolResult: params.events.emitCliDisplayToolResult,
