@@ -34,9 +34,16 @@ progress or errors. The worksheet, priority surfaces, testing instructions, and
 Use an explicit beta when supplied; otherwise resolve the newest published tag
 matching `vYYYY.M.D-beta.N`. Record its version and commit.
 
-Use `gh` to find the open issue identified by
-`<!-- openclaw-release-validation:<tag> -->`. Ignore closed campaign issues and
-fail clearly if more than one open issue has the marker.
+When the request supplies an issue URL or number, resolve it directly with
+`gh issue view`. Accept it only when it is open and its body contains the exact
+`<!-- openclaw-release-validation:<tag> -->` marker. This direct verification is
+authoritative: do not run a subsequent search or let a search result override it.
+
+When no issue is supplied, enumerate open repository issues through `gh api`
+and inspect their bodies locally for the exact marker. Ignore pull requests and
+closed issues. Do not use GitHub full-text search for this lookup: hidden HTML
+comments are not reliably indexed. Fail clearly if more than one open issue has
+the marker.
 
 Whenever the workflow reaches its issue announcement, use this exact shape with
 one raw URL and no commentary about discovery or campaign counts:
