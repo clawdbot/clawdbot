@@ -3990,7 +3990,7 @@ src/worker/worker-process.ts	2
 src/worker/worker-session-tools.ts	4
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/api/gateway.ts	1
-ui/src/app-navigation.ts	3
+ui/src/app-navigation.ts	2
 ui/src/app-route-paths.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1
@@ -4016,7 +4016,7 @@ ui/src/app/overlays.ts	1
 ui/src/app/question-prompt.ts	2
 ui/src/app/server-prefs-state.ts	14
 ui/src/app/server-prefs.ts	17
-ui/src/app/settings.ts	10
+ui/src/app/settings.ts	9
 ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/theme.ts	4
@@ -4089,7 +4089,7 @@ ui/src/components/session-data-controller.ts	2
 ui/src/components/session-data-scroll-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
 ui/src/components/session-menu.ts	1
-ui/src/components/session-organizer-controller.ts	9
+ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
 ui/src/components/sidebar-agent-card.ts	1
