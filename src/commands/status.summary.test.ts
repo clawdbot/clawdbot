@@ -6,6 +6,7 @@ import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { registerStatusSummarySessionRowCases } from "./status.summary.session-row-cases.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
@@ -277,6 +278,15 @@ describe("getStatusSummary", () => {
       scope: "per-sender",
       agents: [{ id: "main" }],
     });
+  });
+
+  registerStatusSummarySessionRowCases({
+    getStatusSummary: () => getStatusSummary(),
+    getStatusSummaryRuntime: () => statusSummaryRuntime,
+    rejectProviderStaticModel: (error) =>
+      statusSummaryMocks.resolveProviderStaticModel.mockRejectedValueOnce(error),
+    setSessions: (store) =>
+      statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -705,122 +715,6 @@ describe("getStatusSummary", () => {
       modelContextWindow: 1_048_576,
       allowAsyncLoad: false,
     });
-  });
-
-  it("keeps status available when static catalog lookup fails", async () => {
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
-      provider: "broken-provider",
-      model: "broken-model",
-    });
-    statusSummaryMocks.resolveProviderStaticModel.mockRejectedValueOnce(
-      new Error("static catalog unavailable"),
-    );
-
-    await expect(getStatusSummary()).resolves.toMatchObject({
-      sessions: {
-        defaults: {
-          model: "broken-model",
-          contextTokens: 200_000,
-        },
-      },
-    });
-  });
-
-  it("includes the selected agent runtime on recent sessions", async () => {
-    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
-      id: "codex",
-      label: "OpenAI Codex",
-    });
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        "agent:main:main": {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      }),
-    );
-
-    const summary = await getStatusSummary();
-
-    expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
-  });
-
-  it("rejects a stale runtime window after a same-model harness change", async () => {
-    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(1_000_000);
-    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
-      id: "codex",
-      label: "OpenAI Codex",
-    });
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        "agent:main:main": {
-          sessionId: "same-model-runtime-change",
-          updatedAt: Date.now(),
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          agentHarnessId: "openclaw",
-          contextTokens: 272_000,
-          contextTokensSource: "runtime",
-          totalTokens: 11,
-          totalTokensFresh: true,
-          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-        },
-      }),
-    );
-
-    const summary = await getStatusSummary();
-
-    expect(summary.sessions.recent[0]).toMatchObject({
-      runtime: "OpenAI Codex",
-      contextTokens: 1_000_000,
-      remainingTokens: 999_989,
-    });
-  });
-
-  it("keeps telemetry from the matching runtime producer", async () => {
-    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(1_000_000);
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        "agent:main:main": {
-          sessionId: "matching-runtime-window",
-          updatedAt: Date.now(),
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          agentHarnessId: "openclaw",
-          contextTokens: 272_000,
-          contextTokensSource: "runtime",
-          totalTokens: 11,
-          totalTokensFresh: true,
-          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-        },
-      }),
-    );
-
-    const summary = await getStatusSummary();
-
-    expect(summary.sessions.recent[0]?.contextTokens).toBe(272_000);
-  });
-
-  it("preserves the native window owned by a locked legacy session", async () => {
-    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(1_000_000);
-    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
-      id: "codex",
-      label: "OpenAI Codex",
-    });
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        "agent:main:main": {
-          sessionId: "locked-legacy-window",
-          updatedAt: Date.now(),
-          modelSelectionLocked: true,
-          contextTokens: 272_000,
-        },
-      }),
-    );
-
-    const summary = await getStatusSummary();
-
-    expect(summary.sessions.recent[0]?.contextTokens).toBe(272_000);
   });
 
   it("hydrates only recent session rows while preserving total counts", async () => {
