@@ -197,10 +197,12 @@ export async function loadSkillWorkshopProposals(
       if (!selectionRequestByState.has(state)) {
         markSkillWorkshopSelectionRequest(state, selectedKey);
       }
-      await loadSkillWorkshopProposalDetail(state, context, selectedKey);
-      // The Applied tab can be opened without a fresh click, so the predecessor
-      // has to be warmed here too or the diff never has a baseline.
-      await loadSkillWorkshopPredecessorBody(state, context, selectedKey);
+      const selectedLoaded = await loadSkillWorkshopProposalDetail(state, context, selectedKey);
+      if (selectedLoaded) {
+        // The Applied tab can be opened without a fresh click, so the predecessor
+        // has to be warmed here too or the diff never has a baseline.
+        await loadSkillWorkshopPredecessorBody(state, context, selectedKey);
+      }
     }
   } catch (err) {
     state.skillWorkshopError = formatUiError(err);

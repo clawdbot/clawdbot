@@ -191,13 +191,23 @@ describe("Skill Workshop proposal RPCs", () => {
   });
 
   it("reports a failed inspect for a selection retained across refresh", async () => {
+    const appliedManifest = manifest("applied");
+    const latest = appliedManifest.proposals[0];
+    if (!latest) {
+      throw new Error("Expected proposal fixture");
+    }
+    const previous = {
+      ...latest,
+      id: "proposal-0",
+      updatedAt: "2026-06-15T12:00:00.000Z",
+    };
     const { state, context, request } = createFixture({
       skillWorkshopAgentId: "research",
       skillWorkshopSelectedKey: "proposal-1",
     });
     request.mockImplementation(async (method: string) => {
       if (method === "skills.proposals.list") {
-        return manifest();
+        return { ...appliedManifest, proposals: [latest, previous] };
       }
       throw new Error("inspect failed");
     });
@@ -206,6 +216,9 @@ describe("Skill Workshop proposal RPCs", () => {
 
     expect(state.skillWorkshopSelectedKey).toBe("proposal-1");
     expect(state.skillWorkshopError).toContain("inspect failed");
+    expect(request.mock.calls.filter(([method]) => method === "skills.proposals.inspect")).toEqual([
+      ["skills.proposals.inspect", { agentId: "research", proposalId: "proposal-1" }],
+    ]);
   });
 
   it("preserves capped support-file size formatting through the shared helper", async () => {
