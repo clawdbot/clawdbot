@@ -471,29 +471,38 @@ suite.define(() => {
         });
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        const sidebarTrigger = page.locator(
+          `.sidebar-recent-session[data-session-key="${selectedSessionKey}"] .sidebar-recent-session__link`,
+        );
+        await sidebarTrigger.focus();
+        await expect
+          .poll(
+            async () =>
+              (await gateway.getRequests("progressCard.get")).filter(
+                (request) =>
+                  isRecord(request.params) && request.params.sessionKey === selectedSessionKey,
+              ).length,
+          )
+          .toBe(1);
+        const sidebarProgress = page.locator(".session-progress-hovercard");
+        await sidebarProgress.waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await expect.poll(() => sidebarProgress.count()).toBe(0);
+
         const link = page.locator(`.markdown-session-link[data-session-key="${linkedSessionKey}"]`);
         await link.waitFor({ state: "visible" });
         await link.focus();
 
         const preview = page.locator(".session-link-hovercard");
-        await preview.waitFor({ state: "visible" });
+        await expect.poll(() => preview.getAttribute("data-loading")).toBe("false");
         expect(await preview.getAttribute("role")).toBe("dialog");
         expect(await link.getAttribute("aria-controls")).toBe(await preview.getAttribute("id"));
-        await expect
-          .poll(
-            async () => {
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, 700);
-              });
-              return (await gateway.getRequests("progressCard.get")).filter(
-                (request) =>
-                  isRecord(request.params) && request.params.sessionKey === linkedSessionKey,
-              ).length;
-            },
-            { timeout: 2_000 },
-          )
-          .toBe(0);
-        expect(await page.locator(".session-progress-hovercard").count()).toBe(0);
+        expect(
+          (await gateway.getRequests("progressCard.get")).filter(
+            (request) => isRecord(request.params) && request.params.sessionKey === linkedSessionKey,
+          ),
+        ).toHaveLength(0);
+        expect(await sidebarProgress.count()).toBe(0);
       },
     );
   });
