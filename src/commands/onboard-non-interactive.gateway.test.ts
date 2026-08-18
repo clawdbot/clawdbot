@@ -181,13 +181,18 @@ vi.mock("./health.js", () => ({
 
 vi.mock("../daemon/service.js", () => ({
   readGatewayServiceState: async () => {
-    const [loaded, runtime] = await Promise.all([
-      gatewayServiceMock.isLoaded(),
+    const [loadState, runtime] = await Promise.all([
+      gatewayServiceMock
+        .isLoaded()
+        .then((loaded) =>
+          loaded ? ({ status: "loaded" } as const) : ({ status: "not-loaded" } as const),
+        )
+        .catch((error: unknown) => ({ status: "unknown" as const, detail: String(error) })),
       gatewayServiceMock.readRuntime(),
     ]);
     return {
       installed: true,
-      loadState: { status: loaded ? ("loaded" as const) : ("not-loaded" as const) },
+      loadState,
       running: runtime.status === "running",
       env: {},
       command: null,
@@ -452,7 +457,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const cfg = readTestConfig<{
+      const cfg = readTestConfig() as {
         gateway?: {
           mode?: string;
           bind?: string;
@@ -462,7 +467,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         agents?: { defaults?: { workspace?: string } };
         tools?: { profile?: string };
         hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
-      }>();
+      };
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg?.gateway?.mode).toBe("local");
@@ -724,9 +729,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       await runOnboardLocalDaemonSetup({ runSetup: runNonInteractiveSetup, stateDir, runtime });
 
-      const cfg = readTestConfig<{
+      const cfg = readTestConfig() as {
         gateway?: { mode?: string; bind?: string };
-      }>();
+      };
 
       expect(cfg?.gateway?.mode).toBe("local");
       expect(cfg?.gateway?.bind).toBe("loopback");
@@ -851,6 +856,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         diagnostics?: {
           service?: {
             label?: string;
+            loaded?: boolean | null;
             loadState?: { status?: string };
             runtimeStatus?: string;
             pid?: number;
@@ -865,10 +871,39 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(parsed.gateway?.wsUrl).toContain("ws://127.0.0.1:");
       expect(parsed.hints).toContain("Run `openclaw gateway status --deep` for more detail.");
       expect(parsed.diagnostics?.service?.label).toBe("LaunchAgent");
+      expect(parsed.diagnostics?.service?.loaded).toBe(true);
       expect(parsed.diagnostics?.service?.loadState).toEqual({ status: "loaded" });
       expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
       expect(parsed.diagnostics?.service?.pid).toBe(4242);
       expect(parsed.diagnostics?.lastGatewayError).toContain("required secrets are unavailable");
+    });
+  }, 60_000);
+
+  it("preserves unknown service inspection in JSON diagnostics", async () => {
+    await withStateDir("state-local-daemon-health-unknown-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
+      }));
+      gatewayServiceMock.isLoaded.mockRejectedValueOnce(new Error("systemctl timed out"));
+
+      const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+      await expectOnboardLocalJsonSetupFailure({
+        runSetup: runNonInteractiveSetup,
+        stateDir,
+        runtime: runtimeWithCapture,
+      });
+
+      const parsed = JSON.parse(readCapturedJson()) as {
+        diagnostics?: {
+          service?: { loaded?: boolean | null; loadState?: { status?: string; detail?: string } };
+        };
+      };
+      expect(parsed.diagnostics?.service?.loaded).toBeNull();
+      expect(parsed.diagnostics?.service?.loadState).toEqual({
+        status: "unknown",
+        detail: "Error: systemctl timed out",
+      });
     });
   }, 60_000);
 
@@ -932,13 +967,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const cfg = readTestConfig<{
+      const cfg = readTestConfig() as {
         gateway?: {
           bind?: string;
           port?: number;
           auth?: { mode?: string; token?: string };
         };
-      }>();
+      };
 
       expect(cfg.gateway?.bind).toBe("lan");
       expect(cfg.gateway?.port).toBe(port);

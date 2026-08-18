@@ -12,6 +12,7 @@ import type { OnboardOptions } from "../../onboard-types.js";
 export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
+    loaded: boolean | null;
     loadState: GatewayServiceLoadState;
     loadedText: string;
     runtimeStatus?: string;

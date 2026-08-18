@@ -82,8 +82,11 @@ async function collectGatewayHealthFailureDiagnostics(): Promise<
     const env = process.env as Record<string, string | undefined>;
     const state = await readGatewayServiceState(service, { env });
     const runtime = state.runtime;
+    const loaded =
+      state.loadState.status === "unknown" ? null : state.loadState.status === "loaded";
     diagnostics.service = {
       label: service.label,
+      loaded,
       loadState: state.loadState,
       loadedText: service.loadedText,
       runtimeStatus: runtime?.status,

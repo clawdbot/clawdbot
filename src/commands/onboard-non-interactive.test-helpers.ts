@@ -115,9 +115,8 @@ export function createOnboardTestConfigStore() {
     return path.join(stateDir, "openclaw.json");
   }
 
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe stored config shape.
-  function readConfig<T = OpenClawConfig>(): T {
-    return (configStore.get(resolveConfigPath()) ?? {}) as T;
+  function readConfig(): OpenClawConfig {
+    return configStore.get(resolveConfigPath()) ?? {};
   }
 
   function readSnapshot(): ConfigFileSnapshot {
