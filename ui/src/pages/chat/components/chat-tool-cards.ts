@@ -449,7 +449,7 @@ function renderFileToolRowContent(
   const stat =
     outcome === "succeeded"
       ? view.stat
-      : outcome === "running"
+      : outcome === "running" && (view.kind === "edit" || view.kind === "write")
         ? card.liveDiffStat
         : undefined;
   const filename = compactToolTarget(view.target, view.kind);
@@ -770,8 +770,10 @@ export function renderToolCard(
   const expanded = opts.expanded || isRunning;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
   const workspaceFilePath =
-    view.kind === "edit" || view.kind === "write" ? resolveToolWorkspaceFilePath(card, view) : null;
-  const isFileMutation = Boolean(workspaceFilePath && (view.kind === "edit" || view.kind === "write"));
+    view.kind === "read" || view.kind === "edit" || view.kind === "write"
+      ? resolveToolWorkspaceFilePath(card, view)
+      : null;
+  const isFileRow = Boolean(workspaceFilePath);
 
   return html`
     <div
@@ -779,7 +781,7 @@ export function renderToolCard(
         ? "is-open"
         : ""}"
     >
-      ${isFileMutation
+      ${isFileRow
         ? html`<div
             class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${isRunning
               ? "chat-tool-row--running"
