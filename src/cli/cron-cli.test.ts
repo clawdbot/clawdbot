@@ -157,6 +157,30 @@ function buildProgram() {
   return program;
 }
 
+const CRON_GATEWAY_COMMANDS = [
+  { name: "status", args: [] },
+  { name: "list", args: [] },
+  { name: "add", args: [] },
+  { name: "rm", args: ["job-1"] },
+  { name: "enable", args: ["job-1"] },
+  { name: "disable", args: ["job-1"] },
+  { name: "get", args: ["job-1"] },
+  { name: "show", args: ["job-1"] },
+  { name: "runs", args: ["--id", "job-1"] },
+  { name: "run", args: ["job-1"] },
+  { name: "scratch", args: ["job-1"] },
+  { name: "edit", args: ["job-1"] },
+] as const;
+
+function findCronCommand(program: Command, name: string): Command {
+  const cron = program.commands.find((command) => command.name() === "cron");
+  const command = cron?.commands.find((candidate) => candidate.name() === name);
+  if (!command) {
+    throw new Error(`missing cron command: ${name}`);
+  }
+  return command;
+}
+
 function createCronJob(id: string, name: string): CronJob {
   const now = Date.now();
   return {
@@ -338,6 +362,65 @@ async function runCronRunAndCaptureExit(params: {
 }
 
 describe("cron cli", () => {
+  it.each(CRON_GATEWAY_COMMANDS)(
+    "inherits parent Gateway options for cron $name",
+    async ({ name, args }) => {
+      const program = buildProgram();
+      const command = findCronCommand(program, name);
+      command.action(() => {});
+
+      await program.parseAsync(
+        ["automations", "--port", "65267", "--token", "parent-token", name, ...args],
+        { from: "user" },
+      );
+
+      expect(command.opts()).toMatchObject({ port: "65267", token: "parent-token" });
+    },
+  );
+
+  it.each(CRON_GATEWAY_COMMANDS)(
+    "accepts leaf Gateway options for cron $name",
+    async ({ name, args }) => {
+      const program = buildProgram();
+      const command = findCronCommand(program, name);
+      command.action(() => {});
+
+      await program.parseAsync(
+        ["automations", name, ...args, "--port", "65268", "--token", "leaf-token"],
+        { from: "user" },
+      );
+
+      expect(command.opts()).toMatchObject({
+        port: "65268",
+        token: "leaf-token",
+      });
+    },
+  );
+
+  it("prefers explicit leaf Gateway options over cron parent options", async () => {
+    const program = buildProgram();
+    const command = findCronCommand(program, "add");
+    command.action(() => {});
+
+    await program.parseAsync(
+      [
+        "cron",
+        "--port",
+        "65267",
+        "--token",
+        "parent-token",
+        "add",
+        "--port",
+        "65268",
+        "--token",
+        "leaf-token",
+      ],
+      { from: "user" },
+    );
+
+    expect(command.opts()).toMatchObject({ port: "65268", token: "leaf-token" });
+  });
+
   it("documents the gateway-host timezone default for cron --tz help", () => {
     const program = buildProgram();
     const cronCommand = program.commands.find((command) => command.name() === "cron");

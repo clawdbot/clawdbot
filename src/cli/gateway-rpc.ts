@@ -24,6 +24,7 @@ async function loadGatewayRpcRuntime(): Promise<GatewayRpcRuntimeModule> {
 export function addGatewayClientOptions(cmd: Command, defaults?: { timeoutMs?: number }) {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--port <port>", "Local Gateway port")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (if required)")
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 30_000))
