@@ -2152,8 +2152,8 @@ button.chat-reply-preview--message:disabled {
   --task-suggestion-card-bg: var(--sidebar-bg, var(--panel));
   --task-suggestion-path-bg: var(--panel-strong);
   --task-suggestion-prompt-bg: var(--card);
-  --task-suggestion-action-bg: var(--text-strong);
-  --task-suggestion-action-fg: var(--bg);
+  --task-suggestion-action-bg: color-mix(in srgb, var(--accent) 72%, var(--text-strong) 28%);
+  --task-suggestion-action-fg: var(--primary-foreground);
 }
 
 :root[data-theme-mode="light"] .task-suggestion__start,
@@ -2162,6 +2162,14 @@ button.chat-reply-preview--message:disabled {
   border-right: 0;
   border-bottom: 0;
   background: transparent;
+  color: var(--task-suggestion-action-fg);
+}
+
+:root[data-theme-mode="light"] .task-suggestion__start:hover:not(:disabled),
+:root[data-theme-mode="light"] .task-suggestion__start:focus-visible,
+:root[data-theme-mode="light"] .task-suggestion__menu-trigger:hover:not(:disabled),
+:root[data-theme-mode="light"] .task-suggestion__menu-trigger:focus-visible {
+  background: color-mix(in srgb, var(--task-suggestion-action-fg) 10%, transparent);
   color: var(--task-suggestion-action-fg);
 }
 
