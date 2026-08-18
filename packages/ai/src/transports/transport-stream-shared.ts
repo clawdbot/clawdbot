@@ -124,7 +124,10 @@ export function transportAbortError(signal?: AbortSignal): Error {
     : new Error("Request was aborted");
 }
 
-type ProviderAcceptanceOptions = Pick<StreamOptions, "onProviderAccepted" | "onResponse">;
+type ProviderAcceptanceOptions = Pick<
+  StreamOptions,
+  "onProviderAccepted" | "onResponse" | "signal"
+>;
 
 async function awaitProviderLifecycleCallback(
   callback: (() => void | Promise<void>) | undefined,
@@ -169,6 +172,7 @@ export async function notifyProviderHttpResponse(params: {
   }
   const status = params.response.status;
   const headers = headersToRecord(params.response.headers);
+  const signal = params.signal ?? params.options?.signal;
   try {
     await awaitProviderLifecycleCallback(
       params.options.onProviderAccepted
@@ -178,13 +182,13 @@ export async function notifyProviderHttpResponse(params: {
               params.model,
             )
         : undefined,
-      params.signal,
+      signal,
     );
     await awaitProviderLifecycleCallback(
       params.options.onResponse
         ? () => params.options?.onResponse?.({ status, headers }, params.model)
         : undefined,
-      params.signal,
+      signal,
     );
   } catch (error) {
     await params.response.body?.cancel(error).catch(() => undefined);
@@ -194,12 +198,19 @@ export async function notifyProviderHttpResponse(params: {
 
 /** Report an accepted SDK stream when the SDK does not expose HTTP metadata. */
 export async function notifyProviderStreamOpened(params: {
-  options?: Pick<StreamOptions, "onProviderAccepted">;
+  options?: Pick<StreamOptions, "onProviderAccepted" | "signal">;
   model: Model;
+  signal?: AbortSignal;
 }): Promise<void> {
-  await params.options?.onProviderAccepted?.(
-    { kind: "provider_stream_opened", httpMetadata: "unavailable" },
-    params.model,
+  await awaitProviderLifecycleCallback(
+    params.options?.onProviderAccepted
+      ? () =>
+          params.options?.onProviderAccepted?.(
+            { kind: "provider_stream_opened", httpMetadata: "unavailable" },
+            params.model,
+          )
+      : undefined,
+    params.signal ?? params.options?.signal,
   );
 }
 
