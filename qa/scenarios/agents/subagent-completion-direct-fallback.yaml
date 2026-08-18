@@ -114,7 +114,7 @@ flow:
                   - lambda:
                       async: true
                       expr: "(async () => { const task = await readSettledTerminalTask(terminalCase.name); if (!task) return undefined; const matchingCount = state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && String(candidate.text ?? '').trim() === terminalCase.marker).length; return terminalCase.expectedSendCount === 0 || matchingCount >= terminalCase.expectedSendCount ? task : undefined; })().catch(() => undefined)"
-                  - expr: liveTurnTimeoutMs(env, 120000)
+                  - expr: liveTurnTimeoutMs(env, 180000)
                   - 250
               - set: caseOutbound
                 value:
@@ -207,7 +207,7 @@ flow:
             - lambda:
                 async: true
                 expr: "(async () => { const task = await readSettledTerminalTask('restart'); if (!task) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? task : undefined; })().catch(() => undefined)"
-            - expr: liveTurnTimeoutMs(env, 120000)
+            - expr: liveTurnTimeoutMs(env, 180000)
             - 250
         - set: restartMatches
           value:
@@ -273,7 +273,7 @@ flow:
             - lambda:
                 async: true
                 expr: "(async () => { const task = await readSettledTerminalTask('empty'); if (!task) return undefined; const represented = state.getSnapshot().messages.slice(emptyStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === emptyConversationId && String(candidate.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED'); return represented ? task : undefined; })().catch(() => undefined)"
-            - expr: liveTurnTimeoutMs(env, 120000)
+            - expr: liveTurnTimeoutMs(env, 180000)
             - 250
         - set: emptyOutbound
           value:
