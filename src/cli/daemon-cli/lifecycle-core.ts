@@ -124,9 +124,6 @@ async function resolveServiceLoadedOrFail(params: {
       : Boolean(await params.service.readCommand(process.env).catch(() => null));
   const loadState = await readGatewayServiceLoadState(params.service, { env: process.env });
   if (loadState.status === "unknown") {
-    if (params.acceptInstalledDefinition && (await hasInstalledDefinition())) {
-      return true;
-    }
     params.fail(
       `${params.inspectionFailureMessage ?? `${params.serviceNoun} service check failed`}: ${loadState.detail}`,
     );

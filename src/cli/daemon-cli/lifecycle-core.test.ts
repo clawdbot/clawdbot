@@ -367,7 +367,7 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
-  it("restarts an installed system-scope service when its loaded-state probe is unavailable", async () => {
+  it("fails restart when an installed service cannot be inspected", async () => {
     service.isLoaded.mockRejectedValue(
       new Error(
         "systemctl is-enabled unavailable: Command failed during launch or output capture (EACCES)",
@@ -383,14 +383,14 @@ describe("runServiceRestart token drift", () => {
         service: { ...service, hasInstalledDefinition } as GatewayService,
         postRestartCheck,
       }),
-    ).resolves.toBe(true);
+    ).rejects.toThrow("__exit__:1");
 
-    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
-    expect(service.restart).toHaveBeenCalledTimes(1);
-    expect(postRestartCheck).toHaveBeenCalledTimes(1);
-    expect(readJsonLog<{ ok?: boolean; result?: string }>()).toMatchObject({
-      ok: true,
-      result: "restarted",
+    expect(hasInstalledDefinition).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(postRestartCheck).not.toHaveBeenCalled();
+    expect(readJsonLog<{ ok?: boolean; error?: string }>()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("systemctl is-enabled unavailable"),
     });
   });
 
