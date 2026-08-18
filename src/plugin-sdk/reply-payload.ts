@@ -13,6 +13,12 @@ import {
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 
+/** Lazy-load fenced-MEDIA latch so reply-payload stays free of outbound plan cycles (#41966). */
+async function loadDirectAcceptedFencedMediaWarnLatch() {
+  const mod = await import("./channel-outbound-fenced-media-runtime.js");
+  return mod.createDirectAcceptedFencedMediaWarnLatch;
+}
+
 export type { MediaPayloadInput } from "../channels/plugins/media-payload.js";
 /** @deprecated Inbound contexts use `media`; outbound replies use `ReplyPayload.mediaUrl(s)`. */
 export type { MediaPayload } from "../channels/plugins/media-payload.js";
@@ -131,7 +137,7 @@ export function createNormalizedOutboundDeliverer(
   return async (payload: unknown) => {
     const normalized =
       payload && typeof payload === "object"
-        ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
+        ? normalizeOutboundReplyPayload(payload as Record<string, unknown>) // SAFETY: deliverer accepts arbitrary caller payloads before normalize
         : {};
     await handler(normalized);
   };
@@ -188,12 +194,16 @@ export async function sendPayloadWithChunkedTextAndMedia<
   /** Host callback that persists each completed sub-send before the next one starts. */
   onResult?: (result: TResult) => Promise<void> | void;
 }): Promise<TResult> {
+  // SAFETY: sendPayload helper only needs text/media fields from the channel payload bag
   const payload = params.ctx.payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string };
   const text = payload.text ?? "";
   const urls = resolveOutboundMediaUrls(payload);
   if (!text && urls.length === 0) {
     return params.emptyResult;
   }
+  // Zalo/Zalouser expose this helper as outbound.sendPayload. Core then owns the
+  // accepted-send fenced-MEDIA diagnostic after identified delivery — do not warn
+  // here or structured/audio payload routes double-log (#41966).
   const [firstUrl, ...remainingUrls] = urls;
   if (firstUrl !== undefined) {
     // Caption-limited transports get text only on the first media item; the
@@ -509,13 +519,31 @@ export async function deliverTextOrMediaReply(params: {
   const { mediaUrls } = resolveSendableOutboundReplyParts(params.payload, {
     text: params.text,
   });
+  // Shared direct-delivery owner for iMessage/Zalo-family (and peers): warn once
+  // after an accepted visible send when fenced MEDIA: stayed as text (#41966).
+  const createDirectAcceptedFencedMediaWarnLatch = await loadDirectAcceptedFencedMediaWarnLatch();
+  const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
+    payload: params.payload,
+  });
+  // Only latch fenced-MEDIA warn after a successful *caption-bearing* media send.
+  // sendMediaWithLeadingCaption may continue after a handled first-send failure and
+  // later succeed without the original caption (#41966 / ClawSweeper P2).
+  let captionBearingSendAccepted = false;
   const sentMedia = await sendMediaWithLeadingCaption({
     mediaUrls,
     caption: params.text,
-    send: params.sendMedia,
+    send: async (payload) => {
+      await params.sendMedia(payload);
+      if (typeof payload.caption === "string") {
+        captionBearingSendAccepted = true;
+      }
+    },
     onError: params.onMediaError,
   });
   if (sentMedia) {
+    if (captionBearingSendAccepted) {
+      fencedMediaWarn.afterAcceptedVisibleText(params.text);
+    }
     return "media";
   }
   if (!params.text) {
@@ -528,6 +556,7 @@ export async function deliverTextOrMediaReply(params: {
       continue;
     }
     await params.sendText(chunk);
+    fencedMediaWarn.afterAcceptedVisibleText(chunk);
     sentText = true;
   }
   return sentText ? "text" : "empty";
@@ -545,9 +574,16 @@ export async function deliverFormattedTextWithAttachments(params: {
   if (!text) {
     return false;
   }
+  // Shared direct-delivery owner for IRC/Nextcloud-family: warn once after an
+  // accepted formatted send when fenced MEDIA: stayed as text (#41966).
+  const createDirectAcceptedFencedMediaWarnLatch = await loadDirectAcceptedFencedMediaWarnLatch();
+  const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
+    payload: params.payload,
+  });
   await params.send({
     text,
     replyToId: params.payload.replyToId,
   });
+  fencedMediaWarn.afterAcceptedVisibleText(text);
   return true;
 }

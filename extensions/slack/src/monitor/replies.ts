@@ -2,6 +2,7 @@
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createDirectAcceptedFencedMediaWarnLatch } from "openclaw/plugin-sdk/channel-outbound-fenced-media-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -204,6 +205,11 @@ export async function deliverReplies(params: {
       continue;
     }
 
+    // #41966: fenced MEDIA has no media attachment — text-only path must latch too.
+    const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
+      payload,
+    });
+
     // Fire the `message_sent` hook(s) after delivery, mirroring Telegram's
     // `emitMessageSentHooks` in `extensions/telegram/src/bot/delivery.replies.ts`.
     // `emitSlackMessageSentHooks` self-gates on registered listeners, so this is
@@ -253,6 +259,8 @@ export async function deliverReplies(params: {
         } else if (!textRaw && spokenText) {
           hookParts.push(spokenText);
         }
+        // Shared deliverTextOrMediaReply owns the accepted-caption latch.
+        // Do not also fire Slack's outer latch here or media+fenced replies warn twice (#41966).
         const mediaDelivery = await deliverTextOrMediaReply({
           payload,
           text: mediaCaption,
@@ -277,6 +285,7 @@ export async function deliverReplies(params: {
           for (const chunk of chunkSlackTextAtHardLimit(text)) {
             lastResult = await sendReply({ text: chunk, threadTs, textIsSlackPlainText: true });
             delivered = true;
+            fencedMediaWarn.afterAcceptedVisibleText(chunk);
           }
           continue;
         }
@@ -299,12 +308,20 @@ export async function deliverReplies(params: {
           ...(baseText ? { nativeDataFallbackBaseText: baseText } : {}),
         });
         delivered = true;
+        // #41966: structured blocks can still surface fenced MEDIA as visible
+        // authored/fallback text — latch after accepted block send.
+        const blockVisibleProjection =
+          baseText || accessibilityText || buildSlackBlocksFallbackText(segment.blocks) || "";
+        if (blockVisibleProjection) {
+          fencedMediaWarn.afterAcceptedVisibleText(blockVisibleProjection);
+        }
       }
 
       if (outsideText && !reply.hasMedia) {
         hookParts.push(outsideText);
         lastResult = await sendReply({ text: outsideText, threadTs });
         delivered = true;
+        fencedMediaWarn.afterAcceptedVisibleText(outsideText);
       }
     } catch (error) {
       const hookContent = hookParts.join("\n\n") || textRaw || spokenText || "";

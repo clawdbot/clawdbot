@@ -1,21 +1,19 @@
 // Media parse helpers normalize media references from user and channel input.
-import {
-  extractEmbeddedIpv4FromIpv6,
-  isBlockedSpecialUseIpv4Address,
-  isBlockedSpecialUseIpv6Address,
-  isCanonicalDottedDecimalIPv4,
-  isIpv4Address,
-  isLegacyIpv4Literal,
-  parseCanonicalIpAddress,
-  parseLooseIpAddress,
-} from "@openclaw/net-policy/ip";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
-
-/** Captures legacy MEDIA: attachment directives from model/tool output. */
-const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+import {
+  cleanCandidate,
+  FILE_URL_PREFIX_RE,
+  isValidMedia,
+  looksLikeLocalFilePath,
+  normalizeMediaSource,
+  unwrapQuoted,
+  MEDIA_TOKEN_RE,
+  lineHasAcceptableMediaDirective,
+  resolveMediaDirectivePayload,
+} from "./media-directive-validation.js";
 
 /** Ordered output segment emitted after visible text and extracted media are separated. */
 type ParsedMediaOutputSegment =
@@ -33,216 +31,15 @@ type SplitMediaFromOutputOptions = {
   extractAudioDirectives?: boolean;
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
+  /**
+   * Invoked when a `MEDIA:` token is skipped because it sits inside a fenced
+   * code block (see #41966). Callers running in a Node context can pass a
+   * logger here to surface the otherwise-silent skip. Left undefined by
+   * default so this module stays free of Node-only logger imports and remains
+   * safe to bundle into the browser UI.
+   */
+  onFencedMediaTokenSkipped?: (line: string) => void;
 };
-
-const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
-
-/** Converts file URLs into plain local paths before downstream media validation. */
-function normalizeMediaSource(src: string): string {
-  return src.replace(FILE_URL_PREFIX_RE, "");
-}
-
-const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:]|$).*/s;
-
-function cleanCandidate(raw: string) {
-  const stripped = raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
-  const jsonSuffixMatch = TRAILING_SERIALIZED_JSON_AFTER_EXT_RE.exec(stripped);
-  return jsonSuffixMatch?.[1] ?? stripped;
-}
-
-const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
-const MEDIA_SOURCE_ROOT_RE = /^(?:[a-z]:[\\/]|[/~]|\.{1,2}[\\/]|\\\\)/i;
-const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
-const HAS_FILE_EXT = /\.\w{1,10}$/;
-
-// Matches ".." as a standalone path segment (start, middle, or end).
-const TRAVERSAL_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
-
-function isSupportedHomeRelativePath(candidate: string): boolean {
-  return candidate.startsWith("~/") || candidate.startsWith("~\\");
-}
-
-function hasTraversalOrUnsupportedHomeDirPrefix(candidate: string): boolean {
-  return (
-    candidate.startsWith("../") ||
-    candidate === ".." ||
-    (candidate.startsWith("~") && !isSupportedHomeRelativePath(candidate)) ||
-    TRAVERSAL_SEGMENT_RE.test(candidate)
-  );
-}
-
-// Broad structural check: does this look like a local file path? Used only for
-// stripping MEDIA: lines from output text — never for media approval.
-function looksLikeLocalFilePath(candidate: string): boolean {
-  return (
-    candidate.startsWith("/") ||
-    candidate.startsWith("./") ||
-    candidate.startsWith("../") ||
-    candidate.startsWith("~") ||
-    WINDOWS_DRIVE_RE.test(candidate) ||
-    candidate.startsWith("\\\\") ||
-    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
-  );
-}
-
-// Recognize safe local file path patterns for media approval, rejecting
-// traversal and unsupported home-dir paths so they never reach downstream load/send logic.
-function isLikelyLocalPath(candidate: string): boolean {
-  if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
-    return false;
-  }
-  return (
-    candidate.startsWith("/") ||
-    candidate.startsWith("./") ||
-    isSupportedHomeRelativePath(candidate) ||
-    WINDOWS_DRIVE_RE.test(candidate) ||
-    candidate.startsWith("\\\\") ||
-    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
-  );
-}
-
-function normalizeRemoteMediaHostname(value: string): string {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/^\[|\]$/g, "")
-    .replace(/\.+$/, "");
-  if (normalized.split(".").some((label) => label.length === 0)) {
-    return "";
-  }
-  return normalized;
-}
-
-function isBlockedRemoteMediaHostname(hostname: string): boolean {
-  const normalized = normalizeRemoteMediaHostname(hostname);
-  if (!normalized) {
-    return true;
-  }
-  if (!normalized.includes(".")) {
-    return true;
-  }
-  if (
-    normalized === "localhost" ||
-    normalized === "localhost.localdomain" ||
-    normalized === "metadata.google.internal" ||
-    normalized.endsWith(".localhost") ||
-    normalized.endsWith(".local") ||
-    normalized.endsWith(".internal")
-  ) {
-    return true;
-  }
-
-  const strictIp = parseCanonicalIpAddress(normalized);
-  if (strictIp) {
-    if (isIpv4Address(strictIp)) {
-      return isBlockedSpecialUseIpv4Address(strictIp);
-    }
-    if (isBlockedSpecialUseIpv6Address(strictIp)) {
-      return true;
-    }
-    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
-    return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4) : false;
-  }
-
-  if (normalized.includes(":") && !parseLooseIpAddress(normalized)) {
-    return true;
-  }
-  return !isCanonicalDottedDecimalIPv4(normalized) && isLegacyIpv4Literal(normalized);
-}
-
-function isAllowedRemoteMediaUrl(candidate: string): boolean {
-  try {
-    const parsed = new URL(candidate);
-    return (
-      parsed.protocol === "https:" &&
-      !parsed.username &&
-      !parsed.password &&
-      !isBlockedRemoteMediaHostname(parsed.hostname)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isValidMedia(
-  candidate: string,
-  opts?: { allowSpaces?: boolean; allowBareFilename?: boolean },
-) {
-  if (!candidate) {
-    return false;
-  }
-  if (candidate.length > 4096) {
-    return false;
-  }
-  if (!opts?.allowSpaces && /\s/.test(candidate)) {
-    return false;
-  }
-  if (hasHttpUrlPrefix(candidate)) {
-    return isAllowedRemoteMediaUrl(candidate);
-  }
-
-  if (isLikelyLocalPath(candidate)) {
-    return true;
-  }
-
-  // Hard reject traversal/unsupported home-dir patterns before the bare-filename fallback
-  // to prevent path traversal bypasses (e.g. "../../.env" matching HAS_FILE_EXT).
-  if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
-    return false;
-  }
-
-  // Accept bare filenames (e.g. "image.png") only when the caller opts in.
-  // This avoids treating space-split path fragments as separate media items.
-  if (opts?.allowBareFilename && !SCHEME_RE.test(candidate) && HAS_FILE_EXT.test(candidate)) {
-    return true;
-  }
-
-  return false;
-}
-
-function beginsIndependentMediaSource(raw: string): boolean {
-  const candidate = normalizeMediaSource(cleanCandidate(raw));
-  return MEDIA_SOURCE_ROOT_RE.test(candidate) || SCHEME_RE.test(candidate);
-}
-
-function splitUnquotedMediaDirectiveParts(payload: string): string[] {
-  const parts: string[] = [];
-  let previousEnd = 0;
-  for (const match of payload.matchAll(/\S+/g)) {
-    const candidate = normalizeMediaSource(cleanCandidate(match[0]));
-    const previous = parts.at(-1);
-    const previousCandidate = previous ? normalizeMediaSource(cleanCandidate(previous)) : "";
-    if (
-      MEDIA_SOURCE_ROOT_RE.test(previousCandidate) &&
-      !beginsIndependentMediaSource(candidate) &&
-      (!HAS_FILE_EXT.test(previousCandidate) || !isValidMedia(candidate))
-    ) {
-      // Preserve real filename whitespace while keeping independently valid attachments separate.
-      parts[parts.length - 1] = `${previous}${payload.slice(previousEnd, match.index)}${match[0]}`;
-    } else {
-      parts.push(match[0]);
-    }
-    previousEnd = match.index + match[0].length;
-  }
-  return parts;
-}
-
-function unwrapQuoted(value: string): string | undefined {
-  const trimmed = value.trim();
-  if (trimmed.length < 2) {
-    return undefined;
-  }
-  const first = trimmed[0];
-  const last = trimmed[trimmed.length - 1];
-  if (first !== last) {
-    return undefined;
-  }
-  if (first !== `"` && first !== "'" && first !== "`") {
-    return undefined;
-  }
-  return trimmed.slice(1, -1).trim();
-}
-
 function mayContainFenceMarkers(input: string): boolean {
   return input.includes("```") || input.includes("~~~");
 }
@@ -507,6 +304,7 @@ function collectMarkdownImageSegments(params: { line: string; media: string[] })
 }
 
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
+
 export function splitMediaFromOutput(
   raw: string,
   options: SplitMediaFromOutputOptions = {},
@@ -524,6 +322,7 @@ export function splitMediaFromOutput(
   }
   const extractMarkdownImages = options.extractMarkdownImages === true;
   const extractMediaDirectives = options.extractMediaDirectives !== false;
+  const onFencedMediaTokenSkipped = options.onFencedMediaTokenSkipped;
   const mayContainMediaToken = extractMediaDirectives && /media:/i.test(trimmedRaw);
   const mayContainMarkdownImage = extractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
@@ -562,6 +361,18 @@ export function splitMediaFromOutput(
   for (const line of lines) {
     // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
     if (fenceSpans.some((span) => lineOffset >= span.start && lineOffset < span.end)) {
+      // Notify the caller so the silent-failure mode is at least observable
+      // (fixes #41966 — MEDIA tokens in code fences are otherwise silently ignored).
+      // Only signal when media-directive extraction is enabled. Callers that keep
+      // this function active for other features (e.g. markdown images) with
+      // extractMediaDirectives: false must not create a warning path (#41966).
+      if (
+        extractMediaDirectives &&
+        onFencedMediaTokenSkipped &&
+        lineHasAcceptableMediaDirective(line)
+      ) {
+        onFencedMediaTokenSkipped(line);
+      }
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
@@ -610,67 +421,21 @@ export function splitMediaFromOutput(
       pieces.push(line.slice(cursor, start));
 
       const payload = expectDefined(match[1], "parse regex capture 1");
-      const unwrapped = unwrapQuoted(payload);
-      const payloadValue = unwrapped ?? payload;
-      const parts = unwrapped ? [unwrapped] : splitUnquotedMediaDirectiveParts(payload);
       const mediaStartIndex = media.length;
-      let validCount = 0;
-      const invalidParts: string[] = [];
+      const resolved = resolveMediaDirectivePayload(payload);
       let hasValidMedia = false;
-      for (const part of parts) {
-        const candidate = normalizeMediaSource(cleanCandidate(part));
-        if (
-          isValidMedia(candidate, unwrapped || /\s/.test(part) ? { allowSpaces: true } : undefined)
-        ) {
-          media.push(candidate);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          validCount += 1;
-        } else if (!/\s/.test(part) || !hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
-          invalidParts.push(part);
-        }
+      const invalidParts: string[] = [];
+      if (resolved) {
+        media.push(...resolved.media);
+        hasValidMedia = true;
+        foundMediaToken = true;
+        invalidParts.push(...resolved.invalidParts);
       }
-
-      const trimmedPayload = payloadValue.trim();
-      const looksLikeLocalPath =
-        looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
-      if (
-        !unwrapped &&
-        validCount === 1 &&
-        invalidParts.length > 0 &&
-        !parts.slice(1).some(beginsIndependentMediaSource) &&
-        /\s/.test(payloadValue) &&
-        looksLikeLocalPath
-      ) {
-        // A single valid split plus invalid leftovers can be one local path containing spaces.
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
-        if (isValidMedia(fallback, { allowSpaces: true })) {
-          media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          invalidParts.length = 0;
-        }
-      }
-
-      if (!hasValidMedia && !unwrapped && /\s/.test(payloadValue)) {
-        const spacedFallback = normalizeMediaSource(cleanCandidate(payloadValue));
-        if (isValidMedia(spacedFallback, { allowSpaces: true, allowBareFilename: true })) {
-          media.splice(mediaStartIndex, media.length - mediaStartIndex, spacedFallback);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          invalidParts.length = 0;
-        }
-      }
-
-      if (!hasValidMedia) {
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
-        if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
-          media.push(fallback);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          invalidParts.length = 0;
-        }
-      }
+      const unwrappedPayload = unwrapQuoted(payload);
+      const trimmedPayload = (unwrappedPayload ?? payload).trim();
+      const looksLikeLocalPath = resolved
+        ? resolved.looksLikeLocalPath
+        : looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
 
       if (hasValidMedia) {
         const beforeText = cleanLineText(pieces.join(""));

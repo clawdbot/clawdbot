@@ -16,7 +16,9 @@ export function hasReplyDirectiveMetadata(
       parsed.audioAsVoice ||
       parsed.replyToId ||
       parsed.replyToTag ||
-      parsed.replyToCurrent),
+      parsed.replyToCurrent ||
+      parsed.mediaTokenSkippedInFence ||
+      (parsed.fencedSkippedMediaDirectives?.length ?? 0) > 0),
   );
 }
 
@@ -37,6 +39,10 @@ export function mergeReplyDirectiveResults(
     return first;
   }
   const mediaUrls = uniqueStrings([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]);
+  const fencedSkippedMediaDirectives = uniqueStrings([
+    ...(first.fencedSkippedMediaDirectives ?? []),
+    ...(second.fencedSkippedMediaDirectives ?? []),
+  ]);
   return {
     text: `${first.text ?? ""}${second.text ?? ""}`,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
@@ -45,6 +51,9 @@ export function mergeReplyDirectiveResults(
     replyToTag: first.replyToTag || second.replyToTag,
     audioAsVoice: first.audioAsVoice || second.audioAsVoice || undefined,
     isSilent: first.isSilent || second.isSilent,
+    mediaTokenSkippedInFence:
+      first.mediaTokenSkippedInFence || second.mediaTokenSkippedInFence || false,
+    fencedSkippedMediaDirectives,
   };
 }
 
@@ -214,12 +223,21 @@ export function recordPendingAssistantReplyDirectives(
   const mediaUrls = Array.from(
     new Set([...(current?.mediaUrls ?? []), ...(parsed.mediaUrls ?? [])]),
   );
+  const fencedSkippedMediaDirectives = uniqueStrings([
+    ...(current?.fencedSkippedMediaDirectives ?? []),
+    ...(parsed.fencedSkippedMediaDirectives ?? []),
+  ]);
   state.pendingAssistantReplyDirectives = {
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     audioAsVoice: current?.audioAsVoice || parsed?.audioAsVoice || undefined,
     replyToId: parsed?.replyToId ?? current?.replyToId,
     replyToTag: current?.replyToTag || parsed.replyToTag || undefined,
     replyToCurrent: current?.replyToCurrent || parsed.replyToCurrent || undefined,
+    mediaTokenSkippedInFence:
+      current?.mediaTokenSkippedInFence || parsed.mediaTokenSkippedInFence || undefined,
+    fencedSkippedMediaDirectives: fencedSkippedMediaDirectives.length
+      ? fencedSkippedMediaDirectives
+      : undefined,
   };
 }
 
@@ -235,6 +253,10 @@ export function consumePendingAssistantReplyDirectivesIntoReply(
   const mediaUrls = Array.from(
     new Set([...(payload.mediaUrls ?? []), ...(pending.mediaUrls ?? [])]),
   );
+  const fencedSkippedMediaDirectives = uniqueStrings([
+    ...(payload.fencedSkippedMediaDirectives ?? []),
+    ...(pending.fencedSkippedMediaDirectives ?? []),
+  ]);
   state.pendingAssistantReplyDirectives = undefined;
   return {
     ...payload,
@@ -243,6 +265,11 @@ export function consumePendingAssistantReplyDirectivesIntoReply(
     replyToId: payload.replyToId ?? pending.replyToId,
     replyToTag: Boolean(payload.replyToTag || pending.replyToTag) || undefined,
     replyToCurrent: Boolean(payload.replyToCurrent || pending.replyToCurrent) || undefined,
+    mediaTokenSkippedInFence:
+      payload.mediaTokenSkippedInFence || pending.mediaTokenSkippedInFence || undefined,
+    fencedSkippedMediaDirectives: fencedSkippedMediaDirectives.length
+      ? fencedSkippedMediaDirectives
+      : undefined,
   };
 }
 

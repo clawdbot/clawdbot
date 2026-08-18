@@ -1,6 +1,14 @@
 // Reply payload tests cover reply target parsing, media payloads, and approval metadata.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+
+const warnFencedMediaSkipsForAcceptedOutboundDelivery = vi.hoisted(() => vi.fn());
+vi.mock("./channel-outbound-fenced-media-warn.js", () => ({
+  warnFencedMediaSkipsForAcceptedOutboundDelivery: (
+    ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
+  ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
+}));
+
 import {
   buildTtsSupplementMediaPayload,
   countOutboundMedia,

@@ -64,6 +64,7 @@
     "!dist/plugin-sdk/channel-contract-testing.js",
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
     "!dist/plugin-sdk/channel-mention-gating.d.ts",
+    "!dist/plugin-sdk/channel-outbound-fenced-media-runtime.d.ts",
     "!dist/plugin-sdk/channel-route.d.ts",
     "!dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
     "!dist/plugin-sdk/channel-target-testing.js",
@@ -1467,6 +1468,9 @@
     },
     "./plugin-sdk/llm": {
       "default": "./dist/plugin-sdk/llm.js"
+    },
+    "./plugin-sdk/channel-outbound-fenced-media-runtime": {
+      "default": "./dist/plugin-sdk/channel-outbound-fenced-media-runtime.js"
     },
     "./cli-entry": "./openclaw.mjs"
   },

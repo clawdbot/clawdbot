@@ -15,6 +15,14 @@ type PreparedOutboundAcceptedEntry = {
   replyHookChanged: boolean;
   messageHookChanged: boolean;
   preparedMediaCount: number;
+  /**
+   * Durable fenced-MEDIA skip fact from original source text (#41966).
+   * Survives queue restart so post-send operator warnings can be reconstructed
+   * even after fence-stripping adapters normalize accepted payload text.
+   */
+  mediaTokenSkippedInFence?: boolean;
+  /** Exact skipped MEDIA directive identities from the source plan (#41966). */
+  fencedSkippedMediaDirectives?: readonly string[];
 };
 
 type PreparedOutboundSuppressedEntry = {

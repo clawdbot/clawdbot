@@ -51,6 +51,8 @@ describe("pending assistant reply directives", () => {
       replyToTag: true,
       audioAsVoice: true,
       isSilent: false,
+      mediaTokenSkippedInFence: false,
+      fencedSkippedMediaDirectives: [],
     });
 
     expect(
@@ -86,4 +88,45 @@ describe("pending assistant reply directives", () => {
     });
     expect(state.pendingAssistantReplyDirectives?.mediaUrls).toEqual(["/tmp/reply.png"]);
   });
+});
+
+it("preserves fenced MEDIA directive metadata for embedded block replies (#41966)", () => {
+  const state = { pendingAssistantReplyDirectives: undefined };
+
+  recordPendingAssistantReplyDirectives(state, {
+    text: "```\nMEDIA:/tmp/demo.png\n```",
+    mediaUrls: undefined,
+    replyToCurrent: false,
+    replyToTag: false,
+    audioAsVoice: false,
+    isSilent: false,
+    mediaTokenSkippedInFence: true,
+    fencedSkippedMediaDirectives: ["MEDIA:/tmp/demo.png"],
+  });
+
+  expect(state.pendingAssistantReplyDirectives).toEqual({
+    mediaUrls: undefined,
+    audioAsVoice: undefined,
+    replyToId: undefined,
+    replyToTag: undefined,
+    replyToCurrent: undefined,
+    mediaTokenSkippedInFence: true,
+    fencedSkippedMediaDirectives: ["MEDIA:/tmp/demo.png"],
+  });
+
+  expect(
+    consumePendingAssistantReplyDirectivesIntoReply(state, {
+      text: "```\nMEDIA:/tmp/demo.png\n```",
+    }),
+  ).toEqual({
+    text: "```\nMEDIA:/tmp/demo.png\n```",
+    mediaUrls: undefined,
+    audioAsVoice: undefined,
+    replyToId: undefined,
+    replyToTag: undefined,
+    replyToCurrent: undefined,
+    mediaTokenSkippedInFence: true,
+    fencedSkippedMediaDirectives: ["MEDIA:/tmp/demo.png"],
+  });
+  expect(state.pendingAssistantReplyDirectives).toBeUndefined();
 });

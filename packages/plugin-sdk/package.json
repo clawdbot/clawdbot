@@ -28,6 +28,10 @@
       "types": "./dist/src/plugin-sdk/channel-activity-runtime.d.ts",
       "default": "./src/channel-activity-runtime.ts"
     },
+    "./channel-outbound-fenced-media-runtime": {
+      "types": "./dist/src/plugin-sdk/channel-outbound-fenced-media-runtime.d.ts",
+      "default": "./src/channel-outbound-fenced-media-runtime.ts"
+    },
     "./cli-runtime": {
       "types": "./dist/src/plugin-sdk/cli-runtime.d.ts",
       "default": "./src/cli-runtime.ts"

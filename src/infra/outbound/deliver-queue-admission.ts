@@ -49,10 +49,27 @@ export function restoreQueuedDeliveryCustody(
     legacyPreparedContentUnavailable: _legacyPreparedContentUnavailable,
     ...custody
   } = entry;
-  const payloads = acceptedPreparedOutboundEntries(custody.preparedBatch).map(
-    (prepared) => prepared.payload,
+  const accepted = acceptedPreparedOutboundEntries(custody.preparedBatch);
+  const payloads = accepted.map((prepared) => prepared.payload);
+  // Reconstruct process-local fenced-skip handoff from durable prepared-batch facts
+  // so recovered sends warn after physical delivery even when adapters stripped fences.
+  const fencedMediaSkipPlanBySourceIndex = new Map(
+    accepted
+      .filter((prepared) => prepared.mediaTokenSkippedInFence === true)
+      .map((prepared) => [
+        prepared.sourceIndex,
+        {
+          mediaTokenSkippedInFence: true,
+          fencedSkippedMediaDirectives: prepared.fencedSkippedMediaDirectives ?? [],
+        },
+      ]),
   );
-  return { ...params, ...custody, payloads };
+  return {
+    ...params,
+    ...custody,
+    payloads,
+    ...(fencedMediaSkipPlanBySourceIndex.size > 0 ? { fencedMediaSkipPlanBySourceIndex } : {}),
+  };
 }
 
 /** Stages producer-owned media and atomically admits one durable outbound intent. */

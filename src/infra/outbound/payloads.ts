@@ -1,6 +1,3 @@
-// Outbound payload planning normalizes reply payloads into sendable text,
-// media, presentation, interactive, and mirror projections.
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
@@ -25,6 +22,9 @@ import {
 } from "../../interactive/payload.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+// Outbound payload planning normalizes reply payloads into sendable text,
+// media, presentation, interactive, and mirror projections.
+import { resolveSendableOutboundReplyParts } from "./reply-payload-parts.js";
 
 /** Runtime-ready outbound payload after text/media/rich-content normalization. */
 export type NormalizedOutboundPayload = {
@@ -63,6 +63,17 @@ export type OutboundPayloadPlan = {
   hasPresentation: boolean;
   hasInteractive: boolean;
   hasChannelData: boolean;
+  /**
+   * True when planning saw a fenced `MEDIA:` token that remains visible text.
+   * Warning is emitted only for accepted outbound delivery (#41966).
+   */
+  mediaTokenSkippedInFence: boolean;
+  /**
+   * Exact fenced `MEDIA:` directive lines seen at plan time (trimmed).
+   * Used transiently at accepted delivery to avoid false warnings after hooks
+   * rewrite text to unrelated `media:` prose (#41966).
+   */
+  fencedSkippedMediaDirectives: string[];
 };
 
 type OutboundPayloadPlanContext = {
@@ -71,6 +82,8 @@ type OutboundPayloadPlanContext = {
   surface?: string;
   conversationType?: SilentReplyConversationType;
   extractMarkdownImages?: boolean;
+  /** Honor upstream disabled media-directive parsing (#41966). */
+  extractMediaDirectives?: boolean;
 };
 
 /** Text/media projection used to mirror outbound replies into session state. */
@@ -212,13 +225,18 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
 
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
-  context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
+  context: Pick<
+    OutboundPayloadPlanContext,
+    "extractMarkdownImages" | "extractMediaDirectives"
+  > = {},
 ): Omit<OutboundPayloadPlan, "sourceIndex"> | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
+  const extractMediaDirectives = context.extractMediaDirectives ?? payload.extractMediaDirectives;
   const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
     extractMarkdownImages: context.extractMarkdownImages,
+    extractMediaDirectives,
   });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrls?.[0];
@@ -228,7 +246,9 @@ function createOutboundPayloadPlanEntry(
   );
   const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
   const strippedParsed =
-    strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
+    strippedText === (parsed.text ?? "")
+      ? parsed
+      : parseReplyDirectives(strippedText, { extractMediaDirectives });
   const parsedText = strippedParsed.text ?? "";
   if (
     (strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText)) &&
@@ -262,7 +282,39 @@ function createOutboundPayloadPlanEntry(
     hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
     hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
     hasChannelData,
+    // Prefer the first parse (pre-strip); stripped re-parse is only for citation markers.
+    // Also honor upstream payload-carried plan facts (embedded pending directives)
+    // so fence-flattening channels still warn after accepted send (#41966).
+    mediaTokenSkippedInFence:
+      Boolean(payload.mediaTokenSkippedInFence) ||
+      parsed.mediaTokenSkippedInFence ||
+      strippedParsed.mediaTokenSkippedInFence,
+    fencedSkippedMediaDirectives: mergeFencedSkippedMediaDirectives(
+      payload.fencedSkippedMediaDirectives,
+      mergeFencedSkippedMediaDirectives(
+        parsed.fencedSkippedMediaDirectives,
+        strippedParsed.fencedSkippedMediaDirectives,
+      ),
+    ),
   };
+}
+
+function mergeFencedSkippedMediaDirectives(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+): string[] {
+  const out: string[] = [];
+  for (const list of [a, b]) {
+    if (!list) {
+      continue;
+    }
+    for (const item of list) {
+      if (item && !out.includes(item)) {
+        out.push(item);
+      }
+    }
+  }
+  return out;
 }
 
 /** Builds the canonical outbound payload plan shared by delivery projections. */
@@ -277,6 +329,7 @@ export function createOutboundPayloadPlan(
   for (const [sourceIndex, payload] of payloads.entries()) {
     const entry = createOutboundPayloadPlanEntry(payload, {
       extractMarkdownImages: context.extractMarkdownImages,
+      extractMediaDirectives: context.extractMediaDirectives,
     });
     if (!entry) {
       continue;

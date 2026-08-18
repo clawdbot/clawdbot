@@ -330,5 +330,6 @@
   "web-media",
   "agent-core",
   "agent-sessions",
-  "llm"
+  "llm",
+  "channel-outbound-fenced-media-runtime"
 ]

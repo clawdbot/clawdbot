@@ -36,6 +36,7 @@ import {
   emitOutboundAuditTerminals,
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
+import { createOutboundPayloadPlan } from "./payloads.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 const log = createSubsystemLogger("outbound/deliver");
@@ -222,6 +223,42 @@ async function runOutboundDeliveryWithQueue(
   const preparedPayloads = acceptedPreparedOutboundEntries(preparedBatch).map(
     (entry) => entry.payload,
   );
+  // Capture fenced-skip facts for the live handoff map (#41966):
+  // 1) caller-provided map (pre-normalization source text)
+  // 2) durable prepared-batch accepted entry facts (queue recovery / fence-stripped payloads)
+  // 3) replan of current payloads (best-effort only)
+  const fencedMediaSkipPlanBySourceIndex =
+    params.fencedMediaSkipPlanBySourceIndex ??
+    (() => {
+      const fromBatch = new Map(
+        acceptedPreparedOutboundEntries(preparedBatch)
+          .filter((entry) => entry.mediaTokenSkippedInFence === true)
+          .map((entry) => [
+            entry.sourceIndex,
+            {
+              mediaTokenSkippedInFence: true as const,
+              fencedSkippedMediaDirectives: entry.fencedSkippedMediaDirectives ?? [],
+            },
+          ]),
+      );
+      if (fromBatch.size > 0) {
+        return fromBatch;
+      }
+      return new Map(
+        createOutboundPayloadPlan(params.payloads, {
+          cfg: params.cfg,
+          sessionKey: params.session?.policyKey ?? params.session?.key,
+          surface: params.channel,
+          conversationType: params.session?.conversationType,
+        }).map((entry) => [
+          entry.sourceIndex,
+          {
+            mediaTokenSkippedInFence: entry.mediaTokenSkippedInFence,
+            fencedSkippedMediaDirectives: entry.fencedSkippedMediaDirectives,
+          },
+        ]),
+      );
+    })();
   const preparedRenderedBatchPlan =
     existingStableDelivery?.renderedBatchPlan ??
     (params.preparedBatch ? params.renderedBatchPlan : undefined) ??
@@ -257,6 +294,7 @@ async function runOutboundDeliveryWithQueue(
     ...params,
     payloads: preparedPayloads,
     preparedBatch,
+    fencedMediaSkipPlanBySourceIndex,
     // Recovery must preserve the provider-facing plan captured before local
     // media was rewritten to spool paths; reconciliation uses that same plan.
     renderedBatchPlan: preparedRenderedBatchPlan,

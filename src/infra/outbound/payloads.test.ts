@@ -1,10 +1,15 @@
+const logWarn = vi.hoisted(() => vi.fn());
+vi.mock("../../logger.js", () => ({
+  logWarn: (msg: string) => logWarn(msg),
+}));
 // Covers outbound payload normalization across text, media, presentation,
 // interactive blocks, mirror text, and suppressed relay status payloads.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
+import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "./fenced-media-skip-warn.js";
 import {
   createOutboundPayloadPlan,
   formatOutboundPayloadLog,
@@ -834,5 +839,101 @@ describe("summarizeOutboundPayloadForTransport", () => {
 
     expect(summary.text).toBe("");
     expect(summary.hookContent).toBeUndefined();
+  });
+});
+
+const FENCED_MEDIA = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+
+describe("fenced MEDIA skip on accepted outbound delivery (#41966)", () => {
+  it("carries mediaTokenSkippedInFence on the outbound plan entry", () => {
+    const plan = createOutboundPayloadPlan([{ text: FENCED_MEDIA }]);
+    expect(plan).toHaveLength(1);
+    expect(plan[0]?.mediaTokenSkippedInFence).toBe(true);
+    expect(plan[0]?.payload.text).toContain("MEDIA:/home/user/screenshot.png");
+    expect(plan[0]?.payload.mediaUrls).toBeUndefined();
+  });
+
+  it("does not flag unfenced MEDIA extraction", () => {
+    const plan = createOutboundPayloadPlan([{ text: "MEDIA:https://example.com/plain.png" }]);
+    expect(plan).toHaveLength(1);
+    expect(plan[0]?.mediaTokenSkippedInFence).toBe(false);
+    expect(plan[0]?.payload.mediaUrls).toEqual(["https://example.com/plain.png"]);
+  });
+
+  it("warns once per accepted final text with a fenced skip", () => {
+    logWarn.mockClear();
+    warnFencedMediaSkipsForAcceptedOutboundDelivery([
+      {
+        text: FENCED_MEDIA,
+        mediaTokenSkippedInFence: true,
+        fencedSkippedMediaDirectives: ["MEDIA:/home/user/screenshot.png"],
+      },
+      { text: "ok", mediaTokenSkippedInFence: false, fencedSkippedMediaDirectives: [] },
+    ]);
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logWarn.mock.calls[0]?.[0]).toMatch(/fenced code block and will not be delivered/);
+  });
+
+  it("does not warn when final text no longer contains MEDIA (hook rewrite)", () => {
+    logWarn.mockClear();
+    warnFencedMediaSkipsForAcceptedOutboundDelivery([
+      {
+        text: "redacted",
+        mediaTokenSkippedInFence: true,
+        fencedSkippedMediaDirectives: ["MEDIA:/home/user/screenshot.png"],
+      },
+    ]);
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when hook rewrites to ordinary media: prose", () => {
+    logWarn.mockClear();
+    warnFencedMediaSkipsForAcceptedOutboundDelivery([
+      {
+        text: "For media: see docs",
+        mediaTokenSkippedInFence: true,
+        fencedSkippedMediaDirectives: ["MEDIA:/home/user/screenshot.png"],
+      },
+    ]);
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when hook replaces with a different unfenced MEDIA directive", () => {
+    logWarn.mockClear();
+    warnFencedMediaSkipsForAcceptedOutboundDelivery([
+      {
+        text: "MEDIA:https://example.com/other.png",
+        mediaTokenSkippedInFence: true,
+        fencedSkippedMediaDirectives: ["MEDIA:/home/user/screenshot.png"],
+      },
+    ]);
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn from final text alone without the plan skip signal", () => {
+    logWarn.mockClear();
+    warnFencedMediaSkipsForAcceptedOutboundDelivery([{ text: FENCED_MEDIA }]);
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when planning/comparison parses the same payload twice (#41966 vincentkoc)", () => {
+    logWarn.mockClear();
+    const first = createOutboundPayloadPlan([{ text: FENCED_MEDIA }]);
+    const second = createOutboundPayloadPlan([{ text: FENCED_MEDIA }]);
+    expect(first[0]?.mediaTokenSkippedInFence).toBe(true);
+    expect(second[0]?.mediaTokenSkippedInFence).toBe(true);
+    // Planning must stay silent even if payloads.ts parses twice.
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("carries exact fencedSkippedMediaDirectives on the outbound plan entry", () => {
+    const plan = createOutboundPayloadPlan([{ text: FENCED_MEDIA }]);
+    expect(plan[0]?.fencedSkippedMediaDirectives).toEqual(["MEDIA:/home/user/screenshot.png"]);
+  });
+
+  it("stays silent when planning only (no accepted-delivery warn helper)", () => {
+    logWarn.mockClear();
+    createOutboundPayloadPlan([{ text: FENCED_MEDIA }]);
+    expect(logWarn).not.toHaveBeenCalled();
   });
 });

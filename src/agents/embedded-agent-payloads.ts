@@ -18,6 +18,10 @@ export type BlockReplyPayload = {
   replyToId?: string;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
+  /** Plan-time #41966 signal: fenced MEDIA was skipped (warn after accepted send). */
+  mediaTokenSkippedInFence?: boolean;
+  /** Skipped fenced MEDIA identities for operator diagnostics. */
+  fencedSkippedMediaDirectives?: string[];
   /** Portable controls attached to a harness-owned blocking prompt. */
   presentation?: MessagePresentation;
   /** Runtime-authored text is the fallback for the portable presentation. */

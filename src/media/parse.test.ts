@@ -1,5 +1,5 @@
 // Media parse tests cover media reference parsing from text and payloads.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { splitMediaFromOutput } from "./parse.js";
 
 type SplitMediaFromOutputOptions = NonNullable<Parameters<typeof splitMediaFromOutput>[1]>;
@@ -91,6 +91,7 @@ describe("splitMediaFromOutput", () => {
     ["/tmp/generated.png", "MEDIA:FILE:///tmp/generated.png"],
     ["/tmp/generated.png", "MEDIA:FILE:/tmp/generated.png"],
     ["/tmp/generated.png", "MEDIA:file:///tmp/generated.png"],
+    ["/tmp/a.png", "MEDIA:file:/tmp/a.png"],
     ["/Users/pete/My File.png", "MEDIA:FILE:///Users/pete/My File.png"],
     ["/Users/pete/My File.png", "MEDIA:file:///Users/pete/My File.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
@@ -312,6 +313,72 @@ describe("splitMediaFromOutput", () => {
       text: code,
       mediaUrls: ["https://example.com/a.png"],
       audioAsVoice: true,
+    });
+  });
+
+  describe("MEDIA token inside fenced code block notifies via callback (#41966)", () => {
+    it("invokes onFencedMediaTokenSkipped when a MEDIA: token appears inside a triple-backtick fence", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      splitMediaFromOutput(
+        "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd of example.",
+        { onFencedMediaTokenSkipped },
+      );
+      expect(onFencedMediaTokenSkipped).toHaveBeenCalledOnce();
+      expect(onFencedMediaTokenSkipped.mock.calls[0]?.[0]).toMatch(
+        /MEDIA:\/home\/user\/screenshot\.png/,
+      );
+    });
+
+    it("does not notify when a MEDIA: token appears outside a fence", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      splitMediaFromOutput("MEDIA:https://example.com/image.png", { onFencedMediaTokenSkipped });
+      expect(onFencedMediaTokenSkipped).not.toHaveBeenCalled();
+    });
+
+    it("notifies once per fenced MEDIA line and still keeps the line as visible text", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      const result = splitMediaFromOutput(
+        "Caption\n```\nMEDIA:https://example.com/a.png\nMEDIA:https://example.com/b.png\n```\nEnd",
+        { onFencedMediaTokenSkipped },
+      );
+      // Both fenced MEDIA lines notify
+      expect(onFencedMediaTokenSkipped).toHaveBeenCalledTimes(2);
+      // Neither is extracted as media — kept as visible text (contract unchanged)
+      expect(result.mediaUrls).toBeUndefined();
+      expect(result.text).toContain("MEDIA:https://example.com/a.png");
+    });
+
+    it("stays silent (no callback) when none is provided — keeps parse.ts browser-safe", () => {
+      const result = splitMediaFromOutput("```\nMEDIA:/home/user/x.png\n```");
+      // No throw, contract unchanged: fenced token kept as text, not extracted.
+      expect(result.mediaUrls).toBeUndefined();
+      expect(result.text).toContain("MEDIA:/home/user/x.png");
+    });
+
+    it("does not notify for empty or invalid fenced MEDIA examples (#41966)", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      splitMediaFromOutput("```\nMEDIA:\nMEDIA: example\n```", { onFencedMediaTokenSkipped });
+      expect(onFencedMediaTokenSkipped).not.toHaveBeenCalled();
+    });
+
+    it("notifies for fenced bare filenames accepted by the normal parser (#41966)", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      splitMediaFromOutput(
+        '```\nMEDIA:image.png\nMEDIA:"render final.png"\nMEDIA:render final.png\n```',
+        {
+          onFencedMediaTokenSkipped,
+        },
+      );
+      expect(onFencedMediaTokenSkipped).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not notify when extractMediaDirectives is false", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      splitMediaFromOutput(
+        "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd of example.",
+        { onFencedMediaTokenSkipped, extractMediaDirectives: false },
+      );
+      expect(onFencedMediaTokenSkipped).not.toHaveBeenCalled();
     });
   });
 

@@ -90,6 +90,11 @@ function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
     replyToId,
     replyToTag,
     text: _text,
+    // #41966: never persist plan-time fenced-MEDIA diagnostics inside nested
+    // durable payload JSON. Entry-level facts are rebuilt post-policy below;
+    // rest-spread would otherwise retain pre-redaction MEDIA paths/URLs.
+    mediaTokenSkippedInFence: _mediaTokenSkippedInFence,
+    fencedSkippedMediaDirectives: _fencedSkippedMediaDirectives,
     ...rest
   } = payload;
   return copyReplyPayloadMetadata(
@@ -245,6 +250,61 @@ export async function prepareOutboundPayloadBatch(
       continue;
     }
     const compactPayload = compactPreparedPayload(preparedPayload);
+    // Durable custody may only retain post-policy fenced-skip facts. Never copy
+    // pre-hook directive identities into the accepted batch after redaction/rewrite
+    // (queue recovery would otherwise keep raw MEDIA paths). Fence-stripping
+    // adapters may still keep the exact directive line as plain text — those
+    // retained identities are safe and needed for post-send diagnostics (#41966).
+    const sourcePlan = plan.find((entry) => entry.sourceIndex === sourceIndex);
+    const acceptedText = compactPayload.text;
+    const retainedDirectives = (sourcePlan?.fencedSkippedMediaDirectives ?? []).filter(
+      (directive) => {
+        const identity = directive.trim();
+        if (!identity || !acceptedText) {
+          return false;
+        }
+        return acceptedText.split("\n").some((line) => line.trim() === identity);
+      },
+    );
+    // Preserve block-reply / disabled parsing mode on accepted replan. Passing
+    // text-only would default extractMediaDirectives on and falsely mark fenced
+    // MEDIA as skipped for durable diagnostics (#41966 / ClawSweeper P2).
+    const acceptedPlan = acceptedText
+      ? createOutboundPayloadPlan(
+          [
+            {
+              text: acceptedText,
+              ...(compactPayload.extractMediaDirectives === false
+                ? { extractMediaDirectives: false as const }
+                : compactPayload.extractMediaDirectives === true
+                  ? { extractMediaDirectives: true as const }
+                  : {}),
+            },
+          ],
+          {
+            cfg: params.cfg,
+            sessionKey: params.session?.policyKey ?? params.session?.key,
+            surface: params.channel,
+            conversationType: params.session?.conversationType,
+            extractMediaDirectives: compactPayload.extractMediaDirectives,
+          },
+        )[0]
+      : undefined;
+    const durableDirectives =
+      retainedDirectives.length > 0
+        ? retainedDirectives
+        : acceptedPlan?.mediaTokenSkippedInFence
+          ? [...(acceptedPlan.fencedSkippedMediaDirectives ?? [])]
+          : [];
+    const fencedSkip =
+      durableDirectives.length > 0 || acceptedPlan?.mediaTokenSkippedInFence === true
+        ? {
+            mediaTokenSkippedInFence: true as const,
+            ...(durableDirectives.length > 0
+              ? { fencedSkippedMediaDirectives: durableDirectives }
+              : {}),
+          }
+        : {};
     entries.push({
       sourceIndex,
       status: "accepted",
@@ -252,6 +312,7 @@ export async function prepareOutboundPayloadBatch(
       replyHookChanged: replyHookResult.changed,
       messageHookChanged: messageHookResult.contentRewritten,
       preparedMediaCount: buildPayloadSummary(compactPayload).mediaUrls.length,
+      ...fencedSkip,
     });
   }
 

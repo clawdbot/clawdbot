@@ -205,8 +205,16 @@ export async function applyMessageSendingHook(params: {
         },
       };
     }
+    // Drop plan-time fenced-MEDIA diagnostics when text is rewritten so
+    // pre-redaction MEDIA paths cannot ride nested payload spreads (#41966).
+    const {
+      mediaTokenSkippedInFence: _mediaTokenSkippedInFence,
+      fencedSkippedMediaDirectives: _fencedSkippedMediaDirectives,
+      extractMediaDirectives: _extractMediaDirectives,
+      ...payloadWithoutFencedSkip
+    } = params.payload;
     const payload = {
-      ...params.payload,
+      ...payloadWithoutFencedSkip,
       text: sendingResult.content,
     };
     return {
