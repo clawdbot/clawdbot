@@ -297,6 +297,23 @@ describe("cleanup path removals", () => {
     expect(stateRemoved).toBe(true);
   });
 
+  it("returns failure when any linked dry-run target is unsafe", async () => {
+    const runtime = createRuntimeMock();
+    await expect(
+      removeStateAndLinkedPaths(
+        {
+          stateDir: "/tmp/openclaw-cleanup/state",
+          configPath: path.parse(process.cwd()).root,
+          oauthDir: "/tmp/openclaw-cleanup/oauth",
+          configInsideState: false,
+          oauthInsideState: false,
+        },
+        runtime,
+        { dryRun: true },
+      ),
+    ).resolves.toBe(false);
+  });
+
   it("keeps the canonical state lock visible until state removal completes", async () => {
     const runtime = createRuntimeMock();
     const tmpRoot = await fs.realpath(tempDirs.make("openclaw-cleanup-lock-visible-"));

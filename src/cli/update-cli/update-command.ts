@@ -663,6 +663,7 @@ async function updateCommandInternal(
   await finishUpdate({
     result,
     root,
+    previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
     configSnapshot: finalizationConfigSnapshot,
     requestedChannel,

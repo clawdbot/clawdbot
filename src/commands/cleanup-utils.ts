@@ -410,13 +410,13 @@ export async function removeStateAndLinkedPaths(
             dryRun: true,
             label: cleanup.stateDir,
           });
-    if (!cleanup.configInsideState) {
-      await removePath(cleanup.configPath, runtime, { dryRun: true, label: cleanup.configPath });
-    }
-    if (!cleanup.oauthInsideState) {
-      await removePath(cleanup.oauthDir, runtime, { dryRun: true, label: cleanup.oauthDir });
-    }
-    return stateRemoval.ok;
+    const configRemoval = cleanup.configInsideState
+      ? { ok: true }
+      : await removePath(cleanup.configPath, runtime, { dryRun: true, label: cleanup.configPath });
+    const oauthRemoval = cleanup.oauthInsideState
+      ? { ok: true }
+      : await removePath(cleanup.oauthDir, runtime, { dryRun: true, label: cleanup.oauthDir });
+    return stateRemoval.ok && configRemoval.ok && oauthRemoval.ok;
   }
   if (isUnsafeRemovalTarget(requestedStateDir)) {
     runtime.error(`Refusing to remove unsafe path: ${shortenHomeInString(cleanup.stateDir)}`);
@@ -516,6 +516,7 @@ export async function removeWorkspaceDirs(
   runtime: RuntimeEnv,
   opts?: {
     dryRun?: boolean;
+    preserveWorkspace?: boolean;
     removeStateRows?: boolean;
     removeWorkspace?: (workspace: string) => Promise<boolean>;
   },
@@ -539,9 +540,11 @@ export async function removeWorkspaceDirs(
     const statePlan = opts?.removeStateRows
       ? await attempt(stateLabel, () => prepareWorkspaceStateDeletion(workspace))
       : undefined;
-    const result = opts?.removeWorkspace
-      ? { ok: (await attempt(workspace, () => opts.removeWorkspace!(workspace))) === true }
-      : await removePath(workspace, runtime, { dryRun: opts?.dryRun, label: workspace });
+    const result = opts?.preserveWorkspace
+      ? { ok: true }
+      : opts?.removeWorkspace
+        ? { ok: (await attempt(workspace, () => opts.removeWorkspace!(workspace))) === true }
+        : await removePath(workspace, runtime, { dryRun: opts?.dryRun, label: workspace });
     if (!result.ok) {
       failures.add(workspace);
       continue;
