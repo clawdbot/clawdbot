@@ -186,6 +186,24 @@ describe("OpenClawStdioClientTransport", () => {
     expect(killProcessTreeMock).not.toHaveBeenCalled();
   });
 
+  it("immediately kills the retained process group after the stdio leader exits", async () => {
+    vi.useFakeTimers();
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    child.exitCode = 1;
+    child.emit("close", 1);
+    const closing = transport.close();
+
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
+    await vi.advanceTimersByTimeAsync(500);
+    await closing;
+  });
+
   it("sends and receives JSON-RPC messages over stdio", async () => {
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);

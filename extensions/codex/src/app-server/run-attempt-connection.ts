@@ -109,6 +109,35 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     agentId: sessionAgentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
+  const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
+  const remoteExec = isCodexRemoteExecPlacementSandbox(sandbox);
+  const preparedShellEnvironment = preparedEnvironment
+    ? {
+        ...preparedEnvironment.credentialScrubEnv,
+        ...(!remoteExec ? preparedEnvironment.localIdentityEnv : undefined),
+      }
+    : undefined;
+  const shellEnvironment =
+    preparedShellEnvironment && Object.keys(preparedShellEnvironment).length > 0
+      ? preparedShellEnvironment
+      : undefined;
+  // An empty system-detected overlay intentionally keeps the runtime user's native shell identity.
+  // Selected, scrubbed, or remote identities must not let a later profile replace that decision.
+  const disableLoginShell =
+    remoteExec ||
+    preparedEnvironment?.managedLocalIdentity === true ||
+    (preparedEnvironment !== undefined &&
+      Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
+  const withPreparedProcessEnv = <T extends { start: { env?: Record<string, string> } }>(
+    appServer: T,
+  ) => {
+    return shellEnvironment
+      ? {
+          ...appServer,
+          start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
+        }
+      : appServer;
+  };
   let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -316,7 +345,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       env: process.env,
       agentDir,
     });
-    return { session, appServer: trusted };
+    return { session, appServer: withPreparedProcessEnv(trusted) };
   };
   let resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
   let appServer = resolvedAppServer.appServer;
@@ -392,6 +421,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     startupBinding,
     startupContextTokens: startupBindingResolution.startupContextTokens,
     pluginAppServer: appServer,
+    // Captured before rotation: a rotated-away thread's observed density is the
+    // best available sample for sizing the fresh thread's continuity projection.
+    continuityCalibration: startupBindingBeforeRotation?.continuityCalibration,
   };
   const resolveRuntimeOptionsForCurrentBinding = (selection: {
     modelProvider?: string;
@@ -422,6 +454,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     contextSessionKey,
     sandbox,
     agentDir,
+    shellEnvironment,
+    disableLoginShell,
     bindingIdentity,
     bindingStore,
     activeContextEngine,

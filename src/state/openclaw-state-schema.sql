@@ -92,8 +92,22 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   rejected_at TEXT,
   quarantined_at TEXT,
   stale_at TEXT,
-  status_reason TEXT
+  status_reason TEXT,
+  claim_released_time INTEGER
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
+  review_id TEXT NOT NULL PRIMARY KEY,
+  workspace_dir TEXT NOT NULL,
+  backup_id TEXT NOT NULL,
+  create_time INTEGER NOT NULL,
+  kept_names_json TEXT NOT NULL,
+  written_names_json TEXT NOT NULL,
+  dropped_json TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_workspace_time
+  ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
 
 CREATE TABLE IF NOT EXISTS skill_workshop_proposal_origin_runs (
   proposal_id TEXT NOT NULL,
@@ -2073,6 +2087,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   profile_snapshot_json TEXT NOT NULL,
   provision_operation_id TEXT NOT NULL UNIQUE,
   lease_id TEXT,
+  node_setup_id TEXT,
+  node_device_id TEXT,
   ssh_host TEXT,
   ssh_port INTEGER CHECK (ssh_port IS NULL OR (ssh_port >= 1 AND ssh_port <= 65535)),
   ssh_user TEXT,
@@ -2266,6 +2282,9 @@ CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
   source_owner_epoch INTEGER NOT NULL CHECK (source_owner_epoch >= 1),
   target_kind TEXT NOT NULL CHECK (target_kind IN ('gateway', 'profile', 'device')),
   target_id TEXT,
+  -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the
+  -- same shape as fresh databases; placement-move code validates its value.
+  target_machine_class TEXT,
   last_error TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,

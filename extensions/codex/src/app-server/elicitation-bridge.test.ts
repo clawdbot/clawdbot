@@ -56,8 +56,12 @@ function createParams(): EmbeddedRunAttemptParams {
         "plugin.approval.waitDecision",
         { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
         { id: request.approvalId },
-      )) as { id?: string; decision?: "allow-once" | "allow-always" | "deny" | null };
-      return result?.id === request.approvalId ? result.decision : undefined;
+      )) as { id?: string } & Partial<
+        NonNullable<Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>>
+      >;
+      return result?.id === request.approvalId
+        ? { decision: result.decision, terminalReason: result.terminalReason }
+        : undefined;
     },
   };
   return {

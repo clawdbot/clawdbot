@@ -24,6 +24,7 @@ import {
 } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
@@ -462,6 +463,15 @@ export async function persistAgentSessionPhase(params: {
       sessionKey: params.canonicalSessionKey,
       agentId: params.sessionAgentId,
       entry: sessionEntry,
+    });
+  }
+  if (params.creation.actor?.type === "human" && params.creation.actor.id) {
+    recordSessionParticipantBestEffort({
+      actor: { type: "human", id: params.creation.actor.id },
+      agentId: params.sessionAgentId,
+      sessionKey: params.canonicalSessionKey,
+      source: "profile",
+      storePath: params.storePath,
     });
   }
   if (isNewSession && params.entry?.sessionId && resolvedSessionId !== params.entry.sessionId) {

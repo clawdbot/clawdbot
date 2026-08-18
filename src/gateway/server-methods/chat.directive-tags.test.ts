@@ -61,7 +61,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
-import { handleChatSend } from "./chat-send-handler.js";
+import { handleChatSend, handleChatSendWithRuntimeTools } from "./chat-send-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -145,7 +145,7 @@ const mockState = vi.hoisted(() => ({
   lastDispatchThinkingLevelOverride: undefined as string | undefined,
   lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
   lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
-  lastMessageInjectionAttempted: undefined as true | undefined,
+  lastMessageInjectionDisposition: undefined as "none" | "accepted" | "rejected" | undefined,
   lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
@@ -372,7 +372,7 @@ dispatchInboundMessageMock.mockImplementation(
         imageOrder?: string[];
         thinkingLevelOverride?: string;
         taskSuggestionDeliveryMode?: "gateway";
-        messageInjectionAttempted?: true;
+        messageInjectionDisposition?: "none" | "accepted" | "rejected";
         turnAdoptionLifecycle?: {
           originatingLeafEntryId?: string | null;
         };
@@ -385,7 +385,7 @@ dispatchInboundMessageMock.mockImplementation(
       mockState.lastDispatchOriginatingLeafEntryId =
         params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
       mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
-      mockState.lastMessageInjectionAttempted = params.replyOptions?.messageInjectionAttempted;
+      mockState.lastMessageInjectionDisposition = params.replyOptions?.messageInjectionDisposition;
       await mockState.cronAuthorityProbe?.(
         params.replyOptions?.runId,
         params.replyOptions?.cronCreatorAuthorityCapability,
@@ -1161,6 +1161,7 @@ async function runNonStreamingChatSend(params: {
   waitForCompletion?: boolean;
   waitForDedupe?: boolean;
   waitFor?: NonStreamingChatSendWaitFor;
+  runtimeToolsAllow?: string[];
 }): Promise<Record<string, any> | undefined> {
   const sendParams: {
     sessionKey: string;
@@ -1179,7 +1180,7 @@ async function runNonStreamingChatSend(params: {
     params.directExternal === false
       ? handleChatSend
       : expectDefined(chatHandlers["chat.send"], 'chatHandlers["chat.send"] test invariant');
-  await handler({
+  const handlerOptions = {
     params: {
       ...sendParams,
       ...params.requestParams,
@@ -1189,7 +1190,12 @@ async function runNonStreamingChatSend(params: {
     client: (params.client ?? null) as never,
     isWebchatConnect: () => false,
     context: params.context,
-  });
+  };
+  if (params.runtimeToolsAllow) {
+    await handleChatSendWithRuntimeTools(handlerOptions, params.runtimeToolsAllow);
+  } else {
+    await handler(handlerOptions);
+  }
 
   const waitFor =
     params.waitFor ??
@@ -1326,7 +1332,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchThinkingLevelOverride = undefined;
     mockState.lastDispatchOriginatingLeafEntryId = undefined;
     mockState.lastTaskSuggestionDeliveryMode = undefined;
-    mockState.lastMessageInjectionAttempted = undefined;
+    mockState.lastMessageInjectionDisposition = undefined;
     mockState.lastDispatchUserTurnInput = undefined;
     mockState.modelCatalog = null;
     mockState.emittedTranscriptUpdates = [];
@@ -1358,6 +1364,22 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.runtimeAssistantContentBeforeDelivery = null;
     mockState.runtimeAssistantTextsBeforeDelivery = [];
     mockState.cronAuthorityProbe = undefined;
+  });
+
+  it("carries an internal runtime tool cap into agent dispatch", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-runtime-tools-");
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-runtime-tools",
+      directExternal: false,
+      runtimeToolsAllow: ["read"],
+      waitFor: "dedupe",
+    });
+
+    expect(dispatchInboundMessageMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ toolsAllow: ["read"] }),
+    );
   });
 
   it.each([
@@ -1612,7 +1634,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects targetless steer when no leaf-bound owner exists", async () => {
+  it("starts one normal turn when steer admission finds no direct owner", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-stale-steer-no-owner-");
     await appendTranscriptMessage(transcriptScope(), {
       eventId: "current-leaf",
@@ -1631,15 +1653,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
-    expect(lastRespondCall(respond)).toEqual([
-      false,
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
       undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    ]);
-    expect(context.addChatRun).not.toHaveBeenCalled();
+      expect.any(Object),
+    );
+    await waitForAssertion(() => expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello"));
+    expect(context.addChatRun).toHaveBeenCalledOnce();
   });
 
-  it("rejects targetless steer without a supplied leaf before dispatch", async () => {
+  it("injects targetless steer into the exact direct owner without a client run id", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-no-leaf-");
     const { context, respond, send } = createChatRequestFixture();
     const queueMessage = vi.fn(async () => {});
@@ -1666,14 +1690,116 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       operation.complete();
     }
 
-    expect(lastRespondCall(respond)).toEqual([
-      false,
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
       undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    ]);
-    expect(queueMessage).not.toHaveBeenCalled();
-    expect(context.addChatRun).not.toHaveBeenCalled();
+      expect.any(Object),
+    );
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(context.addChatRun).toHaveBeenCalledOnce();
     expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it.each([
+    ["active descendant", "agent:main:main:subagent:child", "descendant"],
+    ["different session", "agent:main:telegram:direct:other", "other"],
+  ])(
+    "starts the selected idle session despite %s activity",
+    async (_name, activeSessionKey, slug) => {
+      await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-idle-${slug}-`);
+      const { context, respond, send } = createChatRequestFixture();
+      const unrelated = replyRunRegistry.begin({
+        sessionKey: activeSessionKey,
+        sessionId: `${mockState.sessionId}-${slug}`,
+        resetTriggered: false,
+      });
+      unrelated.setPhase("running");
+
+      try {
+        await send({
+          idempotencyKey: `idem-idle-${slug}`,
+          requestParams: { queueMode: "steer" },
+        });
+      } finally {
+        unrelated.complete();
+      }
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
+      expect(context.addChatRun).toHaveBeenCalledOnce();
+      expect(unrelated.result).toEqual({ kind: "completed" });
+      expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
+    },
+  );
+
+  it("falls back visibly when the direct owner has a non-injectable CLI backend", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cli-steer-fallback-");
+    const { context, respond, send } = createChatRequestFixture();
+    const operation = replyRunRegistry.begin({
+      sessionKey: "agent:main:main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    operation.attachBackend({ kind: "cli", runId: "cli-run", cancel: vi.fn() });
+
+    try {
+      await send({
+        idempotencyKey: "idem-cli-steer-fallback",
+        requestParams: { queueMode: "steer" },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledOnce();
+    expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello");
+    expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
+  });
+
+  it("deduplicates a retried targetless steer before a second injection", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-idempotent-");
+    const { context, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async () => {});
+    const operation = replyRunRegistry.begin({
+      sessionKey: "agent:main:main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+    });
+    bindTestToolAuthority(operation);
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-idempotent",
+        requestParams: { queueMode: "steer" },
+      });
+      await send({
+        idempotencyKey: "idem-steer-idempotent",
+        requestParams: { queueMode: "steer" },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(context.addChatRun).toHaveBeenCalledOnce();
   });
 
   it("injects a matching leaf-bound targetless steer through the legacy backend seam", async () => {
@@ -1787,51 +1913,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it("rejects targetless steer when the owner immutable leaf differs", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-leaf-mismatch-");
-    await appendTranscriptMessage(transcriptScope(), {
-      eventId: "current-leaf",
-      message: { role: "assistant", content: "working" },
-      now: 1,
-      parentId: null,
-    });
-    const { context, respond, send } = createChatRequestFixture();
-    const queueMessage = vi.fn(async () => {});
-    const operation = replyRunRegistry.begin({
-      sessionKey: "agent:main:main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-      originatingLeafEntryId: "different-owner-leaf",
-    });
-    bindTestToolAuthority(operation);
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: () => {},
-      messageInjection: { isAvailable: () => true, queueMessage },
-    });
-
-    try {
-      await send({
-        idempotencyKey: "idem-targetless-leaf-mismatch",
-        requestParams: { expectedLeafEntryId: "current-leaf", queueMode: "steer" },
-        waitFor: "none",
-      });
-    } finally {
-      operation.complete();
-    }
-
-    expect(lastRespondCall(respond)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    ]);
-    expect(queueMessage).not.toHaveBeenCalled();
-    expect(context.addChatRun).not.toHaveBeenCalled();
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-  });
-
-  it("rejects a captured targetless steer when a successor replaces its operation", async () => {
+  it("falls back once without touching a successor when the captured owner ends", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-operation-aba-");
     await appendTranscriptMessage(transcriptScope(), {
       eventId: "current-leaf",
@@ -1842,6 +1924,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond } = createChatRequestFixture();
     const originalQueue = vi.fn(async () => {});
     const successorQueue = vi.fn(async () => {});
+    const successorCancel = vi.fn();
+    const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const original = replyRunRegistry.begin({
       sessionKey: "agent:main:main",
       sessionId: mockState.sessionId,
@@ -1895,7 +1979,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           successor.setPhase("running");
           successor.attachBackend({
             kind: "embedded",
-            cancel: () => {},
+            cancel: successorCancel,
             messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
           });
           return true;
@@ -1906,15 +1990,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       successor?.complete();
     }
 
-    expect(lastRespondCall(respond)).toEqual([
-      false,
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
       undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    ]);
+      expect.any(Object),
+    );
+    await waitForAssertion(() =>
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1),
+    );
     expect(originalQueue).not.toHaveBeenCalled();
     expect(successorQueue).not.toHaveBeenCalled();
-    expect(context.addChatRun).not.toHaveBeenCalled();
-    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(successorCancel).not.toHaveBeenCalled();
+    expect(context.addChatRun).toHaveBeenCalledOnce();
+    expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
   });
 
   it("allows an exact-run steer after the active transcript leaf advances", async () => {
@@ -2328,7 +2417,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(successorCancel).not.toHaveBeenCalled();
     expect(mockState.replyContextCalls).toBe(1);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
-    expect(mockState.lastMessageInjectionAttempted).toBe(true);
+    expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
     expect(readPersistedUserMessages()).toHaveLength(1);
     expect(
       (readPersistedUserMessages()[0]?.["__openclaw"] as Record<string, unknown> | undefined)
@@ -2596,7 +2685,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(context.addChatRun).toHaveBeenCalledOnce();
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
-    expect(mockState.lastMessageInjectionAttempted).toBe(true);
+    expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
     expect(successorQueue).not.toHaveBeenCalled();
     expect(successorCancel).not.toHaveBeenCalled();
     expect(readPersistedUserMessages()).toHaveLength(1);
@@ -2666,7 +2755,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(context.addChatRun).toHaveBeenCalledOnce();
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
-    expect(mockState.lastMessageInjectionAttempted).toBe(true);
+    expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
     expect(staleQueue).not.toHaveBeenCalled();
     expect(staleCancel).not.toHaveBeenCalled();
     expect(readPersistedUserMessages()).toHaveLength(1);

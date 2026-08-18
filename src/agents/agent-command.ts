@@ -1,4 +1,5 @@
 /** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
+import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
@@ -442,6 +443,10 @@ async function agentCommandInternal(
             lifecycleGeneration,
             runId,
             workspaceDir,
+            executionSkillsDir: path.join(
+              sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
+              "skills",
+            ),
             isNewSession,
             isSubagentLaneTurn,
             suppressVisibleSessionEffects,

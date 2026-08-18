@@ -413,10 +413,16 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope) || !confirmsSessionDeletion(response)) {
         return { deleted: false };
       }
+      const retireBeforeRevision = Date.now();
       host.retirePullRequestSummary(key);
       confirmedArchives.delete(key.trim());
       preparedWorkSessionKeys.delete(key.trim());
-      host.publish({ ...host.readState(), deletedSessions: [{ key, agentId: options.agentId }] });
+      host.publish({
+        ...host.readState(),
+        deletedSessions: [
+          { key, ...(options.agentId ? { agentId: options.agentId } : {}), retireBeforeRevision },
+        ],
+      });
       setModelOverride(key, undefined);
       await host.refreshReplacement(options.agentId);
       return {
@@ -440,6 +446,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return { deleted: [], errors: [], preservedWorktrees: [] };
     }
     const deleted: string[] = [];
+    const deletionFacts: SessionState["deletedSessions"][number][] = [];
     const errors: string[] = [];
     const preservedWorktrees: SessionDeleteBatchResult["preservedWorktrees"] = [];
     for (const target of targets) {
@@ -452,7 +459,13 @@ export function createSessionMutations(host: SessionMutationsHost) {
           break;
         }
         if (confirmsSessionDeletion(response)) {
+          const retireBeforeRevision = Date.now();
           deleted.push(target.key);
+          deletionFacts.push({
+            key: target.key,
+            ...(target.agentId ? { agentId: target.agentId } : {}),
+            retireBeforeRevision,
+          });
           if (response.worktreePreserved) {
             preservedWorktrees.push(response.worktreePreserved);
           }
@@ -469,7 +482,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       host.publish({
         ...host.readState(),
-        deletedSessions: targets.filter((target) => deleted.includes(target.key)),
+        deletedSessions: deletionFacts,
       });
       for (const key of deleted) {
         setModelOverride(key, undefined);

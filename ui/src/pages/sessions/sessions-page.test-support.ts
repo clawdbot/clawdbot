@@ -12,6 +12,7 @@ import type {
   SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { SessionsRouteData } from "./route.ts";
 import type { TranscriptSearchState } from "./view.ts";
 import "./sessions-page.ts";
@@ -75,7 +76,7 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,

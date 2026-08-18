@@ -253,6 +253,7 @@ export type ControlUiMockGatewayScenario = {
     icon?: string;
     id: string;
     label: string;
+    placement?: string;
     pluginId: string;
   }>;
   controlUiWidgetKinds?: Array<{
@@ -298,6 +299,13 @@ export type ControlUiMockGatewayScenario = {
     name?: string;
     email?: string;
     avatarUrl?: string;
+    deviceFamily?: string;
+    host?: string;
+    instanceId?: string;
+    lastInputSeconds?: number;
+    mode?: string;
+    platform?: string;
+    ts?: number;
     watchedSessions?: string[];
   }>;
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
@@ -310,6 +318,8 @@ export type ControlUiMockGatewayScenario = {
   /** Partition sessions.list fixtures by archived state after applying patches. */
   sessionArchiveFiltering?: boolean;
   models?: ModelCatalogEntry[];
+  /** Simulate a legacy Gateway whose connect hello predates the auth projection. */
+  omitConnectHelloAuth?: boolean;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   sessionKey?: string;
@@ -496,7 +506,14 @@ export type MockGatewayControls = {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
     hasMultipleSessionSharingIdentities: boolean;
   }) => Promise<void>;
-  waitForRequest: (method: string) => Promise<MockGatewayRequest>;
+  /**
+   * Resolves with a captured request for `method`. Without `after` this is
+   * satisfied by ANY prior request of the method (and returns the latest), so
+   * a second same-method wait can return a stale earlier request on slow
+   * runners; pass `after` = the pre-action count from `getRequests(method)`
+   * to wait for and return the next new request instead.
+   */
+  waitForRequest: (method: string, options?: { after?: number }) => Promise<MockGatewayRequest>;
 };
 
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
@@ -864,6 +881,7 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
     operatorScopes: scenario.operatorScopes ?? [
       "operator.admin",
       "operator.read",
@@ -1313,9 +1331,14 @@ function installControlUiMockGateway(
         : "e2e-self-instance";
     return {
       presence: scenario.presenceUsers.map((user, index) => ({
-        instanceId: user.self ? selfInstanceId : `e2e-presence-${index}`,
-        mode: "webchat",
+        instanceId: user.self ? selfInstanceId : (user.instanceId ?? `e2e-presence-${index}`),
+        mode: user.mode ?? "webchat",
         reason: "connect",
+        ts: user.ts ?? Date.now(),
+        ...(user.host ? { host: user.host } : {}),
+        ...(user.platform ? { platform: user.platform } : {}),
+        ...(user.deviceFamily ? { deviceFamily: user.deviceFamily } : {}),
+        ...(user.lastInputSeconds === undefined ? {} : { lastInputSeconds: user.lastInputSeconds }),
         user: {
           id: user.id,
           name: user.name ?? null,
@@ -1633,13 +1656,17 @@ function installControlUiMockGateway(
         const connectedDeviceToken =
           auth && typeof auth.deviceToken === "string" ? auth.deviceToken : scenario.deviceToken;
         return {
-          auth: {
-            deviceToken: connectedDeviceToken,
-            recoveryMigrationAllowed: true as const,
-            recoveryScope: "e2e-recovery-scope",
-            role: "operator",
-            scopes: scenario.operatorScopes,
-          },
+          ...(scenario.omitConnectHelloAuth
+            ? {}
+            : {
+                auth: {
+                  deviceToken: connectedDeviceToken,
+                  recoveryMigrationAllowed: true as const,
+                  recoveryScope: "e2e-recovery-scope",
+                  role: "operator",
+                  scopes: scenario.operatorScopes,
+                },
+              }),
           features: {
             capabilities: scenario.featureCapabilities,
             events: [],
@@ -2619,12 +2646,13 @@ function createMockGatewayControls(
         gateway.setSessionSharingPolicy(nextPolicy);
       }, policy);
     },
-    async waitForRequest(method) {
+    async waitForRequest(method, options) {
       const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
+      const after = options?.after;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await page.waitForFunction(
-            (targetMethod) => {
+            ({ targetMethod, priorCount }) => {
               const gateway = (
                 window as Window & {
                   openclawControlUiE2eGateway?: {
@@ -2632,14 +2660,19 @@ function createMockGatewayControls(
                   };
                 }
               ).openclawControlUiE2eGateway;
-              return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
+              const matching =
+                gateway?.requests.filter((request) => request.method === targetMethod) ?? [];
+              return matching.length > (priorCount ?? 0);
             },
-            method,
+            { targetMethod: method, priorCount: after ?? 0 },
             // Request capture is non-rendering state. Interval polling avoids background-page
             // requestAnimationFrame throttling when CI runs several headless pages concurrently.
             { polling: 25, timeout: Math.max(1, deadline - Date.now()) },
           );
-          const request = (await getRequests(method)).at(-1);
+          const matching = await getRequests(method);
+          // With an `after` cursor, return the first NEW request; otherwise keep
+          // the historical latest-match behavior existing callers rely on.
+          const request = after === undefined ? matching.at(-1) : matching.at(after);
           if (request) {
             return request;
           }

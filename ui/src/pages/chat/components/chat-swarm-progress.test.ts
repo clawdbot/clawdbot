@@ -38,7 +38,12 @@ afterEach(() => {
 describe("chat Swarm progress", () => {
   it("groups live collector children and maps their dot states", () => {
     const container = renderProgress([
-      session({ key: "queued", label: "Queued child", subagentRunState: "active" }),
+      session({
+        key: "queued",
+        label: "Queued child",
+        status: "queued",
+        hasActiveRun: true,
+      }),
       session({ key: "running", label: "Running child", status: "running" }),
       session({ key: "done", label: "Done child", status: "done" }),
       session({ key: "failed", label: "Timed out child", status: "timeout" }),

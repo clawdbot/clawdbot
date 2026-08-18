@@ -70,6 +70,7 @@ const evaluation: SkillWorkshopEvaluation = {
 
 const proposal: SkillWorkshopProposal = {
   key: "proposal-1",
+  kind: "update",
   slug: "inbox-cleaner",
   name: "Inbox Cleaner",
   oneLine: "Clean inbox triage",

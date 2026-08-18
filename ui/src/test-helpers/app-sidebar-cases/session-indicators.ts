@@ -42,7 +42,7 @@ describe("AppSidebar session indicators", () => {
     expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
   });
 
-  it("places Home activity in the same trailing endcap as session activity", async () => {
+  it("keeps Home activity and its active composer draft in the trailing endcap", async () => {
     const mainKey = "agent:main:main";
     const workingKey = "agent:main:working";
     const sessions = createSessionsHarness("main", [mainKey, workingKey]);
@@ -58,6 +58,8 @@ describe("AppSidebar session indicators", () => {
       createGatewayHarness({} as GatewayBrowserClient).gateway,
       sessions.sessions,
     );
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = mainKey;
     sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
     sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
     sidebar.requestUpdate();
@@ -80,6 +82,41 @@ describe("AppSidebar session indicators", () => {
       home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
     ).toContain("2");
     expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
+  });
+
+  it("shows when an admitted session is queued for a concurrency slot", async () => {
+    const sessionKey = "agent:main:thread:queued";
+    const gateway = createGatewayHarness({} as GatewayBrowserClient).gateway;
+    const harness = createSessionsHarness("main", ["agent:main:main", sessionKey]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    sidebar.connected = true;
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:main", kind: "direct", updatedAt: 4 },
+          {
+            key: sessionKey,
+            kind: "direct",
+            label: "Queued repair",
+            updatedAt: 5,
+            hasActiveRun: true,
+            status: "queued",
+          },
+        ],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    expect(row?.textContent).toContain("Waiting for a concurrency slot");
+    const queued = row?.querySelector(".sidebar-child-session__status--queued");
+    expect(queued?.getAttribute("aria-label")).toBe("Queued");
+    expect(row?.querySelector(".session-run-spinner")).toBeNull();
   });
 
   it("preserves child PR indicators and leads a pinned child like any other", async () => {
@@ -302,10 +339,9 @@ describe("AppSidebar session indicators", () => {
       expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);
       expect(sidebar.querySelector(`[id="${descriptionId}"]`)).not.toBeNull();
     }
-    expect(forked?.querySelector("a")?.getAttribute("title")).toContain("Forked session");
-    expect(unread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Active run");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
+    for (const row of [forked, unread, runningUnread]) {
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
+    }
     expect(runningUnread?.querySelector(".session-row-state")?.getAttribute("aria-label")).toBe(
       "Active run · Unread",
     );
@@ -324,9 +360,7 @@ describe("AppSidebar session indicators", () => {
       const row = sidebar.querySelector(`[data-session-key="${key}"]`);
       expectEmptyLead(row);
       expect(row?.querySelector(".session-row-state [data-session-pr-state]")).not.toBeNull();
-      expect(row?.querySelector("a")?.getAttribute("title")).toContain(
-        key === keys.openPullRequest ? "Open PR" : "Merged",
-      );
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
       expect(row?.querySelector("[data-session-pr-state]")?.hasAttribute("title")).toBe(false);
     }
 

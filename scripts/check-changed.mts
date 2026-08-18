@@ -106,7 +106,7 @@ const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
-const RATCHET_BASE_OWNER_PATH = "scripts/lib/ratchet-base.mts";
+const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
@@ -540,24 +540,10 @@ export function createChangedCheckPlan(
 
   add("conflict markers", ["check:no-conflict-markers"]);
   if (
-    result.paths.some((filePath) =>
-      /^(?:src\/|packages\/|extensions\/|config\/env-var-count-budget\.txt$|scripts\/check-env-var-count\.mts$)/u.test(
-        filePath,
-      ),
-    )
-  ) {
-    add("environment variable count ratchet", [
-      "check:env-var-count",
-      ...(options.staged ? ["--staged"] : []),
-      "--base",
-      options.staged ? "HEAD" : (options.base ?? "origin/main"),
-    ]);
-  }
-  if (
     result.paths.some(
       (filePath) =>
-        filePath === RATCHET_BASE_OWNER_PATH ||
-        /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mts$)/u.test(
+        filePath === SHRINK_RATCHET_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/(?:env-var-count-budget|max-lines-baseline)\.txt$|scripts\/check-(?:env-var-count|max-lines-ratchet)\.mts$)/u.test(
           filePath,
         ),
     )
@@ -572,7 +558,7 @@ export function createChangedCheckPlan(
   if (
     result.paths.some(
       (filePath) =>
-        filePath === RATCHET_BASE_OWNER_PATH ||
+        filePath === SHRINK_RATCHET_OWNER_PATH ||
         /^(?:src\/|ui\/src\/|packages\/|extensions\/|config\/assertion-safety-baseline\.txt$|scripts\/check-assertion-safety-ratchet\.mts$|scripts\/lib\/type-assertion-guard-scope\.mjs$|scripts\/oxlint-boundary-guards\.mjs$)/u.test(
           filePath,
         ),

@@ -108,7 +108,19 @@
 }
 
 .chat-group.tool {
-  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
+  display: block;
+  margin-inline-start: 4px;
+  padding-inline-start: 46px;
+}
+
+.chat-group.tool.chat-group--with-footer {
+  display: block;
+}
+
+.chat-group.tool.chat-group--with-footer > .chat-group-messages {
+  max-width: var(--chat-message-column-max);
+  margin-inline-start: 1px;
 }
 
 .chat-group.user .chat-group-footer {
@@ -300,7 +312,7 @@
   padding: 4px;
   min-width: 24px;
   min-height: 24px;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-md);
   color: var(--muted);
   opacity: var(--chat-footer-disclosure-opacity, 0);
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
@@ -328,7 +340,7 @@
 .chat-group-footer button:hover,
 .chat-message-actions-row button:hover {
   opacity: 1 !important;
-  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  background: transparent;
   color: var(--accent);
 }
 
@@ -347,7 +359,7 @@
 .chat-divider {
   display: grid;
   gap: 7px;
-  margin: 18px 8px;
+  margin: var(--space-7) 8px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0;
@@ -667,12 +679,17 @@ img.chat-avatar.chat-avatar--logo {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
 }
 
+.chat-thread--direct .chat-group.tool {
+  margin-inline-start: 0;
+  padding-inline-start: 0;
+}
+
 .chat-duplicate-count {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
+  align-self: baseline;
   min-height: 22px;
-  margin-top: 8px;
+  margin-top: 0;
   padding: 2px 7px;
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   border-radius: var(--radius-sm);
@@ -681,6 +698,8 @@ img.chat-avatar.chat-avatar--logo {
   font-size: 12px; /* was 11px */
   font-weight: 700;
   line-height: 1;
+  vertical-align: 0.08em;
+  white-space: nowrap;
 }
 
 .chat-group.user .chat-duplicate-count {
@@ -817,16 +836,21 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 .chat-group.user .chat-bubble:hover {
-  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: transparent;
+  box-shadow: none;
 }
 
-/* Light mode: restore borders. Order contract: stays below the role variants
-   above; it ties with .chat-group.user .chat-bubble on specificity and the
-   light skin must win (user bubbles render on var(--bg) in light mode). */
+/* Light mode: restore borders for surfaces that retain them. */
 :root[data-theme-mode="light"] .chat-bubble {
   border-color: var(--border);
   background: var(--bg);
   box-shadow: inset 0 1px 0 var(--card-highlight);
+}
+
+:root[data-theme-mode="light"] .chat-group.user .chat-bubble {
+  border-color: transparent;
+  background: var(--accent-subtle);
+  box-shadow: none;
 }
 
 :root[data-theme-mode="light"] .chat-bubble--tool-shell,
@@ -846,7 +870,7 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: hsl(var(--chat-sender-hue) 48% 55% / 0.4);
+  border-color: transparent;
 }
 
 .chat-group.user.chat-group--sender-tint .chat-sender-name {
@@ -855,13 +879,13 @@ img.chat-avatar.chat-avatar--logo {
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble {
   background: hsl(var(--chat-sender-hue) 65% 94%);
-  border-color: hsl(var(--chat-sender-hue) 45% 82%);
+  border-color: transparent;
 }
 
-/* Outranks the light skin above (it also sets border-color); without this the
-   tinted hover border never applies in light mode. */
+/* Keep tinted user turns borderless when the generic light hover skin applies. */
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: hsl(var(--chat-sender-hue) 48% 62%);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {

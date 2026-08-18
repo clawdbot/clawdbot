@@ -892,7 +892,9 @@ suite.define(() => {
       element.scrollTop = 0;
       element.parentElement?.querySelector<HTMLButtonElement>(".chat-history-available")?.click();
     });
-    await gateway.waitForRequest("chat.history");
+    // Pin each wait past the earlier chat.history traffic so a slow runner
+    // can't return a stale load-time or prior-page request.
+    await gateway.waitForRequest("chat.history", { after: initialRequestCount });
     await page.locator(".chat-history-loading").waitFor();
     expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
     if (artifactDir) {
@@ -911,7 +913,7 @@ suite.define(() => {
     const failedRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
     await showEarlier.click();
-    await gateway.waitForRequest("chat.history");
+    await gateway.waitForRequest("chat.history", { after: failedRequestCount });
     await page.locator(".chat-history-loading").waitFor();
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
     await gateway.resolveDeferred("chat.history", {
@@ -956,7 +958,7 @@ suite.define(() => {
     expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount);
     await gateway.deferNext("chat.history");
     await showEarlier.click();
-    await gateway.waitForRequest("chat.history");
+    await gateway.waitForRequest("chat.history", { after: firstPageRequestCount });
     expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
       limit: 100,
       offset: 140,

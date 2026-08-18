@@ -320,6 +320,11 @@ describe("scanStatus", () => {
   });
 
   it("keeps status --json on read-only channel metadata when channel config exists", async () => {
+    const resolvedConfig = createStatusScanConfig({
+      marker: "resolved-preload",
+      plugins: { enabled: false },
+      channels: { telegram: { enabled: false } },
+    });
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
@@ -327,11 +332,7 @@ describe("scanStatus", () => {
         plugins: { enabled: false },
         channels: { telegram: { enabled: false } },
       }),
-      resolvedConfig: createStatusScanConfig({
-        marker: "resolved-preload",
-        plugins: { enabled: false },
-        channels: { telegram: { enabled: false } },
-      }),
+      resolvedConfig,
       summary: createStatusSummary({ linkChannel: { linked: false } }),
     });
 
@@ -343,6 +344,7 @@ describe("scanStatus", () => {
     expect(mocks.probeGateway).toHaveBeenCalledOnce();
     expect(firstCallArg(mocks.probeGateway, "probeGateway args")).toStrictEqual({
       url: "ws://127.0.0.1:18789",
+      config: resolvedConfig,
       auth: {},
       timeoutMs: 2500,
       detailLevel: "presence",

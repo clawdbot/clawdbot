@@ -1,8 +1,15 @@
 // Unmocked auth-policy coverage for the shared Gateway client bootstrap owner.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createConfigIoContext } from "../config/io.context.js";
+import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import type { GatewayRemoteConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function remoteGatewayConfig(remote?: GatewayRemoteConfig): OpenClawConfig {
   return {
@@ -30,6 +37,37 @@ async function expectInteractiveAuth(
 }
 
 describe("resolveGatewayClientBootstrap interactive auth policy", () => {
+  it("preserves an escaped literal credential from config load through client bootstrap", async () => {
+    const root = tempDirs.make("openclaw-client-bootstrap-env-facts-");
+    const configPath = path.join(root, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      VITEST: "true",
+    };
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", auth: { mode: "token", token: "$${LITERAL_TOKEN}" } },
+      }),
+      "utf8",
+    );
+    const context = createConfigIoContext({
+      configPath,
+      env,
+      homedir: () => root,
+      observe: false,
+    });
+
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    const result = await resolveGatewayClientBootstrap({ config: snapshot.config, env });
+
+    expect(result.auth).toEqual({ token: "${LITERAL_TOKEN}", password: undefined });
+  });
+
   it("keeps configured local password ahead of OPENCLAW_GATEWAY_PASSWORD", async () => {
     await expectInteractiveAuth(
       {

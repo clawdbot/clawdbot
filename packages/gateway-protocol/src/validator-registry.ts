@@ -104,6 +104,14 @@ export const validateUsersSetDisplayNameParams = compile(S.UsersSetDisplayNamePa
 export const validateUsersSetDisplayNameResult = compile(S.UsersSetDisplayNameResultSchema);
 export const validateUsersSetAvatarParams = compile(S.UsersSetAvatarParamsSchema);
 export const validateUsersSetAvatarResult = compile(S.UsersSetAvatarResultSchema);
+export const validateUsersSetGitHubIdentityParams = compile(S.UsersSetGitHubIdentityParamsSchema);
+export const validateUsersSetGitHubIdentityResult = compile(S.UsersSetGitHubIdentityResultSchema);
+export const validateUsersClearGitHubIdentityParams = compile(
+  S.UsersClearGitHubIdentityParamsSchema,
+);
+export const validateUsersClearGitHubIdentityResult = compile(
+  S.UsersClearGitHubIdentityResultSchema,
+);
 export const validateAgentIdentityParams = compile(S.AgentIdentityParamsSchema);
 export const validateAgentWaitParams = compile(S.AgentWaitParamsSchema);
 export const validateWakeParams = compile(S.WakeParamsSchema);
@@ -348,6 +356,8 @@ export const validateModelsListParams = compile(S.ModelsListParamsSchema);
 export const validateSkillsStatusParams = compile(S.SkillsStatusParamsSchema);
 export const validateHooksStatusParams = compile(S.HooksStatusParamsSchema);
 export const validateToolsCatalogParams = compile(S.ToolsCatalogParamsSchema);
+export const validateToolsGitHubStatusParams = compile(S.ToolsGitHubStatusParamsSchema);
+export const validateToolsGitHubConfigureParams = compile(S.ToolsGitHubConfigureParamsSchema);
 export const validateToolsEffectiveParams = compile(S.ToolsEffectiveParamsSchema);
 export const validateToolsInvokeParams = compile(S.ToolsInvokeParamsSchema);
 export const validateSkillsBinsParams = compile(S.SkillsBinsParamsSchema);

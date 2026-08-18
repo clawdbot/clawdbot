@@ -148,6 +148,52 @@ describe("sessionsCommand", () => {
     );
   });
 
+  it("renders current context after a same-model runtime change", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
+          },
+        },
+      },
+    }));
+    const store = await writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "stale-openclaw-window",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "openclaw",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+          totalTokens: 11,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        },
+      },
+      "sessions-current-runtime-table",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    cleanupStore(store);
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("OpenAI Codex");
+    expect(row).toContain("0.0k/1000k (0%)");
+    expect(row).not.toContain("272k");
+  });
+
   it("shows placeholder rows when tokens are missing", async () => {
     const store = await writeStore({
       "agent:main:quietchat:group:demo": {

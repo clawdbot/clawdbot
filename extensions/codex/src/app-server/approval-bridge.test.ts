@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
 import {
+  codexApprovalTimeoutText,
   requestPluginApproval,
   waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
@@ -172,8 +173,12 @@ function createParams(): EmbeddedRunAttemptParams {
         "plugin.approval.waitDecision",
         { timeoutMs: request.timeoutMs },
         { id: request.approvalId },
-      )) as { id?: string; decision?: "allow-once" | "allow-always" | "deny" | null };
-      return result?.id === request.approvalId ? result.decision : undefined;
+      )) as { id?: string } & Partial<
+        NonNullable<Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>>
+      >;
+      return result?.id === request.approvalId
+        ? { decision: result.decision, terminalReason: result.terminalReason }
+        : undefined;
     },
   };
   return Object.assign(params, { hostCapabilities });
@@ -198,6 +203,15 @@ describe("Codex app-server approval bridge", () => {
       blocked: false,
       params,
     }));
+  });
+
+  it.each([
+    ["command", "Command approval timed out before an operator responded."],
+    ["file-change", "File change approval timed out before an operator responded."],
+    ["permissions", "Permission approval timed out before an operator responded."],
+    ["other", "Approval timed out before an operator responded."],
+  ] as const)("formats %s approval timeout evidence", (kind, expected) => {
+    expect(codexApprovalTimeoutText(kind)).toBe(expected);
   });
 
   it("keeps unrelated command approval policy unchanged for scheduled app authority", async () => {
@@ -1232,6 +1246,32 @@ describe("Codex app-server approval bridge", () => {
     ]);
   });
 
+  it("declines a denied execve approval instead of cancelling the turn", async () => {
+    const params = createParams();
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
+    };
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-execve-denied", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-execve-denied", decision: "deny" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "cmd-execve-denied",
+        approvalId: "execve-approval-1",
+        command: "git status",
+        availableDecisions: ["accept", "cancel"],
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+  });
+
   it("does not invoke the exec auto-review model before plugin approval", async () => {
     const params = createParams();
     params.config = {
@@ -2127,7 +2167,7 @@ describe("Codex app-server approval bridge", () => {
         reason: "Approval cancelled because the run stopped",
       });
 
-      await handleCodexAppServerApprovalRequest({
+      const result = await handleCodexAppServerApprovalRequest({
         method: "item/commandExecution/requestApproval",
         requestParams: {
           ...codexTestTurnIds(),
@@ -2140,6 +2180,7 @@ describe("Codex app-server approval bridge", () => {
         onNativeToolFailureDisposition,
       });
 
+      expect(result).toEqual({ decision: "cancel" });
       expect(onNativeToolFailureDisposition).toHaveBeenCalledWith(
         "cmd-aborted-policy",
         disposition,
@@ -2594,12 +2635,16 @@ describe("Codex app-server approval bridge", () => {
     await expect(pending).rejects.toThrow("approval expired or not found");
   });
 
-  it("preserves an accepted approval expiry as timed out", async () => {
+  it("uses the gateway terminal reason as the authoritative approval timeout", async () => {
     const params = createParams();
     const onNativeToolFailureDisposition = vi.fn();
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-expired", status: "accepted" })
-      .mockResolvedValueOnce({ id: "plugin:approval-expired", decision: null });
+      .mockResolvedValueOnce({
+        id: "plugin:approval-expired",
+        decision: "deny",
+        terminalReason: "timeout",
+      });
 
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
@@ -2607,6 +2652,7 @@ describe("Codex app-server approval bridge", () => {
         ...codexTestTurnIds(),
         itemId: "cmd-expired",
         command: "pnpm test",
+        availableDecisions: ["accept", "cancel"],
       },
       paramsForRun: params,
       ...codexTestTurnIds(),
@@ -2614,10 +2660,15 @@ describe("Codex app-server approval bridge", () => {
     });
 
     expect(result).toEqual({ decision: "decline" });
-    expect(onNativeToolFailureDisposition).toHaveBeenCalledWith("cmd-expired", "timed_out");
+    expect(onNativeToolFailureDisposition).toHaveBeenCalledWith(
+      "cmd-expired",
+      "timed_out",
+      "command",
+    );
     findApprovalEvent(params, {
-      status: "unavailable",
+      status: "denied",
       approvalId: "plugin:approval-expired",
+      message: codexApprovalTimeoutText("command"),
     });
   });
 

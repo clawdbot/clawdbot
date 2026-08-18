@@ -5,8 +5,8 @@ import {
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../src/shared/session-archive-timeout.ts";
-import { GatewayRequestError } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type {
@@ -54,14 +54,6 @@ export function requireSessionMutationAccess(
   }
   host.sessionData.publishSessionMutationError(scope, access.reason);
   return false;
-}
-
-function isLegacyPatchManyMethodRejection(error: unknown): boolean {
-  return (
-    error instanceof GatewayRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: sessions.patchMany")
-  );
 }
 
 export function sessionRowAgentId(
@@ -147,7 +139,12 @@ export async function patchSessionRows(
       params,
     });
     if (!access.allowed) {
-      if (dispatched.length === 0 && access.cause === "method-unavailable" && options.fallback) {
+      if (
+        dispatched.length === 0 &&
+        access.cause === "method-unavailable" &&
+        isGatewayMethodAdvertised(scope.gateway.snapshot, "sessions.patchMany") === false &&
+        options.fallback
+      ) {
         return options.fallback();
       }
       terminalError = access.reason;
@@ -170,11 +167,6 @@ export async function patchSessionRows(
       }
       dispatched.push({ rows: chunkRows, result });
     } catch (error) {
-      // Metadata-less legacy Gateways allow the optimistic request, then identify
-      // this one unsupported method through the canonical Gateway error contract.
-      if (dispatched.length === 0 && options.fallback && isLegacyPatchManyMethodRejection(error)) {
-        return options.fallback();
-      }
       terminalError = error;
       if (dispatched.length === 0) {
         host.sessionData.publishSessionMutationError(scope, error);

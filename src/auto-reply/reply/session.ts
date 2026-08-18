@@ -36,6 +36,7 @@ import {
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import {
   buildSessionCreationStamp,
+  resolveProfileParticipantIdFromSessionCreation,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
@@ -970,6 +971,7 @@ async function initSessionStateAttemptLocked(
     sessionEntry.cacheRead = undefined;
     sessionEntry.cacheWrite = undefined;
     sessionEntry.contextTokens = undefined;
+    sessionEntry.contextTokensSource = undefined;
     sessionEntry.contextBudgetStatus = undefined;
     sessionEntry.goal = undefined;
     // Skills snapshots are prompt/runtime caches. Do not preserve a stale
@@ -1046,13 +1048,19 @@ async function initSessionStateAttemptLocked(
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
   if (!isSystemEvent && !isInterSession) {
-    const creationActor = ctx.SessionCreation?.actor;
+    const creation = ctx.SessionCreation;
+    const creationActor = creation?.actor;
+    const profileParticipantId = resolveProfileParticipantIdFromSessionCreation(creation);
     const senderId = normalizeOptionalString(ctx.SenderId);
     const participant:
-      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" }
-      | undefined =
-      creationActor?.id && (creationActor.type === "human" || creationActor.type === "agent")
-        ? { actor: { ...creationActor, id: creationActor.id }, source: "profile" }
+      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" | "agent" }
+      | undefined = profileParticipantId
+      ? { actor: { type: "human", id: profileParticipantId }, source: "profile" }
+      : creationActor?.type === "agent" && creationActor.id
+        ? {
+            actor: { ...creationActor, id: creationActor.id },
+            source: "agent",
+          }
         : senderId
           ? { actor: { type: "human", id: senderId }, source: "channel" }
           : undefined;
@@ -1083,7 +1091,6 @@ async function initSessionStateAttemptLocked(
       sessionKey,
       agentId,
       entry: sessionEntry,
-      dmScope: ctx.DmScope ?? sessionCfg?.dmScope ?? "main",
       mainKey,
     });
   }

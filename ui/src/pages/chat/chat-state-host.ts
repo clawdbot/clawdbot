@@ -75,6 +75,7 @@ export type ChatPageHost = ChatHost &
     sessionsError: string | null;
     sessionsArchivedFilter: "active" | "archived" | "all";
     selectedChatSessionArchived: boolean;
+    selectedChatSessionIncognito: boolean;
     agentsList: AgentsListResult | null;
     agentsSelectedId: string | null;
     pendingAbort: PendingChatAbort | null;

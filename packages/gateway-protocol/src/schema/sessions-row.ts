@@ -78,6 +78,7 @@ export const SessionRowSchema = Type.Object(
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(
       Type.Union([
+        Type.Literal("queued"),
         Type.Literal("running"),
         Type.Literal("done"),
         Type.Literal("failed"),

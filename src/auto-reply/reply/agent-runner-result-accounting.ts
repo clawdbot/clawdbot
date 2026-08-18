@@ -240,6 +240,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       allowAsyncLoad: false,
     }) ??
     DEFAULT_CONTEXT_TOKENS;
+  const contextTokensSource = runResult.meta?.agentMeta?.contextTokensSource ?? "resolved";
 
   await persistRunSessionUsage({
     storePath,
@@ -257,11 +258,13 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     modelUsed,
     providerUsed,
     contextTokensUsed,
+    contextTokensSource,
     systemPromptReport: runResult.meta?.systemPromptReport,
     cliSessionId,
     cliSessionBinding,
     clearCliSessionBinding,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
+    agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
   });
   if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
     // A completed run that executed the persisted selection consumes the

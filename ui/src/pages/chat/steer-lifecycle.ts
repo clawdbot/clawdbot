@@ -41,7 +41,7 @@ import {
   isQueuedMessageBeingEdited,
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
-import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
@@ -368,7 +368,7 @@ export async function sendQueuedChatMessageWithQueueMode(
   queueMode: QueueMode | undefined,
   dependencies: SteerSendDependencies,
 ): Promise<void> {
-  if (!host.connected || !hasAbortableSessionRun(host)) {
+  if (!host.connected || !hasDirectSessionRun(host)) {
     return;
   }
   const isSteer = queueMode === "steer";

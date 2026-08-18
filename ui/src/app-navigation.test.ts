@@ -24,14 +24,15 @@ import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
 /**
- * All route identifiers derived from sidebar nav routes plus routed settings
- * slices and the Plugins hub tabs, which route without their own sidebar item.
+ * All route identifiers derived from core sidebar routes, plugin-owned native
+ * routes, routed settings slices, and hub tabs without their own sidebar item.
  */
 const ALL_ROUTES: RouteId[] = Array.from(
   new Set<RouteId>([
     "chat",
     "custodian",
     ...SIDEBAR_NAV_ROUTES,
+    "workboard",
     "skills",
     "skill-workshop",
     // Hub tabs and settings subpages route without their own nav entry.
@@ -268,7 +269,7 @@ describe("subtitleForRoute", () => {
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
       custodian: "System setup and care.",
-      activity: "Browser-local tool activity summaries.",
+      activity: "Recent sessions across people using this gateway.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
       portals: "Live previews from agent-run applications.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
@@ -515,7 +516,6 @@ describe("plugin tabs route", () => {
 describe("SIDEBAR_NAV_ROUTES", () => {
   it("keeps the canonical sidebar route order", () => {
     expect(SIDEBAR_NAV_ROUTES).toEqual([
-      "workboard",
       "dashboards",
       "usage",
       "cron",

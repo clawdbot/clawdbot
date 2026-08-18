@@ -58,7 +58,19 @@ on:
   );
   writeFileSync(
     join(checkout, "scripts", "release-ci-summary.mjs"),
-    'console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { runId: "123" }, evidenceReuse: false }));\n',
+    `const expected = [
+  "--validate-run", "123",
+  "--trusted-workflow-ref", "main",
+  "--json",
+  "--verifier-source-sha", process.env.MOCK_WORKFLOW_SHA,
+  "--verifier-source-file", process.argv[1],
+];
+if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
+  console.error("unexpected verifier args: " + JSON.stringify(process.argv.slice(2)));
+  process.exit(2);
+}
+console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { runId: "123" }, evidenceReuse: false }));
+`,
   );
   runGit(checkout, ["add", "."]);
   runGit(checkout, ["commit", "-m", "test: trusted workflow"]);
@@ -274,14 +286,22 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("validates direct and reused runs through the strict evidence verifier", () => {
-    expect(releaseEvidenceVerificationArgs("123")).toEqual([
+    const workflowSha = "a".repeat(40);
+    const verifier = "/tmp/trusted/scripts/release-ci-summary.mjs";
+    expect(releaseEvidenceVerificationArgs("123", workflowSha, verifier)).toEqual([
       "--validate-run",
       "123",
       "--trusted-workflow-ref",
       "main",
       "--json",
+      "--verifier-source-sha",
+      workflowSha,
+      "--verifier-source-file",
+      verifier,
     ]);
-    expect(() => releaseEvidenceVerificationArgs("")).toThrow("positive decimal");
+    expect(() => releaseEvidenceVerificationArgs("", workflowSha, verifier)).toThrow(
+      "positive decimal",
+    );
   });
 
   it("bounds polling for the exact workflow run", () => {

@@ -38,13 +38,19 @@ export type SessionState = {
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
   error: string | null;
-  deletedSessions: readonly SessionDeleteTarget[];
+  deletedSessions: readonly SessionDeletionFact[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
   /** New Session defaults associated with each gateway-owned group. */
   groupSettings: readonly SessionGroupSettings[];
   /** Gateway-owned sidebar section order; pinned is intentionally absent. */
   sectionOrder: readonly string[];
+};
+
+type SessionDeletionFact = {
+  key: string;
+  agentId?: string;
+  retireBeforeRevision: number;
 };
 
 export type SessionGroupMutationResult = "completed" | "stale";
@@ -56,7 +62,7 @@ export type SessionListOptions = {
   boardFace?: "chat" | "dashboard";
   activeMinutes?: number;
   search?: string;
-  creatorId?: string;
+  ownerId?: string;
   involvingMe?: boolean;
   offset?: number;
   limit?: number;
@@ -155,6 +161,10 @@ export type SessionCapability = {
   readonly state: SessionState;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  /** Captures the current Gateway connection generation for read-only requests. */
+  captureConnectionScope: () => SessionConnectionScope | null;
+  /** Whether a captured read-only request still belongs to the active connection. */
+  isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   listSnapshot: (scope: SessionListScope) => SessionListSnapshot;
   subscribeList: (
@@ -162,7 +172,7 @@ export type SessionCapability = {
     listener: (snapshot: SessionListSnapshot) => void,
   ) => () => void;
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
-  setCreatorFilter: (creatorId: string | null) => Promise<void>;
+  setOwnerFilter: (ownerId: string | null) => Promise<void>;
   setInvolvingMeFilter: (enabled: boolean) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,

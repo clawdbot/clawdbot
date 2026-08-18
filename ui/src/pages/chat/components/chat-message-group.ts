@@ -37,16 +37,14 @@ import {
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message-stream.ts";
-import {
-  extractGroupMeta,
-  renderChatTimestamp,
-  renderMessageMeta,
-} from "./chat-message-timestamp.ts";
+import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
+  syncToolDisclosureOverflow,
+  toggleToolDisclosureKeepingScroll,
 } from "./chat-tool-cards.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -75,7 +73,7 @@ type RenderMessageGroupOptions = {
   getAssistantMessageExpansion?: (messageId: string) => AssistantMessageExpansionState | undefined;
   onToggleAssistantMessageExpanded?: (messageId: string) => void;
   isToolExpanded?: (toolCardId: string) => boolean;
-  onToggleToolExpanded?: (toolCardId: string) => void;
+  onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   onRequestUpdate?: () => void;
   onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
@@ -251,32 +249,11 @@ export function renderActivityGroup(
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
-  const showAvatarGutter = opts.showAvatarGutter !== false;
-  const assistantName = opts.assistantName ?? "Assistant";
-
   return html`
     <div
       class="chat-group tool chat-group--activity chat-group--with-footer"
       data-chat-row-key=${firstGroup.key}
     >
-      ${showAvatarGutter &&
-      (normalizeRoleForGrouping(firstGroup.role) !== "assistant" ||
-        opts.showAssistantAvatar !== false)
-        ? renderChatAvatar(
-            firstGroup.role,
-            {
-              name: assistantName,
-              avatar: opts.assistantAvatar ?? null,
-            },
-            {
-              name: opts.userName ?? null,
-              avatar: opts.userAvatar ?? null,
-            },
-            opts.basePath,
-            opts.assistantAttachmentAuthToken,
-            firstGroup.sender,
-          )
-        : nothing}
       <div class="chat-group-messages">
         <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
           <button
@@ -284,19 +261,23 @@ export function renderActivityGroup(
             type="button"
             aria-expanded=${String(activityExpanded)}
             aria-controls=${activityBodyId}
+            @pointerenter=${syncToolDisclosureOverflow}
+            @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
+                toggleToolDisclosureKeepingScroll(event, () =>
+                  opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded),
+                );
               }
             }}
           >
-            <span class="chat-activity-group__icon">${icons.activity}</span>
-            <span class="chat-activity-group__label" title=${groupSummaryLabel}
-              >${groupSummaryLabel}</span
-            >
-            <span class="chat-inline-disclosure__chevron" aria-hidden="true"
-              >${icons.chevronDown}</span
-            >
+            <span class="chat-activity-group__icon">${icons.listTree}</span>
+            <span class="chat-tool-disclosure__content">
+              <span class="chat-activity-group__label" title=${groupSummaryLabel}
+                >${groupSummaryLabel}</span
+              >
+            </span>
+            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </button>
           <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
             ${activityExpanded
@@ -313,10 +294,6 @@ export function renderActivityGroup(
               : nothing}
           </div>
         </div>
-      </div>
-      <div class="chat-group-footer">
-        <span class="chat-sender-name">${t("chat.messages.activity")}</span>
-        ${renderChatTimestamp(firstGroup.timestamp)}
       </div>
     </div>
   `;
@@ -436,7 +413,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
-      ${showAvatarGutter && (normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
+      ${normalizedRole !== "tool" &&
+      showAvatarGutter &&
+      (normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
         ? renderChatAvatar(
             group.role,
             {
@@ -491,44 +470,46 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
             : nothing}
       </div>
-      <div
-        class="chat-group-footer ${persistUserIdentity
-          ? "chat-group-footer--persistent-identity"
-          : ""}"
-      >
-        <div class="chat-group-footer__meta">
-          ${hasUserFooterActions
-            ? html`
-                <div
-                  class="chat-group-footer-actions"
-                  data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
-                >
-                  ${footerActionDetails?.replyTarget && opts.onReply
-                    ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
-                    : nothing}
-                  ${opts.onRewind
-                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
-                    : nothing}
-                </div>
-              `
-            : nothing}
-          ${normalizedRole === "user" && !showAvatarGutter
-            ? renderChatAuthorAvatar(group.sender)
-            : nothing}
-          <span class="chat-sender-name">${who}</span>
-          ${renderMessageMeta(group.timestamp, meta)}
-        </div>
-        ${normalizedRole !== "user" && footerActionDetails
-          ? html`
-              <div
-                class="chat-group-footer-actions"
-                data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
-              >
-                ${renderMessageActionButtons(footerActionDetails, opts)}
-              </div>
-            `
-          : nothing}
-      </div>
+      ${normalizedRole === "tool"
+        ? nothing
+        : html`<div
+            class="chat-group-footer ${persistUserIdentity
+              ? "chat-group-footer--persistent-identity"
+              : ""}"
+          >
+            <div class="chat-group-footer__meta">
+              ${hasUserFooterActions
+                ? html`
+                    <div
+                      class="chat-group-footer-actions"
+                      data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+                    >
+                      ${footerActionDetails?.replyTarget && opts.onReply
+                        ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
+                        : nothing}
+                      ${opts.onRewind
+                        ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
+              ${normalizedRole === "user" && !showAvatarGutter
+                ? renderChatAuthorAvatar(group.sender)
+                : nothing}
+              <span class="chat-sender-name">${who}</span>
+              ${renderMessageMeta(group.timestamp, meta)}
+            </div>
+            ${normalizedRole !== "user" && footerActionDetails
+              ? html`
+                  <div
+                    class="chat-group-footer-actions"
+                    data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+                  >
+                    ${renderMessageActionButtons(footerActionDetails, opts)}
+                  </div>
+                `
+              : nothing}
+          </div>`}
     </div>
   `;
 }

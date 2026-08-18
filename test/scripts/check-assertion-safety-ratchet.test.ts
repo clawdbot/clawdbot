@@ -6,8 +6,8 @@ import {
   countUnsafeAssertions,
   isGovernedAssertionSourcePath,
   main,
-  parseAssertionSafetyBaseline,
 } from "../../scripts/check-assertion-safety-ratchet.mts";
+import { parseRatchetCounts } from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -130,7 +130,9 @@ describe("check-assertion-safety-ratchet", () => {
     );
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
-    expect(parseAssertionSafetyBaseline(fs.readFileSync(baselinePath, "utf8"))).toEqual(new Map());
+    expect(
+      parseRatchetCounts(fs.readFileSync(baselinePath, "utf8"), path.relative(root, baselinePath)),
+    ).toEqual(new Map());
   });
 
   it("allows rebaselining assertion debt already present in the base tree", () => {
@@ -163,9 +165,9 @@ describe("check-assertion-safety-ratchet", () => {
 
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
-    expect(parseAssertionSafetyBaseline(fs.readFileSync(baselinePath, "utf8"))).toEqual(
-      new Map([["src/example.ts", 2]]),
-    );
+    expect(
+      parseRatchetCounts(fs.readFileSync(baselinePath, "utf8"), path.relative(root, baselinePath)),
+    ).toEqual(new Map([["src/example.ts", 2]]));
   });
 
   it("compares an explicit moving base at the branch fork", () => {

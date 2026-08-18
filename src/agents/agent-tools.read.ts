@@ -753,12 +753,11 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         sandbox: options.sandbox,
         signal,
       });
+      // This wrapper inherits the write tool's output schema, so report only
+      // the authoritative `changed`; deriving `created` before append is racy.
       return {
         content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
-        details: {
-          path: options.relativePath,
-          appendOnly: true,
-        },
+        details: { changed: true },
       };
     },
   };

@@ -209,6 +209,9 @@ const threadBindingSchema = z
     connectionScope: z.literal("supervision").optional(),
     supervisionSourceThreadId: z.string().trim().min(1).optional(),
     authProfileId: optionalStringSchema,
+    // Freeze external-cwd AGENTS.md at thread creation; bootstrap refreshes must
+    // not mutate the inherited policy of a resumed native session.
+    agentWorkspaceDeveloperInstructions: optionalNonBlankStringSchema,
     model: optionalStringSchema,
     // Codex App Server owns selection for supervised and adopted threads. Keep
     // this marker across resumes so OpenClaw never substitutes a default or fallback.
@@ -264,6 +267,17 @@ const threadBindingSchema = z
     conversationStartId: optionalStringSchema,
     conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
     historyCoveredThrough: optionalTimestampSchema,
+    // Observed density of the last completed turn on this thread: prompt chars
+    // actually sent vs provider-reported input tokens. Read by the no-engine
+    // continuity cap so the next projection is sized from this session's real
+    // content density instead of a fixed chars-per-token guess.
+    continuityCalibration: z
+      .object({
+        promptChars: z.number().int().positive(),
+        inputTokens: z.number().int().positive(),
+      })
+      .optional()
+      .catch(undefined),
   })
   .superRefine((binding, context) => {
     if (binding.connectionScope === "supervision") {

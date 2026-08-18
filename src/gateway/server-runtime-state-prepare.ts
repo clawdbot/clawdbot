@@ -122,9 +122,6 @@ export async function prepareGatewayKernelState(params: {
     !(nodeCommandConfig?.deny ?? []).some(
       (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
     );
-  const workerGatewayEndpoint = {
-    resolve: (() => undefined) as () => { host: "127.0.0.1" | "::1"; port: number } | undefined,
-  };
   const desktopSessionRegistry =
     shouldStartWorkerEnvironmentService || hostDesktopEnabled || nodeDesktopObserveAvailable
       ? createDesktopSessionRegistry()
@@ -155,7 +152,6 @@ export async function prepareGatewayKernelState(params: {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
-            resolveWorkerGateway: () => workerGatewayEndpoint.resolve(),
             desktopSessionRegistry,
             startup: workerEnvironmentStartup,
             log,
@@ -573,11 +569,9 @@ export async function prepareGatewayKernelState(params: {
     sessionEventSubscribers,
     sessionMessageSubscribers,
     isConnectionActive,
-    getWorkerIngressEndpoint: transportBridge.getWorkerIngressEndpoint,
     getTailscaleIngressEndpoint: transportBridge.getTailscaleIngressEndpoint,
     getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
     getPortalService: transportBridge.getPortalService,
-    workerGatewayEndpoint,
   };
 }

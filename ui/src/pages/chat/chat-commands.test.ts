@@ -12,6 +12,7 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   applyRemoteSlashCommandsResult,
   dispatchChatSlashCommand,
@@ -36,11 +37,11 @@ function expectRecordFields(value: unknown, label: string, expected: Record<stri
   }
 }
 
-function legacyConnectedSessionAccess() {
+function connectedSessionAccess() {
   return {
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     connected: true,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
   };
 }
 
@@ -384,7 +385,7 @@ describe("conversation reset confirmation", () => {
     const sendResetMessage = vi.fn(async () => {});
     const result = await dispatchChatSlashCommand(
       {
-        ...legacyConnectedSessionAccess(),
+        ...connectedSessionAccess(),
         connectionEpoch: 1,
         sessionKey: "agent:main:current",
         confirmConversationReset: vi.fn(async () => false),
@@ -405,7 +406,7 @@ describe("conversation reset confirmation", () => {
     });
     const sendResetMessage = vi.fn(async () => {});
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       sessionKey: "agent:main:first",
       confirmConversationReset: vi.fn(async () => await confirmation),
@@ -460,7 +461,7 @@ describe("conversation reset confirmation", () => {
     });
     const sendResetMessage = vi.fn(async () => {});
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },
@@ -494,7 +495,7 @@ describe("conversation reset confirmation", () => {
     });
     const sendResetMessage = vi.fn(async () => {});
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       sessionKey: "main",
       confirmConversationReset: vi.fn(async () => await confirmation),
@@ -520,7 +521,7 @@ describe("conversation reset confirmation", () => {
       const sendResetMessage = vi.fn(async () => {});
       const reset = vi.fn();
       const host = {
-        ...legacyConnectedSessionAccess(),
+        ...connectedSessionAccess(),
         chatRunId: null as string | null,
         sessionKey: "agent:main:current",
         confirmConversationReset: vi.fn(async () => await confirmation),
@@ -542,7 +543,7 @@ describe("conversation reset confirmation", () => {
   it("keeps chat-only /reset unchanged", async () => {
     const sendResetMessage = vi.fn(async () => {});
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       sessionKey: "agent:main:current",
     };
@@ -567,7 +568,7 @@ describe("conversation reset confirmation", () => {
     const reset = vi.fn();
     const result = await dispatchChatSlashCommand(
       {
-        ...legacyConnectedSessionAccess(),
+        ...connectedSessionAccess(),
         sessionKey: "agent:main:current",
         confirmConversationReset: vi.fn(async () => false),
         sessions: { reset },
@@ -628,7 +629,7 @@ describe("conversation reset confirmation", () => {
     });
     const reset = vi.fn();
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },

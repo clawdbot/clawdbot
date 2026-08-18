@@ -27,7 +27,7 @@ const node = {
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   workerHost: {
     enabled: true,
-    capacity: "available",
+    capacity: { total: 2, available: 2 },
     bundleRetention: 1,
     bundleStatus: 1,
   },
@@ -41,6 +41,8 @@ function environment(overrides: Record<string, unknown> = {}) {
     profileId: "device:node-1",
     profileSnapshot: { install: "bundle", settings: { device: "node-1" } },
     provisionOperationId: "provision-1",
+    nodeSetupId: null,
+    nodeDeviceId: "node-1",
     sharedHost: true,
     desktop: null,
     bootstrapReceipt: null,
@@ -156,6 +158,7 @@ describe("node workspace retain coordinator", () => {
         environment(),
         environment({
           environmentId: "environment-other",
+          nodeDeviceId: "node-other",
           profileSnapshot: { settings: { device: "node-other" } },
         }),
         environment({ environmentId: "environment-terminal", state: "orphaned" }),
@@ -193,7 +196,7 @@ describe("node workspace retain coordinator", () => {
         ...node,
         workerHost: {
           enabled: true,
-          capacity: "available",
+          capacity: { total: 2, available: 2 },
           bundleRetention: 1,
         },
       },
@@ -413,7 +416,7 @@ describe("node workspace retain coordinator", () => {
     const { coordinator, invoke } = createHarness({
       node: {
         ...node,
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
       },
     });
 

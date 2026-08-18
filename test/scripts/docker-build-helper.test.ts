@@ -216,6 +216,15 @@ function extractUpgradeSurvivorSupervisor(script: string): string {
   return source;
 }
 
+function extractUpgradeSurvivorSystemctlShim(script: string): string {
+  const match = script.match(/cat >"\$shim_dir\/systemctl" <<'SHIM'\n(?<source>[\s\S]*?)\nSHIM/u);
+  const source = match?.groups?.source;
+  if (!source) {
+    throw new Error("upgrade survivor systemctl shim source not found");
+  }
+  return source;
+}
+
 async function waitForProcessExit(child: ChildProcess, timeoutMs = 5_000): Promise<number | null> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return child.exitCode;
@@ -252,6 +261,75 @@ setInterval(() => {}, 1_000);
 `,
   );
   return descendantPath;
+}
+
+async function forEachUpgradeSurvivorSystemctlShim(
+  callback: (fixture: {
+    pid: number;
+    run: (command: "is-active" | "stop", procStat?: string) => number | null;
+    scriptPath: string;
+  }) => void | Promise<void>,
+): Promise<void> {
+  for (const scriptPath of [
+    UPGRADE_SURVIVOR_RUN_SCRIPT,
+    UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH,
+  ]) {
+    const workDir = tempDirs.make("openclaw-systemctl-shim-");
+    const binDir = join(workDir, "bin");
+    const pidPath = join(workDir, "gateway.pid");
+    const childPidPath = join(workDir, "child.pid");
+    const child = spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
+      env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
+      stdio: "ignore",
+    });
+    for (let attempt = 0; attempt < 100 && !existsSync(childPidPath); attempt += 1) {
+      await delay(10);
+    }
+    const pid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+    writeFileSync(pidPath, `${pid}\n`);
+    const shimPath = join(workDir, "systemctl");
+    writeFileSync(shimPath, extractUpgradeSurvivorSystemctlShim(readFileSync(scriptPath, "utf8")), {
+      mode: 0o755,
+    });
+    writeExecutables(binDir, {
+      awk: `#!/usr/bin/env bash
+[ "$FAKE_PROC_STAT_MODE" != "unreadable" ] || exit 1
+set -- $FAKE_PROC_STAT
+printf '%s\\n' "\${3:-}"
+`,
+      cat: `#!/usr/bin/env bash
+case "\${1:-}" in
+  /proc/*/stat)
+    [ "$FAKE_PROC_STAT_MODE" != "unreadable" ] || exit 1
+    printf '%s\\n' "$FAKE_PROC_STAT"
+    ;;
+  *) exec /bin/cat "$@" ;;
+esac
+`,
+      sleep: "#!/usr/bin/env bash\nexit 97\n",
+    });
+    const run = (command: "is-active" | "stop", procStat?: string) =>
+      spawnSync("bash", [shimPath, "--user", command, "openclaw-gateway.service"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_PROC_STAT: procStat ?? "",
+          FAKE_PROC_STAT_MODE: procStat === undefined ? "unreadable" : "readable",
+          OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
+          OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+      }).status;
+
+    try {
+      await callback({ pid, run, scriptPath });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await waitForProcessExit(child).catch(() => undefined);
+    }
+  }
 }
 
 function cleanupSmokeLogTailHelpers(): string {
@@ -2460,7 +2538,7 @@ docker_e2e_docker_run_cmd run demo
     );
     expect(publishedRunner).toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
     expect(publishedRunner).toContain('prepublish_package="@openclaw/whatsapp"');
-    expect(publishedRunner).toContain('if [ "$SCENARIO" = "configured-plugin-installs" ]; then');
+    expect(publishedRunner).toContain("if configured_plugin_installs_enabled; then");
     expect(publishedRunner).toContain('prepublish_package="@openclaw/matrix"');
     expect(publishedRunner).toContain(
       'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version"',
@@ -2493,7 +2571,7 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
     expect(publishedRunner).toContain(
       [
-        'if [ "$SCENARIO" = "configured-plugin-installs" ]; then',
+        'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
         '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
         '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
         "fi",
@@ -2789,6 +2867,80 @@ docker_e2e_docker_run_cmd run demo
     }
   });
 
+  it("records an interrupted upgrade survivor phase as failed", async () => {
+    const workDir = tempDirs.make("openclaw-upgrade-survivor-signal-");
+    const binDir = join(workDir, "bin");
+    const markerPath = join(workDir, "npm-started");
+    const summaryPath = join(workDir, "artifacts", "summary.json");
+    writeExecutables(binDir, {
+      npm: `#!/bin/sh
+touch "$FAKE_NPM_MARKER"
+exec sleep 300
+`,
+      timeout: `#!/bin/sh
+while [ "\${1#--}" != "$1" ]; do shift; done
+shift
+exec "$@"
+`,
+    });
+
+    const child = spawn("bash", [UPGRADE_SURVIVOR_RUN_SCRIPT], {
+      detached: true,
+      env: {
+        ...process.env,
+        FAKE_NPM_MARKER: markerPath,
+        OPENCLAW_TEST_STATE_FUNCTION_B64: Buffer.from(
+          "openclaw_test_state_create() { :; }",
+        ).toString("base64"),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.7.1-2",
+        OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC: join(workDir, "unused.tgz"),
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(workDir, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT: join(workDir, "state-home"),
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: summaryPath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdio: "ignore",
+    });
+    const childPid = child.pid;
+    if (!childPid) {
+      throw new Error("upgrade survivor process did not start");
+    }
+    const exitPromise = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+
+    try {
+      for (let attempt = 0; attempt < 500 && !existsSync(markerPath); attempt += 1) {
+        await delay(10);
+      }
+      expect(existsSync(markerPath)).toBe(true);
+      process.kill(-childPid, "SIGTERM");
+      const exit = await exitPromise;
+
+      expect(exit).toEqual({ code: 143, signal: null });
+      const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
+      expect(summary).toMatchObject({
+        failure: {
+          message: "phase install-baseline interrupted by SIGTERM",
+          phase: "install-baseline",
+        },
+        status: "failed",
+      });
+      expect(summary.phases.at(-1)).toMatchObject({
+        phase: "install-baseline",
+        status: "started",
+      });
+      expect(
+        readFileSync(join(workDir, "artifacts", "baseline-install.log"), "utf8"),
+      ).not.toContain("Upgrade survivor summary:");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        process.kill(-childPid, "SIGKILL");
+      }
+    }
+  });
+
   it("keeps multi-node update Docker artifacts isolated by default", () => {
     const multiNode = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
     expect(multiNode).toContain(
@@ -2970,7 +3122,6 @@ fi
     for (const script of [publishedRunner, updateRestartAuth]) {
       expectTextToIncludeAll(script, [
         'supervisor_script="${pid_file}.supervisor.mjs"',
-        'process_state="$(awk \'{ print $3 }\' "/proc/$pid/stat" 2>/dev/null || true)"',
         'OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start"',
         'nohup node "$supervisor_script"',
         'if (key.startsWith("OPENCLAW_UPDATE_")) {',
@@ -2995,6 +3146,27 @@ fi
       expect(script).toContain("systemctl --user stop openclaw-gateway.service");
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "stops promptly when the systemctl target is a zombie with spaces and parentheses in comm",
+    async () => {
+      await forEachUpgradeSurvivorSystemctlShim(({ pid, run, scriptPath }) => {
+        const procTail = Array.from({ length: 49 }, (_, field) => field + 1).join(" ");
+        expect(run("stop", `${pid} (gateway (old) worker) Z ${procTail}`), scriptPath).toBe(0);
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a killable systemctl target active when proc stat is unreadable or malformed",
+    async () => {
+      await forEachUpgradeSurvivorSystemctlShim(({ pid, run, scriptPath }) => {
+        for (const procStat of [undefined, `${pid} (gateway) Z`]) {
+          expect(run("is-active", procStat), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(0);
+        }
+      });
+    },
+  );
 
   it("stops supervised gateway restarts after the systemd burst limit", async () => {
     const workDir = tempDirs.make("openclaw-update-restart-supervisor-");

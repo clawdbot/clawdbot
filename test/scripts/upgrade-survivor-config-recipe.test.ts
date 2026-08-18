@@ -153,6 +153,12 @@ describe("upgrade survivor config recipe command resolution", () => {
     expect(steps.at(-1)?.id).toBe("validate");
   });
 
+  it("composes configured plugin installs into the SQLite volume scenario", () => {
+    expect(resolveScenarioConfigSteps("sqlite-volume")).toEqual(
+      resolveScenarioConfigSteps("configured-plugin-installs"),
+    );
+  });
+
   it("removes unsupported scenario config for older baselines", () => {
     const steps = resolveUpgradeSurvivorConfigStepsForBaseline("feishu-channel", "2026.3.13");
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();

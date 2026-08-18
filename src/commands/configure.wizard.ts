@@ -8,12 +8,14 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -23,7 +25,7 @@ import { WizardCancelledError } from "../wizard/prompts.js";
 import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
-import { maybeInstallDaemon } from "./configure.daemon.js";
+import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
 import { promptGatewayConfig } from "./configure.gateway.js";
 import type {
@@ -44,6 +46,7 @@ import { healthCommand } from "./health.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
+  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
@@ -524,6 +527,7 @@ export async function runConfigureWizard(
             });
             return probeGatewayReachable({
               url: remoteUrl,
+              ...(baseConfig.gateway?.remote?.edgeAuth ? { config: baseConfig } : {}),
               token: remoteProbeAuth.auth.token,
               ...(remoteProbeAuth.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
               timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
@@ -597,8 +601,8 @@ export async function runConfigureWizard(
 
     let nextConfig = { ...baseConfig };
     let mergeBaseConfig = structuredClone(baseConfig);
-    let didSetGatewayMode = false;
-    if (shouldPromptGatewayRunMode && nextConfig.gateway?.mode !== "local") {
+    let hasPendingConfig = shouldPromptGatewayRunMode && nextConfig.gateway?.mode !== "local";
+    if (hasPendingConfig) {
       nextConfig = {
         ...nextConfig,
         gateway: {
@@ -606,13 +610,23 @@ export async function runConfigureWizard(
           mode: "local",
         },
       };
-      didSetGatewayMode = true;
     }
-    const resolveSetupTarget = () => resolveOnboardingAgentTarget(nextConfig);
+    // Configure keeps legacy default-owner semantics; only explicit fleets opt into
+    // the System Agent target used unconditionally by setup and recovery callers.
+    const resolveSetupTarget = () =>
+      nextConfig.agents?.ownership === "explicit"
+        ? resolveSystemAgentOnboardingTarget(nextConfig)
+        : resolveOnboardingAgentTarget(inheritLegacyDefaultAgentId(baseConfig, nextConfig));
     let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
+    let didPersistConfig = false;
+    let daemonSetupOutcome: DaemonSetupOutcome | undefined;
+    let healthCheckOutcome: GatewayHealthCheckOutcome | undefined;
 
-    const persistConfig = async () => {
+    const persistPendingConfig = async () => {
+      if (!hasPendingConfig) {
+        return;
+      }
       nextConfig = applyWizardMetadata(nextConfig, {
         command: opts.command,
         mode: metadataMode,
@@ -623,6 +637,8 @@ export async function runConfigureWizard(
         writeOptions: configWriteOwnership,
       });
       mergeBaseConfig = structuredClone(nextConfig);
+      hasPendingConfig = false;
+      didPersistConfig = true;
       logConfigUpdated(runtime);
     };
 
@@ -665,16 +681,24 @@ export async function runConfigureWizard(
         }
       }
       const target = resolveSetupTarget();
-      const targetEntry = nextConfig.agents?.entries?.[target.agentId];
+      const authoredEntryKey = Object.keys(nextConfig.agents?.entries ?? {}).find(
+        (key) => normalizeAgentId(key) === target.agentId,
+      );
+      const targetEntry = authoredEntryKey
+        ? nextConfig.agents?.entries?.[authoredEntryKey]
+        : undefined;
+      // Explicit fleets own workspace at the selected entry even when it inherited
+      // the global default; legacy owners stay global until they author an override.
       nextConfig =
-        targetEntry?.workspace !== undefined
+        targetEntry?.workspace !== undefined ||
+        (nextConfig.agents?.ownership === "explicit" && targetEntry !== undefined)
           ? {
               ...nextConfig,
               agents: {
                 ...nextConfig.agents,
                 entries: {
                   ...nextConfig.agents?.entries,
-                  [target.agentId]: { ...targetEntry, workspace: workspaceDir },
+                  [authoredEntryKey ?? target.agentId]: { ...targetEntry, workspace: workspaceDir },
                 },
               },
             }
@@ -765,10 +789,14 @@ export async function runConfigureWizard(
         if (!didConfigureGateway) {
           await promptDaemonPort();
         }
-        await maybeInstallDaemon({ runtime, port: gatewayPort });
+        daemonSetupOutcome = await maybeInstallDaemon({ runtime, port: gatewayPort });
       },
       health: async () => {
-        await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
+        healthCheckOutcome = await runGatewayHealthCheck({
+          cfg: nextConfig,
+          runtime,
+          port: gatewayPort,
+        });
       },
     } satisfies Record<WizardSection, () => Promise<void>>;
 
@@ -791,10 +819,11 @@ export async function runConfigureWizard(
       ] as const) {
         if (selectedSections.includes(section)) {
           await sectionActions[section]();
+          hasPendingConfig = true;
         }
       }
 
-      await persistConfig();
+      await persistPendingConfig();
 
       for (const section of ["daemon", "health"] as const) {
         if (selectedSections.includes(section)) {
@@ -810,22 +839,41 @@ export async function runConfigureWizard(
           break;
         }
         ranSection = true;
+        if (choice === "daemon" || choice === "health") {
+          await persistPendingConfig();
+        }
         await sectionActions[choice]();
         if (choice !== "daemon" && choice !== "health") {
           // Interactive setup commits each section before showing another prompt.
-          await persistConfig();
+          hasPendingConfig = true;
+          await persistPendingConfig();
         }
       }
 
       if (!ranSection) {
-        if (didSetGatewayMode) {
-          await persistConfig();
+        if (hasPendingConfig) {
+          await persistPendingConfig();
           outro("Gateway mode set to local.");
           return;
         }
         outro("No configuration changes selected.");
         return;
       }
+    }
+
+    const failedSideEffects = [
+      ...(daemonSetupOutcome === "failed" ? ["daemon setup"] : []),
+      ...(healthCheckOutcome === "failed" ? ["health check"] : []),
+    ];
+    let completionMessage = didPersistConfig
+      ? "Configuration updated."
+      : "No configuration changes selected.";
+    if (failedSideEffects.length > 0) {
+      completionMessage = `${didPersistConfig ? "Configuration updated" : "Configuration unchanged"}, but ${failedSideEffects.join(" and ")} failed.`;
+    } else if (!didPersistConfig && healthCheckOutcome) {
+      completionMessage = `Health check ${healthCheckOutcome === "succeeded" ? "completed" : "skipped"}.`;
+    } else if (!didPersistConfig && daemonSetupOutcome) {
+      completionMessage = `Daemon setup ${daemonSetupOutcome === "succeeded" ? "completed" : "skipped"}.`;
     }
 
     if (shouldSkipGatewaySummary) {
@@ -838,7 +886,7 @@ export async function runConfigureWizard(
           "Gateway",
         );
       }
-      outro("Configuration updated.");
+      outro(completionMessage);
       return;
     }
 
@@ -907,7 +955,7 @@ export async function runConfigureWizard(
       "Control UI",
     );
 
-    outro("Configuration updated.");
+    outro(completionMessage);
   } catch (err) {
     if (err instanceof WizardCancelledError) {
       runtime.exit(1);

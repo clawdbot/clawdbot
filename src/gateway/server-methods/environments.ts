@@ -25,6 +25,7 @@ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-comma
 import {
   collectNodeRunnerIssuesByNodeId,
   collectNodeWorkerBundleStatusByNodeId,
+  collectNodeWorkerCapacityByNodeId,
   isNodeRunnerSessionHost,
 } from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
@@ -93,6 +94,7 @@ function summarizeNodeEnvironment(
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
     sessionHost: node.connected === true && node.sessionHost === true,
+    ...(node.workerSlots ? { workerSlots: { ...node.workerSlots } } : {}),
     ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
     ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
     ...(node.lastDisconnectedAtMs !== undefined
@@ -139,8 +141,22 @@ export function summarizeWorkerEnvironment(
 }
 async function listEnvironments(context: GatewayRequestContext): Promise<EnvironmentSummary[]> {
   const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
+  const managedCloudNodeIds = new Set(
+    listWorkerEnvironments(context).flatMap((environment) =>
+      environment.providerId !== "device" &&
+      environment.nodeDeviceId &&
+      environment.state !== "destroyed" &&
+      environment.state !== "failed" &&
+      environment.state !== "orphaned"
+        ? [environment.nodeDeviceId]
+        : [],
+    ),
+  );
+  const visibleDevices = devices.paired.filter(
+    (device) => !managedCloudNodeIds.has(device.deviceId),
+  );
   const currentPairingStates = new Map<string, { identity: string; generation?: string }>();
-  for (const device of devices.paired) {
+  for (const device of visibleDevices) {
     const state = resolveNodePairingState(device);
     if (state) {
       currentPairingStates.set(state.identity.nodeId, {
@@ -163,15 +179,20 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
     ),
   );
   const issuesByNodeId = collectNodeRunnerIssuesByNodeId(context.nodeRegistry, connectedNodes);
+  const workerSlotsByNodeId = collectNodeWorkerCapacityByNodeId(
+    context.nodeRegistry,
+    connectedNodes,
+  );
   const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
     context.nodeRegistry,
     connectedNodes,
   );
   const catalog = createKnownNodeCatalog({
-    pairedDevices: devices.paired,
-    pairedNodes: nodes.paired,
-    connectedNodes,
+    pairedDevices: visibleDevices,
+    pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
+    connectedNodes: connectedNodes.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
     sessionHostNodeIds,
+    workerSlotsByNodeId,
     workerBundleByNodeId,
     issuesByNodeId,
   });

@@ -216,19 +216,31 @@ describe("openclaw-session-link-hovercard-provider", () => {
     expect(document.querySelector(".session-link-hovercard")).toBeNull();
   });
 
-  it("does not overlay sidebar session navigation", async () => {
+  it("opens sidebar session rows beyond their trailing actions", async () => {
     const { provider, request } = createProvider({ response: previewResponse() });
+    const sidebar = document.createElement("openclaw-app-sidebar");
+    const row = document.createElement("div");
+    row.className = "sidebar-recent-session";
+    row.getBoundingClientRect = () => new DOMRect(10, 35, 230, 34);
     const anchor = document.createElement("a");
     anchor.className = "sidebar-recent-session__link";
     anchor.href = "/chat/main/research";
     anchor.textContent = "Research";
-    provider.append(anchor);
+    anchor.getBoundingClientRect = () => new DOMRect(20, 40, 160, 24);
+    row.append(anchor);
+    sidebar.append(row);
+    provider.append(sidebar);
     document.body.append(provider);
 
     await hover(anchor);
 
-    expect(document.querySelector(".session-link-hovercard")).toBeNull();
-    expect(request).not.toHaveBeenCalled();
+    const card = document.querySelector<HTMLElement>(".session-link-hovercard");
+    expect(card?.textContent).toContain("Research plan");
+    expect(card?.dataset.side).toBe("right");
+    expect(card?.style.left).toBe("250px");
+    expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", {
+      sessionKey: "agent:main:research",
+    });
   });
 
   it("resolves a short session path only from the loaded roster", async () => {
@@ -275,15 +287,36 @@ describe("openclaw-session-link-hovercard-provider", () => {
 
     resolvePreview?.(previewResponse());
     await vi.advanceTimersByTimeAsync(0);
-    expect(document.querySelector(".session-link-hovercard")?.textContent).toContain(
-      "Research plan",
-    );
+    const card = document.querySelector<HTMLElement>(".session-link-hovercard");
+    expect(card?.textContent).toContain("Research plan");
+    expect(card?.getAttribute("role")).toBe("dialog");
+    expect(anchor.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(anchor.getAttribute("aria-controls")).toBe(card?.id);
     expect(anchor.getAttribute("aria-expanded")).toBe("true");
 
     anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
     expect(document.querySelector(".session-link-hovercard")).toBeNull();
     expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+    expect(anchor.hasAttribute("aria-controls")).toBe(false);
+    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
     expect(document.activeElement).toBe(anchor);
+  });
+
+  it("keeps a pointer-opened card while its trigger gains keyboard focus", async () => {
+    const { provider } = createProvider({ response: previewResponse() });
+    const anchor = sessionAnchor();
+    provider.append(anchor);
+    document.body.append(provider);
+
+    await hover(anchor);
+    anchor.focus();
+    anchor.dispatchEvent(
+      new MouseEvent("pointerout", { bubbles: true, composed: true, relatedTarget: document.body }),
+    );
+    await vi.advanceTimersByTimeAsync(121);
+
+    expect(document.activeElement).toBe(anchor);
+    expect(document.querySelector(".session-link-hovercard")).not.toBeNull();
   });
 
   it("defers unseeded preview requests until intent across many attached anchors", async () => {

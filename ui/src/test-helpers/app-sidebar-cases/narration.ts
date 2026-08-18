@@ -69,7 +69,7 @@ describe("AppSidebar live narration", () => {
     const link = sidebar.querySelector<HTMLAnchorElement>(
       `[data-session-key="${key}"] .sidebar-recent-session__link`,
     );
-    expect(link?.title).toContain("Final verification is running.");
+    expect(link?.hasAttribute("title")).toBe(false);
     expect(link?.querySelector("[aria-live]")).toBeNull();
 
     sessions.publishList({
@@ -129,8 +129,8 @@ describe("AppSidebar live narration", () => {
     );
     expect(row?.textContent).not.toContain("Checking the remaining files.");
     expect(
-      row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")?.title,
-    ).not.toContain("Checking the remaining files.");
+      row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")?.hasAttribute("title"),
+    ).toBe(false);
   });
 
   it("keeps only the six newest running subscriptions and evicts the old boundary", async () => {

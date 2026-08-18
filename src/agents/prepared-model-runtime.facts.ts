@@ -25,7 +25,6 @@ import {
   discoverModels,
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
-import { getPreparedRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   buildInlineProviderModels,
@@ -45,6 +44,7 @@ import {
   resolvePluginModelCatalogOwnerPluginId,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
+import { loadPreparedModelRuntimeAuthStore } from "./prepared-model-runtime.auth-store.js";
 import {
   modelCatalogEntryKey,
   prepareConfiguredRuntimeFacts,
@@ -127,18 +127,7 @@ function prepareAgentFacts(
   additionalProviderIds: readonly string[] = [],
 ): PreparedModelRuntimeAgentBaseFacts {
   const env = input.env ?? process.env;
-  const publishedStore = getPreparedRuntimeAuthProfileStoreSnapshot(
-    input.agentDir,
-    input.inheritedAuthDir,
-  );
-  // Runtime-only external profiles exist only in the published auth generation. Re-reading the
-  // durable store here would erase startup hydration before this owner can carry it forward.
-  const preparedStore =
-    publishedStore &&
-    (publishedStore.runtimeExternalProfileIds !== undefined ||
-      publishedStore.runtimeExternalProfileIdsAuthoritative === true)
-      ? publishedStore
-      : undefined;
+  const preparedStore = loadPreparedModelRuntimeAuthStore(input);
   const authFacts = discoverAuthStorageFacts(input.agentDir, {
     config: input.config,
     // Prepared owners consume only the already-published runtime auth generation. External CLI

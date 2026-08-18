@@ -6,6 +6,7 @@ import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -28,6 +29,8 @@ let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
 type ConfigSnapshotStub = {
   exists: boolean;
   hash?: string;
+  issues?: Array<{ message: string; path: string }>;
+  legacyIssues?: Array<{ message: string; path: string }>;
   path?: string;
   raw?: string | null;
   valid: boolean;
@@ -1100,6 +1103,8 @@ describe("runCli exit behavior", () => {
   it("ignores service mode declared by an invalid selected config", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
+      issues: [{ message: "invalid", path: "gateway" }],
+      legacyIssues: [],
       valid: false,
       sourceConfig: {
         env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
@@ -1695,6 +1700,8 @@ describe("runCli exit behavior", () => {
     await withEnvAsync({ OPENCLAW_INCLUDE_ROOTS: undefined }, async () => {
       readConfigFileSnapshotMock.mockResolvedValue({
         exists: true,
+        issues: [{ message: "invalid", path: "gateway" }],
+        legacyIssues: [],
         valid: false,
         sourceConfig: {
           env: { vars: { OPENCLAW_INCLUDE_ROOTS: "/tmp/openclaw-includes" } },
@@ -4136,6 +4143,30 @@ describe("runCli exit behavior", () => {
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expectBoundTui({ url, token: "loopback-remote-auth" });
+  });
+
+  it("passes configured remote edge auth into the bare-root onboarding probe", async () => {
+    const url = "wss://gateway.example/ws";
+    const config: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url,
+          token: "test-token",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    primeBareRootConfig(config);
+
+    await runBareCli();
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url,
+      config,
+      token: "test-token",
+    });
+    expectBoundTui({ url, token: "test-token" });
   });
 
   it("keeps configured remote password authoritative from preflight through TUI launch", async () => {

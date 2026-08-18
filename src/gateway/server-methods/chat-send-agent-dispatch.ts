@@ -13,15 +13,13 @@ import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gatewa
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
-import {
-  discardPreparedChatSendAttachments,
-  type prepareChatSendAttachments,
-} from "./chat-send-attachments.js";
+import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
   resolveWebchatPromptCacheKey,
   scheduleChatDashboardSessionTitle,
@@ -60,6 +58,7 @@ type StartChatDispatchParams = {
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
+  toolsAllow?: string[];
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
@@ -89,6 +88,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     attachments,
     client,
     context,
+    toolsAllow,
     cronCreatorAuthority,
     externalAuthorityAdmission,
     injection,
@@ -118,7 +118,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     clientRunId,
     entry,
     expectedLeafEntryId,
-    expectedRunId,
     requestedSessionId,
     resolvedSessionModel,
     selectedAgent,
@@ -224,19 +223,18 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             messageInjectionAttempt = beginCapturedMessageInjection();
           }
           if (messageInjectionAttempt) {
-            const outcome = await messageInjectionAttempt.outcome;
-            if (outcome.status === "accepted") {
-              acceptedMessageInjection = true;
+            if (
               await finalizeAcceptedChatSendMessageInjection({
+                attempt: messageInjectionAttempt,
                 context,
                 ctx,
-                outcome,
                 persistUserTurnTranscriptBestEffort: persistGatewayUserTurnTranscriptBestEffort,
                 session,
                 startedAt: admissionStartedAt,
                 target: messageInjectionTarget!,
-                targetRunId: messageInjectionAttempt.targetRunId,
-              });
+              })
+            ) {
+              acceptedMessageInjection = true;
               return {
                 queuedFinal: false,
                 counts: { tool: 0, block: 0, final: 0 },
@@ -248,6 +246,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
+              toolsAllow,
               dispatcherOptions: replyDispatch.dispatcherOptions,
               onSessionMetadataChanges: (changes) =>
                 changes.forEach((change) => emitSessionsChanged(context, change)),
@@ -303,13 +302,19 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 fastModeOverride: p.fastMode,
                 queueModeOverride: p.queueMode,
                 userTurnTranscriptRecorder: userTurnRecorder,
-                ...((messageInjectionTarget && !isInternalTextSlashCommandTurn) ||
-                (p.queueMode === "steer" && expectedRunId !== undefined)
-                  ? { messageInjectionAttempted: true as const }
+                ...(p.queueMode === "steer"
+                  ? { messageInjectionDisposition: "rejected" as const }
                   : {}),
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId) => {
+                  if (activeRunAbort.markExecutionStarted()) {
+                    emitSessionsChanged(context, {
+                      sessionKey,
+                      agentId,
+                      reason: "chat.run.started",
+                    });
+                  }
                   agentRunStarted = replyDispatch.captureAgentTranscriptStart();
                   emitServerTiming(
                     "agent-run-started",
@@ -514,7 +519,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         // markers — so the prepared inbound media stays unreferenced forever
         // (sweep is off by default). Same custody rule as the pre-ACK owner
         // in chat-send-admission.ts: unreferenced staged media is discarded.
-        void discardPreparedChatSendAttachments(attachments.offloadedRefs);
+        void discardPreparedInboundMedia(attachments.offloadedRefs);
       }
     });
   // Title work starts at turn admission, concurrently with the launched run. It must never run

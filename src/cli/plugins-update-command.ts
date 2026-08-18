@@ -445,10 +445,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     await settlePluginInstallTransactions(deferredPluginTransactions, "rollback");
     throw error;
   }
-  const settlePluginTransactions = async (action: "commit" | "rollback") => {
-    await settlePluginInstallTransactions(deferredPluginTransactions, action);
-  };
-  let packageCommitFinalized = false;
+  let packageUpdatePersisted = false;
   try {
     if (pluginSelection.pluginIds.length > 0 && pluginResult.changed && !params.opts.dryRun) {
       const nextInstallRecords = pluginResult.config.plugins?.installs ?? {};
@@ -464,7 +461,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
         installOwnerMigrations: resolvePluginInstallOwnerMigrations(pluginResult),
       });
       if (!reconciled.ok) {
-        await settlePluginTransactions("rollback");
+        await settlePluginInstallTransactions(deferredPluginTransactions, "rollback");
         defaultRuntime.error(reconciled.error);
         return defaultRuntime.exit(1);
       }
@@ -498,11 +495,6 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           })
         : { config: pluginResult.config, changed: false, outcomes: [] };
 
-    const outcomeSummary = logPluginUpdateOutcomes({
-      outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
-      log: (message) => defaultRuntime.log(message),
-    });
-
     if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
       const sourceSnapshot = mutationSnapshot ?? (await sourceSnapshotPromise);
       if (pluginResult.changed) {
@@ -516,7 +508,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           !currentSnapshot.ok ||
           !isDeepStrictEqual([...currentSnapshot.value], [...packageUpdateSnapshot])
         ) {
-          await settlePluginTransactions("rollback");
+          await settlePluginInstallTransactions(deferredPluginTransactions, "rollback");
           defaultRuntime.error(
             currentSnapshot.ok
               ? "Plugin package ownership changed during update; no config or index changes were committed. Refresh the plugin registry and retry."
@@ -575,8 +567,10 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           writeOptions: sourceSnapshot?.writeOptions,
         });
       }
-      packageCommitFinalized = true;
-      await settlePluginTransactions("commit");
+      packageUpdatePersisted = true;
+      await settlePluginInstallTransactions(deferredPluginTransactions, "commit").catch(() =>
+        logger.warn("Plugin update committed, but cleanup failed. Restart is required."),
+      );
       if (pluginResult.changed) {
         await refreshPluginRegistryAfterConfigMutation({
           config: nextConfig,
@@ -592,12 +586,16 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
       defaultRuntime.log("Restart the gateway to load plugins and hooks.");
     }
 
+    const outcomeSummary = logPluginUpdateOutcomes({
+      outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
+      log: (message) => defaultRuntime.log(message),
+    });
     if (outcomeSummary.hasErrors) {
       defaultRuntime.exit(1);
     }
   } catch (error) {
-    if (!packageCommitFinalized) {
-      await settlePluginTransactions("rollback");
+    if (!packageUpdatePersisted) {
+      await settlePluginInstallTransactions(deferredPluginTransactions, "rollback");
     }
     throw error;
   }

@@ -551,7 +551,7 @@ describe("update-cli", () => {
   };
 
   const createTrackedTempDir = async (prefix: string) => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
     tempDirsToCleanup.add(dir);
     return dir;
   };
@@ -4717,34 +4717,6 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it.each(["11.13.0", "11.15.9"])(
-    "refuses npm %s before stopping the managed gateway or cleaning update backups",
-    async (npmVersion) => {
-      const tempDir = await createTrackedTempDir("openclaw-update-npm-policy-");
-      const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
-      const backupDir = path.join(nodeModules, ".openclaw-interrupted");
-      await fs.mkdir(backupDir, { recursive: true });
-      mockRunningManagedGateway(["node", entryPath, "gateway", "run"]);
-      mockFileBackedPathExists();
-      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
-        if (argv[0] === "npm" && argv[1] === "--version") {
-          return commandResult({ stdout: `${npmVersion}\n` });
-        }
-        if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
-          return commandResult({ stdout: `${nodeModules}\n` });
-        }
-        return commandResult();
-      });
-
-      await updateCommand({ yes: true });
-
-      expect(serviceStop).not.toHaveBeenCalled();
-      expect(packageInstallCommandCall()).toBeUndefined();
-      await expect(fs.access(backupDir)).resolves.toBeUndefined();
-      expect(getErrorOutput()).toContain(`npm ${npmVersion} cannot safely approve`);
-    },
-  );
-
   it("stops a running managed gateway before package replacement", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const processOnSpy = vi.spyOn(process, "on");
@@ -6928,32 +6900,6 @@ describe("update-cli", () => {
     expectNoSideEffects(runRestartScript, runDaemonRestart);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
-
-  it.each(["11.13.0", "11.15.9"])(
-    "refuses npm %s package-to-dev updates before checkout or install",
-    async (npmVersion) => {
-      const packageRoot = createCaseDir("openclaw-npm-transition");
-      mockPackageInstallStatus(packageRoot);
-      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
-        if (argv[0] === "npm" && argv[1] === "--version") {
-          return commandResult({ stdout: `${npmVersion}\n` });
-        }
-        if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
-          return commandResult({ stdout: `${path.dirname(packageRoot)}\n` });
-        }
-        return commandResult();
-      });
-
-      await updateCommand({ channel: "dev", yes: true, restart: false });
-
-      expect(runGatewayUpdate).not.toHaveBeenCalled();
-      expect(commandCalls().some(([argv]) => argv[0] === "git")).toBe(false);
-      expect(
-        commandCalls().some(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g"),
-      ).toBe(false);
-      expect(getErrorOutput()).toContain(`npm ${npmVersion} cannot safely approve`);
-    },
-  );
 
   it("explains why git updates cannot run with edited files", async () => {
     vi.mocked(defaultRuntime.log).mockClear();

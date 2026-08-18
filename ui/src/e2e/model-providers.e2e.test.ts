@@ -712,12 +712,15 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
       await openaiCard.getByRole("button", { name: "Replace key" }).click();
       await openaiCard.getByLabel("API key").fill(openaiInputValue);
+      // The { after } cursor waits for and returns the save-triggered patch,
+      // so a slow runner can't hand back an earlier config.patch stale.
       const patchCount = (await gateway.getRequests("config.patch")).length;
       await openaiCard.getByRole("button", { name: "Save" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(patchCount + 1);
-      const keyPatch = requestRaw(await gateway.waitForRequest("config.patch"));
+      const keyPatch = requestRaw(
+        await gateway.waitForRequest("config.patch", {
+          after: patchCount,
+        }),
+      );
       expect(keyPatch).toEqual({
         models: { providers: { openai: providerConfig(openaiInputValue) } },
       });
@@ -755,10 +758,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         })
         .getByRole("button", { name: "Save" })
         .click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(defaultPatchCount + 1);
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toEqual({
+      expect(
+        requestRaw(await gateway.waitForRequest("config.patch", { after: defaultPatchCount })),
+      ).toEqual({
         agents: {
           defaults: {
             model: "anthropic/claude-sonnet-4-5",
@@ -822,10 +824,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       const addPatchCount = (await gateway.getRequests("config.patch")).length;
       await addSection.getByRole("button", { name: "Save provider" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(addPatchCount + 1);
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toEqual({
+      expect(
+        requestRaw(await gateway.waitForRequest("config.patch", { after: addPatchCount })),
+      ).toEqual({
         models: { providers: { google: providerConfig(googleInputValue) } },
       });
       await page.locator('[data-provider-id="google"]').waitFor();

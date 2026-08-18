@@ -23,6 +23,7 @@ type WorkspaceSkillBuildOptions = {
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
   eligibility?: SkillEligibilityContext;
+  preserveEntryOrder?: boolean;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -40,6 +41,7 @@ function resolveWorkspaceSkillPromptState(
     maxSkillsInPrompt: limits?.maxSkillsInPrompt,
     maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
     remoteNote,
+    preserveOrder: opts?.preserveEntryOrder,
   });
   return { eligible, prompt, resolvedSkills, skillFilter };
 }
@@ -79,6 +81,7 @@ type ResolveSkillsPromptParams = {
   agentId?: string;
   eligibility?: SkillEligibilityContext;
   loadEntries?: () => SkillEntry[];
+  preserveEntryOrder?: boolean;
 };
 
 function buildSkillsPromptFromEntries(
@@ -93,6 +96,7 @@ function buildSkillsPromptFromEntries(
     config: params.config,
     agentId: params.agentId,
     eligibility: params.eligibility,
+    preserveEntryOrder: params.preserveEntryOrder,
   }).prompt;
   return prompt.trim() ? prompt : "";
 }

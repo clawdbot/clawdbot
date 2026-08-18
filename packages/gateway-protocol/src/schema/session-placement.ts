@@ -253,6 +253,7 @@ export const SessionMoveGatewayTargetSchema = closedObject({
 export const SessionMoveProfileTargetSchema = closedObject({
   kind: Type.Literal("profile"),
   profileId: WorkerIdentifierSchema,
+  machineClass: Type.Optional(WorkerMachineClassSchema),
 });
 
 /** Moves the session to one paired device worker. */

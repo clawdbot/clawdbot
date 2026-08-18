@@ -917,13 +917,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return { ok: this.pluginApprovalBroker.resolve(id, decision) };
   }
 
-  async listModels(): Promise<TuiModelChoice[]> {
+  async listModels(opts?: { agentId?: string }): Promise<TuiModelChoice[]> {
     const cfg = getRuntimeConfig();
     const catalog = await this.withRuntimePluginRegistry(() => loadEmbeddedTuiModelCatalog(cfg));
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,
       defaultProvider: DEFAULT_PROVIDER,
+      agentId: opts?.agentId,
     });
     const entries = allowedCatalog.length > 0 ? allowedCatalog : catalog;
     return entries.map((entry) => ({

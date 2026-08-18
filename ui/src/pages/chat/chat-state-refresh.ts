@@ -197,8 +197,8 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     }
   } catch (error) {
     if (ownsRequest()) {
-      // Keep the startup/prepared snapshot usable while making the failed
-      // discovery and its retry path visible in the open picker.
+      // Keep the startup/prepared snapshot usable while recording the failed
+      // discovery. Reopening the picker starts another uncached load.
       host.chatModelCatalogError = formatUiError(error);
     }
   } finally {
@@ -236,6 +236,7 @@ async function refreshChat(
     }
     if (areUiSessionKeysEquivalent(history.sessionInfo.key, refreshedSessionKey)) {
       host.selectedChatSessionArchived = history.sessionInfo.archived === true;
+      host.selectedChatSessionIncognito = history.sessionInfo.incognito === true;
     }
     const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,

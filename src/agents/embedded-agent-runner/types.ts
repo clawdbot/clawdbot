@@ -44,6 +44,7 @@ export type EmbeddedAgentMeta = {
   provider: string;
   model: string;
   contextTokens?: number;
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   agentHarnessId?: string;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;

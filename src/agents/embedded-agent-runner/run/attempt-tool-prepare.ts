@@ -4,6 +4,10 @@
  */
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  isCodeModeDiagnosticEnabled,
+  logCodeModeDiagnostic,
+} from "../../../logging/code-mode-diagnostic.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -105,6 +109,22 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolsAllow: attempt.toolsAllow,
     forceCodeModeControls: attempt.forceCodeModeTools,
   });
+  if (isCodeModeDiagnosticEnabled()) {
+    logCodeModeDiagnostic(log, "activation", {
+      runId: attempt.runId,
+      active: codeModeControlsEnabledForRun,
+      toolsEnabled,
+      rawRun: isRawModelRun,
+      toolsDisabled: attempt.disableTools === true,
+      fallbackActive: attempt.fallbackActive === true,
+      allowlist:
+        attempt.toolsAllow === undefined
+          ? "unset"
+          : attempt.toolsAllow.length === 0
+            ? "empty"
+            : "nonempty",
+    });
+  }
   const effectiveToolsAllow =
     toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
       ? [...new Set([...toolsAllowWithForcedRuntimeTools, ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES])]

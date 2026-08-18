@@ -258,6 +258,11 @@ describe("outbound message progress companion", () => {
     expect(
       tableExists(openOpenClawStateDatabase(database).db, "outbound_message_execution_bindings"),
     ).toBe(true);
+    // This pinned reader predates the Workshop's first-use column and requires present lazy tables
+    // to retain its exact shape; project that unrelated table to the reader's historical contract.
+    openOpenClawStateDatabase(database).db.exec(
+      "ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;",
+    );
     closeOpenClawStateDatabaseForTest();
 
     const repositoryRoot = process.cwd();
@@ -345,7 +350,9 @@ describe("outbound message progress companion", () => {
         limit: 10,
       }).events.map((event) => event.outcome),
     ).toEqual(["queued", "platform_started", "sent"]);
-  });
+    // A pinned-SHA worktree plus a cold tsx compile of the audit/state modules costs
+    // minutes on a contended runner; the 120s default makes this fail by construction.
+  }, 300_000);
 
   it("pages large offsets across bounded owner-stream chunks", () => {
     const database = databaseOptions();

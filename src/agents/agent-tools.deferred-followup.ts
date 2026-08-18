@@ -16,10 +16,14 @@ export function applyToolAvailabilityDescriptions(
   params?: { agentId?: string },
 ): AnyAgentTool[] {
   const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
+  const hasProcessTool = tools.some((tool) => tool.name === "process");
   const hasSessionsSpawnTool = tools.some((tool) => tool.name === "sessions_spawn");
   return tools.map((tool) => {
     if (tool.name === "exec") {
-      return replaceDescription(tool, describeExecTool({ agentId: params?.agentId, hasCronTool }));
+      return replaceDescription(
+        tool,
+        describeExecTool({ agentId: params?.agentId, hasCronTool, hasProcessTool }),
+      );
     }
     if (tool.name === "process") {
       return replaceDescription(tool, describeProcessTool({ hasCronTool }));

@@ -30,6 +30,7 @@ type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
 const containers: HTMLElement[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   containers.splice(0).forEach((container) => container.remove());
   Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__");
 });
@@ -118,7 +119,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
 }
 
 function mountIntegratedPresenceHeader(params: {
-  creators: NonNullable<SessionsListResult["creators"]>;
+  owners: NonNullable<SessionsListResult["owners"]>;
   presence: PresenceEntry[];
 }) {
   const client = { instanceId: "self-instance" } as unknown as GatewayBrowserClient;
@@ -126,13 +127,14 @@ function mountIntegratedPresenceHeader(params: {
   const session = row({
     key: state.sessionKey,
     createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+    owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
   });
   state.settings = {} as ChatPageHost["settings"];
   state.sessionsResult = {
     ts: 1,
     path: "",
     count: 1,
-    creators: params.creators,
+    owners: params.owners,
     defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions: [session],
   };
@@ -493,7 +495,10 @@ describe("chat pane header", () => {
   it("renders the permanent owner chip only when attribution chrome is enabled", () => {
     const shown = mount({
       showOwnerChip: true,
-      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
+      session: row({
+        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+        owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
+      }),
     });
     expect(shown.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
 
@@ -509,6 +514,7 @@ describe("chat pane header", () => {
       showOwnerChip: true,
       session: row({
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+        owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
         participants: [
           { type: "human", id: "profile-bob", label: "Bob" },
           { type: "agent", id: "research", label: "Research" },
@@ -531,36 +537,36 @@ describe("chat pane header", () => {
 
   it.each([
     {
-      name: "excludes the creator when the owner chip is shown",
-      creators: [
-        { type: "human", id: "profile-ada", label: "Ada" },
-        { type: "human", id: "profile-zoe", label: "Zoe" },
+      name: "excludes the owner when the owner chip is shown",
+      owners: [
+        { type: "human" as const, id: "profile-ada", label: "Ada" },
+        { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
       viewers: ["profile-ada", "profile-zoe"],
       expectedChip: true,
       expectedViewers: ["profile-zoe"],
     },
     {
-      name: "keeps the creator when the owner chip is hidden",
-      creators: [{ type: "human", id: "profile-ada", label: "Ada" }],
+      name: "keeps the owner when the owner chip is hidden",
+      owners: [{ type: "human" as const, id: "profile-ada", label: "Ada" }],
       viewers: ["profile-ada", "profile-zoe"],
       expectedChip: false,
       expectedViewers: ["profile-ada", "profile-zoe"],
     },
     {
       name: "omits the facepile when the shown owner is the only viewer",
-      creators: [
-        { type: "human", id: "profile-ada", label: "Ada" },
-        { type: "human", id: "profile-zoe", label: "Zoe" },
+      owners: [
+        { type: "human" as const, id: "profile-ada", label: "Ada" },
+        { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
       viewers: ["profile-ada"],
       expectedChip: true,
       expectedViewers: [],
     },
-  ])("$name", async ({ creators, viewers, expectedChip, expectedViewers }) => {
+  ])("$name", async ({ owners, viewers, expectedChip, expectedViewers }) => {
     const sessionKey = "agent:main:current";
     const { container } = mountIntegratedPresenceHeader({
-      creators,
+      owners,
       presence: viewers.map((id) => ({
         instanceId: `${id}-instance`,
         ts: 1,
@@ -587,7 +593,7 @@ describe("chat pane header", () => {
 
   it("updates the header owner vitality from live session presence", async () => {
     const sessionKey = "agent:main:current";
-    const creators = [
+    const owners = [
       { type: "human" as const, id: "profile-ada", label: "Ada" },
       { type: "human" as const, id: "profile-zoe", label: "Zoe" },
     ];
@@ -597,7 +603,7 @@ describe("chat pane header", () => {
       user: { id: "profile-zoe", name: "Zoe" },
       watchedSessions: [sessionKey],
     } satisfies PresenceEntry;
-    const mounted = mountIntegratedPresenceHeader({ creators, presence: [guest] });
+    const mounted = mountIntegratedPresenceHeader({ owners, presence: [guest] });
     const ownerChip = mounted.container.querySelector<
       HTMLElement & { updateComplete?: Promise<unknown> }
     >("openclaw-session-owner-chip");
@@ -633,6 +639,14 @@ describe("chat pane header", () => {
           id: "profile-ada",
           label: "Ada",
           avatarUrl: "/api/users/profile-ada/avatar?v=7",
+        },
+        owner: {
+          actor: {
+            type: "human",
+            id: "profile-ada",
+            label: "Ada",
+            avatarUrl: "/api/users/profile-ada/avatar?v=7",
+          },
         },
       }),
     });
@@ -856,6 +870,48 @@ describe("chat pane workspace chip icon", () => {
     expect(container.querySelector(".workspace-icon")).toBeNull();
     expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
     fetchSpy.mockRestore();
+  });
+
+  it("recovers the workspace icon after a transient route timeout", async () => {
+    vi.useFakeTimers();
+    const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        headers: new Headers({ "retry-after": "1" }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        blob: async () => png,
+      } as unknown as Response);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:recovered-workspace-icon");
+    try {
+      const { container, element } = await mountChip({
+        routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
+        authTokens: ["token"],
+        authReady: true,
+      });
+      await Promise.resolve();
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(container.querySelector(".workspace-icon")).toBeNull();
+      expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.resolve();
+      await element?.updateComplete;
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(container.querySelector("openclaw-workspace-icon")).toBe(element);
+      expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
+        "blob:recovered-workspace-icon",
+      );
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
   });
 
   it("does not refetch a missing project icon when the header rerenders", async () => {

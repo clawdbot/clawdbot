@@ -25,8 +25,8 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it("shows an unsent-draft pencil after switching sessions and removes it after clearing", async () => {
-    const firstKey = "agent:main:draft-first";
+  it("keeps the browser-local draft pencil visible on active Home beside activity", async () => {
+    const mainKey = "agent:main:main";
     const secondKey = "agent:main:draft-second";
     const context = await suite.browser.newContext({
       colorScheme: "dark",
@@ -38,45 +38,60 @@ suite.define(() => {
     await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
-          sessionRow(firstKey, "Draft first", 2),
+          sessionRow(mainKey, "Main", 2, {
+            hasActiveRun: true,
+            startedAt: 1,
+            status: "running",
+          }),
           sessionRow(secondKey, "Draft second", 1),
         ]),
       },
-      sessionKey: firstKey,
+      sessionKey: mainKey,
     });
 
     try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
-      const firstRow = page.locator(`[data-session-key="${firstKey}"]`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainKey));
+      const homeRow = page.locator(".nav-item--home");
       const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
       const composer = page.locator(
         'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > textarea',
       );
-      await firstRow.waitFor({ state: "visible", timeout: 10_000 });
+      await homeRow.waitFor({ state: "visible", timeout: 10_000 });
       await secondRow.waitFor({ state: "visible" });
       await composer.waitFor({ state: "visible" });
       await captureUiProof(page, "draft-indicator-before.png");
 
       await composer.fill("Keep this unsent");
+      const activity = homeRow.getByRole("img", { name: "Active run" });
+      const draft = homeRow.getByRole("img", { name: "Unsent draft" });
+      await activity.waitFor();
+      await draft.waitFor();
+      const activityBox = await activity.boundingBox();
+      const draftBox = await draft.boundingBox();
+      if (!activityBox || !draftBox) {
+        throw new Error("expected activity and draft icon bounds");
+      }
+      expect(draftBox.x).toBeGreaterThanOrEqual(activityBox.x + activityBox.width);
+      await captureUiProof(page, "draft-indicator-active.png");
+
       await secondRow.getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
-      await firstRow.getByRole("img", { name: "Unsent draft" }).waitFor();
-      await captureUiProof(page, "draft-indicator-after.png");
+      await draft.waitFor();
 
-      await firstRow.getByRole("link").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
-      expect(await firstRow.getByRole("img", { name: "Unsent draft" }).count()).toBe(0);
+      await homeRow.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(mainKey));
+      await draft.waitFor();
 
       await composer.fill("");
       await secondRow.getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
-      await expect.poll(() => firstRow.getByRole("img", { name: "Unsent draft" }).count()).toBe(0);
+      await expect.poll(() => draft.count()).toBe(0);
     } finally {
       await context.close();
     }
   });
 
-  it("expands child sessions inline and opens a child chat", async () => {
+  it("expands and manages child sessions inline before opening a child chat", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";
@@ -168,7 +183,7 @@ suite.define(() => {
 
       const childRows = page.locator(".sidebar-recent-session--child");
       await expect.poll(() => childRows.count()).toBe(4);
-      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(0);
+      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(4);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
       await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
 
@@ -189,6 +204,30 @@ suite.define(() => {
       }
       await captureUiProof(page, "child-sessions-expanded.png");
       await captureUiProof(page, "child-sessions-run-state-precedence.png");
+
+      const completedChild = childRows.nth(1);
+      const childMenuButton = completedChild.getByRole("button", {
+        name: "Open session menu: Verify tests",
+        exact: true,
+      });
+      await completedChild.hover();
+      await expect.poll(() => actionOpacity(childMenuButton)).toBe("1");
+      await expect.poll(() => actionPointerEvents(childMenuButton)).toBe("auto");
+      await childMenuButton.focus();
+      await page.keyboard.press("Enter");
+      const childMenu = page.getByRole("menu", { name: "Actions for Verify tests" });
+      await childMenu.waitFor({ state: "visible" });
+      await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();
+      await page.getByRole("menuitem", { name: "Rename…" }).waitFor();
+      await page.getByRole("menuitem", { name: "Set icon" }).waitFor();
+      await page.getByRole("menuitem", { name: "Fork" }).waitFor();
+      await page.getByRole("menuitem", { name: "Archive session" }).waitFor();
+      await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
+      expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);
+      expect(await page.getByRole("menuitem", { name: "Move to group" }).count()).toBe(0);
+      await captureUiProof(page, "child-session-menu.png");
+      await page.keyboard.press("Escape");
+      await childMenu.waitFor({ state: "detached" });
 
       await childRows.nth(1).getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));

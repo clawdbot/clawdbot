@@ -6,18 +6,12 @@ import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
-import {
-  listAssignableSessionOwners,
-  listSessionOwners,
-} from "../../components/session-owner-chip.ts";
+import { listAssignableSessionOwners } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
-import {
-  hasSessionPresenceViewers,
-  projectPresencePayload,
-} from "../../components/viewer-facepile.ts";
 import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasSessionPresenceViewers, projectPresencePayload } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   canArchiveSessionRow,
@@ -340,19 +334,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const selfId = sharingSnapshot.selfUser?.id;
     const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
-    const showOwnerChip =
-      (result?.creators ?? listSessionOwners(result?.sessions ?? [])).length >= 2 ||
-      (row?.participantCount ?? 0) > 0;
-    const renderedOwnerId = showOwnerChip
-      ? (row?.owner?.actor ?? row?.createdActor)?.id
-      : undefined;
+    const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
+    const renderedOwnerId = showOwnerChip ? row?.owner?.actor.id : undefined;
     const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
     const ownerViewing = presence.users.some(
       (user) => user.id === renderedOwnerId && user.watchedSessions.includes(key),
     );
     const ownerOptions = listAssignableSessionOwners({
-      sessions: result?.sessions ?? (row ? [row] : []),
-      facet: result?.creators,
+      facet: result?.owners,
       agents: this.context.agents.state.agentsList?.agents,
       self: sharingSnapshot.selfUser ?? null,
     });
@@ -476,7 +465,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .layoutActions=${layoutMenuActions}
               .ownerOptions=${ownerOptions}
               .selfOwner=${selfOwner}
-              .currentOwnerId=${(row.owner?.actor ?? row.createdActor)?.id ?? null}
+              .currentOwnerId=${row.owner?.actor.id ?? null}
               .actionDisabledReasons=${actionDisabledReasons}
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}

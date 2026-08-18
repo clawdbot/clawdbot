@@ -15,6 +15,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
+import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import {
   NODE_WORKSPACE_TRANSFER_ERROR_CODE,
   NodeWorkerWorkspaceTransferError,
@@ -62,6 +63,8 @@ function environment(): WorkerEnvironmentRecord {
     profileId: "device:node-1",
     profileSnapshot: { settings: { device: "node-1" } },
     provisionOperationId: "provision-1",
+    nodeSetupId: null,
+    nodeDeviceId: "node-1",
     sharedHost: true,
     desktop: null,
     bootstrapReceipt: { ...BUILD, installKind: "bundle" },
@@ -131,7 +134,7 @@ function transport(): NodeWorkerSupervisorTransport {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
         commands: ["system.run"],
       },
     ],
@@ -459,7 +462,7 @@ describe("node worker tunnel manager", () => {
                 ...proof,
                 workerHost: {
                   enabled: true,
-                  capacity: launchEligible ? "available" : "full",
+                  capacity: { total: 2, available: launchEligible ? 2 : 0 },
                 },
               },
             ];
@@ -509,6 +512,84 @@ describe("node worker tunnel manager", () => {
       }),
     );
     expect(outputs).toEqual([]);
+  });
+
+  it("keeps the process timeout inside the node transport deadline", async () => {
+    const record = environment();
+    const manifest = { version: 1 as const, baseCommit: null, entries: [] };
+    const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const validationOutputs = [`quiesced ${"c".repeat(32)}`, manifestRef, ""];
+    let commandTimeoutMs: number | undefined;
+    let transportTimeoutMs: number | undefined;
+    const nodeTransport = transport();
+    nodeTransport.invoke = vi.fn(async (request) => {
+      const input = request.params as NodeWorkerWorkspaceExecInput;
+      if (input.argv[0] === "slow-command") {
+        commandTimeoutMs = input.timeoutMs;
+        transportTimeoutMs = request.timeoutMs;
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({
+            workspaceDir: "/node/workspace",
+            stdout: "",
+            stderr: "",
+            code: null,
+            signal: "SIGTERM",
+            killed: true,
+            termination: "timeout",
+          }),
+        };
+      }
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({
+          workspaceDir: "/node/workspace",
+          stdout: validationOutputs.shift() ?? "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        }),
+      };
+    });
+    const transfer = workspaceTransfer();
+    transfer.prepareSync = vi.fn(async () => ({
+      snapshot: {
+        manifest,
+        manifestRef,
+        rawManifest,
+        root: "/gateway/workspace",
+      },
+      token: "restore-token",
+    }));
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: () => nodeTransport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: transfer,
+    });
+    manager.bindWorkspaceBindingResolver(async () => ({
+      localPath: "/gateway/workspace",
+      manifestRef,
+      remoteWorkspaceDir: "/node/workspace",
+    }));
+    const handle = await manager.start(startRequest());
+
+    await expect(
+      handle.runWorkspaceCommand({
+        argv: ["slow-command"],
+        timeoutMs: 60_000,
+        transportRetry: "never",
+      }),
+    ).resolves.toMatchObject({ killed: true, termination: "timeout" });
+    expect(commandTimeoutMs).toBe(60_000);
+    expect(transportTimeoutMs).toBeGreaterThan(60_000);
+    expect(transportTimeoutMs).toBeLessThanOrEqual(65_000);
+    expect(validationOutputs).toEqual([]);
   });
 
   it("preserves a typed workspace transfer cause from the node", async () => {

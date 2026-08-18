@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/index.js";
+import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -346,7 +347,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         log.debug(`experience review skipped: reason=ineligible-context session=${sessionKey}`);
         return;
       }
-      const workspaceDir = params.ctx.workspaceDir?.trim();
+      const workspaceDir = getCanonicalSkillWorkspace() ?? params.ctx.workspaceDir?.trim();
       if (!workspaceDir) {
         log.debug(`experience review skipped: reason=missing-workspace session=${sessionKey}`);
         return;
@@ -536,7 +537,7 @@ async function runSkillExperienceReviewInner(
   candidate: ExperienceReviewCandidate,
   deps: ExperienceReviewRunDeps,
 ): Promise<void> {
-  const workspaceDir = candidate.ctx.workspaceDir;
+  const workspaceDir = getCanonicalSkillWorkspace() ?? candidate.ctx.workspaceDir;
   const sessionKey = candidate.ctx.sessionKey;
   const modelProviderId = candidate.ctx.modelProviderId?.trim();
   const modelId = candidate.ctx.modelId?.trim();

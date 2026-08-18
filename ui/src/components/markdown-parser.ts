@@ -3,11 +3,7 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import {
-  formatGitHubItemReference,
-  isGitHubItemRootPath,
-  parseGitHubItemPath,
-} from "./github-link-target.ts";
+import { formatGitHubLinkLabel } from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -22,6 +18,7 @@ import {
 } from "./markdown-file-links.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
+import { installMarkdownTables } from "./markdown-tables.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
@@ -134,6 +131,7 @@ export function createMarkdownParser(): MarkdownIt {
   markdownParser.enable("strikethrough");
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
   installMarkdownDetails(markdownParser);
+  installMarkdownTables(markdownParser);
 
   // Disable fuzzy link detection to prevent bare filenames like "README.md"
   // from being auto-linked as "http://README.md". URLs with explicit protocol
@@ -518,7 +516,6 @@ export function createMarkdownParser(): MarkdownIt {
         const generatedUrlLabel = open.markup === "linkify" || open.markup === "autolink";
         const host = url.hostname.toLowerCase();
         const githubLink = host === "github.com" || host === "www.github.com";
-        const itemTarget = githubLink ? parseGitHubItemPath(url) : null;
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
@@ -540,8 +537,9 @@ export function createMarkdownParser(): MarkdownIt {
             break;
           }
         }
-        if (generatedUrlLabel && itemTarget && labelToken && isGitHubItemRootPath(url)) {
-          labelToken.content = formatGitHubItemReference(itemTarget);
+        if (generatedUrlLabel && labelToken) {
+          labelToken.content = formatGitHubLinkLabel(url);
+          open.attrSet("title", href ?? url.href);
         }
       }
     }
@@ -626,7 +624,7 @@ export function createMarkdownParser(): MarkdownIt {
       (env as Partial<MarkdownRenderEnv> | undefined)?.mode === "document",
   });
 
-  // Override fenced code blocks with copy button + JSON collapse
+  // Fenced and indented blocks share one interaction and overflow surface.
   markdownParser.renderer.rules.fence = (tokens, index, _options, env) => {
     const token = tokens[index];
     if (!token) {

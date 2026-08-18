@@ -37,7 +37,7 @@ The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done
 
 ## Format the note
 
-Markdown accepts ordinary formatting, small tables, links, and optional progress bars:
+Choose the representation that makes the current state easiest to scan: use a table for comparisons or metrics, a progress bar for one long operation, and a checklist only when the work is genuinely sequential. Omit the checklist when a table, bar, or sentence says it better, and do not repeat the same facts across the plan and Markdown. Markdown accepts ordinary formatting, links, and optional progress bars:
 
 ```md
 Tests are running.
@@ -79,3 +79,19 @@ The current chat shows exactly one live card:
 - At narrow widths where the rail is hidden, the card appears in the collapsible surface beside the composer.
 
 The two placements are mutually exclusive. Other sessions can show their latest card in the sidebar hovercard. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+
+## Pin the card to the dashboard
+
+Use the `dashboard` tool to keep the live card on the current session's dashboard:
+
+```json
+{
+  "action": "widget_put",
+  "name": "session-progress",
+  "title": "Session progress",
+  "pluginKind": "session:progress",
+  "size": "md"
+}
+```
+
+Omit `props.sessionKey` to follow the dashboard's session. To show another session's card, add `"props": { "sessionKey": "agent:main:release" }`. The current connection must participate in that session; otherwise select an accessible session or change its sharing.

@@ -99,7 +99,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   const agentId = options.agentId?.trim();
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
-  const creatorId = options.creatorId?.trim();
+  const ownerId = options.ownerId?.trim();
   if (options.involvingMe === true) {
     params.involvingMe = true;
   }
@@ -115,8 +115,8 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   if (search) {
     params.search = search;
   }
-  if (creatorId) {
-    params.creatorId = creatorId;
+  if (ownerId) {
+    params.ownerId = ownerId;
   }
   if (typeof options.offset === "number" && options.offset > 0) {
     params.offset = Math.floor(options.offset);

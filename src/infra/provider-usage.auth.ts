@@ -46,13 +46,16 @@ type UsageAuthState = {
   env: NodeJS.ProcessEnv;
   agentDir?: string;
   allowAuthProfileStore: boolean;
+  getStore?: () => AuthStore;
   store?: AuthStore;
 };
 
 function resolveUsageAuthStore(state: UsageAuthState): AuthStore {
-  state.store ??= ensureAuthProfileStore(state.agentDir, {
-    allowKeychainPrompt: false,
-  });
+  state.store ??=
+    state.getStore?.() ??
+    ensureAuthProfileStore(state.agentDir, {
+      allowKeychainPrompt: false,
+    });
   return state.store;
 }
 
@@ -477,6 +480,8 @@ function hasAuthProfileCredentialSource(params: {
 export async function resolveProviderAuths(params: {
   providers: UsageProviderId[];
   auth?: ProviderAuth[];
+  getStore?: () => AuthStore;
+  store?: AuthStore;
   agentDir?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -495,6 +500,8 @@ export async function resolveProviderAuths(params: {
   const authProfileSourceState: UsageAuthState = {
     ...stateBase,
     allowAuthProfileStore: true,
+    getStore: params.getStore,
+    store: params.store,
   };
   const hasAuthProfileStoreSource = params.skipPluginAuthWithoutCredentialSource
     ? hasAnyAuthProfileStoreSource(params.agentDir)

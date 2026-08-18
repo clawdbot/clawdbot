@@ -36,6 +36,7 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
@@ -94,6 +95,7 @@ const WORKER_LOOP_REPLAY = {
 };
 const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
 const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
+const WORKER_INFERENCE_START_TIMEOUT_MS = 90_000;
 
 type InferencePlan =
   | "text"
@@ -165,6 +167,7 @@ class FakeWorkerGateway {
   private sentLiveResync = 0;
   private unavailable = false;
   private ignoredAdmission = false;
+  private readonly inferenceStarted = createDeferred();
 
   socketPath = "";
   connectionCount = 0;
@@ -175,6 +178,14 @@ class FakeWorkerGateway {
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
   readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
   readonly applicationOrder: string[] = [];
+
+  waitForInferenceStart(): Promise<void> {
+    return withTestTimeout(
+      this.inferenceStarted.promise,
+      WORKER_INFERENCE_START_TIMEOUT_MS,
+      "worker inference start did not reach the fake Gateway",
+    );
+  }
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
     this.httpServer = createServer();
@@ -468,6 +479,7 @@ class FakeWorkerGateway {
   private handleInference(socket: WebSocket, frame: WorkerInferenceStartRequestFrame): void {
     this.methods.push(frame.method);
     this.inferenceRequests.push(structuredClone(frame.params));
+    this.inferenceStarted.resolve();
     if (this.options.silenceFirstInference && !this.droppedInference) {
       this.droppedInference = true;
       return;
@@ -1168,7 +1180,7 @@ describe("worker runtime", () => {
     const { gateway, launch } = await setup({ inferencePlans: ["hold"] });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await gateway.waitForInferenceStart();
 
     controller.abort(new Error("operator stopped worker"));
 
@@ -1187,7 +1199,7 @@ describe("worker runtime", () => {
     });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await gateway.waitForInferenceStart();
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");

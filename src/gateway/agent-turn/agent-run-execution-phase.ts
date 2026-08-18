@@ -2,6 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -44,10 +45,12 @@ import {
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
 } from "./agent-restart-recovery-context.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
+import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import {
   resolveAbortedAgentStopReason,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
+import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
 import {
   finalizePreparedAgentRunUserTurn,
   releasePreparedAgentRunUserTurn,
@@ -64,6 +67,7 @@ export function startAgentRunExecution(params: {
   resolvedSessionKey?: string;
   requestedSessionKey?: string;
   resolvedSessionId?: string;
+  storePath?: string;
   agentId?: string;
   activeSessionAgentId: string;
   delivery: AgentDeliveryPhaseResult;
@@ -207,6 +211,12 @@ export function startAgentRunExecution(params: {
         runId: params.runId,
         sessionEntry: params.sessionEntry,
       });
+      const agentRuntimeIdentity = params.client?.internal?.agentRuntimeIdentity;
+      const executionIdentitySpawnFacts =
+        agentRuntimeIdentity &&
+        params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true
+          ? resolveExecutionIdentitySpawnFacts(agentRuntimeIdentity)
+          : undefined;
       const restartRecoveryChannelContext = resolveAgentRestartRecoveryChannelContext({
         canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
         expectedExistingSessionId: params.request.expectedExistingSessionId,
@@ -239,152 +249,177 @@ export function startAgentRunExecution(params: {
         attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
       }
       finalizePreparedAgentRunUserTurn(prepared.userTurn);
-      dispatchAgentRunFromGateway({
-        cronCreatorAuthority: prepared.cronCreatorAuthority,
-        ingressOpts: {
-          message,
-          images: params.images,
-          imageOrder: params.imageOrder,
-          media: params.media,
-          agentId: ingressAgentId,
-          provider: prepared.effectiveProviderOverride,
-          model: prepared.effectiveModelOverride,
-          to: params.delivery.resolvedTo,
-          sessionId: params.resolvedSessionId,
-          sessionKey: params.resolvedSessionKey,
-          thinking: prepared.effectiveThinking,
-          deliver: params.delivery.deliver,
-          deliveryTargetMode: params.delivery.deliveryTargetMode,
-          channel: params.delivery.resolvedChannel,
-          accountId: params.delivery.resolvedAccountId,
-          threadId: prepared.resolvedThreadId,
-          runContext,
-          ...(prepared.userTurn.bashElevated
-            ? { bashElevated: prepared.userTurn.bashElevated }
-            : {}),
-          ...(execApprovalContinuationPromptRange ? { execApprovalContinuationPromptRange } : {}),
-          ...(execApprovalContinuationTranscriptPromptRange
-            ? { execApprovalContinuationTranscriptPromptRange }
-            : {}),
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          spawnedBy: params.spawnedBy,
-          timeout: params.request.timeout?.toString(),
-          bestEffortDeliver: params.bestEffortDeliver,
-          messageChannel: params.delivery.originMessageChannel,
-          runId: params.runId,
-          lane: params.request.lane,
-          modelRun: params.request.modelRun === true,
-          promptMode: params.request.promptMode,
-          extraSystemPrompt: params.request.extraSystemPrompt,
-          bootstrapContextMode: params.request.bootstrapContextMode,
-          bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-          toolsAllow: params.restoredCronContinuation?.toolsAllow,
-          runtimePluginToolGrant,
-          trustedInternalHandoff: prepared.trustedInternalHandoff,
-          toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
-          scheduledToolPolicy: params.restoredCronContinuation
-            ? resolveScheduledToolPolicyContext({
-                toolsAllow: params.restoredCronContinuation.toolsAllow,
-                scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
-                callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
-              })
-            : undefined,
-          requireExplicitMessageTarget:
-            params.restoredCronContinuation?.cliSessionBindingFacts?.requireExplicitMessageTarget,
-          cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
-          acpTurnSource: params.request.acpTurnSource,
-          internalEvents: params.request.internalEvents,
-          inputProvenance: params.inputProvenance,
-          senderIsOwner,
-          sessionEffects: params.sessionEffects,
-          skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
-          preserveUserFacingSessionModelState:
-            params.preserveUserFacingSessionModelState && !params.restoredCronContinuation,
-          sourceReplyDeliveryMode: params.restoredCronContinuation
-            ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
-            : params.request.sourceReplyDeliveryMode,
-          disableMessageTool: params.request.disableMessageTool,
-          swarmCollector: params.request.swarmCollector,
-          swarmOutputSchema: params.request.swarmOutputSchema,
-          forceRestartSafeTools: params.request.forceRestartSafeTools,
-          forceCodeModeTools: params.request.forceCodeModeTools,
-          ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
-          operationalRunInstance: prepared.operationalRunInstance,
-          onAdmittedRunContext: (admittedRunContext) => {
-            const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
-            if (!authority) {
-              throw new Error("agent run delegated authority was not admitted");
-            }
-            // Sessionless runs intentionally have no abort-map owner. Their
-            // prepared admission retains authority until agentCommand closes it.
-            if (prepared.activeRunAbort.registered) {
-              prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
-            }
-          },
-          internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
-          internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
-          suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
-          userTurnTranscriptRecorder,
-          cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
-          abortSignal: prepared.activeRunAbort.controller.signal,
-          lifecycleGeneration: params.lifecycleGeneration,
-          onExecutionStarted: () => prepared.activeRunAbort.markExecutionStarted(),
-          onActiveModelSelected: createAgentRunModelSelectionHandler({
-            context: params.context,
+      dispatchAgentRunFromGateway(
+        withAgentRunDispatchExecutionIdentity(
+          {
+            cronCreatorAuthority: prepared.cronCreatorAuthority,
+            ingressOpts: {
+              message,
+              images: params.images,
+              imageOrder: params.imageOrder,
+              media: params.media,
+              agentId: ingressAgentId,
+              provider: prepared.effectiveProviderOverride,
+              model: prepared.effectiveModelOverride,
+              to: params.delivery.resolvedTo,
+              sessionId: params.resolvedSessionId,
+              sessionKey: params.resolvedSessionKey,
+              thinking: prepared.effectiveThinking,
+              deliver: params.delivery.deliver,
+              deliveryTargetMode: params.delivery.deliveryTargetMode,
+              channel: params.delivery.resolvedChannel,
+              accountId: params.delivery.resolvedAccountId,
+              threadId: prepared.resolvedThreadId,
+              runContext,
+              ...(prepared.userTurn.bashElevated
+                ? { bashElevated: prepared.userTurn.bashElevated }
+                : {}),
+              ...(execApprovalContinuationPromptRange
+                ? { execApprovalContinuationPromptRange }
+                : {}),
+              ...(execApprovalContinuationTranscriptPromptRange
+                ? { execApprovalContinuationTranscriptPromptRange }
+                : {}),
+              groupId: params.groupId,
+              groupChannel: params.groupChannel,
+              groupSpace: params.groupSpace,
+              spawnedBy: params.spawnedBy,
+              timeout: params.request.timeout?.toString(),
+              bestEffortDeliver: params.bestEffortDeliver,
+              messageChannel: params.delivery.originMessageChannel,
+              runId: params.runId,
+              lane: params.request.lane,
+              modelRun: params.request.modelRun === true,
+              promptMode: params.request.promptMode,
+              extraSystemPrompt: params.request.extraSystemPrompt,
+              gitCoauthorAttribution: prepareGitCoauthorAttribution({
+                agentId: params.activeSessionAgentId,
+                config: params.cfgForAgent ?? params.cfg,
+                currentProfileId: params.client?.authenticatedUserProfile?.profileId,
+                sessionKey: params.resolvedSessionKey,
+                storePath: params.storePath,
+              }),
+              bootstrapContextMode: params.request.bootstrapContextMode,
+              bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
+              toolsAllow: params.restoredCronContinuation?.toolsAllow,
+              runtimePluginToolGrant,
+              trustedInternalHandoff: prepared.trustedInternalHandoff,
+              toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
+              scheduledToolPolicy: params.restoredCronContinuation
+                ? resolveScheduledToolPolicyContext({
+                    toolsAllow: params.restoredCronContinuation.toolsAllow,
+                    scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
+                    callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
+                  })
+                : undefined,
+              requireExplicitMessageTarget:
+                params.restoredCronContinuation?.cliSessionBindingFacts
+                  ?.requireExplicitMessageTarget,
+              cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
+              acpTurnSource: params.request.acpTurnSource,
+              internalEvents: params.request.internalEvents,
+              inputProvenance: params.inputProvenance,
+              senderIsOwner,
+              sessionEffects: params.sessionEffects,
+              skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
+              preserveUserFacingSessionModelState:
+                params.preserveUserFacingSessionModelState && !params.restoredCronContinuation,
+              sourceReplyDeliveryMode: params.restoredCronContinuation
+                ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
+                : params.request.sourceReplyDeliveryMode,
+              disableMessageTool: params.request.disableMessageTool,
+              swarmCollector: params.request.swarmCollector,
+              swarmOutputSchema: params.request.swarmOutputSchema,
+              forceRestartSafeTools: params.request.forceRestartSafeTools,
+              forceCodeModeTools: params.request.forceCodeModeTools,
+              ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
+              operationalRunInstance: prepared.operationalRunInstance,
+              onAdmittedRunContext: (admittedRunContext) => {
+                const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+                if (!authority) {
+                  throw new Error("agent run delegated authority was not admitted");
+                }
+                // Sessionless runs intentionally have no abort-map owner. Their
+                // prepared admission retains authority until agentCommand closes it.
+                if (prepared.activeRunAbort.registered) {
+                  prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
+                }
+              },
+              internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
+              internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
+              suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
+              userTurnTranscriptRecorder,
+              cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
+              abortSignal: prepared.activeRunAbort.controller.signal,
+              lifecycleGeneration: params.lifecycleGeneration,
+              onExecutionStarted: () => {
+                if (prepared.activeRunAbort.markExecutionStarted() && params.resolvedSessionKey) {
+                  emitSessionsChanged(params.context, {
+                    sessionKey: params.resolvedSessionKey,
+                    agentId: params.agentId,
+                    reason: "agent.run.started",
+                  });
+                }
+              },
+              onActiveModelSelected: createAgentRunModelSelectionHandler({
+                context: params.context,
+                runId: params.runId,
+                cfg: params.cfg,
+                cfgForAgent: params.cfgForAgent,
+                restoredCronContinuationLifecycleRevision:
+                  prepared.restoredCronContinuationLifecycleRevision,
+                resolvedSessionKey: params.resolvedSessionKey,
+                lifecycleStorePath: prepared.lifecycleStorePath,
+                activeSessionAgentId: params.activeSessionAgentId,
+                trustedInternalHandoff: prepared.trustedInternalHandoff,
+              }),
+              onSessionIdChanged: (sessionId) => {
+                if (prepared.activeRunAbort.entry) {
+                  prepared.activeRunAbort.entry.sessionId = sessionId;
+                }
+              },
+              workspaceDir: resolveIngressWorkspaceOverrideForSessionRun({
+                spawnedBy: params.spawnedBy,
+                workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
+                cwd: params.sessionEntry?.spawnedCwd,
+              }),
+              cwd: resolveSessionRuntimeCwd({
+                requestedCwd: params.request.cwd,
+                sessionEntry: params.sessionEntry,
+              }),
+              allowGatewaySubagentBinding: true,
+              ...(params.mainRestartRecoveryOwnerLease
+                ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
+                : {}),
+              ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
+              ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
+                ? {
+                    mainRestartRecoveryAttempt:
+                      params.request.internalExecutionIdentityRecoveryAttempt,
+                  }
+                : {}),
+              allowModelOverride: prepared.effectiveAllowModelOverride,
+            },
             runId: params.runId,
-            cfg: params.cfg,
-            cfgForAgent: params.cfgForAgent,
-            restoredCronContinuationLifecycleRevision:
-              prepared.restoredCronContinuationLifecycleRevision,
-            resolvedSessionKey: params.resolvedSessionKey,
-            lifecycleStorePath: prepared.lifecycleStorePath,
-            activeSessionAgentId: params.activeSessionAgentId,
-            trustedInternalHandoff: prepared.trustedInternalHandoff,
-          }),
-          onSessionIdChanged: (sessionId) => {
-            if (prepared.activeRunAbort.entry) {
-              prepared.activeRunAbort.entry.sessionId = sessionId;
-            }
+            dedupeKeys: params.agentDedupeKeys,
+            abortController: prepared.activeRunAbort.controller,
+            cleanupAbortController: cleanupAdmittedRun,
+            onSettled: params.restoredCronContinuation
+              ? async ({ terminalOutcome, onRecovered }) =>
+                  await params.releaseCronContinuationClaimWithRecovery(
+                    { terminalOutcome },
+                    onRecovered,
+                  )
+              : undefined,
+            io: params.io,
+            context: params.context,
+            taskTrackingMode: prepared.dispatchTaskTrackingMode,
+            restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
+            canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
           },
-          workspaceDir: resolveIngressWorkspaceOverrideForSessionRun({
-            spawnedBy: params.spawnedBy,
-            workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
-            cwd: params.sessionEntry?.spawnedCwd,
-          }),
-          cwd: resolveSessionRuntimeCwd({
-            requestedCwd: params.request.cwd,
-            sessionEntry: params.sessionEntry,
-          }),
-          allowGatewaySubagentBinding: true,
-          ...(params.mainRestartRecoveryOwnerLease
-            ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
-            : {}),
-          ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
-          ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
-            ? {
-                mainRestartRecoveryAttempt: params.request.internalExecutionIdentityRecoveryAttempt,
-              }
-            : {}),
-          allowModelOverride: prepared.effectiveAllowModelOverride,
-        },
-        runId: params.runId,
-        dedupeKeys: params.agentDedupeKeys,
-        abortController: prepared.activeRunAbort.controller,
-        cleanupAbortController: cleanupAdmittedRun,
-        onSettled: params.restoredCronContinuation
-          ? async ({ terminalOutcome, onRecovered }) =>
-              await params.releaseCronContinuationClaimWithRecovery(
-                { terminalOutcome },
-                onRecovered,
-              )
-          : undefined,
-        io: params.io,
-        context: params.context,
-        taskTrackingMode: prepared.dispatchTaskTrackingMode,
-        restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
-      });
+          executionIdentitySpawnFacts,
+        ),
+      );
       dispatched = true;
     } catch (err) {
       const renderedErr = formatErrorMessageWithCode(err);

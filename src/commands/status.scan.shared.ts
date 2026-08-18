@@ -310,6 +310,7 @@ export async function resolveGatewayProbeSnapshot(params: {
         .then(({ probeGateway }) =>
           probeGateway({
             url: gatewayConnection.url,
+            config: params.cfg,
             auth: gatewayProbeAuthResolution.auth,
             timeoutMs: probeTimeoutMs,
             detailLevel: params.opts.detailLevel ?? "presence",

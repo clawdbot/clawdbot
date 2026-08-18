@@ -3676,8 +3676,8 @@
       ]
     },
     {
-      "id": "native.android.4a28face60d58157",
-      "source": "Collapse plan checklist",
+      "id": "native.android.21dc666555b12fc1",
+      "source": "Collapse progress card",
       "surface": "android",
       "sites": [
         {
@@ -6432,8 +6432,8 @@
       ]
     },
     {
-      "id": "native.android.ea6215eb594513da",
-      "source": "Expand plan checklist",
+      "id": "native.android.9670906a534e5a6a",
+      "source": "Expand progress card",
       "surface": "android",
       "sites": [
         {
@@ -12595,6 +12595,17 @@
       ]
     },
     {
+      "id": "native.android.44b8d8ffa2ef3c89",
+      "source": "Progress note",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
+        }
+      ]
+    },
+    {
       "id": "native.android.088ff5176727fefe",
       "source": "Promoted",
       "surface": "android",
@@ -12886,6 +12897,10 @@
       "source": "Queued",
       "surface": "android",
       "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarComponents.kt"
+        },
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt"
@@ -18586,6 +18601,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.565f13278080f6c3",
+      "source": "Waiting for a concurrency slot",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
         }
       ]
     },
@@ -24455,7 +24481,7 @@
       "sites": [
         {
           "kind": "conditional-branch",
-          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatPlanPill.swift"
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatProgressCard.swift"
         }
       ]
     },
@@ -29103,7 +29129,7 @@
       "sites": [
         {
           "kind": "conditional-branch",
-          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatPlanPill.swift"
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatProgressCard.swift"
         }
       ]
     },
@@ -39394,6 +39420,10 @@
         },
         {
           "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift"
+        },
+        {
+          "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Swarm.swift"
         }
       ]
@@ -47327,6 +47357,17 @@
       ]
     },
     {
+      "id": "native.apple.f909e3670ef8f380",
+      "source": "Thread queued",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.745fd928bca281ed",
       "source": "Thread running",
       "surface": "apple",
@@ -49095,6 +49136,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayDiscoveryStatusText.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.941cd659e4ed6f94",
+      "source": "Waiting for a concurrency slot",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarModel.swift"
         }
       ]
     },

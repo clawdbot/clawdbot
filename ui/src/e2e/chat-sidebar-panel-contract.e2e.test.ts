@@ -41,6 +41,8 @@ const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
   "Review",
   // Tasks: no background tasks, nothing to inspect.
   "Tasks",
+  // Discussion: no external URL, nothing to open.
+  "Discussion",
 ]);
 
 function coldOpenScenario(): ControlUiMockGatewayScenario {
@@ -67,7 +69,6 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       },
       "environments.list": { environments: [] },
       "session.discussion.info": {
-        openUrl: "https://discussion.example/session",
         state: "open",
       },
       "sessions.files.list": {
@@ -282,7 +283,7 @@ suite.define(() => {
   it("preserves the production header-action shapes for Side chat and Discussion", async () => {
     const context = await suite.newBrowserContext({ serviceWorkers: "block" });
     const page = await context.newPage();
-    const choices = await openColdSidebar(page);
+    const choices = await openColdSidebar(page, populatedColdOpenScenario());
 
     await choices.filter({ hasText: "Side chat" }).click();
     const contentActions = page.locator(".side-panel__action-group--content");
@@ -290,6 +291,83 @@ suite.define(() => {
     await companionMenu.waitFor();
     expect(await companionMenu.count()).toBe(1);
     expect(await contentActions.locator(":scope > button").count()).toBe(0);
+
+    const tab = page.locator(".side-panel__header .tabstrip-tab[active]");
+    for (const direction of ["ltr", "rtl"] as const) {
+      const tabPadding = await tab.evaluate((node, dir) => {
+        const panel = node.closest(".side-panel");
+        if (!(panel instanceof HTMLElement)) {
+          throw new Error("Active side-panel tab must render inside the side panel");
+        }
+        panel.dir = dir;
+        const tabBase = node.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
+        const leadingGlyph = node.querySelector<HTMLElement>(".tabstrip-tab__icon svg");
+        const label = node.querySelector<HTMLElement>(".tabstrip-tab__label");
+        const labelClipper = node.querySelector<HTMLElement>(".tabstrip-tab__tooltip-trigger");
+        const close = node.nextElementSibling;
+        const trailingGlyph = close?.querySelector<HTMLElement>("svg");
+        if (
+          !(close instanceof HTMLElement) ||
+          !tabBase ||
+          !leadingGlyph ||
+          !label ||
+          !labelClipper ||
+          !trailingGlyph
+        ) {
+          throw new Error("Active side-panel tab must render its label and both edge glyphs");
+        }
+        const tabBounds = tabBase.getBoundingClientRect();
+        const closeBounds = close.getBoundingClientRect();
+        const leadingBounds = leadingGlyph.getBoundingClientRect();
+        const labelBounds = label.getBoundingClientRect();
+        const labelClipperBounds = labelClipper.getBoundingClientRect();
+        const trailingBounds = trailingGlyph.getBoundingClientRect();
+        const rtl = dir === "rtl";
+        const tabStyle = getComputedStyle(tabBase);
+        const closeStyle = getComputedStyle(close);
+        return {
+          leading: rtl
+            ? tabBounds.right - leadingBounds.right
+            : leadingBounds.left - tabBounds.left,
+          trailing: rtl
+            ? trailingBounds.left - closeBounds.left
+            : closeBounds.right - trailingBounds.right,
+          labelBlockStartInset: labelBounds.top - labelClipperBounds.top,
+          labelBlockEndInset: labelClipperBounds.bottom - labelBounds.bottom,
+          tabOuterRadius: Number.parseFloat(
+            rtl ? tabStyle.borderTopRightRadius : tabStyle.borderTopLeftRadius,
+          ),
+          tabJoinRadius: Number.parseFloat(
+            rtl ? tabStyle.borderTopLeftRadius : tabStyle.borderTopRightRadius,
+          ),
+          closeJoinRadius: Number.parseFloat(
+            rtl ? closeStyle.borderTopRightRadius : closeStyle.borderTopLeftRadius,
+          ),
+          closeOuterRadius: Number.parseFloat(
+            rtl ? closeStyle.borderTopLeftRadius : closeStyle.borderTopRightRadius,
+          ),
+        };
+      }, direction);
+      expect(tabPadding.trailing, `${direction} glyph insets`).toBeCloseTo(tabPadding.leading, 0);
+      expect(
+        tabPadding.labelBlockStartInset,
+        `${direction} label block-start containment`,
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        tabPadding.labelBlockEndInset,
+        `${direction} label block-end containment`,
+      ).toBeGreaterThanOrEqual(0);
+      expect(tabPadding.tabJoinRadius, `${direction} tab join`).toBe(0);
+      expect(tabPadding.closeJoinRadius, `${direction} close join`).toBe(0);
+      expect(tabPadding.tabOuterRadius, `${direction} tab outer`).toBeGreaterThan(0);
+      expect(tabPadding.closeOuterRadius, `${direction} close outer`).toBeGreaterThan(0);
+    }
+    await tab.evaluate((node) => {
+      const panel = node.closest(".side-panel");
+      if (panel instanceof HTMLElement) {
+        panel.removeAttribute("dir");
+      }
+    });
 
     await page.locator(".side-panel-type-menu__trigger").click();
     await page.locator(".side-panel-type-menu__item").filter({ hasText: "Discussion" }).click();

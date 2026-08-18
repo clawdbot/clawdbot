@@ -59,6 +59,7 @@ import {
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import {
   buildSystemAgentChatResult,
+  buildSystemAgentRejoinResult,
   getSystemAgentChatInputError,
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
@@ -535,10 +536,14 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         const boundSession = sessions.get(sessionId);
         if (boundSession && boundSession.ownerKey !== ownerKey) {
+          // Structured invalidation details let clients with a persisted id mint a
+          // fresh one instead of retry-looping against the foreign live session.
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw session belongs to another caller."),
+            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw session belongs to another caller.", {
+              details: buildSystemAgentSessionInvalidatedErrorDetails(),
+            }),
           );
           return;
         }
@@ -683,12 +688,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         ) {
           respond(
             true,
-            {
+            buildSystemAgentRejoinResult({
               sessionId,
-              reply: session.welcome,
-              action: "none",
-              ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
-            },
+              welcome: session.welcome,
+              ...(session.welcomeQuestion ? { welcomeQuestion: session.welcomeQuestion } : {}),
+              engine: session.engine,
+            }),
             undefined,
           );
           acknowledgeDeliveredSystemAgentWelcome(session);

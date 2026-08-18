@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -30,7 +31,9 @@ const mocks = vi.hoisted(() => ({
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
   fakeRuntimeWorkerHosting: false,
-  runnerAvailabilityChanged: undefined as ((available: boolean) => void) | undefined,
+  runnerCapacityChanged: undefined as
+    | ((capacity: { total: number; available: number }) => void)
+    | undefined,
   nodeHostCommands: [] as string[],
   nodeHostCaps: [] as string[],
   availabilityOnWatch: undefined as { caps: string[]; commands: string[] } | undefined,
@@ -51,17 +54,13 @@ const mocks = vi.hoisted(() => ({
       gateway: params.gateway,
     };
   }),
-  getRuntimeConfig: vi.fn(() => ({
-    gateway: {
-      handshakeTimeoutMs: 1_000,
-    },
-  })),
+  getRuntimeConfig: vi.fn<() => unknown>(() => ({ gateway: { handshakeTimeoutMs: 1_000 } })),
   startGatewayClientWhenEventLoopReady: vi.fn(async () => ({
     ready: false,
     aborted: false,
     elapsedMs: 0,
   })),
-  resolveGatewayCredentialsWithSecretInputs: vi.fn(async () => ({})),
+  resolveGatewayCredentialsWithSecretInputs: vi.fn(async (_params: { config: unknown }) => ({})),
   activeRuntime: {
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
@@ -199,7 +198,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
         initialInventory: { skills: [], pluginTools: [] },
         start: (params) => {
           mocks.runtimeClient = params.client;
-          mocks.runnerAvailabilityChanged = params.onRunnerAvailabilityChanged;
+          mocks.runnerCapacityChanged = params.onRunnerCapacityChanged;
           return mocks.activeRuntime;
         },
       };
@@ -232,7 +231,7 @@ describe("runNodeHost", () => {
     mocks.runtimeSteps = [];
     mocks.useFakeRuntime = false;
     mocks.fakeRuntimeWorkerHosting = false;
-    mocks.runnerAvailabilityChanged = undefined;
+    mocks.runnerCapacityChanged = undefined;
     mocks.nodeHostCommands = [];
     mocks.nodeHostCaps = [];
     mocks.availabilityOnWatch = undefined;
@@ -435,10 +434,13 @@ describe("runNodeHost", () => {
     const config = {
       gateway: {
         mode: "local",
-        handshakeTimeoutMs: 1_000,
         remote: { token: "remote-token", password: "remote-password" },
       },
     };
+    setConfigResolutionFacts(
+      config,
+      new Set(["gateway.auth.token", "gateway.remote.token", "gateway.remote.password"]),
+    );
     mocks.getRuntimeConfig.mockReturnValue(config);
 
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
@@ -449,7 +451,6 @@ describe("runNodeHost", () => {
       config: {
         gateway: {
           mode: "local",
-          handshakeTimeoutMs: 1_000,
           remote: { token: undefined, password: undefined },
         },
       },
@@ -458,6 +459,9 @@ describe("runNodeHost", () => {
       remoteTokenPrecedence: "env-first",
       remotePasswordPrecedence: "env-first",
     });
+    const resolvedConfig =
+      mocks.resolveGatewayCredentialsWithSecretInputs.mock.calls[0]?.[0].config;
+    expect(getConfigResolutionFacts(resolvedConfig)).toEqual(new Set(["gateway.auth.token"]));
     expect(config.gateway.remote).toEqual({
       token: "remote-token",
       password: "remote-password",
@@ -704,13 +708,13 @@ describe("runNodeHost", () => {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
       workerHost: {
         enabled: true,
-        capacity: "available",
+        capacity: { total: 2, available: 2 },
         bundlePrewarm: 1,
       },
     });
   });
 
-  it("withdraws and restores worker launch eligibility without reconnecting", async () => {
+  it("publishes each exact worker slot transition without reconnecting", async () => {
     mocks.useFakeRuntime = true;
     mocks.fakeRuntimeWorkerHosting = true;
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
@@ -720,7 +724,7 @@ describe("runNodeHost", () => {
     const client = mocks.capturedGatewayClients[0];
     expect(options?.workerRuns).toBeUndefined();
 
-    mocks.runnerAvailabilityChanged?.(true);
+    mocks.runnerCapacityChanged?.({ total: 2, available: 2 });
     options?.onHelloOk?.({
       protocol: 4,
       features: {
@@ -734,7 +738,7 @@ describe("runNodeHost", () => {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: {
           enabled: true,
-          capacity: "available",
+          capacity: { total: 2, available: 2 },
           bundlePrewarm: 1,
           bundleRetention: 1,
         },
@@ -757,7 +761,7 @@ describe("runNodeHost", () => {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: {
           enabled: true,
-          capacity: "available",
+          capacity: { total: 2, available: 2 },
           bundlePrewarm: 1,
           bundleRetention: 1,
           bundleStatus: 1,
@@ -765,33 +769,24 @@ describe("runNodeHost", () => {
       });
     });
 
-    mocks.runnerAvailabilityChanged?.(false);
-    await vi.waitFor(() => {
-      expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
-          enabled: true,
-          capacity: "full",
-          bundlePrewarm: 1,
-          bundleRetention: 1,
-          bundleStatus: 1,
-        },
+    const expectPublishedSlots = async (available: number) => {
+      mocks.runnerCapacityChanged?.({ total: 2, available });
+      await vi.waitFor(() => {
+        expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: {
+            enabled: true,
+            capacity: { total: 2, available },
+            bundlePrewarm: 1,
+            bundleRetention: 1,
+            bundleStatus: 1,
+          },
+        });
       });
-    });
-
-    mocks.runnerAvailabilityChanged?.(true);
-    await vi.waitFor(() => {
-      expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
-          enabled: true,
-          capacity: "available",
-          bundlePrewarm: 1,
-          bundleRetention: 1,
-          bundleStatus: 1,
-        },
-      });
-    });
+    };
+    for (const available of [1, 0, 2]) {
+      await expectPublishedSlots(available);
+    }
     expect(client?.updateNodeManifest).not.toHaveBeenCalled();
   });
 

@@ -37,6 +37,7 @@ import {
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
+  agentTerminalOwner,
   baseOpenRequest,
   makeFakePty,
   taskAgentOwner,
@@ -170,7 +171,7 @@ function createParams(): SubscriptionParams {
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     chatAbortControllers: new Map(),
     restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeAgentSessions: vi.fn() },
+    terminalSessions: { closeTaskSessions: vi.fn() },
   };
 }
 
@@ -652,10 +653,10 @@ describe("startGatewayEventSubscriptions", () => {
   it.each(["succeeded", "failed", "cancelled", "timed_out", "lost"] as const)(
     "closes task-run terminals exactly once for a %s transition",
     async (status) => {
-      const closeAgentSessions = vi.fn(() => 1);
+      const closeTaskSessions = vi.fn(() => 1);
       unsubs = startGatewayEventSubscriptions({
         ...createParams(),
-        terminalSessions: { closeAgentSessions },
+        terminalSessions: { closeTaskSessions },
       });
       await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
 
@@ -687,8 +688,8 @@ describe("startGatewayEventSubscriptions", () => {
       terminalize();
       terminalize();
 
-      expect(closeAgentSessions).toHaveBeenCalledOnce();
-      expect(closeAgentSessions).toHaveBeenCalledWith(task.taskId);
+      expect(closeTaskSessions).toHaveBeenCalledOnce();
+      expect(closeTaskSessions).toHaveBeenCalledWith(task.taskId);
     },
   );
 
@@ -728,9 +729,8 @@ describe("startGatewayEventSubscriptions", () => {
         owner: taskAgentOwner(runSessionKey, task.taskId),
       }),
     );
-    const persistentOpen = await manager.open(
-      baseOpenRequest({ owner: { kind: "agent", agentSessionKey: "agent:main:main" } }),
-    );
+    const persistentOwner = agentTerminalOwner("agent:main:main");
+    const persistentOpen = await manager.open(baseOpenRequest({ owner: persistentOwner }));
     if (!taskOpen.ok || !persistentOpen.ok) {
       throw new Error("expected terminal sessions");
     }
@@ -745,12 +745,12 @@ describe("startGatewayEventSubscriptions", () => {
     expect(taskPty.killed).toBe(true);
     expect(persistentPty.killed).toBe(false);
     expect(manager.size).toBe(1);
-    expect(manager.listAgent("agent:main:main")).toHaveLength(1);
+    expect(manager.listAgent(persistentOwner)).toHaveLength(1);
   });
 
   it("closes task-run terminals only after the authoritative task becomes terminal", async () => {
     const events: string[] = [];
-    const closeAgentSessions = vi.fn((taskId: string) => {
+    const closeTaskSessions = vi.fn((taskId: string) => {
       events.push(`terminal:${taskId}`);
       return 1;
     });
@@ -763,7 +763,7 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs = startGatewayEventSubscriptions({
       ...createParams(),
       broadcast,
-      terminalSessions: { closeAgentSessions },
+      terminalSessions: { closeTaskSessions },
     });
     await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
 
@@ -782,17 +782,17 @@ describe("startGatewayEventSubscriptions", () => {
     if (!task) {
       throw new Error("expected task record");
     }
-    expect(closeAgentSessions).not.toHaveBeenCalled();
+    expect(closeTaskSessions).not.toHaveBeenCalled();
     expect(events).toEqual(["task:running"]);
 
     markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_000 });
-    expect(closeAgentSessions).toHaveBeenCalledOnce();
-    expect(closeAgentSessions).toHaveBeenCalledWith(task.taskId);
+    expect(closeTaskSessions).toHaveBeenCalledOnce();
+    expect(closeTaskSessions).toHaveBeenCalledWith(task.taskId);
     expect(events).toEqual(["task:running", "task:completed", `terminal:${task.taskId}`]);
 
     // Later terminal-row updates cannot close terminals opened by a newer owner.
     markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_001 });
-    expect(closeAgentSessions).toHaveBeenCalledOnce();
+    expect(closeTaskSessions).toHaveBeenCalledOnce();
   });
 
   it("keeps a replacement gateway's task observer when a stale unsub runs late", async () => {

@@ -1,7 +1,12 @@
 // Auth choice tests cover auth choice application, provider config, and credential prompts.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  createAuthTestLifecycle,
+  createExitThrowingRuntime,
+  createWizardPrompter,
+  setupAuthTestEnv,
+} from "../../test/helpers/auth-wizard.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -10,12 +15,6 @@ import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.apply.js";
-import {
-  createAuthTestLifecycle,
-  createExitThrowingRuntime,
-  createWizardPrompter,
-  setupAuthTestEnv,
-} from "./test-wizard-helpers.js";
 
 type DetectZaiEndpoint = (params: {
   apiKey: string;
@@ -605,6 +604,7 @@ describe("applyAuthChoice", () => {
     "SYNTHETIC_API_KEY",
   ]);
   let authTestRoot: string | null = null;
+  let authTestCleanup: (() => Promise<void>) | null = null;
   let authStateCounter = 0;
   async function setupTempState() {
     if (!authTestRoot) {
@@ -683,15 +683,15 @@ describe("applyAuthChoice", () => {
   let defaultProviderPlugins: ProviderPlugin[] = [];
 
   beforeAll(async () => {
-    authTestRoot = (await setupAuthTestEnv("openclaw-auth-")).stateDir;
+    const authTestEnv = await setupAuthTestEnv("openclaw-auth-");
+    authTestRoot = authTestEnv.stateDir;
+    authTestCleanup = authTestEnv.cleanup;
     defaultProviderPlugins = await createDefaultProviderPlugins();
     resolvePluginProviders.mockReturnValue(defaultProviderPlugins);
   });
 
   afterAll(async () => {
-    if (authTestRoot) {
-      await fs.rm(authTestRoot, { recursive: true, force: true });
-    }
+    await authTestCleanup?.();
   });
 
   afterEach(async () => {

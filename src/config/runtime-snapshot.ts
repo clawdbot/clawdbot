@@ -5,6 +5,7 @@ import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
 } from "./config-env-vars.js";
+import { copyConfigResolutionFacts, getConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -167,6 +168,8 @@ export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
 ): void {
+  const factSource = getConfigResolutionFacts(config) !== null ? config : (sourceConfig ?? config);
+  copyConfigResolutionFacts(factSource, config);
   for (const prepare of runtimeConfigSnapshotPreparers) {
     prepare(config);
   }
@@ -206,6 +209,7 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
   ) {
     return false;
   }
+  copyConfigResolutionFacts(params.sourceConfig, runtimeConfigSnapshot);
   setRuntimeConfigSnapshot(runtimeConfigSnapshot, params.sourceConfig);
   return true;
 }

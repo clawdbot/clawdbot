@@ -1,22 +1,13 @@
 // Control UI tests cover markdown behavior.
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { handleMarkdownCodeBlockCopy } from "./markdown-code-blocks.ts";
+import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
   container.innerHTML = html;
   return container;
-}
-
-function escapedCodeBlockCopyAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function withControlUiBasePath<T>(basePath: string, fn: () => T): T {
@@ -337,7 +328,7 @@ describe("toSanitizedMarkdownHtml", () => {
           throw new Error("expected code copy button");
         }
 
-        fragment.addEventListener("click", handleMarkdownCodeBlockCopy);
+        fragment.addEventListener("click", handleMarkdownCodeBlockClick);
         button.click();
 
         await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(blockArt));
@@ -353,16 +344,23 @@ describe("toSanitizedMarkdownHtml", () => {
     it("renders indented code blocks", () => {
       // markdown-it requires a blank line before indented code
       const html = toSanitizedMarkdownHtml("text\n\n    indented code");
-      expect(html).toBe(
-        `<p>text</p>\n<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("indented code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>indented code\n</code></pre></div>`,
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector("p")?.textContent).toBe("text");
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
+      expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
+      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe(
+        "indented code",
       );
     });
 
     it("includes copy button", () => {
       const html = toSanitizedMarkdownHtml("```\ncode\n```");
-      expect(html).toBe(
-        `<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>code\n</code></pre></div>`,
-      );
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
+      expect(fragment.querySelector(".code-block-copy__idle")).toBeInstanceOf(HTMLSpanElement);
+      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe("code");
     });
 
     it("omits copy chrome when rendering user-preserved code blocks", () => {
@@ -383,7 +381,8 @@ PY
       const fragment = htmlFragment(html);
 
       expect(fragment.querySelector(".code-block-copy")).toBeNull();
-      expect(fragment.textContent).toBe(source);
+      expect(fragment.querySelector(".code-block-wrapper")).toBeNull();
+      expect(fragment.querySelector("pre code")?.textContent).toBe(source);
     });
 
     it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
@@ -397,42 +396,132 @@ PY
       );
     });
 
-    it("keeps short JSON code blocks visible and highlighted", () => {
-      const html = toSanitizedMarkdownHtml(jsonBlock(6));
-      const fragment = htmlFragment(html);
-      const code = fragment.querySelector(".code-block-wrapper pre code");
+    it("keeps the interactive code-block cache separate from static rendering", () => {
+      const markdown = jsonBlock(41);
+      const staticHtml = toSanitizedMarkdownHtml(markdown);
+      const interactiveHtml = toSanitizedMarkdownHtml(markdown, {
+        codeBlockInteraction: "interactive",
+      });
 
-      expect(fragment.querySelector("details.json-collapse")).toBeNull();
-      expect(code?.textContent?.split("\n")).toHaveLength(7);
+      expect(htmlFragment(staticHtml).querySelector(".code-block-expand")).toBeNull();
+      expect(htmlFragment(interactiveHtml).querySelector(".code-block-expand")).toBeInstanceOf(
+        HTMLButtonElement,
+      );
+    });
+
+    it("keeps short code blocks fully visible in interactive hosts", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(7), { codeBlockInteraction: "interactive" }),
+      );
+      const code = fragment.querySelector(".code-block-viewport pre code");
+
+      expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
+      expect(fragment.querySelector(".code-block-expand")).toBeNull();
+      expect(code?.textContent?.split("\n")).toHaveLength(8);
       expect(code?.innerHTML).toContain("hljs-");
     });
 
-    it("collapses JSON only above 40 lines and uses one copyable header", () => {
-      const atLimit = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(40)));
-      const overLimit = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
-      const details = overLimit.querySelector("details.json-collapse");
-      const summary = details?.querySelector("summary");
+    it("previews longer code blocks with the exact hidden-line count", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(11), { codeBlockInteraction: "interactive" }),
+      );
+      const expand = fragment.querySelector(".code-block-expand");
 
-      expect(atLimit.querySelector("details.json-collapse")).toBeNull();
-      expect(summary?.textContent).toContain("JSON · 41 lines");
-      expect(summary?.querySelector(".code-block-copy")).toBeInstanceOf(HTMLButtonElement);
-      expect(details?.querySelectorAll(".code-block-header")).toHaveLength(1);
-      expect(summary?.classList.contains("code-block-header")).toBe(true);
-      expect(details?.querySelector("pre code")?.innerHTML).toContain("hljs-");
+      expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeInstanceOf(
+        HTMLDivElement,
+      );
+      expect(expand?.textContent).toContain("4 hidden lines");
+      expect(expand?.getAttribute("aria-expanded")).toBe("false");
+      expect(fragment.querySelector(".code-block-viewport pre code")?.innerHTML).toContain("hljs-");
     });
 
-    it("localizes collapsed JSON line counts", async () => {
+    it("uses the singular hidden-line label for a single hidden line", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(8), { codeBlockInteraction: "interactive" }),
+      );
+      const expand = fragment.querySelector(".code-block-expand");
+
+      expect(expand?.textContent).toBe("1 hidden line");
+      expect(expand?.getAttribute("aria-label")).toBe("Show 1 hidden line");
+    });
+
+    it("collapses on line count alone, not on JSON detection", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(`\`\`\`bash\n${"echo hi\n".repeat(20)}\`\`\``, {
+          codeBlockInteraction: "interactive",
+        }),
+      );
+
+      expect(fragment.querySelector(".code-block-expand")?.textContent).toContain(
+        "13 hidden lines",
+      );
+    });
+
+    it("keeps collapse and wrap controls out of hosts that do not own them", () => {
+      const markdown = jsonBlock(41);
+      const staticHost = htmlFragment(toSanitizedMarkdownHtml(markdown));
+      const interactiveHost = htmlFragment(
+        toSanitizedMarkdownHtml(markdown, { codeBlockInteraction: "interactive" }),
+      );
+
+      expect(staticHost.querySelector(".code-block-expand")).toBeNull();
+      expect(staticHost.querySelector(".code-block-wrap")).toBeNull();
+      expect(staticHost.querySelector(".code-block-viewport")).toBeNull();
+      expect(staticHost.querySelector(".code-block-copy")).toBeInstanceOf(HTMLButtonElement);
+      expect(interactiveHost.querySelector(".code-block-expand")).toBeInstanceOf(HTMLButtonElement);
+      expect(interactiveHost.querySelector(".code-block-wrap")).toBeInstanceOf(HTMLButtonElement);
+    });
+
+    it("reveals a collapsed block through the shared click owner", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(41), { codeBlockInteraction: "interactive" }),
+      );
+      const wrapper = fragment.querySelector(".code-block-wrapper");
+      const expand = fragment.querySelector<HTMLButtonElement>(".code-block-expand");
+      fragment.addEventListener("click", handleMarkdownCodeBlockClick);
+
+      expand?.click();
+
+      expect(wrapper?.classList.contains("is-expanded")).toBe(true);
+      expect(expand?.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("toggles wrapping through the shared click owner", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(jsonBlock(41), { codeBlockInteraction: "interactive" }),
+      );
+      const wrapper = fragment.querySelector(".code-block-wrapper");
+      const wrap = fragment.querySelector<HTMLButtonElement>(".code-block-wrap");
+      fragment.addEventListener("click", handleMarkdownCodeBlockClick);
+
+      wrap?.click();
+      expect(wrapper?.classList.contains("is-wrapped")).toBe(true);
+      expect(wrap?.getAttribute("aria-pressed")).toBe("true");
+
+      wrap?.click();
+      expect(wrapper?.classList.contains("is-wrapped")).toBe(false);
+      expect(wrap?.getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("localizes the hidden-line count and the language fallback", async () => {
       i18n.registerTranslation("pt-BR", {
         chat: {
           codeBlock: {
-            jsonLines: "JSON · {count} linhas",
+            languageFallback: "Código",
+            hiddenLines: "{count} linhas ocultas",
           },
         },
       });
       await i18n.setLocale("pt-BR");
       try {
-        const fragment = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
-        expect(fragment.querySelector("summary")?.textContent).toContain("JSON · 41 linhas");
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml(jsonBlock(41), { codeBlockInteraction: "interactive" }),
+        );
+        expect(fragment.querySelector(".code-block-expand")?.textContent).toContain(
+          "34 linhas ocultas",
+        );
+        const unlabeled = htmlFragment(toSanitizedMarkdownHtml("```\nconteúdo\n```"));
+        expect(unlabeled.querySelector(".code-block-lang")?.textContent).toBe("Código");
       } finally {
         await i18n.setLocale("en");
       }

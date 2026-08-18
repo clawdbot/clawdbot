@@ -170,7 +170,6 @@ describe("renderChatComposer controls", () => {
         actionLabel: "Unarchive",
         onAction,
       },
-      typingActors: [{ id: "ayaan", label: "Ayaan" }],
     });
 
     const banner = container.querySelector(".agent-chat__disabled-banner");
@@ -203,10 +202,13 @@ describe("renderChatComposer controls", () => {
       draft: "a draft that hides the placeholder",
     });
 
-    // The placeholder carries the reason only for an empty composer; the
-    // dedicated reason row must keep the explanation visible alongside a draft.
-    expect(container.querySelector(".agent-chat__disabled-reason")?.textContent).toContain(reason);
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const reasonRow = container.querySelector<HTMLElement>(".agent-chat__disabled-reason");
+    expect(reasonRow?.textContent).toContain(reason);
+    expect(container.textContent?.split(reason)).toHaveLength(2);
+    expect(textarea?.placeholder).toBe(t("chat.composer.placeholder", { name: "OpenClaw" }));
+    expect(textarea?.disabled).toBe(true);
+    expect(textarea?.getAttribute("aria-describedby")?.split(" ")).toContain(reasonRow?.id);
   });
 
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
@@ -618,7 +620,6 @@ describe("renderChatComposer status", () => {
       gatewayQuestionPrompts: [],
       composerControls: html`<button type="button">Model</button>`,
       onRequestUpdate: vi.fn(),
-      typingActors: [{ id: "ayaan", label: "Ayaan" }],
     });
     composerProps.onDraftChange = (next) => {
       composerProps.draft = next;

@@ -8,7 +8,8 @@ import type {
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
-import type { BrowserTarget, DraftNode } from "./discovery.ts";
+import { renderWorktreeFields } from "./detail-chip.ts";
+import type { BrowserTarget, DraftBranches, DraftNode } from "./discovery.ts";
 import { folderDisplayName, parentFolderDisplayName } from "./path.ts";
 import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate } from "./place-labels.ts";
@@ -27,6 +28,10 @@ export type DraftRemoteProject = Readonly<{
   cloneUrl: string;
   projectId?: string;
 }>;
+
+function inputValue(event: Event): string {
+  return event.target instanceof HTMLInputElement ? event.target.value : "";
+}
 
 type ProjectChipState = Readonly<{
   mode: "projects" | "node-path";
@@ -105,6 +110,11 @@ export function renderProjectChip(params: {
   execNodes: readonly DraftNode[];
   gatewayLabel: string;
   execNode: string;
+  cloudProfileId: string;
+  branches: DraftBranches | null;
+  branchesLoading: boolean;
+  baseRef: string;
+  worktreeName: string;
   submitting: boolean;
   pendingCloud: boolean;
   popoverOpen: boolean;
@@ -125,6 +135,8 @@ export function renderProjectChip(params: {
   onProjectQueryInput: (query: string) => void;
   onSelectRemoteProject: (project: DraftRemoteProject) => void;
   onApplyFolder: (folder: string, execNode: string) => void;
+  onBaseRefInput: (baseRef: string) => void;
+  onWorktreeNameInput: (name: string) => void;
   onBrowse: (target: BrowserTarget) => void;
   onBrowserPathDraftChange: (value: string) => void;
   onBrowserNavigate: (path: string | undefined) => void;
@@ -254,8 +266,7 @@ export function renderProjectChip(params: {
                         placeholder=${t("newSession.projectSearchPlaceholder")}
                         .value=${params.projectQuery}
                         ?disabled=${params.submitting || params.pendingCloud}
-                        @input=${(event: Event) =>
-                          params.onProjectQueryInput((event.target as HTMLInputElement).value)}
+                        @input=${(event: Event) => params.onProjectQueryInput(inputValue(event))}
                         @keydown=${(event: KeyboardEvent) => {
                           if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
                             event.preventDefault();
@@ -343,6 +354,50 @@ export function renderProjectChip(params: {
                           ${t("newSession.projectsAdminHint")}
                         </div>`
                       : nothing}
+                  `
+                : nothing}
+              ${params.state.mode === "node-path"
+                ? html`
+                    <label class="new-session-page__menu-field new-session-page__node-path">
+                      <span>${t("newSession.nodeCwd")}</span>
+                      <input
+                        type="text"
+                        ?disabled=${params.submitting || params.pendingCloud}
+                        placeholder=${t("newSession.folderPlaceholder")}
+                        .value=${params.folder}
+                        @change=${(event: Event) =>
+                          params.onApplyFolder(inputValue(event).trim(), params.execNode)}
+                        @keydown=${(event: KeyboardEvent) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            params.onApplyFolder(inputValue(event).trim(), params.execNode);
+                          }
+                        }}
+                      />
+                    </label>
+                  `
+                : nothing}
+              ${params.cloudProfileId
+                ? html`
+                    <details>
+                      <summary class="new-session-page__menu-title">
+                        ${t("configForm.advancedDivider")}
+                      </summary>
+                      ${renderWorktreeFields({
+                        branches: params.branches,
+                        branchesLoading: params.branchesLoading,
+                        baseRef: params.baseRef,
+                        worktreeName: params.worktreeName,
+                        worktreeNameLabel: t("newSession.checkoutName"),
+                        submitting: params.submitting,
+                        pendingCloud: params.pendingCloud,
+                        onBaseRefInput: params.onBaseRefInput,
+                        onWorktreeNameInput: params.onWorktreeNameInput,
+                      })}
+                      <div class="new-session-page__menu-note">
+                        ${t("newSession.cloudSyncsFolder", { folder: params.state.label })}
+                      </div>
+                    </details>
                   `
                 : nothing}
               ${params.state.recents.length > 0

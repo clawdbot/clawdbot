@@ -17,14 +17,13 @@ import {
   renderAttachmentPreview,
   renderChatAttachmentInputs,
 } from "./chat-attachments.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import { renderChatPrimaryActions } from "./chat-composer-controls.ts";
-import { focusComposerFromChrome } from "./chat-composer-dom.ts";
+import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
-import { renderSkillMenu } from "./chat-composer-skill-menu.ts";
+import { renderSkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
 import { renderSlashMenu } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import {
@@ -34,6 +33,7 @@ import {
   type ComposerRunStatus,
 } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import { renderChatPermissionPicker } from "./chat-permission-picker.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import { renderChatVoiceError } from "./chat-voice-activity.ts";
 
@@ -64,6 +64,7 @@ type ChatComposerViewContext = {
   mirrorCameraPreview: boolean;
   slashMenuVisible: boolean;
   skillMenuVisible: boolean;
+  skillMenuHost: SkillMenuHost;
   activeSlashMenuOptionId: string | null;
   activeSlashMenuOptionLabel: string;
   slashMenuListboxId: string;
@@ -99,6 +100,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     mirrorCameraPreview,
     slashMenuVisible,
     skillMenuVisible,
+    skillMenuHost,
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,
@@ -154,6 +156,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     props.toolOverrides,
     t("chat.composer.menu.webSearch"),
   ).join(", ");
+  const disabledReasonId = paneDomId(props.paneId, "disabled-reason");
 
   return html`
     ${renderChatQueue({
@@ -179,29 +182,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             <span class="chat-run-error__summary">${props.runError.summary}</span>
           </div>
         `
-      : nothing}
-    ${showComposerInput && props.typingActors?.length
-      ? html`<div
-          class="agent-chat__typing-indicator agent-chat__typing-indicator--outside"
-          role="status"
-        >
-          <!-- Avatars stay aria-hidden: the status text already names every
-               typer, and role="img" avatars would announce each name twice. -->
-          <span class="agent-chat__typing-avatars" aria-hidden="true">
-            ${props.typingActors
-              .slice(0, 3)
-              .map((actor) => renderChatAuthorAvatar({ id: actor.id, name: actor.label }))}
-          </span>
-          <span class="agent-chat__typing-text"
-            >${props.typingActors.length === 1
-              ? t("chat.sessionSuggestions.typing", {
-                  name: props.typingActors[0]?.label ?? "",
-                })
-              : t("chat.sessionSuggestions.typingMany", {
-                  names: props.typingActors.map((actor) => actor.label).join(", "),
-                })}</span
-          >
-        </div>`
       : nothing}
     <div class="agent-chat__composer-shell">
       ${questionPanelProps
@@ -231,7 +211,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>`
               : nothing}
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
-            ${skillMenuVisible ? renderSkillMenu(requestUpdate, props) : nothing}
+            ${skillMenuVisible ? renderSkillMenu(state, skillMenuHost, requestUpdate) : nothing}
             ${renderAttachmentPreview(props)}
             ${props.replyTarget
               ? html`
@@ -349,7 +329,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               : nothing}
             ${props.disabledReason
               ? html`
-                  <div class="agent-chat__disabled-reason">
+                  <div id=${disabledReasonId} class="agent-chat__disabled-reason">
                     <span>${props.disabledReason}</span>
                   </div>
                 `
@@ -411,7 +391,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     slashMenuVisible || skillMenuVisible ? "true" : undefined,
                   )}
                   aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
-                  aria-describedby=${slashMenuAnnouncementId}
+                  aria-describedby=${`${slashMenuAnnouncementId}${
+                    props.disabledReason ? ` ${disabledReasonId}` : ""
+                  }`}
                   aria-keyshortcuts=${sendShortcut === "enter"
                     ? "Enter"
                     : "Control+Enter Meta+Enter"}
@@ -458,6 +440,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             </div>
 
             <div class="agent-chat__composer-footer">
+              ${props.permissionPicker
+                ? html`<div class="agent-chat__composer-meta">
+                    ${renderChatPermissionPicker(props.permissionPicker)}
+                  </div>`
+                : nothing}
               ${composerControls !== nothing
                 ? html`
                     <div class="agent-chat__composer-controls">
@@ -511,7 +498,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     </div>
                   `
                 : nothing}
-              <div class="agent-chat__composer-meta">${contextNotice}</div>
+              <div class="agent-chat__composer-context">${contextNotice}</div>
             </div>
           </div>`
         : nothing}

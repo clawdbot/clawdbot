@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
@@ -2457,20 +2457,14 @@ describe("session accessor seam", () => {
       sessionId: "replacement-prepare",
       updatedAt: 10,
     });
-    let releasePlanner!: () => void;
-    let markPlannerStarted!: () => void;
-    const plannerStarted = new Promise<void>((resolve) => {
-      markPlannerStarted = resolve;
-    });
-    const plannerGate = new Promise<void>((resolve) => {
-      releasePlanner = resolve;
-    });
+    const plannerStarted = createDeferred();
+    const plannerGate = createDeferred();
     const pendingReplacement = applySessionEntryReplacements({
       sessionKeys: [scope.sessionKey],
       storePath,
       update: async (entries) => {
-        markPlannerStarted();
-        await plannerGate;
+        plannerStarted.resolve();
+        await plannerGate.promise;
         return {
           replacements: entries.map(({ entry, sessionKey }) => ({
             entry: { ...entry, model: "planned" },
@@ -2481,7 +2475,7 @@ describe("session accessor seam", () => {
       },
     });
 
-    await plannerStarted;
+    await plannerStarted.promise;
     let replacementError: unknown;
     try {
       replaceSessionEntrySync(scope, {
@@ -2492,7 +2486,7 @@ describe("session accessor seam", () => {
     } catch (error) {
       replacementError = error;
     } finally {
-      releasePlanner();
+      plannerGate.resolve();
     }
     const planningError = await pendingReplacement.then(
       () => undefined,
@@ -2506,36 +2500,31 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(scope)).toMatchObject({ model: "newer", updatedAt: 20 });
   });
 
-  it("does not hold a write transaction while awaiting a lifecycle entry builder", async () => {
-    const sessionKey = "agent:main:lifecycle-prepare";
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      { model: "base", sessionId: "lifecycle-prepare", updatedAt: 10 },
-    );
-    let releaseBuilder!: () => void;
-    let markBuilderStarted!: () => void;
-    const builderStarted = new Promise<void>((resolve) => {
-      markBuilderStarted = resolve;
+  it("awaits lifecycle builders outside transactions while keeping their commit indivisible", async () => {
+    const scope = { sessionKey: "agent:main:lifecycle-prepare", storePath };
+    await upsertSessionEntryCore(scope, {
+      model: "base",
+      sessionId: "lifecycle-prepare",
+      updatedAt: 10,
     });
-    const builderGate = new Promise<void>((resolve) => {
-      releaseBuilder = resolve;
-    });
+    const builderStarted = createDeferred();
+    const builderGate = createDeferred();
     const pendingMutation = applySessionEntryLifecycleMutation({
       storePath,
       upserts: [
         {
-          sessionKey,
+          sessionKey: scope.sessionKey,
           buildEntry: async ({ currentEntry }) => {
-            markBuilderStarted();
-            await builderGate;
-            return { ...currentEntry, model: "projected" } as SessionEntry;
+            builderStarted.resolve();
+            await builderGate.promise;
+            return { ...currentEntry, model: "projected", updatedAt: 20 } as SessionEntry;
           },
         },
       ],
       skipMaintenance: true,
     });
 
-    await builderStarted;
+    await builderStarted.promise;
     let unrelatedWriteError: unknown;
     try {
       appendSqliteTrajectoryRuntimeEvents({ sessionId: "lifecycle-prepare", storePath }, [
@@ -2543,13 +2532,19 @@ describe("session accessor seam", () => {
       ]);
     } catch (error) {
       unrelatedWriteError = error;
-    } finally {
-      releaseBuilder();
     }
+    const replacement = {
+      model: "replacement",
+      sessionId: "lifecycle-prepare",
+      updatedAt: 30,
+    };
+    const queuedReplacement = replaceSessionEntry(scope, replacement);
+    builderGate.resolve();
 
     await expect(pendingMutation).resolves.toMatchObject({ afterCount: 1 });
     expect(unrelatedWriteError).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ model: "projected" });
+    await expect(queuedReplacement).resolves.toMatchObject(replacement);
+    expect(loadSessionEntry(scope)).toMatchObject(replacement);
   });
 
   it("rejects a lifecycle projection when its source row changes", async () => {
@@ -2559,22 +2554,16 @@ describe("session accessor seam", () => {
       sessionId: "lifecycle-stale",
       updatedAt: 10,
     });
-    let releaseBuilder!: () => void;
-    let markBuilderStarted!: () => void;
-    const builderStarted = new Promise<void>((resolve) => {
-      markBuilderStarted = resolve;
-    });
-    const builderGate = new Promise<void>((resolve) => {
-      releaseBuilder = resolve;
-    });
+    const builderStarted = createDeferred();
+    const builderGate = createDeferred();
     const pendingMutation = applySessionEntryLifecycleMutation({
       storePath,
       upserts: [
         {
           sessionKey: scope.sessionKey,
           buildEntry: async ({ currentEntry }) => {
-            markBuilderStarted();
-            await builderGate;
+            builderStarted.resolve();
+            await builderGate.promise;
             return { ...currentEntry, model: "stale-projection" } as SessionEntry;
           },
         },
@@ -2582,7 +2571,7 @@ describe("session accessor seam", () => {
       skipMaintenance: true,
     });
 
-    await builderStarted;
+    await builderStarted.promise;
     let replacementError: unknown;
     try {
       replaceSessionEntrySync(scope, {
@@ -2593,7 +2582,7 @@ describe("session accessor seam", () => {
     } catch (error) {
       replacementError = error;
     } finally {
-      releaseBuilder();
+      builderGate.resolve();
     }
     const mutationError = await pendingMutation.then(
       () => undefined,

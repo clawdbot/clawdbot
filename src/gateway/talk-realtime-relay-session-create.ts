@@ -135,6 +135,7 @@ export function createTalkRealtimeRelaySession(
           ),
         sessionKey: relaySessionKey,
         ownerConnId: params.connId,
+        authority: params.consultAuthority,
         getVoiceSessionId: () => relaySessionId,
         initialItems: [],
         runIdPrefix: "talk-realtime-relay-consult",

@@ -53,6 +53,7 @@ describe("resolveGatewayScopedTools terminal ownership", () => {
       const result = resolveGatewayScopedTools({
         cfg: { tools: { allow: ["terminal"] } } as OpenClawConfig,
         sessionKey: childSessionKey,
+        sessionId: "loopback-session-id",
         runId: "shared-run",
         senderIsOwner: true,
         surface: "loopback",
@@ -68,8 +69,8 @@ describe("resolveGatewayScopedTools terminal ownership", () => {
         "shared-run",
         childSessionKey,
       );
-      expect(manager.closeAgentSessions("task-2")).toBe(1);
-      expect(manager.closeAgentSessions("task-1")).toBe(0);
+      expect(manager.closeTaskSessions("task-2")).toBe(1);
+      expect(manager.closeTaskSessions("task-1")).toBe(0);
       expect(backend.killed).toBe(true);
     } finally {
       clearContext();

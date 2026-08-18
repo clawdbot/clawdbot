@@ -49,6 +49,8 @@ export type ChatAbortControllerEntry = {
   agentRunDelegatedAuthority?: AgentRunDelegatedAuthority;
   agentId?: string;
   startedAtMs: number;
+  /** False until lane admission reaches the execution boundary. */
+  executionStarted?: boolean;
   expiresAtMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
@@ -113,7 +115,7 @@ type RegisteredChatAbortController = {
   controller: AbortController;
   registered: boolean;
   entry?: ChatAbortControllerEntry;
-  markExecutionStarted: () => void;
+  markExecutionStarted: () => boolean;
   bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
   cleanup: (opts?: { force?: boolean }) => void;
 };
@@ -217,21 +219,26 @@ export function registerChatAbortController(params: {
   let executionStarted = false;
   const markExecutionStarted = () => {
     if (executionStarted) {
-      return;
+      return false;
     }
     const entry = params.chatAbortControllers.get(params.runId);
-    if (entry?.controller !== controller || controller.signal.aborted || entry.kind !== "agent") {
-      return;
+    if (entry?.controller !== controller || controller.signal.aborted) {
+      return false;
+    }
+    executionStarted = true;
+    entry.executionStarted = true;
+    if (entry.kind !== "agent") {
+      return true;
     }
     const now = Date.now();
-    executionStarted = true;
     if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
-      return;
+      return true;
     }
     entry.expiresAtMs = resolveAgentRunExpiresAtMs({
       now,
       timeoutMs: params.timeoutMs,
     });
+    return true;
   };
   const cleanup = (opts?: { force?: boolean }) => {
     const entry = params.chatAbortControllers.get(params.runId);
@@ -294,6 +301,7 @@ export function registerChatAbortController(params: {
     operationalRunInstance: params.operationalRunInstance,
     agentId: normalizeActiveAgentId(params.agentId),
     startedAtMs: now,
+    executionStarted: false,
     expiresAtMs:
       explicitExpiresAtMs ??
       resolveChatRunExpiresAtMs({ now: rawNow, timeoutMs: params.timeoutMs }),

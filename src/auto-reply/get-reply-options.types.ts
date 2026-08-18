@@ -134,8 +134,8 @@ export type GetReplyOptions = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-  /** Gateway already attempted exact active-run injection for this turn. */
-  messageInjectionAttempted?: true;
+  /** Gateway-owned start-or-steer decision for this turn. */
+  messageInjectionDisposition?: "none" | "accepted" | "rejected";
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;

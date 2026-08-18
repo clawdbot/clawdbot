@@ -1709,7 +1709,8 @@ describe("browser tool snapshot maxChars", () => {
     expect(imageParams.extraText).toContain(
       JSON.stringify("/tmp/openclaw-media/outbound/share.png"),
     );
-    expect(imageParams.extraText).toContain("message tool");
+    expect(imageParams.extraText).toContain("sanitized outbound copy");
+    expect(imageParams.extraText).not.toContain("message tool");
     expect(imageParams.details?.media).toEqual({ outbound: false });
     expect(toolCommonMocks.stageBrowserScreenshotForSharing).toHaveBeenCalledWith(
       "/tmp/test.png",
@@ -1796,7 +1797,8 @@ describe("browser tool snapshot maxChars", () => {
     expect(joined).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(joined).toContain("/tmp/secret.png");
     expect(joined).toContain(JSON.stringify("/tmp/openclaw-media/outbound/share.png"));
-    expect(joined).toContain("message tool");
+    expect(joined).toContain("sanitized outbound copy");
+    expect(joined).not.toContain("message tool");
     // The vision-success path must not surface raw screenshot media via
     // details.media so channel auto-delivery cannot grab the screenshot.
     expect((out?.details as Record<string, unknown>)?.media).toBeUndefined();
@@ -1851,7 +1853,8 @@ describe("browser tool snapshot maxChars", () => {
     expect(imageParams.extraText).toContain(
       JSON.stringify("/tmp/openclaw-media/outbound/share.png"),
     );
-    expect(imageParams.extraText).toContain("message tool");
+    expect(imageParams.extraText).toContain("sanitized outbound copy");
+    expect(imageParams.extraText).not.toContain("message tool");
     expect(imageParams.details?.media).toEqual({ outbound: false });
   });
 

@@ -6,6 +6,7 @@ import {
   waitForConfirmModal,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSettledFormControls } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cloud workers settings mocked Gateway E2E",
@@ -77,6 +78,10 @@ suite.define(() => {
       await page.getByRole("button", { name: "Add profile" }).click();
       await page.getByLabel("Profile ID").fill("build-fleet");
       await page.getByLabel("Crabbox backend").fill("hetzner");
+      await waitForSettledFormControls(page, [
+        { locator: page.getByLabel("Profile ID"), value: "build-fleet" },
+        { locator: page.getByLabel("Crabbox backend"), value: "hetzner" },
+      ]);
       await gateway.deferNext("config.patch");
       const addRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
@@ -110,11 +115,22 @@ suite.define(() => {
           idleTimeout: "45m",
         },
       };
+      // Keep the mocked config.get consistent with the patch response: the
+      // config store may reconcile with a refetch, and a stale empty config
+      // would flap the snapshot and silently drop the next save.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
+          "cloud-workers-2",
+        ),
+      );
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-2",
         config: { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
       });
+
       await page.getByText("Advertised", { exact: true }).waitFor();
       await page.getByText("Gateway restart required.", { exact: true }).waitFor();
 
@@ -128,11 +144,39 @@ suite.define(() => {
         .locator("wa-switch")
         .click();
       await page.getByLabel("Crabbox binary").fill("/opt/bin/crabbox");
+      await waitForSettledFormControls(page, [
+        { locator: page.getByLabel("Machine class", { exact: true }), value: "custom" },
+        { locator: page.getByLabel("Custom machine class"), value: "ccx53" },
+        { locator: page.getByLabel("Max lifetime"), value: "12h" },
+        {
+          locator: page.getByRole("switch", { name: "Desktop", exact: true }),
+          checked: true,
+        },
+        { locator: page.getByLabel("Crabbox binary"), value: "/opt/bin/crabbox" },
+      ]);
+      const saveButton = page.getByRole("button", { name: "Save" });
+      const configGetCount = (await gateway.getRequests("config.get")).length;
+      await gateway.deferNext("config.get");
+      await gateway.emitGatewayEvent("config.changed", {
+        path: "/tmp/openclaw.json",
+        hash: "cloud-workers-2",
+        ts: Date.now(),
+      });
+      await gateway.waitForRequest("config.get", { after: configGetCount });
+      await expect.poll(() => saveButton.isDisabled()).toBe(true);
+      await gateway.resolveDeferred(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
+          "cloud-workers-2",
+        ),
+      );
+      await expect.poll(() => saveButton.isEnabled()).toBe(true);
       await gateway.deferNext("config.patch");
       const editRequestCount = (await gateway.getRequests("config.patch")).length;
-      await page.getByRole("button", { name: "Save" }).click();
+      await saveButton.click();
       const editPatch = await waitForConfigPatch(gateway, editRequestCount);
-      expect(editPatch).toMatchObject({
+      expect(editPatch).toEqual({
         cloudWorkers: {
           profiles: {
             "build-fleet": {
@@ -163,16 +207,31 @@ suite.define(() => {
           binary: "/opt/bin/crabbox",
         },
       };
+      // Keep the mocked config.get consistent with the patch response: the
+      // config store may reconcile with a refetch, and a stale empty config
+      // would flap the snapshot and silently drop the next save.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": editedFleet } } },
+          "cloud-workers-3",
+        ),
+      );
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-3",
         config: { cloudWorkers: { profiles: { "build-fleet": editedFleet } } },
       });
+
       await page.getByText(/Class: ccx53/).waitFor();
 
       await page.getByRole("button", { name: "Add profile" }).click();
       await page.getByLabel("Profile ID").fill("pending");
       await page.getByLabel("Crabbox backend").fill("aws");
+      await waitForSettledFormControls(page, [
+        { locator: page.getByLabel("Profile ID"), value: "pending" },
+        { locator: page.getByLabel("Crabbox backend"), value: "aws" },
+      ]);
       await gateway.deferNext("config.patch");
       const pendingRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
@@ -199,6 +258,13 @@ suite.define(() => {
           idleTimeout: "45m",
         },
       };
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": editedFleet, pending } } },
+          "cloud-workers-4",
+        ),
+      );
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-4",

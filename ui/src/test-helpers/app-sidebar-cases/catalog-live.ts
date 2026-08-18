@@ -303,11 +303,12 @@ describe("AppSidebar session catalog pagination", () => {
     const backingRows = (sidebar.sessionData.sessionsResult?.sessions ?? []).map((row) =>
       row.key === backingSessionKey ? Object.assign({}, row, { unread: true }) : row,
     );
-    sidebar.sessionData.sessionsResult = {
+    const backingResult = {
       ...sidebar.sessionData.sessionsResult!,
       sessions: backingRows,
     };
-    sidebar.sessionData.sessionRowsByAgent = { main: backingRows };
+    sidebar.sessionData.sessionsResult = backingResult;
+    sidebar.sessionData.sessionResultsByAgent = { main: backingResult };
     sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 
@@ -355,11 +356,12 @@ describe("AppSidebar session catalog pagination", () => {
         ? Object.assign({}, row, { unread: false, hasActiveRun: true })
         : row,
     );
-    sidebar.sessionData.sessionsResult = {
+    const runningResult = {
       ...sidebar.sessionData.sessionsResult,
       sessions: runningRows,
     };
-    sidebar.sessionData.sessionRowsByAgent = { main: runningRows };
+    sidebar.sessionData.sessionsResult = runningResult;
+    sidebar.sessionData.sessionResultsByAgent = { main: runningResult };
     sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 

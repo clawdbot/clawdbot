@@ -219,6 +219,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   stateDir?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
+  startupCheckedStorePaths?: Set<string>;
   updatedBeforeMs?: number;
 }): Promise<{ marked: number; skipped: number }> {
   const result = { marked: 0, skipped: 0 };
@@ -237,7 +238,12 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   const resolveActiveSessionKeys = () =>
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
 
-  for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
+  // Check each store path once at startup so rows added later in that same path remain current.
+  // Add paths only after every marking write succeeds so a failed scan retries safely.
+  const storePaths = (await resolveRestartRecoveryStorePaths(params)).filter(
+    (storePath) => !params.startupCheckedStorePaths?.has(storePath),
+  );
+  for (const storePath of storePaths) {
     const storeResult = await markRecoveryStore({
       storePath,
       statuses: ["running"],
@@ -269,6 +275,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     result.marked += storeResult.marked;
     result.skipped += storeResult.skipped;
   }
+  storePaths.forEach((storePath) => params.startupCheckedStorePaths?.add(storePath));
 
   if (result.marked > 0) {
     mainSessionRecoveryLog.warn(

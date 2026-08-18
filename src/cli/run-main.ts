@@ -512,11 +512,15 @@ async function resolveReachableGateway(
     }
     const probeOptions: {
       url: string;
+      config?: OpenClawConfig;
       token?: string;
       password?: string;
       tlsFingerprint?: string;
       preauthHandshakeTimeoutMs?: number;
     } = { url: target.url };
+    if (config.gateway?.remote?.edgeAuth) {
+      probeOptions.config = config;
+    }
     if (auth.token) {
       probeOptions.token = auth.token;
     }

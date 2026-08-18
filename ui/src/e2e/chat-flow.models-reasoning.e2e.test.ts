@@ -39,10 +39,32 @@ suite.define(() => {
       const trigger = pane.locator('[data-chat-permission-select="true"]');
       await trigger.waitFor({ state: "visible", timeout: 10_000 });
       expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+      expect(
+        await trigger.evaluate((element) => element.closest(".agent-chat__composer-meta") != null),
+      ).toBe(true);
+      expect(
+        await trigger.evaluate(
+          (element) => element.closest(".chat-composer-model-control") != null,
+        ),
+      ).toBe(false);
 
       const firstListCount = (await gateway.getRequests("sessions.list")).length;
       await gateway.deferNext("sessions.list");
       await trigger.click();
+      const firstOption = pane.locator('[data-chat-permission-option="default"]');
+      await firstOption.waitFor({ state: "visible" });
+      const [triggerBox, firstOptionBox] = await Promise.all([
+        trigger.boundingBox(),
+        firstOption.boundingBox(),
+      ]);
+      expect(triggerBox).not.toBeNull();
+      expect(firstOptionBox).not.toBeNull();
+      if (!triggerBox || !firstOptionBox) {
+        throw new Error("expected permission picker geometry");
+      }
+      expect(firstOptionBox.y + firstOptionBox.height).toBeLessThanOrEqual(triggerBox.y - 1);
+      expect(firstOptionBox.x).toBeGreaterThanOrEqual(triggerBox.x);
+      expect(firstOptionBox.x - triggerBox.x).toBeLessThanOrEqual(32);
       await pane.locator('[data-chat-permission-option="workspace"]').click();
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({
@@ -233,6 +255,14 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+      const main = page.getByRole("main");
+      await main.locator(".chat-composer-model-control").evaluate((element) => {
+        Object.assign((element as HTMLElement).style, {
+          position: "fixed",
+          right: "80px",
+          top: "640px",
+        });
+      });
       await page.evaluate(() => {
         document.documentElement.style.overflowY = "auto";
         document.body.style.height = "1800px";
@@ -240,17 +270,18 @@ suite.define(() => {
       });
       expect(await page.evaluate(() => window.scrollY)).toBe(300);
 
-      const main = page.getByRole("main");
       await main.locator('[data-chat-model-select="true"]').click();
       const modelScroller = main.locator(".chat-controls__model-options");
       await expect.poll(() => modelScroller.isVisible()).toBe(true);
+      await modelScroller.evaluate((element) => {
+        element.scrollTop = 0;
+      });
       await modelScroller.hover();
-      const outerScrollBeforeFling = await page.evaluate(() => window.scrollY);
-      expect(outerScrollBeforeFling).toBeGreaterThan(0);
+      expect(await page.evaluate(() => window.scrollY)).toBe(300);
       await page.mouse.wheel(0, -5_000);
       await page.waitForTimeout(100);
 
-      expect(await page.evaluate(() => window.scrollY)).toBe(outerScrollBeforeFling);
+      expect(await page.evaluate(() => window.scrollY)).toBe(300);
     } finally {
       await suite.closeBrowserContext(context);
     }

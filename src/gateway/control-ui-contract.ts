@@ -124,6 +124,7 @@ export type ControlUiSessionPullRequest = {
   state: "open" | "draft" | "merged" | "closed";
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /** Latest check-run rollup for the head commit; absent when no checks ran. */
   checks?: ControlUiSessionPullRequestChecks;
   checksUrl?: string;
@@ -140,6 +141,7 @@ export type ControlUiSessionBranch = {
   /** Working-tree diff vs the merge base with the remote default branch. */
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /**
    * GitHub "open a pull request for this branch" page. Absent while the
    * branch is unpushed or has nothing to compare — the row then only reports

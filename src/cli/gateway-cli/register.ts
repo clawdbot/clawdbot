@@ -20,6 +20,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
+import { rethrowExpectedCliError } from "../failure-output.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
@@ -138,6 +139,9 @@ async function runGatewayCommand(
   try {
     await action();
   } catch (err) {
+    if (!opts?.json) {
+      rethrowExpectedCliError(err);
+    }
     if (opts?.json) {
       const {
         formatGatewayAuthErrorJson,
@@ -199,10 +203,10 @@ function resolveGatewayRpcOptions<T extends { token?: string; password?: string 
   };
 }
 
-async function resolveGatewayRpcOptionsWithLocalPort(
+function resolveGatewayRpcOptionsWithLocalPort(
   opts: GatewayRpcOpts & { port?: unknown },
   command?: Command,
-): Promise<GatewayRpcOpts> {
+): GatewayRpcOpts {
   const rpcOpts = resolveGatewayRpcOptions(opts, command);
   const port = parseGatewayPortOption(opts.port ?? inheritOptionFromParent(command, "port"));
   if (port === undefined) {
@@ -211,19 +215,9 @@ async function resolveGatewayRpcOptionsWithLocalPort(
   if (typeof opts.url === "string" && opts.url.trim()) {
     throw new Error("Use either --url or --port, not both.");
   }
-  const { readBestEffortConfig } = await loadConfigModule();
-  const config = await readBestEffortConfig();
   return {
     ...rpcOpts,
     localPortOverride: port,
-    config: {
-      ...config,
-      gateway: {
-        ...config.gateway,
-        mode: "local",
-        port,
-      },
-    },
   };
 }
 
@@ -587,7 +581,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
               command.getOptionValueSource("timeout") === "default"
                 ? { ...opts, timeout: String(SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS) }
                 : opts;
-            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(callOpts, command);
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(callOpts, command);
             const params = parseGatewayCallParams(String(opts.params ?? "{}"));
             const result = await callGatewayReadOnlyCli(method, rpcOpts, params);
             if (rpcOpts.json) {
@@ -616,7 +610,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
             await runGatewaySuspend(
               {
                 rpcOpts,
@@ -642,7 +636,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .action(async (suspensionId, opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
             await runGatewayResume(
               { rpcOpts, suspensionId: String(suspensionId), json: Boolean(rpcOpts.json) },
               { callGateway: callGatewayReadOnlyCli, runtime: defaultRuntime },
@@ -700,7 +694,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
             let result: unknown;
             try {
               result = await callGatewayReadOnlyCli("health", rpcOpts);
