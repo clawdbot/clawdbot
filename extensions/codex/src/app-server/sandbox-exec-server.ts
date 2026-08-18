@@ -193,6 +193,8 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
     url,
     sandbox,
     server,
+    children: new Set(),
+    cleanupTasks: new Set(),
   };
   server.on("connection", (socket, request) => {
     // ws emits error for maxPayload rejections before auth or JSON-RPC sees the frame.
@@ -228,20 +230,7 @@ async function releaseOpenClawExecServer(execServer: OpenClawExecServer): Promis
   if (current === execServer) {
     sandboxExecServerRegistry.servers.delete(execServer.sandbox.runtimeId);
   }
-  await closeOpenClawExecServer(execServer);
-}
-
-async function closeOpenClawExecServer(execServer: OpenClawExecServer): Promise<void> {
-  if (execServer.closed) {
-    return;
-  }
-  execServer.closed = true;
-  for (const client of execServer.server.clients) {
-    client.close(1001, "shutdown");
-  }
-  await new Promise<void>((resolve) => {
-    execServer.server.close(() => resolve());
-  });
+  await sandboxExecServerRegistry.close(execServer);
 }
 
 function buildEnvironmentId(sandbox: SandboxContext): string {
@@ -267,9 +256,21 @@ function handleConnection(execServer: OpenClawExecServer, socket: WebSocket): vo
   });
   socket.on("close", () => {
     closeAllFileReads(fileReads);
-    for (const process of processes.values()) {
-      process.abortController.abort();
-    }
+    const cleanup = Promise.all(
+      [...processes].map(async ([processId]) => {
+        await terminateProcess(processes, { processId });
+      }),
+    ).then(() => undefined);
+    execServer.cleanupTasks.add(cleanup);
+    void cleanup.then(
+      () => execServer.cleanupTasks.delete(cleanup),
+      (error: unknown) => {
+        execServer.cleanupTasks.delete(cleanup);
+        embeddedAgentLog.warn("codex sandbox exec-server socket cleanup failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
   });
 }
 
@@ -341,7 +342,7 @@ async function dispatchRequest(
     case "process/write":
       return writeProcess(processes, request.params);
     case "process/terminate":
-      return terminateProcess(processes, request.params);
+      return await terminateProcess(processes, request.params);
     case "fs/open":
       return await openFile(execServer, fileReads, request.params);
     case "fs/readBlock":
