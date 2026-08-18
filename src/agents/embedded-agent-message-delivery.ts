@@ -262,9 +262,11 @@ export function projectEmbeddedMessageDeliveryFact(
     // legacy visible-envelope shape accepted by pluginBroadcastHasDelivery.
     fact: entry.result
       ? projectSend(entry.result)
-      : entry.ok
-        ? projectPluginPayload(entry.payload)
-        : undefined,
+      : entry.sentBeforeError
+        ? { status: "settled" as const, partialDelivery: true, createdThreadIds: [] }
+        : entry.ok
+          ? projectPluginPayload(entry.payload)
+          : undefined,
   }));
   const facts = entries.flatMap(({ fact }) => (fact ? [fact] : []));
   const settled = facts.find((fact) => fact.status === "settled");

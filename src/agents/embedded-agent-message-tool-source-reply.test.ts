@@ -133,21 +133,30 @@ describe("isDeliveredMessagingToolResult", () => {
   );
 
   it.each([
-    ["provider message id", { ok: true, messageId: "plugin-message-1" }, true],
-    ["provider bare ok", { ok: true, to: "spaces/AAA" }, true],
-    ["provider suppressed status", { ok: true, status: "suppressed" }, false],
-    ["provider no-op marker", { ok: true, changed: false }, false],
-    ["missing provider payload", undefined, false],
-  ] satisfies Array<[string, unknown, boolean]>)(
+    [
+      "provider message id",
+      { ok: true, payload: { ok: true, messageId: "plugin-message-1" } },
+      true,
+    ],
+    ["provider bare ok", { ok: true, payload: { ok: true, to: "spaces/AAA" } }, true],
+    [
+      "provider suppressed status",
+      { ok: true, payload: { ok: true, status: "suppressed" } },
+      false,
+    ],
+    ["provider no-op marker", { ok: true, payload: { ok: true, changed: false } }, false],
+    ["missing provider payload", { ok: true }, false],
+    ["failed entry after partial delivery", { ok: false, sentBeforeError: true as const }, true],
+  ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
     "preserves the differential payload-only broadcast verdict for $0",
-    (_name, payload, expected) => {
+    (_name, entry, expected) => {
       const actionResult: MessageActionResult = {
         kind: "broadcast",
         channel: "googlechat",
         action: "broadcast",
         handledBy: "core",
         payload: {
-          results: [{ channel: "googlechat", to: "space-1", ok: true, payload }],
+          results: [{ channel: "googlechat", to: "space-1", ...entry }],
         },
         dryRun: false,
       };

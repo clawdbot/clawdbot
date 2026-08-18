@@ -3653,6 +3653,45 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
   });
 
+  it("commits partial broadcast delivery after middleware replaces details", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    const messageDelivery = projectEmbeddedMessageDeliveryFact({
+      kind: "broadcast",
+      channel: "googlechat",
+      action: "broadcast",
+      handledBy: "core",
+      payload: {
+        results: [
+          {
+            channel: "googlechat",
+            to: "spaces/AAA",
+            ok: false,
+            sentBeforeError: true,
+          },
+        ],
+      },
+      dryRun: false,
+    });
+    expect(messageDelivery).toEqual({
+      status: "settled",
+      partialDelivery: true,
+      createdThreadIds: [],
+    });
+    ctx.consumeToolSendReceipt = () => ({ details: { messageDelivery } });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-private-partial-broadcast-delivery",
+      args: { action: "send", message: "visible before failure" },
+      isError: true,
+      result: { details: { redacted: true } },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["visible before failure"]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+  });
+
   it("does not commit dry-run or external message sends as internal-ui source replies", async () => {
     const { ctx } = createTestContext();
 
