@@ -24,6 +24,7 @@ import {
   RealtimeTalkResponseOutcomeOwner,
   realtimeTalkDataChannelMaxMessageSize,
   realtimeTalkImageEvent,
+  realtimeTalkInputTranscriptionUpdate,
   type RealtimeServerEvent,
 } from "./realtime-talk-webrtc-support.ts";
 
@@ -320,6 +321,13 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     switch (event.type) {
+      case "session.created": {
+        const update = realtimeTalkInputTranscriptionUpdate(event);
+        if (update) {
+          this.send(update);
+        }
+        return;
+      }
       case "input_transcript.added":
         this.emitFramelessTranscript("user", event.item?.text, false, event.item?.id);
         return;

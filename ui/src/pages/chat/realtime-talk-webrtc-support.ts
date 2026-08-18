@@ -33,7 +33,36 @@ export type RealtimeServerEvent = {
     role?: string;
     transcript?: string;
   };
+  session?: {
+    audio?: { input?: Record<string, unknown> };
+  };
 };
+
+// The model OpenAI realtime sessions use to transcribe captured speech. Kept in
+// step with the provider-side session policy default; a session that omits
+// transcription emits no user utterances at all.
+const REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+
+/**
+ * A browser-owned GA realtime call can start without any session policy, because
+ * ChatGPT subscription auth cannot mint the client secret that normally carries
+ * one. Such a session never transcribes the speaker, so ask for it once the
+ * server reports the session it actually created.
+ */
+export function realtimeTalkInputTranscriptionUpdate(
+  event: RealtimeServerEvent,
+): { type: "session.update"; session: unknown } | null {
+  if (event.session?.audio?.input?.transcription) {
+    return null;
+  }
+  return {
+    type: "session.update",
+    session: {
+      type: "realtime",
+      audio: { input: { transcription: { model: REALTIME_INPUT_TRANSCRIPTION_MODEL } } },
+    },
+  };
+}
 
 export class RealtimeTalkResponseOutcomeOwner {
   private activeResponseId: string | undefined;

@@ -149,6 +149,32 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     vi.unstubAllGlobals();
   });
 
+  it("asks a session created without transcription to transcribe the speaker", async () => {
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      { provider: "openai", transport: "webrtc", clientSecret: "client-secret-123" },
+      { client: {} as never, sessionKey: "main", callbacks: {} },
+    );
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    peer?.channel.dispatchEvent(
+      new MessageEvent("message", {
+        data: JSON.stringify({ type: "session.created", session: { audio: { input: {} } } }),
+      }),
+    );
+
+    expect(peer?.channel.send.mock.calls.map(([payload]) => JSON.parse(String(payload)))).toEqual([
+      {
+        type: "session.update",
+        session: {
+          type: "realtime",
+          audio: { input: { transcription: { model: "gpt-4o-mini-transcribe" } } },
+        },
+      },
+    ]);
+    transport.stop();
+  });
+
   it("submits semantic realtime control tool results through the OpenAI data channel", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.steer") {
