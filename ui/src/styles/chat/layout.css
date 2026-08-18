@@ -2073,7 +2073,8 @@ button.chat-reply-preview--message:disabled {
   height: 34px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  border-radius: 13px;
+  border-radius: 11px;
+  corner-shape: superellipse(1.5);
   background: var(--text-strong);
 }
 
