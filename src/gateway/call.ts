@@ -265,6 +265,8 @@ function firstGatewayErrorLine(message: string): string {
 // next step; protocol/auth failures keep their own richer messages.
 const GATEWAY_UNREACHABLE_SOCKET_CODES = new Set([
   "ECONNREFUSED",
+  // RST during connect/handshake: the port is not serving a working gateway.
+  "ECONNRESET",
   "EHOSTUNREACH",
   "ENETUNREACH",
   "ENOTFOUND",

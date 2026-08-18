@@ -24,7 +24,7 @@ import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
-import { renderSkillMenu } from "./chat-composer-skill-menu.ts";
+import { renderSkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
 import { renderSlashMenu } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import {
@@ -65,6 +65,7 @@ type ChatComposerViewContext = {
   mirrorCameraPreview: boolean;
   slashMenuVisible: boolean;
   skillMenuVisible: boolean;
+  skillMenuHost: SkillMenuHost;
   activeSlashMenuOptionId: string | null;
   activeSlashMenuOptionLabel: string;
   slashMenuListboxId: string;
@@ -100,6 +101,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     mirrorCameraPreview,
     slashMenuVisible,
     skillMenuVisible,
+    skillMenuHost,
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,
@@ -232,7 +234,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>`
               : nothing}
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
-            ${skillMenuVisible ? renderSkillMenu(requestUpdate, props) : nothing}
+            ${skillMenuVisible ? renderSkillMenu(state, skillMenuHost, requestUpdate) : nothing}
             ${renderAttachmentPreview(props)}
             ${props.replyTarget
               ? html`

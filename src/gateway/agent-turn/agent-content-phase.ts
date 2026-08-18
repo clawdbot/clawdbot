@@ -93,8 +93,31 @@ export async function prepareAgentContentPhase(params: {
   let imageOrder: PromptImageOrderEntry[] = [];
   let media: MediaFact[] = [];
   let offloadedRefs: OffloadedRef[] = [];
+  let supportsInlineImages: boolean | undefined;
   let agentId = params.agentId;
   let requestedSessionKey = params.requestedSessionKey;
+
+  const isKnownGatewayChannel = (value: string): boolean =>
+    isGatewayMessageChannel(value) || isInternalNonDeliveryChannel(value);
+  const channelHints = normalizeStringEntries(
+    [params.request.channel, params.request.replyChannel].filter(
+      (value): value is string => typeof value === "string",
+    ),
+  );
+  for (const rawChannel of channelHints) {
+    const normalized = normalizeMessageChannel(rawChannel);
+    if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent params: unknown channel: ${normalized}`,
+        ),
+      );
+      return undefined;
+    }
+  }
 
   if (params.normalizedAttachments.length > 0) {
     let baseProvider: string | undefined;
@@ -117,7 +140,7 @@ export async function prepareAgentContentPhase(params: {
       params.request.acpTurnSource === "manual_spawn" &&
       isAcpSessionKey(params.requestedSessionKeyRaw) &&
       requestedAcpMeta != null;
-    const supportsInlineImages = isConfirmedAcpSession
+    supportsInlineImages = isConfirmedAcpSession
       ? true
       : await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: params.context.loadGatewayModelCatalog,
@@ -126,52 +149,6 @@ export async function prepareAgentContentPhase(params: {
           provider: params.providerOverride || baseProvider,
           model: params.modelOverride || baseModel,
         });
-    try {
-      const parsed = await parseMessageWithAttachments(message, params.normalizedAttachments, {
-        maxBytes: resolveChatAttachmentMaxBytes(params.cfg),
-        log: params.context.logGateway,
-        supportsInlineImages,
-        acceptNonImage: false,
-      });
-      message = parsed.message.trim();
-      images = parsed.images;
-      imageOrder = parsed.imageOrder;
-      media = parsed.media;
-      offloadedRefs = parsed.offloadedRefs;
-    } catch (err) {
-      logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          String(err),
-        ),
-      );
-      return undefined;
-    }
-  }
-
-  const isKnownGatewayChannel = (value: string): boolean =>
-    isGatewayMessageChannel(value) || isInternalNonDeliveryChannel(value);
-  const channelHints = normalizeStringEntries(
-    [params.request.channel, params.request.replyChannel].filter(
-      (value): value is string => typeof value === "string",
-    ),
-  );
-  for (const rawChannel of channelHints) {
-    const normalized = normalizeMessageChannel(rawChannel);
-    if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agent params: unknown channel: ${normalized}`,
-        ),
-      );
-      return undefined;
-    }
   }
 
   const voiceWakeTrigger = normalizeOptionalString(params.request.voiceWakeTrigger) ?? "";
@@ -237,6 +214,33 @@ export async function prepareAgentContentPhase(params: {
       }
     } catch (err) {
       params.context.logGateway.warn(`voicewake routing load failed: ${formatForLog(err)}`);
+    }
+  }
+
+  if (params.normalizedAttachments.length > 0) {
+    try {
+      const parsed = await parseMessageWithAttachments(message, params.normalizedAttachments, {
+        maxBytes: resolveChatAttachmentMaxBytes(params.cfg),
+        log: params.context.logGateway,
+        supportsInlineImages,
+        acceptNonImage: false,
+      });
+      message = parsed.message.trim();
+      images = parsed.images;
+      imageOrder = parsed.imageOrder;
+      media = parsed.media;
+      offloadedRefs = parsed.offloadedRefs;
+    } catch (err) {
+      logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          String(err),
+        ),
+      );
+      return undefined;
     }
   }
 
