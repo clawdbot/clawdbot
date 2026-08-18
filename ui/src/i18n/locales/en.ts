@@ -170,6 +170,11 @@ export const en: TranslationMap = {
     ariaLabel: "Session progress",
     title: "Progress",
     noteLabel: "Progress note",
+    widgetLabel: "Session progress",
+    widgetLoading: "Loading session progress…",
+    widgetEmpty: "No progress card yet",
+    widgetUnavailable: "Session progress is unavailable.",
+    widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
     stepLabel: "{step}, {status}",
     status: {

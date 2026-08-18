@@ -4,9 +4,10 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
 
 describe("chat pane composer controls", () => {
-  it("renders model and permission controls", () => {
+  it("assembles model and permission controls as separate footer inputs", () => {
     const container = document.createElement("div");
     const state = {
       chatRunId: null,
@@ -24,25 +25,28 @@ describe("chat pane composer controls", () => {
     } as unknown as ChatPageHost;
     const onModelSetup = vi.fn();
 
-    render(
-      renderChatPaneComposerControls({
-        state,
-        selectedSession: undefined,
-        agentDefaultModel: undefined,
-        modelAccess: { allowed: true, requiredScope: "operator.write" },
-        effortAccess: { allowed: true, requiredScope: "operator.write" },
-        permissionAccess: { allowed: true, requiredScope: "operator.write" },
-        canSelectFull: true,
-        onModelSetup,
-      }),
-      container,
-    );
+    const controls = renderChatPaneComposerControls({
+      state,
+      selectedSession: undefined,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      onModelSetup,
+    });
+    render(controls.composerControls, container);
 
     expect(Array.from(container.children).map((node) => node.className)).toEqual([
       "chat-composer-model-control",
     ]);
     expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
-    expect(container.querySelector('[data-chat-permission-select="true"]')).not.toBeNull();
+    expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
+    const permissionContainer = document.createElement("div");
+    render(renderChatPermissionPicker(controls.permissionPicker), permissionContainer);
+    expect(
+      permissionContainer.querySelector('[data-chat-permission-select="true"]'),
+    ).not.toBeNull();
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
@@ -65,24 +69,22 @@ describe("chat pane composer controls", () => {
       chatStream: null,
     } as unknown as ChatPageHost;
 
-    render(
-      renderChatPaneComposerControls({
-        state,
-        selectedSession: {
-          key: "agent:main:permission-test",
-          kind: "direct",
-          permissionMode: "full",
-          sessionRoot: "/workspace/projects/openclaw",
-        },
-        agentDefaultModel: undefined,
-        modelAccess: { allowed: true, requiredScope: "operator.write" },
-        effortAccess: { allowed: true, requiredScope: "operator.write" },
-        permissionAccess: { allowed: true, requiredScope: "operator.write" },
-        canSelectFull: false,
-        onModelSetup: vi.fn(),
-      }),
-      container,
-    );
+    const controls = renderChatPaneComposerControls({
+      state,
+      selectedSession: {
+        key: "agent:main:permission-test",
+        kind: "direct",
+        permissionMode: "full",
+        sessionRoot: "/workspace/projects/openclaw",
+      },
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: false,
+      onModelSetup: vi.fn(),
+    });
+    render(renderChatPermissionPicker(controls.permissionPicker), container);
 
     const dropdown = container.querySelector<HTMLElement>(".chat-controls__permission-picker");
     dropdown?.setAttribute("open", "");

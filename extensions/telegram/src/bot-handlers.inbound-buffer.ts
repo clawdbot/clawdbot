@@ -362,11 +362,13 @@ export function createTelegramInboundBuffers({
   };
   const handleTextFragment = async (params: TelegramTextFragmentInput): Promise<boolean> => {
     const text = typeof params.msg.text === "string" ? params.msg.text : undefined;
-    const isCommandLike = (text ?? "").trim().startsWith("/");
+    const isCommand = getTelegramTextParts(params.msg).entities.some(
+      (entity) => entity.type === "bot_command" && entity.offset === 0,
+    );
     const senderId = params.msg.from?.id != null ? String(params.msg.from.id) : "unknown";
     const threadId = params.resolvedThreadId ?? params.dmThreadId;
     const key = `text:${params.chatId}:${threadId ?? "main"}:${senderId}`;
-    if (text && !isCommandLike && !params.isAbortControlMessage) {
+    if (text && !isCommand && !params.isAbortControlMessage) {
       const nowMs = Date.now();
       const existing = textBuffer.get(key);
       if (existing) {

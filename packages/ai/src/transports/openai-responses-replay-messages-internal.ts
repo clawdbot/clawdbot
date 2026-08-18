@@ -362,13 +362,19 @@ function convertResponsesMessagesWithStyle(
             block.thinkingSignature &&
             (providerStyle || block.thinkingSignature.startsWith("{"))
           ) {
-            // Transport conversion skips openai-completions provenance tags; the provider
-            // conversion retains its shipped parse behavior for every non-empty signature.
-            const reasoningItem = JSON.parse(
-              block.thinkingSignature,
-            ) as ReplayableResponseReasoningItem;
+            // Persisted signatures are provider-owned data. Skip malformed or unrelated
+            // shapes so one corrupt history item cannot prevent the next request.
+            let reasoningItem: unknown;
+            try {
+              reasoningItem = JSON.parse(block.thinkingSignature);
+            } catch {
+              continue;
+            }
+            if (!isRecord(reasoningItem) || reasoningItem.type !== "reasoning") {
+              continue;
+            }
             const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
-              reasoningItem,
+              reasoningItem as ReplayableResponseReasoningItem,
               replayContext,
               readOpenAIResponsesReasoningReplayBlockMetadata(isRecord(block) ? block : {}),
               providerStyle ? { preserveUnattributedEncryptedContent: true } : undefined,

@@ -20,6 +20,10 @@
   border-top: 1px solid var(--border);
 }
 
+.session-progress-card--board {
+  padding: var(--space-3);
+}
+
 .session-progress-card__heading {
   display: flex;
   align-items: center;

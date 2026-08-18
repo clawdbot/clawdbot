@@ -432,7 +432,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var nodeTerminationCleanup: @MainActor () async -> Void = {
         // CUA shutdown drains the worker before closing the daemon socket; run it
         // first so other cleanup cannot consume the app termination deadline.
-        await CuaDriverHostCoordinator.shared.shutdown()
+        if AppLaunchRuntimePlan.current.allowsCuaComputerControl {
+            await CuaDriverHostCoordinator.shared.shutdown()
+        }
         await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
     }

@@ -34,6 +34,7 @@ import {
   type ComposerRunStatus,
 } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import { renderChatPermissionPicker } from "./chat-permission-picker.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import { renderChatVoiceError } from "./chat-voice-activity.ts";
 
@@ -458,6 +459,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             </div>
 
             <div class="agent-chat__composer-footer">
+              ${props.permissionPicker
+                ? html`<div class="agent-chat__composer-meta">
+                    ${renderChatPermissionPicker(props.permissionPicker)}
+                  </div>`
+                : nothing}
               ${composerControls !== nothing
                 ? html`
                     <div class="agent-chat__composer-controls">
@@ -511,7 +517,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     </div>
                   `
                 : nothing}
-              <div class="agent-chat__composer-meta">${contextNotice}</div>
+              <div class="agent-chat__composer-context">${contextNotice}</div>
             </div>
           </div>`
         : nothing}

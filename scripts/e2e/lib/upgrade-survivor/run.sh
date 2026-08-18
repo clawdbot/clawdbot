@@ -14,6 +14,23 @@ export OPENCLAW_NO_PROMPT=1
 export OPENCLAW_SKIP_PROVIDERS=1
 export OPENCLAW_SKIP_CHANNELS=1
 export OPENCLAW_DISABLE_BONJOUR=1
+LIVE_OPENAI="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI:-0}"
+LIVE_OPENAI_API_KEY=""
+case "$LIVE_OPENAI" in
+  0)
+    ;;
+  1)
+    if [ -z "${OPENAI_API_KEY:-}" ]; then
+      echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 requires OPENAI_API_KEY" >&2
+      exit 2
+    fi
+    LIVE_OPENAI_API_KEY="$OPENAI_API_KEY"
+    ;;
+  *)
+    echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI must be 0 or 1; got: $LIVE_OPENAI" >&2
+    exit 2
+    ;;
+esac
 export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
 export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
 export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
@@ -81,6 +98,8 @@ HEALTHZ_JSON="$ARTIFACT_ROOT/healthz.json"
 READYZ_JSON="$ARTIFACT_ROOT/readyz.json"
 STATUS_JSON="$ARTIFACT_ROOT/status.json"
 STATUS_ERR="$ARTIFACT_ROOT/status.err"
+LIVE_OPENAI_JSON="$ARTIFACT_ROOT/live-openai.json"
+LIVE_OPENAI_ERR="$ARTIFACT_ROOT/live-openai.err"
 BASELINE_CONFIG_VALIDATE_LOG="$ARTIFACT_ROOT/baseline-config-validate.log"
 BASELINE_SERVICE_INSTALL_JSON="$ARTIFACT_ROOT/baseline-service-install.json"
 BASELINE_SERVICE_INSTALL_ERR="$ARTIFACT_ROOT/baseline-service-install.err"
@@ -232,11 +251,12 @@ fs.writeFileSync(process.env.SUMMARY_JSON, `${JSON.stringify(summary, null, 2)}\
 NODE
 }
 
-cleanup() {
+stop_gateway() {
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true
   fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
+  gateway_pid=""
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     local shim_pid
     shim_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE" 2>/dev/null || true)"
@@ -244,6 +264,11 @@ cleanup() {
       openclaw_e2e_terminate_gateways "$shim_pid"
     fi
   fi
+  rm -f "$SYSTEMCTL_SHIM_PID_FILE"
+}
+
+cleanup() {
+  stop_gateway
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
 }
@@ -1530,6 +1555,41 @@ check_gateway_status() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$STATUS_JSON"
 }
 
+run_live_openai() {
+  local marker="OPENCLAW_UPGRADE_SURVIVOR_LIVE_OK"
+  local model="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL:-openai/gpt-5.5}"
+  local timeout_seconds
+  local status=0
+  timeout_seconds="$(
+    openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS 180
+  )"
+  stop_gateway
+  (
+    unset OPENCLAW_SKIP_PROVIDERS
+    export OPENAI_API_KEY="$LIVE_OPENAI_API_KEY"
+    openclaw_e2e_maybe_timeout "${timeout_seconds}s" \
+      openclaw agent \
+      --local \
+      --agent main \
+      --session-id upgrade-survivor-live-openai \
+      --model "$model" \
+      --message "Reply with exactly $marker and no other text." \
+      --thinking off \
+      --timeout "$timeout_seconds" \
+      --json
+  ) >"$LIVE_OPENAI_JSON" 2>"$LIVE_OPENAI_ERR" || status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "live OpenAI survivor turn failed" >&2
+    openclaw_e2e_print_log "$LIVE_OPENAI_ERR" >&2
+    openclaw_e2e_print_log "$LIVE_OPENAI_JSON" >&2
+    return "$status"
+  fi
+  node --input-type=module - "$marker" "$LIVE_OPENAI_JSON" <<'NODE'
+import { assertAgentReplyContainsMarker } from "./scripts/e2e/lib/agent-turn-output.mjs";
+assertAgentReplyContainsMarker(process.argv[2], process.argv[3]);
+NODE
+}
+
 phase storage-preflight storage_preflight
 phase validate-update-restart-mode validate_update_restart_mode
 phase reset-run-state reset_run_state
@@ -1573,5 +1633,8 @@ phase assert-survival assert_survival
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
+if [ "$LIVE_OPENAI" = "1" ]; then
+  phase live-openai run_live_openai
+fi
 
 echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version} updateRestartMode=${UPDATE_RESTART_MODE} startup=${start_seconds}s updateRestart=${update_restart_seconds:-manual}s healthz=${healthz_seconds}s readyz=${readyz_seconds}s status=${status_seconds}s."

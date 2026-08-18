@@ -2597,10 +2597,6 @@ button.chat-pr__diff {
   width: 100%;
 }
 
-.chat-composer-model-control .chat-controls__permission-picker {
-  flex: 0 0 auto;
-}
-
 .agent-chat__stt-interim {
   padding: 10px 14px 0;
   color: var(--muted);
@@ -2682,7 +2678,8 @@ button.chat-pr__diff {
   padding: calc(var(--chat-box-inset) / 2) var(--chat-box-inset);
 }
 
-.agent-chat__composer-meta {
+.agent-chat__composer-meta,
+.agent-chat__composer-context {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -3758,7 +3755,8 @@ button.chat-pr__diff {
     flex: 0 0 26px;
   }
 
-  .agent-chat__composer-meta {
+  .agent-chat__composer-meta,
+  .agent-chat__composer-context {
     margin-left: 0;
   }
 
@@ -3775,7 +3773,7 @@ button.chat-pr__diff {
      text yields before either picker does. */
   .agent-chat__input .agent-chat__composer-controls .chat-composer-model-control {
     flex: 0 1 auto;
-    min-width: 138px;
+    min-width: 144px;
   }
 
   .agent-chat__input .agent-chat__composer-controls .chat-controls__model-picker {
@@ -3789,6 +3787,7 @@ button.chat-pr__diff {
 
   /* The borderless trigger is 30px on desktop; keep a >=44px touch target
      inside the mobile composer row. */
+  .agent-chat__input .agent-chat__composer-meta .chat-controls__inline-select-trigger,
   .agent-chat__input .agent-chat__composer-controls .chat-controls__inline-select-trigger {
     width: fit-content;
     max-width: 100%;
@@ -5364,6 +5363,16 @@ button.chat-pr__diff {
 }
 
 @media (max-width: 640px) {
+  .agent-chat__composer-meta .chat-controls__permission-trigger {
+    width: 44px;
+  }
+
+  .agent-chat__composer-meta
+    .chat-controls__permission-trigger
+    .chat-controls__inline-select-label {
+    display: none;
+  }
+
   .agent-chat__composer-controls {
     align-items: center;
     flex-direction: row;

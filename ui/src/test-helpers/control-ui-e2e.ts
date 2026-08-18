@@ -496,7 +496,14 @@ export type MockGatewayControls = {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
     hasMultipleSessionSharingIdentities: boolean;
   }) => Promise<void>;
-  waitForRequest: (method: string) => Promise<MockGatewayRequest>;
+  /**
+   * Resolves with a captured request for `method`. Without `after` this is
+   * satisfied by ANY prior request of the method (and returns the latest), so
+   * a second same-method wait can return a stale earlier request on slow
+   * runners; pass `after` = the pre-action count from `getRequests(method)`
+   * to wait for and return the next new request instead.
+   */
+  waitForRequest: (method: string, options?: { after?: number }) => Promise<MockGatewayRequest>;
 };
 
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
@@ -2619,12 +2626,13 @@ function createMockGatewayControls(
         gateway.setSessionSharingPolicy(nextPolicy);
       }, policy);
     },
-    async waitForRequest(method) {
+    async waitForRequest(method, options) {
       const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
+      const after = options?.after;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await page.waitForFunction(
-            (targetMethod) => {
+            ({ targetMethod, priorCount }) => {
               const gateway = (
                 window as Window & {
                   openclawControlUiE2eGateway?: {
@@ -2632,14 +2640,19 @@ function createMockGatewayControls(
                   };
                 }
               ).openclawControlUiE2eGateway;
-              return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
+              const matching =
+                gateway?.requests.filter((request) => request.method === targetMethod) ?? [];
+              return matching.length > (priorCount ?? 0);
             },
-            method,
+            { targetMethod: method, priorCount: after ?? 0 },
             // Request capture is non-rendering state. Interval polling avoids background-page
             // requestAnimationFrame throttling when CI runs several headless pages concurrently.
             { polling: 25, timeout: Math.max(1, deadline - Date.now()) },
           );
-          const request = (await getRequests(method)).at(-1);
+          const matching = await getRequests(method);
+          // With an `after` cursor, return the first NEW request; otherwise keep
+          // the historical latest-match behavior existing callers rely on.
+          const request = after === undefined ? matching.at(-1) : matching.at(after);
           if (request) {
             return request;
           }

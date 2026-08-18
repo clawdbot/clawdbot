@@ -376,6 +376,7 @@ final class AppState {
         self.ifNotPreview {
             let computerControlEnabled = isComputerControlEnabled()
             let provider = ComputerControlProvider.current()
+            let launchPlan = AppLaunchRuntimePlan.current
             let peekabooBridgeEnabled = self.peekabooBridgeEnabled
             self.computerControlHostGeneration &+= 1
             let generation = self.computerControlHostGeneration
@@ -389,7 +390,9 @@ final class AppState {
                     guard generation == self.computerControlHostGeneration else { return }
                     await CuaDriverHostCoordinator.shared.setEnabled(true)
                 case .peekaboo:
-                    await CuaDriverHostCoordinator.shared.setEnabled(false)
+                    if launchPlan.allowsCuaComputerControl {
+                        await CuaDriverHostCoordinator.shared.setEnabled(false)
+                    }
                     guard generation == self.computerControlHostGeneration else { return }
                     await PeekabooBridgeHostCoordinator.shared.setEnabled(
                         peekabooBridgeEnabled && computerControlEnabled)

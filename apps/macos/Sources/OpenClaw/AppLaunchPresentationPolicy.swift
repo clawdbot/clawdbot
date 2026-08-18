@@ -190,6 +190,10 @@ struct AppLaunchRuntimePlan: Equatable {
         !self.isElevationHost
     }
 
+    var allowsCuaComputerControl: Bool {
+        !self.isElevationHost
+    }
+
     func shouldAutoOpenChat(arguments: [String]) -> Bool {
         self.allowsAutomaticPresentation &&
             (arguments.contains("--chat") || arguments.contains("--webchat"))

@@ -26,6 +26,7 @@ import type {
   ChatComposerPlusMenuProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
+import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
 
 /** One shape for queued-row edit state and actions. */
 export type ChatQueuedEditProps = {
@@ -120,6 +121,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   typingActors?: readonly { id: string; label: string }[];
   onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
+  permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;

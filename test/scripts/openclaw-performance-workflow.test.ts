@@ -390,8 +390,8 @@ describe("OpenClaw performance workflow", () => {
 
     expect(run).toContain('"$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts"');
     expect(run).toContain('--entry "$GITHUB_WORKSPACE/openclaw.mjs"');
-    expect(run).toContain("--case gatewayHealthJsonConnected \\");
-    expect(run).toContain("--case gatewayHealthJsonFirstDevice \\");
+    expect(run).toContain("--case gatewayHealthJsonWarmState \\");
+    expect(run).toContain("--case gatewayHealthJsonFreshState \\");
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {

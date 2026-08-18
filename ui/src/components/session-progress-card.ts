@@ -4,7 +4,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../i18n/index.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
-type SessionProgressCardPlacement = "composer" | "hovercard" | "rail";
+type SessionProgressCardPlacement = "board" | "composer" | "hovercard" | "rail";
 
 const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
   completed: "sessionProgressCard.status.completed",

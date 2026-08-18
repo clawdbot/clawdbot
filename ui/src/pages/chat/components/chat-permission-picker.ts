@@ -9,6 +9,15 @@ const PERMISSION_OPTIONS = [null, ...PERMISSION_MODES] as const;
 
 type PermissionSelection = SessionPermissionMode | null;
 
+export type ChatPermissionPickerProps = {
+  canSelectFull: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
+  mode?: SessionPermissionMode;
+  sessionRoot?: string;
+  onSelect: (mode: PermissionSelection) => unknown;
+};
+
 function handlePermissionPickerKeydown(
   event: KeyboardEvent,
   onSelect: (mode: PermissionSelection) => void,
@@ -63,14 +72,7 @@ function permissionSelection(value: string | undefined): PermissionSelection | u
   return isPermissionMode(value) ? value : undefined;
 }
 
-export function renderChatPermissionPicker(params: {
-  canSelectFull: boolean;
-  disabled?: boolean;
-  disabledReason?: string;
-  mode?: SessionPermissionMode;
-  sessionRoot?: string;
-  onSelect: (mode: PermissionSelection) => unknown;
-}) {
+export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
   const selectMode = (mode: PermissionSelection) => {
     if (params.disabled || (mode === "full" && !params.canSelectFull)) {
       return;
@@ -82,7 +84,7 @@ export function renderChatPermissionPicker(params: {
   return html`
     <wa-dropdown
       class="chat-controls__inline-select chat-controls__permission-picker"
-      placement="top-end"
+      placement="top-start"
       @keydown=${(event: KeyboardEvent) => handlePermissionPickerKeydown(event, selectMode)}
       @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
         const mode = permissionSelection(event.detail.item.value);
