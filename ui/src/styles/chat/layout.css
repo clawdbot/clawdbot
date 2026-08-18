@@ -1828,7 +1828,6 @@ button.chat-reply-preview--message:disabled {
   position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 4px;
   box-sizing: border-box;
   width: 50px;
