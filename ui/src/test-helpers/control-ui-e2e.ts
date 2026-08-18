@@ -299,6 +299,13 @@ export type ControlUiMockGatewayScenario = {
     name?: string;
     email?: string;
     avatarUrl?: string;
+    deviceFamily?: string;
+    host?: string;
+    instanceId?: string;
+    lastInputSeconds?: number;
+    mode?: string;
+    platform?: string;
+    ts?: number;
     watchedSessions?: string[];
   }>;
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
@@ -1321,9 +1328,14 @@ function installControlUiMockGateway(
         : "e2e-self-instance";
     return {
       presence: scenario.presenceUsers.map((user, index) => ({
-        instanceId: user.self ? selfInstanceId : `e2e-presence-${index}`,
-        mode: "webchat",
+        instanceId: user.self ? selfInstanceId : (user.instanceId ?? `e2e-presence-${index}`),
+        mode: user.mode ?? "webchat",
         reason: "connect",
+        ts: user.ts ?? Date.now(),
+        ...(user.host ? { host: user.host } : {}),
+        ...(user.platform ? { platform: user.platform } : {}),
+        ...(user.deviceFamily ? { deviceFamily: user.deviceFamily } : {}),
+        ...(user.lastInputSeconds === undefined ? {} : { lastInputSeconds: user.lastInputSeconds }),
         user: {
           id: user.id,
           name: user.name ?? null,

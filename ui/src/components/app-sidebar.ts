@@ -31,6 +31,7 @@ import {
   renderAppSidebarBrand,
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
+  renderAppSidebarOnline,
   renderAppSidebarPagesHead,
   renderAppSidebarPluginTabEntry,
   renderAppSidebarZoneEntry,
@@ -554,7 +555,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   .map((tab) => renderAppSidebarPluginTabEntry(this, tab))}
               </div>
             </nav>
-            ${this.renderSessions()}
+            ${renderAppSidebarOnline(this)} ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
             ${renderAppSidebarAttention(this)}

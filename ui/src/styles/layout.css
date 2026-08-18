@@ -2182,7 +2182,6 @@ body.update-dialog-open .sidebar-update-card__status {
   display: inline-flex;
 }
 
-.viewer-facepile > openclaw-viewer-avatar:not(:first-child) .viewer-avatar,
 .viewer-facepile > .viewer-avatar:not(:first-child) {
   margin-left: -5px;
 }
@@ -2228,8 +2227,7 @@ body.update-dialog-open .sidebar-update-card__status {
   margin-left: 1px;
 }
 
-.viewer-avatar--footer,
-.viewer-facepile--footer .viewer-avatar--overflow {
+.viewer-avatar--footer {
   width: 20px;
   height: 20px;
   font-size: 8px;
@@ -2240,22 +2238,6 @@ body.update-dialog-open .sidebar-update-card__status {
   height: 40px;
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
   font-size: var(--control-ui-text-sm);
-}
-
-.viewer-facepile-trigger {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  margin: -2px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  cursor: var(--cursor-action);
-}
-
-.viewer-facepile-trigger:hover,
-.viewer-facepile-trigger:focus-visible {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .sidebar-recent-session__name {
@@ -2422,6 +2404,92 @@ body.update-dialog-open .sidebar-update-card__status {
 .nav-section__items {
   display: grid;
   gap: 2px;
+}
+
+.sidebar-online {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 12px;
+  margin: 12px 0 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+}
+
+.sidebar-online__heading {
+  padding: 0 8px 3px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sidebar-online__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-online__person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    background var(--duration-fast) ease,
+    filter var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.sidebar-online__person:hover,
+.sidebar-online__person:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  text-decoration: none;
+}
+
+.sidebar-online__person--away {
+  filter: grayscale(0.8);
+  opacity: 0.45;
+}
+
+.sidebar-online__person .viewer-avatar {
+  flex: none;
+}
+
+.sidebar-online__person-name {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-online__person-action {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-online__person:hover .sidebar-online__person-action,
+.sidebar-online__person:focus-visible .sidebar-online__person-action {
+  opacity: 1;
+}
+
+.sidebar-online__person-action svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
 }
 
 .sidebar-zone-entry {
@@ -3500,74 +3568,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   font-size: var(--control-ui-text-sm);
   line-height: 1.35;
   text-align: left;
-}
-
-.sidebar-hover-card__region {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.sidebar-hover-card__heading {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.sidebar-hover-card__people {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  max-height: min(240px, 45vh);
-  overflow-y: auto;
-}
-
-.sidebar-hover-card__person {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.sidebar-hover-card__person .viewer-avatar {
-  width: 24px;
-  height: 24px;
-  flex: none;
-  border-color: var(--card);
-  font-size: 9px;
-}
-
-.sidebar-hover-card__person-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.sidebar-hover-card__person-name,
-.sidebar-hover-card__person-email {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-hover-card__person-name {
-  color: var(--text);
-  font-weight: 550;
-}
-
-.sidebar-hover-card__person-email {
-  color: var(--muted);
-  font-weight: 400;
-  font-size: var(--control-ui-text-xs);
-}
-
-.sidebar-hover-card__divider {
-  height: 1px;
-  margin: 10px 0;
-  background: color-mix(in srgb, var(--border-strong) 68%, transparent);
 }
 
 .sidebar-hover-card__server-details {

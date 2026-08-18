@@ -5,9 +5,9 @@ import {
   renderSettingsSection,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
-import type { PresenceViewer } from "../../components/viewer-facepile.ts";
-import "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/viewer-facepile.ts";
+import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 type IdentitySectionProps = {

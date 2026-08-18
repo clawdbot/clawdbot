@@ -5,7 +5,7 @@ import {
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
+import { isRouteId, isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -16,6 +16,11 @@ import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import {
+  isPresenceViewerIdle,
+  presenceViewerLabel,
+  projectOnlinePresenceViewers,
+} from "../lib/presence-users.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -246,6 +251,53 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
         ${icons.penLine}
       </button>
     </div>
+  `;
+}
+
+export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
+  const selfUser = resolveCurrentSelfUser({
+    snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
+    presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
+    presenceInstanceId: host.sessionData.presenceInstanceId,
+  });
+  const users = projectOnlinePresenceViewers(
+    host.sessionData.presencePayload,
+    selfUser?.id,
+    host.sessionData.presenceInstanceId,
+  );
+  if (users.length === 0) {
+    return nothing;
+  }
+  return html`
+    <section class="sidebar-online" aria-label=${t("presence.rosterTitle")}>
+      <div class="sidebar-online__heading">${t("presence.rosterTitle")}</div>
+      <div class="sidebar-online__list">
+        ${users.map((user) => {
+          const pathname = pathForRoute("activity", host.basePath);
+          const search = `?${new URLSearchParams({ person: user.id }).toString()}`;
+          return html`<a
+            class="sidebar-online__person ${isPresenceViewerIdle(user)
+              ? "sidebar-online__person--away"
+              : ""}"
+            data-online-user-id=${user.id}
+            href=${`${pathname}${search}`}
+            @click=${(event: MouseEvent) => {
+              if (!shouldHandleNavigationClick(event)) {
+                return;
+              }
+              event.preventDefault();
+              host.onNavigate?.("activity", { pathname, search });
+            }}
+          >
+            <openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>
+            <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+            <span class="sidebar-online__person-action" aria-hidden="true"
+              >${icons.chevronRight}</span
+            >
+          </a>`;
+        })}
+      </div>
+    </section>
   `;
 }
 

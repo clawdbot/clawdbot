@@ -8,13 +8,10 @@ import { icons } from "../../components/icons.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { listAssignableSessionOwners } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
-import {
-  hasSessionPresenceViewers,
-  projectPresencePayload,
-} from "../../components/viewer-facepile.ts";
 import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasSessionPresenceViewers, projectPresencePayload } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   canArchiveSessionRow,
