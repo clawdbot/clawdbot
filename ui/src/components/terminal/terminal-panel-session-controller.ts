@@ -91,6 +91,8 @@ export class TerminalPanelSessionController
     });
   }
 
+  hostConnected(): void {}
+
   private updateControllerState<Key extends keyof TerminalPanelSessionControllerState>(
     key: Key,
     value: TerminalPanelSessionControllerState[Key],
@@ -211,10 +213,9 @@ export class TerminalPanelSessionController
   }
 
   private terminalActionsCanRun(): boolean {
-    const client = this.host.client;
     return (
-      Boolean(client) &&
-      client === this.activeClient &&
+      this.host.client !== null &&
+      this.host.client === this.activeClient &&
       this.host.available &&
       this.host.isConnected
     );

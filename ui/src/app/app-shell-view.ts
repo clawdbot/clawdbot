@@ -645,7 +645,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         .agentId=${selectedAgentId}
         .sessionKey=${isSessionRouteId(activeRoute) ? host.activeSessionKey : null}
         .suppressed=${settingsTakeover}
-        .sessionBottomOnly=${isSessionRouteId(activeRoute)}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
