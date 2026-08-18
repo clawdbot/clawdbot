@@ -470,6 +470,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               id: preparedWorktree.id,
               branch: preparedWorktree.branch,
               repoRoot: preparedWorktree.repoRoot,
+              canonicalWorkspaceDir: workspace,
             },
             ...(provisioned
               ? {

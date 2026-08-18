@@ -74,11 +74,13 @@ it("re-registers durable lineage children before configured-only runtime reads",
       ),
     ).toBe(false);
 
+    const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => 0);
     await runSessionStartupMigration({
       cfg,
       env,
       log: { info: vi.fn(), warn: vi.fn() },
       deps: {
+        migrateManagedWorktreeCanonicalWorkspaces,
         migrateLegacyMainSessionKeys: vi.fn(async () => ({
           armed: false,
           changes: [],
@@ -94,6 +96,7 @@ it("re-registers durable lineage children before configured-only runtime reads",
         sweepOrphanSessionStoreTemps: vi.fn(async () => 0),
       },
     });
+    expect(migrateManagedWorktreeCanonicalWorkspaces).toHaveBeenCalled();
 
     expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
       expect.objectContaining({ agentId: "codex", path: childDatabasePath }),

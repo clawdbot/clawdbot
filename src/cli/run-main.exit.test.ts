@@ -6,6 +6,7 @@ import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -4136,6 +4137,30 @@ describe("runCli exit behavior", () => {
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expectBoundTui({ url, token: "loopback-remote-auth" });
+  });
+
+  it("passes configured remote edge auth into the bare-root onboarding probe", async () => {
+    const url = "wss://gateway.example/ws";
+    const config: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url,
+          token: "test-token",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    primeBareRootConfig(config);
+
+    await runBareCli();
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url,
+      config,
+      token: "test-token",
+    });
+    expectBoundTui({ url, token: "test-token" });
   });
 
   it("keeps configured remote password authoritative from preflight through TUI launch", async () => {

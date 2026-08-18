@@ -286,6 +286,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
   getPromptCacheRetention: () => PromptCacheRetention;
   getSystemPrompt: () => string;
+  onCurrentTurnImageFailure?: (count: number) => void;
   isOpenAIResponsesApi: boolean;
   repairToolUseResultPairing: boolean;
   sessionAgentId: string;
@@ -451,6 +452,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         input.sandbox?.enabled && input.sandbox.fsBridge
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
           : undefined,
+      onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
     },
   );
   const previousComputerFrameTransform = activeSession.agent.transformContext;

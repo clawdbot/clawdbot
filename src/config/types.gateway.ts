@@ -276,6 +276,8 @@ export type GatewayRemoteConfig = {
   token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */
   password?: SecretInput;
+  /** Headers presented to an identity-aware proxy in front of the Gateway (values are secrets). */
+  edgeAuth?: Record<string, SecretInput>;
   /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
   tlsFingerprint?: string;
   /** SSH target for tunneling remote Gateway (user@host). */

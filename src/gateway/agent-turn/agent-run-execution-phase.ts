@@ -406,6 +406,7 @@ export function startAgentRunExecution(params: {
             context: params.context,
             taskTrackingMode: prepared.dispatchTaskTrackingMode,
             restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
+            canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
           },
           executionIdentitySpawnFacts,
         ),

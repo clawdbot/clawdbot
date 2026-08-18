@@ -302,6 +302,7 @@ function throwIfResetFailed(failures: string[]): void {
 
 type OnboardingGatewayProbeParams = {
   url: string;
+  config?: OpenClawConfig;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -317,6 +318,7 @@ function runOnboardingGatewayProbe(
   const timeoutMs = params.timeoutMs ?? Math.max(1500, params.preauthHandshakeTimeoutMs ?? 0);
   return probeGateway({
     url,
+    ...(params.config ? { config: params.config } : {}),
     timeoutMs,
     auth: {
       token: params.token,

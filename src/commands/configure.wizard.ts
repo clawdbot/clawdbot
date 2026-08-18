@@ -527,6 +527,7 @@ export async function runConfigureWizard(
             });
             return probeGatewayReachable({
               url: remoteUrl,
+              ...(baseConfig.gateway?.remote?.edgeAuth ? { config: baseConfig } : {}),
               token: remoteProbeAuth.auth.token,
               ...(remoteProbeAuth.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
               timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,

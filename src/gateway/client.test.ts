@@ -2407,11 +2407,11 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
-  it("never logs a registered Cloudflare Access credential from connection errors", async () => {
-    const clientSecret = ["cf", "redaction", "secret"].join("-");
+  it("never logs a registered edge auth header value from connection errors", async () => {
+    const clientSecret = "test-secret";
     const client = new GatewayClient({
       url: "wss://gateway.example",
-      cloudflareAccess: { clientId: "cf-redaction-id", clientSecret },
+      edgeAuthHeaders: { "X-Edge-Auth": clientSecret },
       deviceIdentity: null,
     });
 

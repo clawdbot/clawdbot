@@ -1886,6 +1886,7 @@ export const en: TranslationMap = {
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
+    reviewOnly: "Review only. Sign in with approval access to record a decision.",
     deny: "Deny",
     details: "Details",
     labels: {

@@ -74,6 +74,17 @@ function getSection(container: Element, heading: string): Element {
   return section;
 }
 
+function getSettingsRow(container: Element, title: string): Element {
+  const row = Array.from(container.querySelectorAll(".settings-row")).find(
+    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+  );
+  expect(row).toBeInstanceOf(Element);
+  if (!(row instanceof Element)) {
+    throw new Error(`Expected ${title} row`);
+  }
+  return row;
+}
+
 function getInventorySection(container: Element): Element {
   return getSection(container, "Paired devices");
 }
@@ -626,6 +637,95 @@ describe("devices inventory rendering", () => {
 });
 
 describe("devices exec approvals rendering", () => {
+  it("renders owner-reported defaults for fresh approval state", () => {
+    const container = renderDevicesContainer({
+      execApprovalsSnapshot: {
+        path: "/tmp/exec-approvals.json",
+        exists: false,
+        hash: "missing:empty",
+        file: { version: 1, agents: {} },
+        resolvedDefaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      },
+    });
+    const section = getSection(container, "Exec approvals");
+
+    expect(
+      getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select")?.value,
+    ).toBe("full");
+    expect(getSettingsRow(section, "Ask").querySelector<HTMLSelectElement>("select")?.value).toBe(
+      "off",
+    );
+  });
+
+  it("preserves authored wildcard and agent overrides above owner defaults", () => {
+    const container = renderDevicesContainer({
+      execApprovalsSnapshot: {
+        path: "/tmp/exec-approvals.json",
+        exists: false,
+        hash: "missing:empty",
+        file: {
+          version: 1,
+          agents: {
+            "*": { security: "allowlist", ask: "always" },
+            main: { ask: "on-miss" },
+          },
+        },
+        resolvedDefaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      },
+      execApprovalsSelectedAgent: "main",
+    });
+    const section = getSection(container, "Exec approvals");
+    const security = getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select");
+    const ask = getSettingsRow(section, "Ask").querySelector<HTMLSelectElement>("select");
+    const fallback = getSettingsRow(section, "Ask fallback").querySelector<HTMLSelectElement>(
+      "select",
+    );
+
+    expect(security?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (allowlist)");
+    expect(ask?.value).toBe("on-miss");
+    expect(fallback?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (deny)");
+  });
+
+  it("offers only nodes that support both reading and writing approval policy", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "get-only",
+          displayName: "Get only",
+          commands: ["system.execApprovals.get"],
+        },
+        {
+          nodeId: "set-only",
+          displayName: "Set only",
+          commands: ["system.execApprovals.set"],
+        },
+        {
+          nodeId: "editable",
+          displayName: "Editable",
+          commands: ["system.execApprovals.get", "system.execApprovals.set"],
+        },
+      ],
+      execApprovalsTarget: "node",
+    });
+    const section = getSection(container, "Exec approvals");
+    const nodeSelect = section.querySelector<HTMLSelectElement>('select[aria-label="Node"]');
+
+    expect(Array.from(nodeSelect?.options ?? [], (option) => option.value)).toEqual([
+      "",
+      "editable",
+    ]);
+  });
+
   it("renders defaults, configured agents, and approval-only agents in the avatar picker", async () => {
     const onExecApprovalsSelectAgent = vi.fn();
     const container = renderDevicesContainer({
