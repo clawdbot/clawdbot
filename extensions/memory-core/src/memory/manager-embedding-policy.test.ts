@@ -5,7 +5,7 @@ import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
-  isSplittableMemoryEmbeddingTransportError,
+  isSplittableMemoryEmbeddingBatchError,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -168,16 +168,14 @@ describe("memory embedding policy", () => {
 
     for (const message of splittableMessages) {
       expect(isRetryableMemoryEmbeddingError(message)).toBe(true);
-      expect(isSplittableMemoryEmbeddingTransportError(message)).toBe(true);
+      expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
     }
     expect(isRetryableMemoryEmbeddingError("ECONNREFUSED")).toBe(true);
-    expect(isSplittableMemoryEmbeddingTransportError("ECONNREFUSED")).toBe(false);
+    expect(isSplittableMemoryEmbeddingBatchError("ECONNREFUSED")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("EHOSTUNREACH")).toBe(true);
-    expect(isSplittableMemoryEmbeddingTransportError("EHOSTUNREACH")).toBe(false);
+    expect(isSplittableMemoryEmbeddingBatchError("EHOSTUNREACH")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("memory embeddings batch timed out")).toBe(true);
-    expect(isSplittableMemoryEmbeddingTransportError("memory embeddings batch timed out")).toBe(
-      false,
-    );
+    expect(isSplittableMemoryEmbeddingBatchError("memory embeddings batch timed out")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("worker terminated by user")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("embedding validation failed")).toBe(false);
   });
@@ -196,7 +194,7 @@ describe("memory embedding policy", () => {
       items: ["a", "b", "c", "d"],
       run,
       isRetryable: isRetryableMemoryEmbeddingError,
-      isSplittable: isSplittableMemoryEmbeddingTransportError,
+      isSplittable: isSplittableMemoryEmbeddingBatchError,
       waitForRetry: async () => {},
       maxAttempts: 3,
       baseDelayMs: 500,
@@ -205,10 +203,79 @@ describe("memory embedding policy", () => {
     expect(result).toEqual([[97], [98], [99], [100]]);
     expect(run.mock.calls.map(([items]) => items.length)).toEqual([4, 2, 1, 1, 2, 1, 1]);
     expect(isRetryableMemoryEmbeddingError("431 request_headers_too_large")).toBe(false);
-    expect(isSplittableMemoryEmbeddingTransportError("431 request_headers_too_large")).toBe(true);
-    expect(
-      isSplittableMemoryEmbeddingTransportError("embedding validation failed at item 4312"),
-    ).toBe(false);
+    expect(isSplittableMemoryEmbeddingBatchError("431 request_headers_too_large")).toBe(true);
+    expect(isSplittableMemoryEmbeddingBatchError("embedding validation failed at item 4312")).toBe(
+      false,
+    );
+  });
+
+  it("splits explicit embedding item-count limits without replaying oversized requests", async () => {
+    const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
+    const waits: number[] = [];
+    const splits: string[] = [];
+    const itemLimitError = (itemCount: number) =>
+      `openai-compatible embeddings failed: HTTP 400: {"error":{"code":"InvalidParameter","message":"Embeddings API input limit exceeded: max 10, got ${itemCount}. Request id: fixture-000597000","param":"input","type":"BadRequest"}}`;
+    const run = vi.fn(async (batch: string[]) => {
+      if (batch.length > 10) {
+        throw new Error(itemLimitError(batch.length));
+      }
+      return batch.map((item) => [Number.parseInt(item.slice("item-".length), 10)]);
+    });
+
+    const result = await runMemoryEmbeddingBatchRetryWithSplit({
+      items,
+      run,
+      isRetryable: isRetryableMemoryEmbeddingError,
+      isSplittable: isSplittableMemoryEmbeddingBatchError,
+      waitForRetry: async (delayMs) => {
+        waits.push(delayMs);
+      },
+      maxAttempts: 3,
+      baseDelayMs: 500,
+      onSplit: ({ itemCount, splitAt }) => {
+        splits.push(`${itemCount}:${splitAt}`);
+      },
+    });
+
+    expect(run.mock.calls.map(([batch]) => batch.length)).toEqual([33, 17, 9, 8, 16, 8, 8]);
+    expect(waits).toEqual([]);
+    expect(splits).toEqual(["33:17", "17:9", "16:8"]);
+    expect(result).toEqual(items.map((_, index) => [index]));
+    expect(isRetryableMemoryEmbeddingError(itemLimitError(33))).toBe(false);
+    expect(isSplittableMemoryEmbeddingBatchError(itemLimitError(33))).toBe(true);
+  });
+
+  it("does not split unrelated generic HTTP 400 embedding errors", async () => {
+    const genericError = new Error(
+      'openai-compatible embeddings failed: HTTP 400: {"error":{"code":"InvalidParameter","message":"The parameter input specified in the request is not valid. Request id: fixture-000597000","param":"input","type":"BadRequest"}}',
+    );
+    const run = vi.fn(async () => {
+      throw genericError;
+    });
+    const waits: number[] = [];
+    const splits: string[] = [];
+
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({
+        items: ["a", "b"],
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        isSplittable: isSplittableMemoryEmbeddingBatchError,
+        waitForRetry: async (delayMs) => {
+          waits.push(delayMs);
+        },
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        onSplit: ({ itemCount, splitAt }) => {
+          splits.push(`${itemCount}:${splitAt}`);
+        },
+      }),
+    ).rejects.toBe(genericError);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(waits).toEqual([]);
+    expect(splits).toEqual([]);
+    expect(isSplittableMemoryEmbeddingBatchError(genericError.message)).toBe(false);
   });
 
   it("retries too-many-tokens-per-day errors", async () => {
@@ -272,7 +339,7 @@ describe("memory embedding policy", () => {
       items: ["a", "b", "c", "d"],
       run,
       isRetryable: isRetryableMemoryEmbeddingError,
-      isSplittable: isSplittableMemoryEmbeddingTransportError,
+      isSplittable: isSplittableMemoryEmbeddingBatchError,
       waitForRetry: async (delayMs) => {
         waits.push(delayMs);
       },
@@ -299,7 +366,7 @@ describe("memory embedding policy", () => {
         items: ["a", "b"],
         run,
         isRetryable: isRetryableMemoryEmbeddingError,
-        isSplittable: isSplittableMemoryEmbeddingTransportError,
+        isSplittable: isSplittableMemoryEmbeddingBatchError,
         waitForRetry: async () => {},
         maxAttempts: 1,
         baseDelayMs: 500,
@@ -318,7 +385,7 @@ describe("memory embedding policy", () => {
         items: ["a", "b"],
         run,
         isRetryable: isRetryableMemoryEmbeddingError,
-        isSplittable: isSplittableMemoryEmbeddingTransportError,
+        isSplittable: isSplittableMemoryEmbeddingBatchError,
         waitForRetry: async () => {},
         maxAttempts: 2,
         baseDelayMs: 500,
