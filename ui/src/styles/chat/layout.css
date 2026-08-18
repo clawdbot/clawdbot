@@ -2367,6 +2367,7 @@ button.chat-reply-preview--message:disabled {
 
 .chat-pr__link--static {
   grid-template-columns: 18px minmax(0, 1fr);
+  cursor: default;
 }
 
 .chat-pr__link:hover .chat-pr__number {
@@ -2396,10 +2397,6 @@ button.chat-reply-preview--message:disabled {
 
 .chat-pr[data-state="branch"] .chat-pr__icon {
   color: var(--muted);
-}
-
-.chat-pr__link--static {
-  cursor: default;
 }
 
 .chat-pr__icon svg,
