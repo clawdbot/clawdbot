@@ -134,7 +134,7 @@ function transport(): NodeWorkerSupervisorTransport {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
         commands: ["system.run"],
       },
     ],
@@ -462,7 +462,7 @@ describe("node worker tunnel manager", () => {
                 ...proof,
                 workerHost: {
                   enabled: true,
-                  capacity: launchEligible ? "available" : "full",
+                  capacity: { total: 2, available: launchEligible ? 2 : 0 },
                 },
               },
             ];

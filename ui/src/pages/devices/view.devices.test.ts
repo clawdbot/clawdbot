@@ -379,6 +379,7 @@ describe("devices inventory rendering", () => {
           displayName: "Installed Mac",
           connected: true,
           paired: true,
+          workerSlots: { total: 2, available: 1 },
           workerBundle: { status: "installed", version: "2026.8.9" },
         },
         {
@@ -397,6 +398,9 @@ describe("devices inventory rendering", () => {
 
     expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
       "Worker 2026.8.9",
+    );
+    expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
+      "Worker slots 1/2",
     );
     expect(installed ? statusesByText(installed, "connected") : []).toHaveLength(0);
     expect(installed ? statusesByText(installed, "worker missing") : []).toHaveLength(0);

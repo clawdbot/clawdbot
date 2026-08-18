@@ -60,6 +60,12 @@ const NodeWorkerBundleStatusSchema = Type.Union([
   closedObject({ status: Type.Literal("missing") }),
 ]);
 
+/** Bounded live worker slots advertised by a connected node host. */
+export const WorkerSlotSummarySchema = closedObject({
+  total: Type.Integer({ minimum: 1, maximum: 1_024 }),
+  available: Type.Integer({ minimum: 0, maximum: 1_024 }),
+});
+
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
   providerId: NonEmptyString,
@@ -84,6 +90,7 @@ function createEnvironmentSummarySchema() {
     status: EnvironmentStatusSchema,
     platform: Type.Optional(NonEmptyString),
     sessionHost: Type.Optional(Type.Boolean()),
+    workerSlots: Type.Optional(WorkerSlotSummarySchema),
     workerBundle: Type.Optional(NodeWorkerBundleStatusSchema),
     lastConnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDisconnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -185,6 +192,7 @@ export type WorkerEnvironmentState = Static<typeof WorkerEnvironmentStateSchema>
 export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
 export type WorkerDesktopAppId = Static<typeof WorkerDesktopAppIdSchema>;
 export type RuntimeTargetIssue = Static<typeof RuntimeTargetIssueSchema>;
+export type WorkerSlotSummary = Static<typeof WorkerSlotSummarySchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type WorkerMachineOption = Static<typeof WorkerMachineOptionSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;

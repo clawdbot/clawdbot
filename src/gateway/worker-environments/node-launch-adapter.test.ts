@@ -27,10 +27,7 @@ const WORKER_RUNS = {
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
 
-function nodeProof(
-  connId = "conn-1",
-  capacity: "available" | "full" = "available",
-): NodeWorkerSupervisorNodeProof {
+function nodeProof(connId = "conn-1", available = 2): NodeWorkerSupervisorNodeProof {
   return {
     nodeId: DEVICE_ID,
     connId,
@@ -39,7 +36,7 @@ function nodeProof(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity },
+    workerHost: { enabled: true, capacity: { total: 2, available } },
     commands: ["system.run"],
   };
 }
@@ -262,7 +259,7 @@ describe("node worker launch adapter", () => {
     });
     const adapter = createNodeWorkerLaunchAdapter({
       getTransport: () =>
-        transportWith(invoke, async () => [nodeProof("conn-1", launched ? "full" : "available")]),
+        transportWith(invoke, async () => [nodeProof("conn-1", launched ? 0 : 2)]),
       sleep: async () => {},
     });
 
@@ -386,7 +383,7 @@ describe("node worker launch adapter", () => {
     });
     const adapter = createNodeWorkerLaunchAdapter({
       getTransport: () =>
-        transportWith(invoke, async () => [nodeProof("conn-1", launched ? "full" : "available")]),
+        transportWith(invoke, async () => [nodeProof("conn-1", launched ? 0 : 2)]),
       sleep: async () => {
         controller.abort();
       },
@@ -396,7 +393,10 @@ describe("node worker launch adapter", () => {
       adapter.launch({ ...launchRequest(input), signal: controller.signal }),
     ).resolves.toEqual(receipt(input, "cancelled"));
     expect(invoke.mock.calls.at(-1)?.[0].command).toBe("worker.cancel.v1");
-    expect(invoke.mock.calls.at(-1)?.[0].node.workerHost.capacity).toBe("full");
+    expect(invoke.mock.calls.at(-1)?.[0].node.workerHost.capacity).toEqual({
+      total: 2,
+      available: 0,
+    });
   });
 
   it("keeps cancelling through missing and active receipts until terminal", async () => {

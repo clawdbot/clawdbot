@@ -117,6 +117,7 @@ export {
   WorkerTunnelStatusSchema,
   WorkerDesktopAppIdSchema,
   WorkerEnvironmentMetadataSchema,
+  WorkerSlotSummarySchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,

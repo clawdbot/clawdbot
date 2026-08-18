@@ -226,6 +226,7 @@ function buildEffectiveKnownNode(entry: {
   pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
   sessionHost: boolean;
+  workerSlots?: NodeListNode["workerSlots"];
   workerBundle?: NodeListNode["workerBundle"];
   issues?: NodeListNode["issues"];
 }): NodeListNode {
@@ -236,6 +237,7 @@ function buildEffectiveKnownNode(entry: {
     pendingNodePairing,
     live,
     sessionHost,
+    workerSlots,
     workerBundle,
     issues,
   } = entry;
@@ -308,6 +310,7 @@ function buildEffectiveKnownNode(entry: {
     ),
     computerUse: live?.computerUse,
     sessionHost,
+    ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
     ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
     ...(issues?.length ? { issues: [...issues] } : {}),
     nodePluginTools: live?.nodePluginTools,
@@ -359,6 +362,7 @@ export function createKnownNodeCatalog(params: {
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
   sessionHostNodeIds?: ReadonlySet<string>;
+  workerSlotsByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerSlots"]>>;
   workerBundleByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerBundle"]>>;
   issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
 }): KnownNodeCatalog {
@@ -414,6 +418,7 @@ export function createKnownNodeCatalog(params: {
         pendingNodePairing,
         live,
         sessionHost: params.sessionHostNodeIds?.has(nodeId) === true,
+        workerSlots: params.workerSlotsByNodeId?.get(nodeId),
         workerBundle: params.workerBundleByNodeId?.get(nodeId),
         issues: params.issuesByNodeId?.get(nodeId),
       }),

@@ -10,6 +10,7 @@ import {
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
+  WorkerSlotSummarySchema,
 } from "../index.js";
 
 const workerStates = [
@@ -148,6 +149,22 @@ describe("worker environment protocol schemas", () => {
         workerBundle: { status: "installed", version: "" },
       }),
     ).toBe(false);
+  });
+
+  it("accepts only bounded closed worker slot summaries", () => {
+    const slots = { total: 2, available: 1 };
+    expect(Value.Check(WorkerSlotSummarySchema, slots)).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: slots,
+      }),
+    ).toBe(true);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 0, available: 0 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 1_025 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { ...slots, busy: 1 })).toBe(false);
   });
 
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {

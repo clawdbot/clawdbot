@@ -89,7 +89,7 @@ function requireDeviceId(profile: WorkerProfile): string {
 }
 
 function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
-  return node.workerHost.capacity === "available";
+  return node.workerHost.capacity.available > 0;
 }
 
 function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice {
