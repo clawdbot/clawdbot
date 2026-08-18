@@ -158,6 +158,7 @@ describe("registerPreActionHooks", () => {
       .command("agent")
       .argument("[note]")
       .requiredOption("-m, --message <text>")
+      .option("--agent <id>")
       .option("--local")
       .option("--json")
       .action(() => {});
@@ -505,7 +506,7 @@ describe("registerPreActionHooks", () => {
   it("bypasses operator config and plugin startup for agent exec", async () => {
     await runPreAction({
       parseArgv: ["agent", "exec", "fix it"],
-      processArgv: ["node", "openclaw", "agent", "exec", "fix it"],
+      processArgv: ["node", "openclaw", "agent", "--agent", "main", "exec", "fix it"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
