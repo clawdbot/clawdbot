@@ -372,6 +372,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           .every((shard) => (shard.predictedSeconds ?? Infinity) <= 150),
       ).toBe(true);
     }
+    for (const plan of [
+      githubCompact,
+      githubPullRequestCompact,
+      hybridCompact,
+      hybridPullRequestCompact,
+    ]) {
+      const agentChatStripes = plan
+        .flatMap((shard) => shard.groups)
+        .filter((group) => group.shard_name.startsWith("agentic-control-plane-agent-chat-hosted-"));
+      expect(agentChatStripes).toHaveLength(2);
+      expect(
+        agentChatStripes.every(
+          (group) =>
+            !group.includePatterns?.includes(
+              "src/gateway/server.chat.gateway-server-chat.test.ts",
+            ) || !group.includePatterns.includes("src/gateway/server.sessions.create.test.ts"),
+        ),
+      ).toBe(true);
+    }
     // Historical checks-node-compact-large-2 was this gateway-core group. Its
     // 139.5s Blacksmith spike keeps a dedicated floor and singleton bin even
     // though compact check numbers change when the matrix shrinks.
