@@ -48,11 +48,9 @@ Notes`. Add `#### Recommended testing` between them whenever release changes
    under **What changed** and omit **Recommended testing**.
 
    For each **What changed**, synthesize the dominant themes across the
-   subsystem's complete group instead of listing a few fixes. Issue or PR links
-   are optional supporting examples: label them `Examples`, limit them to one or
-   two representative links, and never use them as the organizing content.
-   Hyperlink every reference, using only items cited by the release notes or
-   verified live. Each **Recommended testing** is one concise human-driven
+   subsystem's complete group instead of listing a few fixes. Do not include
+   issue, PR, commit, or workflow examples; a handful of links misrepresents the
+   full release surface. Each **Recommended testing** is one concise human-driven
    exercise.
 
 4. Make a working copy of the worksheet asset and fill it with the exact
