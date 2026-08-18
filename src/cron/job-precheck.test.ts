@@ -129,9 +129,9 @@ describe("normalizeCronJobPrecheck", () => {
   });
 
   it("rejects fractional persisted exit codes (no silent trunc)", () => {
-    expect(() =>
-      normalizeCronJobPrecheck({ command: "true", workExitCodes: [0.5] }, { requireCommand: true }),
-    ).toThrow(/workExitCodes must contain only integers/);
+    expect(() => normalizeCronJobPrecheck({ command: "true", workExitCodes: [0.5] })).toThrow(
+      /workExitCodes must contain only integers/,
+    );
     expect(() => normalizeCronJobPrecheck({ command: "echo hi", noWorkExitCodes: [] })).toThrow(
       /noWorkExitCodes must be a non-empty array/,
     );
@@ -318,11 +318,9 @@ describe("runCronJobPrecheck", () => {
       );
       expect(result.decision).toBe("run");
       expect(spawned).not.toBeNull();
-      if (!spawned) {
-        throw new Error("expected precheck spawn");
-      }
-      expect(spawned.cmd).toBe("/bin/sh");
-      expect(spawned.args[0]).toBe("-c");
+      const spawnedCmd = spawned as { cmd: string; args: string[] };
+      expect(spawnedCmd.cmd).toBe("/bin/sh");
+      expect(spawnedCmd.args[0]).toBe("-c");
     } finally {
       if (prevShell === undefined) {
         delete process.env.SHELL;
