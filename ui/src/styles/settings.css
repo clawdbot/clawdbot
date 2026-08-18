@@ -1018,6 +1018,22 @@ textarea.settings-input {
   color: var(--danger);
 }
 
+/* ── Account value (small round avatar + handle inside a row control) ── */
+
+.settings-account {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.settings-account__avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  flex: none;
+}
+
 /* ── Mobile ── */
 
 @media (max-width: 640px) {
