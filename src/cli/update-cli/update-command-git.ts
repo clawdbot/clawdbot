@@ -74,7 +74,7 @@ export async function retireStandaloneGitWrapper(params: {
       stat.size > 4096 ||
       (platform !== "win32" && (stat.mode & 0o111) === 0)
     ) {
-      return {};
+      continue;
     }
 
     let contents: string;
@@ -100,7 +100,7 @@ export async function retireStandaloneGitWrapper(params: {
       execArgs[2] === expectedEntry &&
       execArgs[3] === "$@";
     if (!matchesWindows && !matchesPosix) {
-      return {};
+      continue;
     }
     try {
       await fs.unlink(wrapperPath);

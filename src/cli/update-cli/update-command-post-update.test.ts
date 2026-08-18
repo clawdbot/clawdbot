@@ -125,8 +125,11 @@ describe("retireStandaloneGitWrapper", () => {
   it("removes only the installer wrapper for the previous checkout", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wrapper-retire-"));
     const oldRoot = path.join(home, "old checkout");
+    const unrelatedWrapper = path.join(home, "earlier", "openclaw");
     const wrapper = path.join(home, ".local", "bin", "openclaw");
+    await fs.mkdir(path.dirname(unrelatedWrapper), { recursive: true });
     await fs.mkdir(path.dirname(wrapper), { recursive: true });
+    await fs.writeFile(unrelatedWrapper, "#!/usr/bin/env bash\necho unrelated\n", { mode: 0o755 });
     await fs.writeFile(
       wrapper,
       `#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/bin/node ${oldRoot.replaceAll(" ", "\\ ")}/dist/entry.js "$@"\n`,
@@ -137,9 +140,10 @@ describe("retireStandaloneGitWrapper", () => {
         retireStandaloneGitWrapper({
           previousRoot: oldRoot,
           platform: "linux",
-          searchDirs: [path.dirname(wrapper)],
+          searchDirs: [path.dirname(unrelatedWrapper), path.dirname(wrapper)],
         }),
       ).resolves.toEqual({});
+      await expect(fs.readFile(unrelatedWrapper, "utf8")).resolves.toContain("unrelated");
       await expect(fs.stat(wrapper)).rejects.toMatchObject({ code: "ENOENT" });
 
       await fs.writeFile(
