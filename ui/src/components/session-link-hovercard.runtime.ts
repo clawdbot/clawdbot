@@ -558,7 +558,9 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
     renderLoading(card);
     card.addEventListener("pointerenter", this.handleCardPointerEnter);
     card.addEventListener("pointerleave", this.handleCardPointerLeave);
-    this.hovercard.mount(anchor, card, "vertical");
+    // Sidebar rows open beside the rail so the card never covers sibling navigation targets.
+    const placement = anchor.closest("openclaw-app-sidebar") ? "horizontal" : "vertical";
+    this.hovercard.mount(anchor, card, placement);
     void this.previewTask.run([target]);
   }
 

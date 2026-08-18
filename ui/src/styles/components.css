@@ -1104,6 +1104,11 @@ openclaw-session-progress-hovercard-provider {
   transform-origin: top left;
 }
 
+.session-link-hovercard[data-side="right"] {
+  transform: translateX(-5px) scale(0.99);
+  transform-origin: left center;
+}
+
 .session-link-hovercard[data-open="true"] {
   opacity: 1;
   transform: translateY(0) scale(1);
