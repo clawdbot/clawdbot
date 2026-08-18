@@ -461,6 +461,7 @@ describe("worker session placement moves", () => {
         idempotencyKey: `session-move:${begun.intent.operationId}:dispatch`,
       }),
       undefined,
+      undefined,
     );
     expect(restartedStore.get(source.sessionId)).toMatchObject({
       state: "local",
