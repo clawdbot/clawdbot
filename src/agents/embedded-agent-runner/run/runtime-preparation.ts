@@ -8,6 +8,7 @@ import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
+import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
 import {
   hasPreparedAuthAttemptModelMetadata,
   resolveCredentialScopedAuthAttemptModelDecision,
@@ -494,13 +495,17 @@ export async function prepareEmbeddedRunRuntime(input: {
     })
       ? pluginMetadataSnapshot
       : undefined;
-  const endpointClass = resolveProviderEndpoint(
-    effectiveModel.baseUrl,
-    compatibleMetadataSnapshot?.owners,
-  ).endpointClass;
-  const providerOwner = ["default", "invalid", "local", "custom"].includes(endpointClass)
+  const routeFacts = getModelProviderRequestRouteFacts(effectiveModel);
+  const fallbackEndpointClass = routeFacts
     ? undefined
-    : endpointClass;
+    : resolveProviderEndpoint(effectiveModel.baseUrl, compatibleMetadataSnapshot?.owners)
+        .endpointClass;
+  const providerOwner =
+    routeFacts?.providerOwner ??
+    (fallbackEndpointClass &&
+    !["default", "invalid", "local", "custom"].includes(fallbackEndpointClass)
+      ? fallbackEndpointClass
+      : undefined);
   const providerRuntimeHandle = {
     ...resolveProviderRuntimePluginHandle({
       provider,

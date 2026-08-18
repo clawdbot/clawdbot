@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { attachModelProviderMetadataOwners } from "../agents/provider-request-config.js";
+import { attachModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import type { Model } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "./plugin-metadata-snapshot.types.js";
 
@@ -59,8 +59,8 @@ describe("normalizeModelCompat prepared metadata", () => {
     const firstOwners = makeOwners("first");
     const secondOwners = makeOwners("second");
 
-    normalizeModelCompat(attachModelProviderMetadataOwners(model, firstOwners));
-    normalizeModelCompat(attachModelProviderMetadataOwners(model, secondOwners));
+    normalizeModelCompat(attachModelProviderRequestRouteFacts(model, firstOwners));
+    normalizeModelCompat(attachModelProviderRequestRouteFacts(model, secondOwners));
 
     expect(resolveProviderRequestCapabilities).toHaveBeenNthCalledWith(
       1,

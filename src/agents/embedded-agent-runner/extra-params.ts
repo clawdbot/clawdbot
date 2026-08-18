@@ -38,7 +38,10 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveModelExtraParamSources } from "../model-extra-params.js";
-import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import {
+  getModelProviderRequestRouteFacts,
+  resolveProviderRequestPolicyConfig,
+} from "../provider-request-config.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
@@ -706,14 +709,16 @@ function shouldStripOpenAICompletionsStore(model: ProviderRuntimeModel): boolean
     model.compat && typeof model.compat === "object"
       ? (model.compat as Record<string, unknown>)
       : undefined;
-  const capabilities = resolveProviderRequestPolicyConfig({
-    provider: typeof model.provider === "string" ? model.provider : undefined,
-    api: model.api,
-    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-    compat,
-    capability: "llm",
-    transport: "stream",
-  }).capabilities;
+  const capabilities =
+    getModelProviderRequestRouteFacts(model)?.capabilities ??
+    resolveProviderRequestPolicyConfig({
+      provider: typeof model.provider === "string" ? model.provider : undefined,
+      api: model.api,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      compat,
+      capability: "llm",
+      transport: "stream",
+    }).capabilities;
   return !capabilities.usesKnownNativeOpenAIRoute;
 }
 

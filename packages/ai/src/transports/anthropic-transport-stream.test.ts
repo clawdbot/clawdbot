@@ -340,7 +340,6 @@ describe("anthropic transport stream", () => {
       ...coreTransportHost,
       buildModelFetch: buildGuardedModelFetchMock,
       redactSecrets: redactTestSecrets,
-      resolveProviderEndpointClass: resolveTestEndpointClass,
       resolveProviderRequestCapabilities: (input) => {
         const endpointClass = resolveTestEndpointClass(input.baseUrl);
         return {
