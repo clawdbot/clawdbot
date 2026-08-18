@@ -154,11 +154,29 @@ suite.define(() => {
         },
         { locator: page.getByLabel("Crabbox binary"), value: "/opt/bin/crabbox" },
       ]);
+      const saveButton = page.getByRole("button", { name: "Save" });
+      const configGetCount = (await gateway.getRequests("config.get")).length;
+      await gateway.deferNext("config.get");
+      await gateway.emitGatewayEvent("config.changed", {
+        path: "/tmp/openclaw.json",
+        hash: "cloud-workers-2",
+        ts: Date.now(),
+      });
+      await gateway.waitForRequest("config.get", { after: configGetCount });
+      await expect.poll(() => saveButton.isDisabled()).toBe(true);
+      await gateway.resolveDeferred(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
+          "cloud-workers-2",
+        ),
+      );
+      await expect.poll(() => saveButton.isEnabled()).toBe(true);
       await gateway.deferNext("config.patch");
       const editRequestCount = (await gateway.getRequests("config.patch")).length;
-      await page.getByRole("button", { name: "Save" }).click();
+      await saveButton.click();
       const editPatch = await waitForConfigPatch(gateway, editRequestCount);
-      expect(editPatch).toMatchObject({
+      expect(editPatch).toEqual({
         cloudWorkers: {
           profiles: {
             "build-fleet": {
