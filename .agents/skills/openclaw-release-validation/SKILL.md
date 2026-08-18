@@ -1,6 +1,8 @@
 ---
 name: openclaw-release-validation
-description: Run a public OpenClaw beta validation campaign through OCM using either clean state or copied real state, an isolated candidate checkout, a shared per-release GitHub issue, and a guided subsystem mission checklist. Use for beta readiness, existing-user upgrade validation, clean onboarding validation, or broad manual subsystem testing.
+description: Guide a maintainer through a selectable OpenClaw beta validation campaign using OCM and a shared GitHub issue.
+user-invocable: true
+disable-model-invocation: true
 ---
 
 # OpenClaw Release Validation
