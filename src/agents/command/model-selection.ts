@@ -6,7 +6,6 @@ import {
   type ThinkLevel,
 } from "../../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
-import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
@@ -18,6 +17,7 @@ import {
   isModelSelectionLocked,
   repairProviderWrappedModelOverride,
 } from "../../sessions/model-overrides.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -116,9 +116,6 @@ export async function resolveEmbeddedModelSelection(params: {
   let sessionEntry = params.sessionEntry;
   const hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
   let storedModelOverrideSource = hasStoredOverride ? sessionEntry?.modelOverrideSource : undefined;
-  let storedModelOverrideRouteResolution = hasStoredOverride
-    ? resolveSessionModelOverrideRouteResolution(sessionEntry)
-    : undefined;
   let hasStoredAutoFallbackProvenance =
     hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
   let hasLegacyAutoFallbackOverrideWithoutOrigin =
@@ -232,9 +229,6 @@ export async function resolveEmbeddedModelSelection(params: {
       storedModelOverrideSource = adoptedHasStoredOverride
         ? sessionEntry?.modelOverrideSource
         : undefined;
-      storedModelOverrideRouteResolution = adoptedHasStoredOverride
-        ? resolveSessionModelOverrideRouteResolution(sessionEntry)
-        : undefined;
       hasStoredAutoFallbackProvenance =
         adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
       hasLegacyAutoFallbackOverrideWithoutOrigin =
@@ -246,12 +240,26 @@ export async function resolveEmbeddedModelSelection(params: {
     hasLegacyAutoFallbackOverrideWithoutOrigin = false;
   }
 
+  const effectiveStoredOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+    ? null
+    : resolveStoredModelOverride({
+        sessionEntry,
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        parentSessionKey: sessionEntry?.parentSessionKey,
+        defaultProvider,
+      });
+  if (effectiveStoredOverride?.source === "parent") {
+    storedModelOverrideSource = undefined;
+    hasStoredAutoFallbackProvenance = false;
+  }
   const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? undefined
-    : sessionEntry?.providerOverride?.trim();
+    : (effectiveStoredOverride?.provider ?? sessionEntry?.providerOverride?.trim());
   const storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? undefined
-    : sessionEntry?.modelOverride?.trim();
+    : (effectiveStoredOverride?.model ?? sessionEntry?.modelOverride?.trim());
+  const storedModelOverrideRouteResolution = effectiveStoredOverride?.routeResolution;
   const currentRunModelChannel = [
     params.runContext.messageChannel,
     params.opts.replyChannel,

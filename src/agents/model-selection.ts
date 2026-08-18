@@ -26,6 +26,7 @@ import {
   resolveSubagentConfiguredModelSelection,
 } from "./model-selection-config.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js";
 import {
   resolveAllowedModelRefCore as resolveAllowedModelRefInternal,
   resolveConfiguredModelFallbacks,
@@ -51,6 +52,11 @@ export {
 export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
 
 export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
+
+export {
+  normalizeStoredOverrideModel,
+  resolvePersistedOverrideModelRef,
+} from "./model-selection-persisted.js";
 
 export {
   buildConfiguredModelCatalog,
@@ -81,31 +87,6 @@ export { getModelRefStatus } from "./model-selection-resolve.js";
 
 function normalizePersistedDefaultProvider(value: unknown): string {
   return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
-}
-
-export function resolvePersistedOverrideModelRef(params: {
-  defaultProvider?: unknown;
-  overrideProvider?: unknown;
-  overrideModel?: unknown;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
-}): ModelRef | null {
-  const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
-  const overrideProvider = normalizeOptionalString(params.overrideProvider);
-  const overrideModel = normalizeOptionalString(params.overrideModel);
-  if (!overrideModel) {
-    return null;
-  }
-  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
-  return (
-    parseModelRef(encodedOverride, defaultProvider, {
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
-    }) ?? {
-      provider: overrideProvider || defaultProvider,
-      model: overrideModel,
-    }
-  );
 }
 
 /**
@@ -178,28 +159,6 @@ export function resolvePersistedSelectedModelRef(params: {
     allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
   });
-}
-
-export function normalizeStoredOverrideModel(params: {
-  providerOverride?: unknown;
-  modelOverride?: unknown;
-}): { providerOverride?: string; modelOverride?: string } {
-  const providerOverride = normalizeOptionalString(params.providerOverride);
-  const modelOverride = normalizeOptionalString(params.modelOverride);
-  if (!providerOverride || !modelOverride) {
-    return {
-      providerOverride,
-      modelOverride,
-    };
-  }
-
-  const providerPrefix = `${providerOverride.toLowerCase()}/`;
-  return {
-    providerOverride,
-    modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
-      ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
-      : modelOverride,
-  };
 }
 
 export async function canonicalizeCaseOnlyCatalogModelRef(params: {
