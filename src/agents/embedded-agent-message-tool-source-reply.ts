@@ -1,8 +1,11 @@
-import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString, readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
-import { readEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
+import {
+  pluginBroadcastHasDelivery,
+  pluginEnvelopeHas,
+  readEmbeddedMessageDeliveryFact,
+} from "./embedded-agent-message-delivery.js";
 import {
   isMessageToolConversationCreateActionName,
   isMessageToolSendActionName,
@@ -12,8 +15,6 @@ import { normalizeToolPolicyName } from "./tool-policy.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 
 const EXPLICIT_MESSAGE_ROUTE_KEYS = ["channel", "target", "to", "channelId", "provider"];
-const NON_DELIVERY_MESSAGE_IDS = new Set(["skipped", "suppressed"]);
-const FALLBACK_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
 export function resolveMessageToolSourceReplyFinal(args: unknown): boolean {
   return (asOptionalRecord(args) ?? {}).final !== false;
 }
@@ -53,123 +54,8 @@ function normalizeStatus(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 }
 
-function visitPluginEnvelope(
-  value: unknown,
-  predicate: (record: Record<string, unknown>) => boolean,
-  depth = 0,
-): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
-    return false;
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => visitPluginEnvelope(item, predicate, depth + 1));
-  }
-  const record = value as Record<string, unknown>;
-  if (predicate(record)) {
-    return true;
-  }
-  if (typeof record.text === "string") {
-    const parsed = safeParseJsonRecord(record.text);
-    if (parsed && visitPluginEnvelope(parsed, predicate, depth + 1)) {
-      return true;
-    }
-  }
-  if (
-    Array.isArray(record.content) &&
-    record.content.some((item) => visitPluginEnvelope(item, predicate, depth + 1))
-  ) {
-    return true;
-  }
-  return FALLBACK_ENVELOPE_KEYS.some((key) =>
-    visitPluginEnvelope(record[key], predicate, depth + 1),
-  );
-}
-
-const PLUGIN_SIGNALS = {
-  dryRun: (record: Record<string, unknown>) =>
-    record.dryRun === true || normalizeStatus(record.status) === "dry_run",
-  partial: (record: Record<string, unknown>) =>
-    record.sentBeforeError === true ||
-    record.visibleReplySent === true ||
-    normalizeStatus(record.status) === "partial_failed",
-  conversation: (record: Record<string, unknown>) =>
-    [
-      record.topicId,
-      record.threadId,
-      record.messageThreadId,
-      asOptionalRecord(record.thread)?.id,
-    ].some((id) => hasNonEmptyString(id) || (typeof id === "number" && Number.isFinite(id))),
-  nonDelivery: (record: Record<string, unknown>) => {
-    const id = normalizeStatus(record.messageId);
-    return (
-      (id !== undefined && NON_DELIVERY_MESSAGE_IDS.has(id)) ||
-      normalizeStatus(record.status) === "suppressed"
-    );
-  },
-  noOp: (record: Record<string, unknown>) => {
-    const removed = record.removed;
-    const status = normalizeStatus(record.status);
-    return (
-      removed === null ||
-      removed === false ||
-      removed === 0 ||
-      (Array.isArray(removed) && removed.length === 0) ||
-      record.applied === false ||
-      record.changed === false ||
-      record.created === false ||
-      record.deleted === false ||
-      record.sent === false ||
-      record.updated === false ||
-      status === "noop" ||
-      status === "no_op" ||
-      status === "not_found"
-    );
-  },
-  delivery: (record: Record<string, unknown>) => {
-    const message = asOptionalRecord(record.message);
-    const ids = [record.messageId, record.pollId, message?.id]
-      .map(normalizeStatus)
-      .filter((id): id is string => Boolean(id));
-    return (
-      ids.some((id) => !NON_DELIVERY_MESSAGE_IDS.has(id)) ||
-      normalizeStatus(record.status) === "sent" ||
-      normalizeStatus(record.text) === "sent"
-    );
-  },
-  deliveryId: (record: Record<string, unknown>) =>
-    [record.messageId, record.pollId, asOptionalRecord(record.message)?.id]
-      .map(normalizeStatus)
-      .some((id) => Boolean(id && !NON_DELIVERY_MESSAGE_IDS.has(id))),
-  ok: (record: Record<string, unknown>) =>
-    record.ok === true || normalizeStatus(record.text) === "ok",
-} satisfies Record<string, (record: Record<string, unknown>) => boolean>;
-
-function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SIGNALS): boolean {
-  return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
-}
-
 export function hasPluginMessagingDeliveryId(value: unknown): boolean {
   return pluginEnvelopeHas(value, "deliveryId");
-}
-
-function pluginBroadcastHasDelivery(value: unknown): boolean {
-  return visitPluginEnvelope(
-    value,
-    (record) =>
-      Array.isArray(record.results) &&
-      record.results.some((item) => {
-        const entry = asOptionalRecord(item);
-        if (!entry || entry.ok !== true || pluginEnvelopeHas(entry, "nonDelivery")) {
-          return false;
-        }
-        return [entry.payload, entry.toolResult].some((payload) => {
-          return (
-            !pluginEnvelopeHas(payload, "noOp") &&
-            (pluginEnvelopeHas(payload, "delivery") || pluginEnvelopeHas(payload, "ok"))
-          );
-        });
-      }),
-  );
 }
 
 export function isDeliveredMessagingToolResult(params: {

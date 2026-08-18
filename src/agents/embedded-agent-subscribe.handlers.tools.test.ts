@@ -20,6 +20,7 @@ import {
   buildAdjustedParamsKey,
   recordToolExecutionTracked,
 } from "./agent-tools.before-tool-call.state.js";
+import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
@@ -3608,22 +3609,41 @@ describe("messaging tool media URL tracking", () => {
     ]);
   });
 
-  it("commits core delivery from the private receipt after middleware replaces details", async () => {
+  it("commits projected payload-only delivery after middleware replaces details", async () => {
     const { ctx } = createTestContext();
     ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    const messageDelivery = projectEmbeddedMessageDeliveryFact({
+      kind: "broadcast",
+      channel: "googlechat",
+      action: "broadcast",
+      handledBy: "core",
+      payload: {
+        results: [
+          {
+            channel: "googlechat",
+            to: "spaces/AAA",
+            ok: true,
+            payload: { ok: true, messageId: "plugin-message-1" },
+          },
+        ],
+      },
+      dryRun: false,
+    });
+    expect(messageDelivery).toEqual({
+      status: "settled",
+      primaryPlatformMessageId: "plugin-message-1",
+      partialDelivery: false,
+      createdThreadIds: [],
+    });
     ctx.consumeToolSendReceipt = () => ({
       details: {
-        messageDelivery: {
-          status: "settled",
-          partialDelivery: false,
-          createdThreadIds: [],
-        },
+        messageDelivery,
       },
     });
 
     await executeTool(ctx, {
       toolName: "message",
-      toolCallId: "tool-private-core-delivery",
+      toolCallId: "tool-private-broadcast-delivery",
       args: { action: "send", message: "visible after redaction" },
       isError: false,
       result: { details: { redacted: true } },

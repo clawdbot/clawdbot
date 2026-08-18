@@ -1806,7 +1806,6 @@ src/agents/embedded-agent-helpers/images.ts	8
 src/agents/embedded-agent-helpers/openai.ts	21
 src/agents/embedded-agent-helpers/turns.ts	23
 src/agents/embedded-agent-live-edit-diff.ts	3
-src/agents/embedded-agent-message-tool-source-reply.ts	1
 src/agents/embedded-agent-messaging-extraction.ts	1
 src/agents/embedded-agent-messaging.ts	1
 src/agents/embedded-agent-runner/cache-ttl.ts	2
