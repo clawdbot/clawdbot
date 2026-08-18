@@ -4,6 +4,8 @@ import {
   defaultRangeExtractor,
   measureElement as measureVirtualElement,
   observeElementRect,
+  type Range,
+  Virtualizer,
 } from "@tanstack/virtual-core";
 import {
   html,
@@ -263,20 +265,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           }
         }),
       measureElement: measureVirtualElement,
-      rangeExtractor: (range) => {
-        const indexes = defaultRangeExtractor(range);
-        const focused =
-          this.focusedRowKey === null ? undefined : this.rowIndexesByKey.get(this.focusedRowKey);
-        if (
-          focused === undefined ||
-          focused < 0 ||
-          focused >= range.count ||
-          indexes.includes(focused)
-        ) {
-          return indexes;
-        }
-        return [...indexes, focused].toSorted((left, right) => left - right);
-      },
+      rangeExtractor: (range) => this.extractTranscriptRange(range, this.rowIndexesByKey),
       scrollEndThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
@@ -368,61 +357,76 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     announce: boolean,
     overlay: unknown = nothing,
   ): TemplateResult {
-    this.syncRows(rows);
-    this.syncAnnouncement(announcement, announce);
+    const nextKeys = rows.map((row) => row.key);
+    const rowModelChanged =
+      nextKeys.length !== this.rowKeys.length ||
+      nextKeys.some((key, index) => key !== this.rowKeys[index]);
     const virtualizer = this.virtualizerController.getVirtualizer();
-    const virtualRows = virtualizer.getVirtualItems();
-    const nextRowKeys = new Set(
-      virtualRows.flatMap((virtualRow) => {
-        const row = rows[virtualRow.index];
-        return row ? [row.key] : [];
-      }),
-    );
-    const rendered = html`
-      <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
-        <div
-          class="chat-virtual-sizer"
-          style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
-        >
-          ${overlay}
-          ${repeat(
-            virtualRows,
-            (virtualRow) => virtualRow.key,
-            (virtualRow) => {
-              const row = rows[virtualRow.index];
-              if (!row) {
-                return nothing;
-              }
-              return html`
-                <div
-                  class="chat-virtual-row ${virtualRow.index === 0
-                    ? "chat-virtual-row--first"
-                    : ""}"
-                  style=${styleMap({
-                    transform: `translateY(${
-                      virtualRow.start - virtualizer.options.scrollMargin
-                    }px)`,
-                    // Keep skipped overscan rows at the virtualizer's known size.
-                    containIntrinsicBlockSize: `auto ${virtualRow.size}px`,
-                  })}
-                  data-index=${String(virtualRow.index)}
-                  data-virtual-row-key=${row.key}
-                  ${ref(this.measureRowRefFor(row.key))}
-                >
-                  ${renderRow(row)}
-                </div>
-              `;
-            },
-          )}
-        </div>
-      </div>
-    `;
-    return this.mcpAppUnmountGate.render(JSON.stringify([...nextRowKeys]), rendered, () =>
-      this.threadInnerElement
-        ? [...this.threadInnerElement.querySelectorAll<HTMLElement>(".chat-virtual-row")].filter(
-            (row) => !nextRowKeys.has(row.dataset.virtualRowKey ?? ""),
-          )
-        : [],
+    const nextRowKeys = rowModelChanged
+      ? nextKeys
+      : virtualizer.getVirtualItems().flatMap(({ index }) => rows[index]?.key ?? []);
+    return this.mcpAppUnmountGate.render(
+      rowModelChanged ? nextKeys : JSON.stringify(nextRowKeys),
+      () => {
+        if (rowModelChanged) {
+          this.syncRows(nextKeys);
+        }
+        this.syncAnnouncement(announcement, announce);
+        const virtualRows = virtualizer.getVirtualItems();
+        return html`
+          <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
+            <div
+              class="chat-virtual-sizer"
+              style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
+            >
+              ${overlay}
+              ${repeat(
+                virtualRows,
+                (virtualRow) => virtualRow.key,
+                (virtualRow) => {
+                  const row = rows[virtualRow.index];
+                  if (!row) {
+                    return nothing;
+                  }
+                  return html`
+                    <div
+                      class="chat-virtual-row ${virtualRow.index === 0
+                        ? "chat-virtual-row--first"
+                        : ""}"
+                      style=${styleMap({
+                        transform: `translateY(${
+                          virtualRow.start - virtualizer.options.scrollMargin
+                        }px)`,
+                        // Keep skipped overscan rows at the virtualizer's known size.
+                        containIntrinsicBlockSize: `auto ${virtualRow.size}px`,
+                      })}
+                      data-index=${String(virtualRow.index)}
+                      data-virtual-row-key=${row.key}
+                      ${ref(this.measureRowRefFor(row.key))}
+                    >
+                      ${renderRow(row)}
+                    </div>
+                  `;
+                },
+              )}
+            </div>
+          </div>
+        `;
+      },
+      () => {
+        const appRows = new Set(
+          [
+            ...(this.threadInnerElement?.querySelectorAll<HTMLElement>("mcp-app-view") ?? []),
+          ].flatMap((app) => app.closest<HTMLElement>(".chat-virtual-row") ?? []),
+        );
+        if (appRows.size === 0) {
+          return [];
+        }
+        const nextRenderedKeys = rowModelChanged
+          ? this.previewVirtualRowKeys(nextKeys)
+          : new Set(nextRowKeys);
+        return [...appRows].filter((row) => !nextRenderedKeys.has(row.dataset.virtualRowKey ?? ""));
+      },
     ) as TemplateResult;
   }
 
@@ -536,20 +540,54 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     this.currentAnnouncementText = announcement.text;
   }
 
-  private syncRows(rows: readonly TranscriptRow[]): void {
-    const nextKeys = rows.map((row) => row.key);
+  private previewVirtualRowKeys(nextKeys: readonly string[]): Set<string> {
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const nextIndexes = new Map(nextKeys.map((key, index) => [key, index]));
+    const preview = new Virtualizer<HTMLDivElement, HTMLElement>({
+      ...virtualizer.options,
+      initialMeasurementsCache: virtualizer.takeSnapshot(),
+      initialOffset: virtualizer.scrollOffset ?? virtualizer.options.initialOffset,
+      initialRect: virtualizer.scrollRect ?? virtualizer.options.initialRect,
+      onChange: () => undefined,
+      rangeExtractor: (range) => this.extractTranscriptRange(range, nextIndexes),
+    });
+    preview.scrollElement = virtualizer.scrollElement;
+    // Apply the fork's key-anchor transition on isolated state so teardown
+    // selection is exact without advancing the model owned by connected DOM.
+    preview.setOptions({
+      ...preview.options,
+      count: nextKeys.length,
+      getItemKey: (index) => nextKeys[index] ?? `missing:${index}`,
+    });
+    return new Set(preview.getVirtualIndexes().flatMap((index) => nextKeys[index] ?? []));
+  }
+
+  private extractTranscriptRange(
+    range: Range,
+    rowIndexesByKey: ReadonlyMap<string, number>,
+  ): number[] {
+    const indexes = defaultRangeExtractor(range);
+    const focused =
+      this.focusedRowKey === null ? undefined : rowIndexesByKey.get(this.focusedRowKey);
     if (
-      nextKeys.length === this.rowKeys.length &&
-      nextKeys.every((key, index) => key === this.rowKeys[index])
+      focused === undefined ||
+      focused < 0 ||
+      focused >= range.count ||
+      indexes.includes(focused)
     ) {
-      return;
+      return indexes;
     }
+    return [...indexes, focused].toSorted((left, right) => left - right);
+  }
+
+  private syncRows(nextKeys: string[]): void {
     const virtualizer = this.virtualizerController.getVirtualizer();
     const typingAdded =
       !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
     const followTyping = typingAdded && virtualizer.isAtEnd();
     this.rowKeys = Object.freeze(nextKeys);
-    this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
+    const rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
+    this.rowIndexesByKey = rowIndexesByKey;
     for (const key of this.measureRowRefs.keys()) {
       if (!this.rowIndexesByKey.has(key)) {
         this.measureRowRefs.delete(key);
@@ -561,6 +599,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       count: keys.length,
       getItemKey: (index) => keys[index] ?? `missing:${index}`,
       followOnAppend: false,
+      rangeExtractor: (range) => this.extractTranscriptRange(range, rowIndexesByKey),
     });
     if (followTyping) {
       virtualizer.scrollToIndex(this.rowIndexesByKey.get("presence:typing") ?? keys.length - 1, {

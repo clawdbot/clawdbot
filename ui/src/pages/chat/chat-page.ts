@@ -706,7 +706,7 @@ export class ChatPage extends OpenClawLightDomElement {
         );
       }),
     );
-    const rendered = html`
+    const renderValue = () => html`
       <div class="chat-split-view__drop-container">
         ${this.renderSplitLayout(layout, Boolean(this.layout), retainedSessions)}
         ${indicator
@@ -725,7 +725,7 @@ export class ChatPage extends OpenClawLightDomElement {
           : nothing}
       </div>
     `;
-    return this.mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), rendered, () =>
+    return this.mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), renderValue, () =>
       [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
         (pane) => !nextPaneKeys.has(pane.dataset.mcpAppOwnerKey ?? ""),
       ),
