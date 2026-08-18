@@ -4586,6 +4586,83 @@ describe("runCodexAppServerAttempt", () => {
       }
     },
   );
+  it("captures settled tool evidence when an active native compaction fails terminally", async () => {
+    const storePath = path.join(tempDir, "settled-compaction-failure.sqlite");
+    const sessionId = "session-settled-compaction-failure";
+    const sessionFile = `agent:main:${sessionId}`;
+    const workspaceDir = path.join(tempDir, "workspace-settled-compaction-failure");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    await attachSqliteSessionTarget(params, storePath, sessionId);
+    params.prompt = "Finish the task and report the result.";
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify(
+      itemNotification("item/started", {
+        type: "commandExecution",
+        id: "tool-settled",
+        command: "echo completed-work",
+        cwd: workspaceDir,
+        status: "inProgress",
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        type: "commandExecution",
+        id: "tool-settled",
+        command: "echo completed-work",
+        cwd: workspaceDir,
+        status: "completed",
+        aggregatedOutput: "completed-work\n",
+        exitCode: 0,
+        durationMs: 12,
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-failed" }),
+    );
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        error: {
+          message: "remote compaction failed",
+          codexErrorInfo: "other",
+          additionalDetails: null,
+        },
+        willRetry: false,
+      },
+    });
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "failed",
+        error: {
+          message: "remote compaction failed",
+          codexErrorInfo: "other",
+          additionalDetails: null,
+        },
+      }),
+    );
+
+    const result = await run;
+
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: "remote compaction failed",
+      promptErrorSource: "compaction",
+    });
+    expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
+    expect(result.settledTurnFinalizationContext).toMatchObject({
+      source: "openclaw-transcript",
+      messages: [
+        expect.objectContaining({ role: "user" }),
+        expect.objectContaining({ role: "assistant" }),
+        expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
+      ],
+    });
+    expect(Object.isFrozen(result.settledTurnFinalizationContext?.messages)).toBe(true);
+  });
   it("preserves every command failure from official app-server events", async () => {
     const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-multi-command-failure");
