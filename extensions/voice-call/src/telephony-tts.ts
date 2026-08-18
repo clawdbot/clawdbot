@@ -62,9 +62,8 @@ function convertTelephonyTtsOutput(result: {
   const format = result.outputFormat?.trim().toLowerCase();
   // Bundled provider contracts: Azure/Gradium emit raw-8khz-8bit-mono-mulaw/ulaw_8000;
   // ElevenLabs/OpenAI emit pcm_22050/pcm. An absent format is the shipped PCM default.
-  const isMulaw = format?.includes("mulaw") || format?.includes("ulaw");
-  const names8Khz = format?.includes("8khz") || format?.includes("8000");
-  if (isMulaw && names8Khz && result.sampleRate === 8_000) {
+  const isRawMulaw = format === "raw-8khz-8bit-mono-mulaw" || format === "ulaw_8000";
+  if (isRawMulaw && result.sampleRate === 8_000) {
     return result.audioBuffer;
   }
   const isPcm =

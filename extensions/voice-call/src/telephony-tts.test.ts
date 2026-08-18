@@ -72,24 +72,30 @@ describe("createTelephonyTtsProvider", () => {
     );
   });
 
-  it("rejects unsupported container output with provider context", async () => {
-    const provider = await createTelephonyTtsProvider({
-      coreConfig: createCoreConfig(),
-      runtime: createRuntime(async () => ({
-        success: true,
-        audioBuffer: Buffer.from("container"),
-        outputFormat: "mp3",
-        sampleRate: 24_000,
-        provider: "example-provider",
-      })),
-    });
+  it.each([
+    ["mp3", 24_000],
+    ["riff-8khz-8bit-mono-mulaw", 8_000],
+  ])(
+    "rejects unsupported %s container output with provider context",
+    async (outputFormat, sampleRate) => {
+      const provider = await createTelephonyTtsProvider({
+        coreConfig: createCoreConfig(),
+        runtime: createRuntime(async () => ({
+          success: true,
+          audioBuffer: Buffer.from("container"),
+          outputFormat,
+          sampleRate,
+          provider: "example-provider",
+        })),
+      });
 
-    const synthesis = provider.synthesizeForTelephony("hello");
-    await expect(synthesis).rejects.toMatchObject({
-      name: "UnsupportedTelephonyTtsOutputFormatError",
-      message: 'Unsupported telephony TTS output format "mp3" from provider "example-provider"',
-    });
-  });
+      const synthesis = provider.synthesizeForTelephony("hello");
+      await expect(synthesis).rejects.toMatchObject({
+        name: "UnsupportedTelephonyTtsOutputFormatError",
+        message: `Unsupported telephony TTS output format "${outputFormat}" from provider "example-provider"`,
+      });
+    },
+  );
 
   it("uses shared preparation for the surface override and request text", async () => {
     const effectiveConfig: OpenClawConfig = {
