@@ -45,7 +45,7 @@ export async function settleAgentFallbackCycle(params: {
       ? cycle.state.pendingLifecycleTerminal.backstop
       : undefined;
   cycle.state.pendingLifecycleTerminal = undefined;
-  if (isReplyOperationRestartAbort(turn.replyOperation)) {
+  if (isReplyOperationRestartAbort(turn.replyOperation) || turn.isRestartRecoveryArmed?.()) {
     settledLifecycleTerminal?.emit("end", runResult);
     throw isAgentRunRestartAbortReason(cycle.runAbortSignal?.reason)
       ? cycle.runAbortSignal?.reason
