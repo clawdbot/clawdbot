@@ -1,5 +1,7 @@
 import {
+  buildDelegationGuidanceSection,
   buildSkillWorkshopPromptSection,
+  resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
   TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -23,6 +25,8 @@ export function buildDeveloperInstructions(
   let hasSkillWorkshop = false;
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
+  let hasSubagentsList = false;
+  let hasSessionsSend = false;
   let hasSeenDirectNamespace = false;
   let messageToolAvailable = options.dynamicTools ? false : params.disableMessageTool !== true;
   for (const spec of options.dynamicTools ?? []) {
@@ -41,6 +45,8 @@ export function buildDeveloperInstructions(
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
+      hasSubagentsList ||= name === "subagents";
+      hasSessionsSend ||= name === "sessions_send";
       messageToolAvailable ||= name === "message";
     }
   }
@@ -48,10 +54,12 @@ export function buildDeveloperInstructions(
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,
   }).join("\n");
-  const nativeDelegationAvailable =
+  const delegationGuidanceAvailable =
     params.disableTools !== true &&
     params.delegationCapability !== "report_only" &&
-    !isMessageOnlyCodexSourceReply(params) &&
+    !isMessageOnlyCodexSourceReply(params);
+  const nativeDelegationAvailable =
+    delegationGuidanceAvailable &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);
   const deferredToolDiscoveryGuidance =
@@ -71,10 +79,30 @@ export function buildDeveloperInstructions(
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
     nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`." : ""}`
+      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
       : undefined,
     hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
+      : undefined,
+    delegationGuidanceAvailable
+      ? buildDelegationGuidanceSection({
+          mode: resolveMainSessionDelegationMode({
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+          }),
+          // Subagent/none prompt modes stay lean and must not be told to delegate further.
+          isMinimal: params.promptMode === "minimal" || params.promptMode === "none",
+          hiddenDelegationTool: nativeDelegationAvailable
+            ? "native `spawn_agent`"
+            : hasSessionsSpawn
+              ? "`sessions_spawn`"
+              : "",
+          hasVisibleSessionSpawn: hasSessionsSpawn,
+          hasSessionsYield,
+          hasSubagentsList,
+          hasSessionsSend,
+        }).join("\n")
       : undefined,
     buildVisibleReplyInstruction(params, messageToolAvailable),
     TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,

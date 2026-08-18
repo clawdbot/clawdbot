@@ -298,7 +298,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: structural Gateway transport and request-error guards for plugin CLI routing.
       // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
       // +1: account-scoped model catalog discovery for native agent harnesses.
-      4332,
+      // +2: shared delegation policy (mode resolver + section builder) so harness
+      //     runtimes render the same guidance instead of diverging prompt copies.
+      4334,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -381,7 +383,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
       // +2: structural Gateway transport and request-error guards for plugin CLI routing.
       // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
-      2575,
+      // +2: shared delegation policy (mode resolver + section builder) so harness
+      //     runtimes render the same guidance instead of diverging prompt copies.
+      2577,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
