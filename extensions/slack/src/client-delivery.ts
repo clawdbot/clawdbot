@@ -1,6 +1,11 @@
 // Slack plugin module owns WebClient-scoped message and file delivery primitives.
 import type { MessageMetadata } from "@slack/types";
-import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import type {
+  Block,
+  FilesCompleteUploadExternalResponse,
+  KnownBlock,
+  WebClient,
+} from "@slack/web-api";
 import {
   extractErrorCode,
   PlatformMessageNotDispatchedError,
@@ -237,6 +242,16 @@ export async function postSlackMessageBestEffort(params: {
   });
 }
 
+function resolveCompletedUploadThreadTs(params: {
+  response: FilesCompleteUploadExternalResponse;
+  channelId: string;
+  fileId: string;
+}): string | undefined {
+  const file = params.response.files?.find((candidate) => candidate.id === params.fileId);
+  // Only the returned share proves this file reached this channel's thread.
+  return file?.shares?.public?.[params.channelId]?.find((share) => share.thread_ts)?.thread_ts;
+}
+
 export async function uploadSlackFile(params: {
   client: WebClient;
   completionClient?: WebClient;
@@ -256,7 +271,7 @@ export async function uploadSlackFile(params: {
   maxBytes?: number;
   onPlatformSendDispatch?: () => Promise<void>;
   auditContext?: string;
-}): Promise<string> {
+}): Promise<{ messageId: string; confirmedThreadTs?: string }> {
   const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
     mediaAccess: params.mediaAccess,
@@ -347,5 +362,12 @@ export async function uploadSlackFile(params: {
   if (!completeResp.ok) {
     throw new Error(`Failed to complete upload: ${completeResp.error ?? "unknown error"}`);
   }
-  return uploadFileId;
+  return {
+    messageId: uploadFileId,
+    confirmedThreadTs: resolveCompletedUploadThreadTs({
+      response: completeResp,
+      channelId: params.channelId,
+      fileId: uploadFileId,
+    }),
+  };
 }

@@ -456,11 +456,13 @@ describe("sendMessageSlack file upload with user IDs", () => {
       await dispatchFinished;
       events.push("dispatch-end");
     });
+    const onDeliveryResult = vi.fn();
 
     const sendPromise = sendUpload(client, {
       mediaUrl: "/tmp/threaded.png",
       threadTs: "171.222",
       onPlatformSendDispatch,
+      onDeliveryResult,
     });
     await vi.waitFor(() => expect(onPlatformSendDispatch).toHaveBeenCalledOnce());
     expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
@@ -507,6 +509,27 @@ describe("sendMessageSlack file upload with user IDs", () => {
       },
     });
     expect(hasSlackThreadParticipation("default", "C123CHAN", "171.222")).toBe(true);
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt.threadId).toBeUndefined();
+    expect(result.receipt.threadId).toBeUndefined();
+  });
+
+  it("records a media receipt thread only when Slack confirms the completed file share", async () => {
+    client.files.completeUploadExternal.mockResolvedValueOnce({
+      ok: true,
+      files: [
+        {
+          id: "F001",
+          shares: { public: { C123CHAN: [{ thread_ts: "171.222" }] } },
+        },
+      ],
+    });
+
+    const result = await sendUpload(client, {
+      mediaUrl: "/tmp/confirmed-threaded.png",
+      threadTs: "171.222",
+    });
+
+    expect(result.threadTs).toBe("171.222");
     expect(result.receipt.threadId).toBe("171.222");
   });
 

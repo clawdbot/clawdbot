@@ -34,6 +34,18 @@ describe("reconcileTerminalSourceReplyDelivery", () => {
     actionParams: { target: "user-1", message: "answer" },
     cfg: {},
   };
+  const threadedSlackMirror = {
+    action: "send",
+    channel: "slack",
+    actionParams: { target: "C123", message: "answer" },
+    cfg: {},
+    sessionKey: "agent:main:slack:channel:C123",
+    toolContext: {
+      currentChannelProvider: "slack",
+      currentChannelId: "C123",
+      currentThreadTs: "1712345678.123456",
+    },
+  };
 
   beforeEach(() => {
     receiptMocks.cancel.mockReset();
@@ -64,6 +76,37 @@ describe("reconcileTerminalSourceReplyDelivery", () => {
         receipt,
       }),
     ).resolves.toBe("pending");
+
+    expect(receiptMocks.cancel).not.toHaveBeenCalled();
+    expect(receiptMocks.complete).not.toHaveBeenCalled();
+  });
+
+  it("keeps a threaded Slack receipt pending without confirmed thread placement", async () => {
+    await expect(
+      reconcileTerminalSourceReplyDelivery({
+        deliveredPayload: { receipt: { platformMessageIds: ["1712345679.000000"] } },
+        mirror: threadedSlackMirror,
+        receipt,
+      }),
+    ).resolves.toBe("not-source");
+
+    expect(receiptMocks.cancel).not.toHaveBeenCalled();
+    expect(receiptMocks.complete).not.toHaveBeenCalled();
+  });
+
+  it("keeps a threaded Slack receipt pending after mismatched thread confirmation", async () => {
+    await expect(
+      reconcileTerminalSourceReplyDelivery({
+        deliveredPayload: {
+          receipt: {
+            platformMessageIds: ["1712345679.000000"],
+            threadId: "1712345678.999999",
+          },
+        },
+        mirror: threadedSlackMirror,
+        receipt,
+      }),
+    ).resolves.toBe("not-source");
 
     expect(receiptMocks.cancel).not.toHaveBeenCalled();
     expect(receiptMocks.complete).not.toHaveBeenCalled();

@@ -113,19 +113,22 @@ describe("sendMessageSlack NO_REPLY literal", () => {
 });
 
 describe("sendMessageSlack thread participation", () => {
-  it("records participation after a successful threaded send", async () => {
+  it("keeps requested thread participation without treating it as receipt confirmation", async () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
+    const onDeliveryResult = vi.fn();
 
     const result = await sendMessageSlack("channel:C123", "hello thread", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
       threadTs: "1712345678.123456",
+      onDeliveryResult,
     });
 
     expect(result.threadTs).toBe("1712345678.123456");
-    expect(result.receipt.threadId).toBe("1712345678.123456");
+    expect(result.receipt.threadId).toBeUndefined();
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt.threadId).toBeUndefined();
     expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(true);
   });
 
@@ -311,6 +314,21 @@ describe("sendMessageSlack chunking", () => {
 });
 
 describe("sendMessageSlack blocks", () => {
+  it("omits an unconfirmed requested thread from the block receipt", async () => {
+    const client = createSlackSendTestClient();
+
+    const result = await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "1712345678.123456",
+      blocks: [{ type: "divider" }],
+    });
+
+    expect(result.threadTs).toBe("1712345678.123456");
+    expect(result.receipt.threadId).toBeUndefined();
+  });
+
   it("posts blocks with fallback text when message is empty", async () => {
     const client = createSlackSendTestClient();
     const result = await sendMessageSlack("channel:C123", "", {
@@ -1332,7 +1350,8 @@ describe("sendMessageSlack blocks", () => {
     expect(postedMessage(client).thread_ts).toBe("171234.100");
     expect(result.messageId).toBe("171234.567");
     expect(result.channelId).toBe("D123");
-    expect(result.receipt.threadId).toBe("171234.100");
+    expect(result.threadTs).toBe("171234.100");
+    expect(result.receipt.threadId).toBeUndefined();
   });
 
   it("passes reply_broadcast for threaded text sends only on the first chunk", async () => {
