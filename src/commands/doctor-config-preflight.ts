@@ -172,6 +172,8 @@ export async function runDoctorConfigPreflight(
     skipPristineCoreStateMigrations?: boolean;
     /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
     skipPristineStartupStateMigrations?: boolean;
+    /** Parsed CLI owner for automatic agent/session migration only. */
+    stateMigrationAgentId?: string;
     /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
     doctorOnlyStateMigrations?: boolean;
   } = {},
@@ -447,7 +449,11 @@ export async function runDoctorConfigPreflight(
     }
 
     const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
-    const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
+    const stateMigrationInput = resolveStateMigrationConfigInput({
+      snapshot,
+      baseConfig,
+      stateMigrationAgentId: options.stateMigrationAgentId,
+    });
     if (migrationCheckpoint) {
       migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
         snapshot,

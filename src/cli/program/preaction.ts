@@ -12,6 +12,7 @@ import {
   ensureCliExecutionBootstrap,
   resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
+import { hasExplicitOptions, inheritOptionFromParent } from "../command-options.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
@@ -55,6 +56,16 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   }
   const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
+}
+
+function getStateMigrationAgentId(actionCommand: Command): string | undefined {
+  if (!actionCommand.options.some((option) => option.attributeName() === "agent")) {
+    return undefined;
+  }
+  const value = hasExplicitOptions(actionCommand, ["agent"])
+    ? actionCommand.getOptionValue("agent")
+    : inheritOptionFromParent(actionCommand, "agent", "cli");
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
@@ -124,6 +135,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       jsonOutputMode,
       env: process.env,
     });
+    const stateMigrationAgentId = getStateMigrationAgentId(actionCommand);
     await applyCliExecutionStartupPresentation({
       startupPolicy,
       version: programVersion,
@@ -186,6 +198,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       runtime: defaultRuntime,
       commandPath,
       startupPolicy,
+      stateMigrationAgentId,
       allowInvalid,
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),

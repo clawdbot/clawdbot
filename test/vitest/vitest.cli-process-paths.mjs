@@ -5,6 +5,7 @@ export const cliProcessTestFiles = [
   "src/cli/gateway-backed-exit.process.test.ts",
   "src/cli/help-exit.process.test.ts",
   "src/cli/hooks-cli.process.test.ts",
+  "src/cli/preaction-agent-owner.process.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);

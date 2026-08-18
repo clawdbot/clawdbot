@@ -72,6 +72,7 @@ export async function ensureCliExecutionBootstrap(params: {
   validateConfigOnly?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
+  stateMigrationAgentId?: string;
 }) {
   await ensureCliCommandBootstrap({
     runtime: params.runtime,
@@ -84,6 +85,7 @@ export async function ensureCliExecutionBootstrap(params: {
     loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
     pluginRegistry: params.startupPolicy.pluginRegistry,
     skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
+    stateMigrationAgentId: params.stateMigrationAgentId,
     ...((params.validateConfigOnly ?? params.startupPolicy.validateConfigOnly)
       ? { validateConfigOnly: true }
       : {}),
