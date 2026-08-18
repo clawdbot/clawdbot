@@ -63,7 +63,7 @@ describe("Discord secret target registry", () => {
             },
             accounts: {
               inherited: { enabled: true },
-              work: {
+              Work: {
                 enabled: true,
                 voice: {
                   enabled: true,
@@ -96,7 +96,7 @@ describe("Discord secret target registry", () => {
       },
       {
         ownerId: "discord:voice:realtime:work:openai",
-        path: "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
+        path: "channels.discord.accounts.Work.voice.realtime.providers.openai.apiKey",
       },
     ]);
   });

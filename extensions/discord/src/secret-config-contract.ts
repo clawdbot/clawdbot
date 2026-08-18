@@ -1,4 +1,5 @@
 // Discord helper module supports secret config contract behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
@@ -34,7 +35,7 @@ function createVoiceProviderSecretTarget(params: {
 }
 
 export function discordRealtimeVoiceSecretOwnerId(accountId: string, providerId: string): string {
-  return `discord:voice:realtime:${accountId}:${providerId}`;
+  return `discord:voice:realtime:${normalizeAccountId(accountId)}:${providerId}`;
 }
 
 function isRealtimeVoiceActive(value: unknown): boolean {
