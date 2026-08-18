@@ -1,5 +1,3 @@
-import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionSuggestion,
   SessionSuggestionEvent,
@@ -34,21 +32,13 @@ import {
 import { resetSessionCompanion } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { clearTypingActorForUserMessage } from "./chat-typing-presence.ts";
 import {
   canManageChatSessionSharing,
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing.ts";
 
 type HeaderScope = ChatPaneConnectionScope;
-
-function rawUserMessageSenderId(payload: unknown): string | undefined {
-  const event = recordOrNull(payload);
-  const message = recordOrNull(event?.message);
-  if (stringValue(message?.role)?.toLowerCase() !== "user") {
-    return undefined;
-  }
-  return stringValue(recordOrNull(message?.__openclaw)?.senderId);
-}
 
 export abstract class ChatPaneSharing extends ChatPaneBase {
   protected readonly clearSessionCompanion = async () => {
@@ -715,18 +705,9 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     ) {
       return;
     }
-    // Typing authority comes only from the structured ingress identity. A
-    // legacy senderLabel may look attributable but is display compatibility.
-    const actorId = rawUserMessageSenderId(payload);
-    if (!actorId || !this.typingActors.delete(actorId)) {
-      return;
+    if (clearTypingActorForUserMessage(payload, this.typingActors, this.typingTimers)) {
+      this.requestUpdate();
     }
-    const timer = this.typingTimers.get(actorId);
-    if (timer !== undefined) {
-      window.clearTimeout(timer);
-      this.typingTimers.delete(actorId);
-    }
-    this.requestUpdate();
   }
 
   protected typingActorViews(): { id: string; label: string }[] {

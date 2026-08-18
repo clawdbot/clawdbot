@@ -1814,7 +1814,9 @@ button.chat-reply-preview--message:disabled {
   margin-bottom: 0;
 }
 
-.agent-chat__typing-avatars > :is(.chat-avatar, .chat-avatar-slot) + :is(.chat-avatar, .chat-avatar-slot) {
+.agent-chat__typing-avatars
+  > :is(.chat-avatar, .chat-avatar-slot)
+  + :is(.chat-avatar, .chat-avatar-slot) {
   margin-left: -7px;
 }
 

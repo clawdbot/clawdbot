@@ -545,7 +545,8 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       return;
     }
     const virtualizer = this.virtualizerController.getVirtualizer();
-    const typingAdded = !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
+    const typingAdded =
+      !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
     const followTyping = typingAdded && virtualizer.isAtEnd();
     this.rowKeys = Object.freeze(nextKeys);
     this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));

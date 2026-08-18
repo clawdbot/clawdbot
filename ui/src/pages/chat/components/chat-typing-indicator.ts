@@ -16,14 +16,12 @@ export function renderChatTypingIndicator(
         });
   return html`<div class="agent-chat__typing-indicator" role="status">
     <span class="agent-chat__typing-avatars" aria-hidden="true">
-      ${actors
-        .slice(0, 3)
-        .map((actor) =>
-          renderChatAvatar("user", undefined, undefined, undefined, undefined, {
-            id: actor.id,
-            name: actor.label,
-          }),
-        )}
+      ${actors.slice(0, 3).map((actor) =>
+        renderChatAvatar("user", undefined, undefined, undefined, undefined, {
+          id: actor.id,
+          name: actor.label,
+        }),
+      )}
     </span>
     <span class="agent-chat__typing-bubble" aria-hidden="true">
       <svg class="agent-chat__typing-tail" viewBox="0 0 12 12">
