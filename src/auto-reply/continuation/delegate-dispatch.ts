@@ -47,7 +47,6 @@ import {
   DELEGATE_DISPATCH_RETRY_MS,
 } from "./delegate-dispatch-hedge.js";
 import { partitionManagedDelegatesForRuntime } from "./delegate-dispatch-managed-gates.js";
-export { resetDelegateDispatchHedgesForTests } from "./delegate-dispatch-hedge.js";
 import {
   annotateQueuedDelegatesInheritedPolicy,
   clearRecoverableDelegatesChainTokensFold,
@@ -61,6 +60,9 @@ import {
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
 import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
 import type { PendingContinuationDelegate } from "./types.js";
+
+export { resetDelegateDispatchHedgesForTests } from "./delegate-dispatch-hedge.js";
+
 const log = createSubsystemLogger("continuation/delegate-dispatch");
 
 function formatDelegateTaskForSystemEvent(task: string): string {

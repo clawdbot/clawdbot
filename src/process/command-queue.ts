@@ -803,12 +803,10 @@ export function resetAllLanes(): void {
  * (excludes queued-but-not-started entries).
  */
 export function getActiveTaskCount(): number {
-  const queueState = getQueueState();
-  let total = 0;
-  for (const s of queueState.lanes.values()) {
-    total += s.activeTaskIds.size;
-  }
-  return total;
+  return [...getQueueState().lanes.values()].reduce(
+    (total, state) => total + state.activeTaskIds.size,
+    0,
+  );
 }
 
 /**

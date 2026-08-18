@@ -9,10 +9,6 @@ import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-confi
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { SubagentSpawnPreparation } from "../../../context-engine/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
-import {
-  GatewayDrainingError,
-  runWithGatewayIndependentRootWorkContinuation,
-} from "../../../process/gateway-work-admission.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import {
   recordSessionCreated,
@@ -34,13 +30,7 @@ import {
   persistInitialChildRuntimeState,
   type ContinuationSpawnParams,
 } from "../announce/subagent-announce.runtime.js";
-import {
-  completeCollectorLaunchCleanup,
-  getSubagentRunByRunId,
-  settleFailedQueuedSubagentLaunch,
-  startQueuedSubagentRun,
-} from "../registry/subagent-registry.js";
-import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import {
   materializeSubagentAttachments,
@@ -51,9 +41,9 @@ import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
-  retrySubagentCleanup,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
+import { activateCollectorSubagentRun } from "./subagent-spawn-collector.js";
 import {
   prepareContextEngineSubagentSpawn,
   prepareSubagentSessionContext,
@@ -635,86 +625,20 @@ export async function spawnSubagentDirect(
     childRunId = pipelineResult.runId;
     let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
-      let launchAcceptanceObserved = false;
-      let launchTerminationConfirmed = false;
-      activateSwarmRun({
-        groupId: swarmSchedulerGroupKey,
-        runId: childRunId,
-        start: async () => {
-          // Acceptance is sticky for this deterministic launch identity. A lost
-          // response on a retry cannot prove the previously accepted run stopped.
-          launchTerminationConfirmed = false;
-          await runWithGatewayIndependentRootWorkContinuation(async () => {
-            const launch = await launchChildRun();
-            launchAcceptanceObserved = true;
-            // Queued registration already owns the task row before either dispatch route starts.
-            // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
-            const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
-            recordSessionParticipantBestEffort({
-              actor: { type: "agent", id: requesterAgentId },
-              agentId: targetAgentId,
-              sessionKey: childSessionKey,
-              source: "agent",
-              storePath: resolveSessionStorePathCore(cfg.session?.store, {
-                agentId: targetAgentId,
-              }),
-            });
-            try {
-              if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
-                throw new Error(
-                  "collector registry row could not transition from queued to running",
-                );
-              }
-            } catch (error) {
-              launchTerminationConfirmed = await terminateAcceptedCollectorRun({
-                childSessionKey,
-                gatewayRunId,
-                ...provisionalSessionIdentity,
-              });
-              throw error;
-            }
-            await emitSpawnLifecycleHooks(gatewayRunId);
-          });
-        },
-        onStartFailure: async (error) => {
-          if (error instanceof GatewayDrainingError) {
-            return false;
-          }
-          if (launchAcceptanceObserved && !launchTerminationConfirmed) {
-            // A possibly-live accepted run keeps the FIFO slot and replays the same
-            // persisted idempotency key, but only while this row still owns the
-            // queued work. Once another owner took it, release.
-            return getSubagentRunByRunId(childRunId)?.execution.status !== "queued";
-          }
-          const launchError = summarizeSpawnError(error);
-          const [contextRollback, sessionCleanup] = await Promise.allSettled([
-            rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
-            cleanupFailedSpawn(
-              // A launch RPC can fail after acceptance. Keep the FIFO slot until
-              // deleting the child session proves no accepted run remains active.
-              !launchTerminationConfirmed,
-            ),
-          ]);
-          await retrySubagentCleanup(async () => {
-            settleFailedQueuedSubagentLaunch(childRunId, launchError);
-            return true;
-          });
-          const cleanupComplete =
-            contextRollback.status === "fulfilled" &&
-            contextRollback.value &&
-            sessionCleanup.status === "fulfilled" &&
-            sessionCleanup.value.attachmentsRemoved &&
-            sessionCleanup.value.sessionDeleted;
-          if (cleanupComplete) {
-            emitSessionLifecycleEvent({
-              sessionKey: childSessionKey,
-              reason: "delete",
-              parentSessionKey: requesterInternalKey,
-            });
-            completeCollectorLaunchCleanup(childRunId);
-          }
-          return true;
-        },
+      activateCollectorSubagentRun({
+        swarmSchedulerGroupKey,
+        childRunId,
+        requesterAgentId,
+        targetAgentId,
+        childSessionKey,
+        requesterInternalKey,
+        cfg,
+        provisionalSessionIdentity,
+        launchChildRun,
+        emitSpawnLifecycleHooks,
+        rollbackPreparedContext: () =>
+          rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
+        cleanupFailedSpawn,
       });
       swarmReservationPending = false;
       collectorSessionKey = childSessionKey;

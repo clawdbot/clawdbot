@@ -21,6 +21,7 @@ const WEAK_RANDOM_SAME_LINE_PATTERN =
 const PATH_JOIN_CALL_PATTERN = /path\s*\.\s*join\s*\(/u;
 const OS_TMPDIR_CALL_PATTERN = /os\s*\.\s*tmpdir\s*\(/u;
 const FILE_READ_CONCURRENCY = 24;
+const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const DEFAULT_GUARDRAIL_SKIP_PATTERNS = [
   /\.test\.tsx?$/,
   /\.test-helpers\.tsx?$/,
@@ -212,6 +213,7 @@ function hasDynamicTmpdirJoin(source: string): boolean {
 function listTrackedRuntimeSourceFiles(repoRoot: string): string[] {
   const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", "src", "extensions"], {
     encoding: "utf8",
+    maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "inherit"],
   });
   return stdout

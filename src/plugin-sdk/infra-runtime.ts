@@ -5,6 +5,10 @@
  */
 
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+import {
+  enqueueSystemEventEntryRaw as enqueueSystemEventEntryInternal,
+  enqueueSystemEventRaw as enqueueSystemEventInternal,
+} from "../infra/system-events.js";
 export * from "./delivery-queue-runtime.js";
 
 export * from "../infra/backoff.js";
@@ -303,10 +307,6 @@ export {
   hasSystemEvents,
   resolveSystemEventDeliveryContext,
   resetSystemEventsForTest,
-} from "../infra/system-events.js";
-import {
-  enqueueSystemEventRaw as enqueueSystemEventInternal,
-  enqueueSystemEventEntryRaw as enqueueSystemEventEntryInternal,
 } from "../infra/system-events.js";
 
 /**

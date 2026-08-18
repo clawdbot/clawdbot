@@ -5,12 +5,6 @@
  * IO without changing the announce logic itself.
  */
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-export { getRuntimeConfig } from "../../../config/config.js";
-export {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
-export { resolveContinuationRuntimeConfig } from "../../../auto-reply/continuation/config.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { normalizeDiagnosticTraceparent } from "../../../infra/diagnostic-trace-context-pure.js";
 import { summarizeSpawnError } from "../../spawn-error.js";
@@ -20,6 +14,14 @@ import {
   resolveGatewaySessionStoreTarget,
   upsertSessionEntryCore,
 } from "../spawn/subagent-spawn.runtime.js";
+
+export { resolveContinuationRuntimeConfig } from "../../../auto-reply/continuation/config.js";
+export { getRuntimeConfig } from "../../../config/config.js";
+export {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
+
 export type ContinuationSpawnParams = Pick<
   SubagentRunRecord,
   | "silentAnnounce"

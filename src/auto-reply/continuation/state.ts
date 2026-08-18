@@ -8,6 +8,12 @@
  * RFC: docs/design/continue-work-signal-v2.md §3.3
  */
 
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { stagedPostCompactionDelegateCount } from "./delegate-store-post-compaction.js";
+import { pendingDelegateCount } from "./delegate-store.js";
+import type { ChainState } from "./types.js";
+import { pendingWorkCount } from "./work-store.js";
+
 type ContinuationTimerHandle = ReturnType<typeof setTimeout>;
 
 // Per-session timer handles for delayed continuation work.
@@ -22,10 +28,6 @@ const continuationTimerRefs = new Map<string, number>();
 // information already in TaskFlow via pendingDelegateCount. Removed:
 // the source of truth is the TaskFlow registry.
 // ---------------------------------------------------------------------------
-
-import { stagedPostCompactionDelegateCount } from "./delegate-store-post-compaction.js";
-import { pendingDelegateCount } from "./delegate-store.js";
-import { pendingWorkCount } from "./work-store.js";
 
 export function hasDelegatePending(sessionKey: string): boolean {
   return (
@@ -120,9 +122,6 @@ export function clearTrackedContinuationTimers(sessionKey: string): void {
 // ---------------------------------------------------------------------------
 // Chain state persistence
 // ---------------------------------------------------------------------------
-
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { ChainState } from "./types.js";
 
 /**
  * Structural subset of `SessionEntry` covering only the fields the
