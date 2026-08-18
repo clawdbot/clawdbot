@@ -116,7 +116,7 @@ and [Z.AI / GLM Coding Plan](/providers/zai).
 
 ## OAuth exchange (how login works)
 
-OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm.ts` and wired into the wizards/commands.
+OpenClaw's interactive login flows live in `src/llm/utils/oauth/` — login and token refresh for the built-in Anthropic OAuth flow (Claude Pro/Max), plus a ChatGPT/Codex adapter that delegates login to the bundled OpenAI OAuth plugin (`src/plugins/provider-openai-chatgpt-oauth.ts`) — on top of the shared runtime in `src/plugin-sdk/provider-oauth-runtime.ts` and `src/plugin-sdk/provider-auth-runtime.ts`. The auth wizards/commands such as `openclaw models auth` (`src/commands/models/auth.ts`) drive these flows and persist the returned credentials into the credential store.
 
 ### Anthropic setup-token
 
