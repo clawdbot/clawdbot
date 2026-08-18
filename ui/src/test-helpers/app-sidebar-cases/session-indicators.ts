@@ -58,6 +58,7 @@ describe("AppSidebar session indicators", () => {
     }
     for (const row of result.sessions) {
       row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+      row.owner = { actor: row.createdActor };
       if (row.key !== ownerKey) {
         row.channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(row.key)}`;
       }
@@ -68,8 +69,8 @@ describe("AppSidebar session indicators", () => {
     }
     iconRow.icon = "🦞";
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
 
     const fetchMock = vi.fn().mockResolvedValue({
