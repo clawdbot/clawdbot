@@ -236,4 +236,51 @@ describe("session activity live status", () => {
     expect(inactive?.querySelector(".activity-feed__run-dot")).toBeNull();
     expect(inactive?.querySelector(".activity-feed__session-headline")).toBeNull();
   });
+
+  it("links active rows to their recorded run ids", () => {
+    const now = Date.now();
+    const owner = { id: "owner", label: "Owner" };
+    const base = props();
+    const context = { ...base.context, basePath: "/control" } as ApplicationContext;
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderSessionActivityView(
+        props({
+          context,
+          rows: [
+            row("Digest run", owner, now, {
+              activeRunIds: ["fallback-run"],
+              hasActiveRun: true,
+              observerDigest: {
+                headline: "Running",
+                health: "on-track",
+                revision: 1,
+                runId: "digest run:a/b",
+                updatedAt: now,
+              },
+            }),
+            row("Active run fallback", owner, now - 1_000, {
+              activeRunIds: ["fallback run:a/b"],
+              hasActiveRun: true,
+            }),
+            row("Inactive run", owner, now - 2_000, {
+              activeRunIds: ["inactive-run"],
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      [...container.querySelectorAll<HTMLAnchorElement>(".activity-feed__inspect-run")].map(
+        (link) => link.getAttribute("href"),
+      ),
+    ).toEqual([
+      "/control/activity?view=run&run=digest%20run%3Aa%2Fb",
+      "/control/activity?view=run&run=fallback%20run%3Aa%2Fb",
+    ]);
+  });
 });

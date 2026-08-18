@@ -18,6 +18,7 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import {
   ACTIVITY_TIME_FILTERS,
   projectSessionActivity,
@@ -250,51 +251,62 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
   const ownerName = presenceViewerLabel(owner);
   const activityAt = sessionActivityTimestamp(row);
   const headline = row.hasActiveRun === true ? row.observerDigest?.headline.trim() : "";
+  const activeRunId =
+    row.hasActiveRun === true ? (row.observerDigest?.runId ?? row.activeRunIds?.[0]) : undefined;
   const scope = row.channel
     ? t("activityFeed.channelLabel", { value: row.channel })
     : row.agentId
       ? t("activityFeed.agentLabel", { value: row.agentId })
       : null;
-  return html`<a
-    class="activity-feed__session"
-    data-activity-session=${row.key}
-    href=${sessionHref(context, row)}
-    @click=${(event: MouseEvent) => navigateToSession(event, context, row)}
-  >
-    <span class="activity-feed__session-avatar">
-      ${row.hasActiveRun === true
-        ? html`<span
-            class="activity-feed__presence-dot activity-feed__run-dot"
-            aria-hidden="true"
-          ></span>`
-        : nothing}
-      <openclaw-viewer-avatar
-        .user=${owner}
-        .markAsViewer=${false}
-        variant="footer"
-      ></openclaw-viewer-avatar>
-    </span>
-    <span class="activity-feed__session-main">
-      <span class="activity-feed__session-title">${resolveSessionDisplayName(row.key, row)}</span>
-      <span class="activity-feed__session-meta">
-        ${headline
+  return html`<div class="activity-feed__session-row">
+    <a
+      class="activity-feed__session"
+      data-activity-session=${row.key}
+      href=${sessionHref(context, row)}
+      @click=${(event: MouseEvent) => navigateToSession(event, context, row)}
+    >
+      <span class="activity-feed__session-avatar">
+        ${row.hasActiveRun === true
           ? html`<span
-              class="activity-feed__session-headline"
-              data-health=${row.observerDigest?.health ?? nothing}
-              >${headline}</span
-            >`
-          : html`<span>${ownerName}</span>`}${scope
-          ? html`<span class="activity-feed__session-scope">${scope}</span>`
+              class="activity-feed__presence-dot activity-feed__run-dot"
+              aria-hidden="true"
+            ></span>`
+          : nothing}
+        <openclaw-viewer-avatar
+          .user=${owner}
+          .markAsViewer=${false}
+          variant="footer"
+        ></openclaw-viewer-avatar>
+      </span>
+      <span class="activity-feed__session-main">
+        <span class="activity-feed__session-title">${resolveSessionDisplayName(row.key, row)}</span>
+        <span class="activity-feed__session-meta">
+          ${headline
+            ? html`<span
+                class="activity-feed__session-headline"
+                data-health=${row.observerDigest?.health ?? nothing}
+                >${headline}</span
+              >`
+            : html`<span>${ownerName}</span>`}${scope
+            ? html`<span class="activity-feed__session-scope">${scope}</span>`
+            : nothing}
+        </span>
+      </span>
+      <span class="activity-feed__session-time">
+        ${headline ? html`<span class="activity-feed__session-owner">${ownerName}</span>` : nothing}
+        ${activityAt > 0
+          ? html`<span>${formatRelativeTimestamp(activityAt, { fallback: "" })}</span>`
           : nothing}
       </span>
-    </span>
-    <span class="activity-feed__session-time">
-      ${headline ? html`<span class="activity-feed__session-owner">${ownerName}</span>` : nothing}
-      ${activityAt > 0
-        ? html`<span>${formatRelativeTimestamp(activityAt, { fallback: "" })}</span>`
-        : nothing}
-    </span>
-  </a>`;
+    </a>
+    ${activeRunId
+      ? html`<a
+          class="activity-feed__inspect-run"
+          href=${activityRunInspectorHref(activeRunId, context.basePath)}
+          >${t("activityFeed.inspectRun")}</a
+        >`
+      : nothing}
+  </div>`;
 }
 
 function renderDaySessions(

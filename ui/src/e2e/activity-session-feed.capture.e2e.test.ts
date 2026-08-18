@@ -54,7 +54,7 @@ suite.define(() => {
           ],
           methodResponses: {
             "sessions.list": {
-              count: 4,
+              count: 5,
               creators: [
                 { id: "profile-alice", label: "Alice Chen" },
                 { id: "profile-bob", label: "Bob Rivera" },
@@ -74,6 +74,16 @@ suite.define(() => {
                     actor: { type: "human", id: "profile-alice", label: "Alice Chen" },
                   },
                   participants: [{ type: "human", id: "profile-bob", label: "Bob Rivera" }],
+                  activeRunIds: ["mock run:a/b"],
+                  hasActiveRun: true,
+                  observerDigest: {
+                    headline: "Waiting on a fictional mock approval",
+                    health: "waiting-on-user",
+                    revision: 1,
+                    runId: "mock run:a/b",
+                    updatedAt: now - 4 * 60_000,
+                  },
+                  status: "running",
                   updatedAt: now - 4 * 60_000,
                 },
                 {
@@ -86,6 +96,7 @@ suite.define(() => {
                     actor: { type: "human", id: "profile-bob", label: "Bob Rivera" },
                   },
                   participants: [{ type: "human", id: "profile-alice", label: "Alice Chen" }],
+                  hasAutomation: true,
                   updatedAt: now - 42 * 60_000,
                 },
                 {
@@ -97,7 +108,20 @@ suite.define(() => {
                   owner: {
                     actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
                   },
-                  updatedAt: now - 26 * 60 * 60_000,
+                  hasAutomation: true,
+                  updatedAt: now - 2 * 60 * 60_000,
+                },
+                {
+                  key: "agent:main:nightly-maintenance",
+                  kind: "direct",
+                  displayName: "Nightly mock maintenance",
+                  agentId: "main",
+                  createdActor: { type: "human", id: "profile-carol", label: "Carol Singh" },
+                  owner: {
+                    actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
+                  },
+                  hasAutomation: true,
+                  updatedAt: now - 3 * 60 * 60_000,
                 },
                 {
                   key: "agent:main:incident-notes",
@@ -147,9 +171,32 @@ suite.define(() => {
           )
           .toBe(3);
         await page.keyboard.press("Escape");
+        const automationGroup = page.locator("[data-activity-automation-group]");
+        await expect.poll(() => automationGroup.count()).toBe(1);
+        await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("false");
+        await expect.poll(() => page.locator("[data-activity-session]").count()).toBe(2);
+        await automationGroup.click();
+        await expect.poll(() => page.locator("[data-activity-session]").count()).toBe(5);
+        await automationGroup.click();
+        await expect.poll(() => page.locator("[data-activity-session]").count()).toBe(2);
+
+        const liveRow = page.locator(`[data-activity-session="${releaseKey}"]`);
+        await expect.poll(() => liveRow.locator(".activity-feed__run-dot").count()).toBe(1);
         await expect
-          .poll(() => page.locator(".activity-feed__sessions > .activity-feed__session").count())
-          .toBe(4);
+          .poll(() => liveRow.locator(".activity-feed__session-headline").textContent())
+          .toContain("Waiting on a fictional mock approval");
+        const inspectRun = liveRow.locator("xpath=following-sibling::a");
+        await liveRow.hover();
+        await expect
+          .poll(() => inspectRun.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("1");
+        await inspectRun.focus();
+        await expect
+          .poll(() => inspectRun.evaluate((element) => document.activeElement === element))
+          .toBe(true);
+        expect(await inspectRun.getAttribute("href")).toBe(
+          "/activity?view=run&run=mock%20run%3Aa%2Fb",
+        );
         await page.screenshot({
           animations: "disabled",
           path: path.join(outputDir, "02-global-activity.png"),
