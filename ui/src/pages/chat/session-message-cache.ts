@@ -91,6 +91,11 @@ export function appendChatMessageToCache(
   message: unknown,
   eventClaim?: object,
 ): void {
+  const cacheKey = resolveChatSnapshotKey(host, target);
+  const existing = getSessionCacheValue(cache, cacheKey);
+  if (!existing) {
+    return;
+  }
   if (eventClaim) {
     let claims = appendedEventClaims.get(cache);
     if (!claims) {
@@ -101,16 +106,6 @@ export function appendChatMessageToCache(
       return;
     }
     claims.add(eventClaim);
-  }
-  const cacheKey = resolveChatSnapshotKey(host, target);
-  const existing = getSessionCacheValue(cache, cacheKey);
-  if (!existing) {
-    cacheChatSessionSnapshot(cache, host, target, {
-      messages: [message],
-      pagination: { hasMore: false },
-      sessionId: null,
-    });
-    return;
   }
   const messageWeight = serializedArrayItemWeight(message);
   if (messageWeight === null) {

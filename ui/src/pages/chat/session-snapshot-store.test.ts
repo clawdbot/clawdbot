@@ -4,6 +4,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  appendChatMessageToCache,
   cacheChatSessionSnapshot,
   observeChatCache,
   type ChatMessageCache,
@@ -102,6 +103,37 @@ describe("persistent chat session snapshots", () => {
     await writer.flush();
 
     expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(cached);
+  });
+
+  it("does not let an append miss replace a richer persisted snapshot", async () => {
+    const sessionKey = "agent:main:append-miss";
+    const persisted = {
+      ...snapshot("unused", "session-rich"),
+      deltaCursor: "cursor-rich",
+      messages: ["one", "two", "three", "four", "five"],
+    };
+    const writer = new SessionSnapshotStore();
+    writer.write(sessionKey, persisted);
+    await writer.flush();
+
+    const memoryCache: ChatMessageCache = new Map();
+    const store = new SessionSnapshotStore(memoryCache);
+    store.connect();
+    observeChatCache(memoryCache, store);
+    try {
+      appendChatMessageToCache(
+        memoryCache,
+        { assistantAgentId: "main", agentsList: null, hello: null },
+        { sessionKey },
+        "newest",
+      );
+      await store.flush();
+
+      expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(persisted);
+    } finally {
+      store.disconnect();
+      await store.whenIdle();
+    }
   });
 
   it("seeds the savedAt index once for every synchronous lookup", async () => {

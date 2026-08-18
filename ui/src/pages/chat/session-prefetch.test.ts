@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
+  appendChatMessageToCache,
   cacheChatSessionSnapshot,
   observeChatCache,
   readChatSessionSnapshot,
@@ -317,20 +318,20 @@ describe("recent session prefetch", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("rewarms a stored snapshot through delta replay and advances freshness", async () => {
+  it("rewarms complete stored history after an interleaved append miss", async () => {
     const sessionKey = "agent:main:delta";
-    const cachedMessage = {
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
-      __openclaw: { id: "assistant-tool", seq: 1 },
-    };
+    const priorMessages = Array.from({ length: 5 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `prior-${index + 1}`,
+      __openclaw: { id: `prior-${index + 1}`, seq: index + 1 },
+    }));
     cacheChatSessionSnapshot(
       cache,
       snapshotHost,
       { sessionKey },
       {
         deltaCursor: "cursor-1",
-        messages: [cachedMessage],
+        messages: priorMessages,
         pagination: { hasMore: false, completeSnapshot: true },
         sessionId: "session-delta",
       },
@@ -338,22 +339,32 @@ describe("recent session prefetch", () => {
     await store.flush();
     const previousSavedAt = store.readSavedAt(sessionKey);
     cache.clear();
+    const liveMessage = {
+      role: "user",
+      content: "live broadcast",
+      __openclaw: { id: "live-user", seq: 6 },
+    };
+    const liveEvent = {
+      sessionKey,
+      message: liveMessage,
+      messageId: "live-user",
+      messageSeq: 6,
+    };
+    appendChatMessageToCache(cache, snapshotHost, { sessionKey }, liveMessage, liveEvent);
     const deltaMessage = {
       role: "assistant",
-      content: [
-        { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-        { type: "toolResult", toolCallId: "call-1", text: "file contents" },
-      ],
-      __openclaw: { id: "assistant-tool", seq: 1 },
+      content: "delta reply",
+      __openclaw: { id: "delta-assistant", seq: 7 },
     };
     const request = vi.fn(async () => ({
       kind: "delta",
       messages: [
+        liveEvent,
         {
           sessionKey,
           message: deltaMessage,
-          messageId: "assistant-tool",
-          messageSeq: 1,
+          messageId: "delta-assistant",
+          messageSeq: 7,
         },
       ],
       deltaCursor: "cursor-2",
@@ -375,11 +386,18 @@ describe("recent session prefetch", () => {
     );
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual({
       deltaCursor: "cursor-2",
-      messages: [deltaMessage],
+      messages: [...priorMessages, liveMessage, deltaMessage],
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
     });
     expect(store.readSavedAt(sessionKey)).toBeGreaterThan(previousSavedAt ?? 0);
+    await store.flush();
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual({
+      deltaCursor: "cursor-2",
+      messages: [...priorMessages, liveMessage, deltaMessage],
+      pagination: { hasMore: false, completeSnapshot: true },
+      sessionId: "session-delta",
+    });
   });
 
   it("skips the cycle when another tab holds the Web Lock", async () => {
