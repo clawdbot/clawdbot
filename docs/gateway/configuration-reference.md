@@ -1081,7 +1081,7 @@ Validation and safety notes:
 **Endpoints:**
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat", agentId?, sessionKey? }`
-  - `sessionKey` is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`) and must match `hooks.allowedSessionKeyPrefixes` when configured.
+  - `sessionKey` requires `mode: "now"`, is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`), and must match `hooks.allowedSessionKeyPrefixes` when configured.
   - A supplied `agentId` must name a configured agent.
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, sessionMode?, wakeMode?, deliver?, channel?, to?, accountId?, model?, thinking?, timeoutSeconds? }`
   - A supplied `agentId` must name a configured agent.

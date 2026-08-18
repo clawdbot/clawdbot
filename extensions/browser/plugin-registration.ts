@@ -26,7 +26,13 @@ import {
 } from "./src/browser-node-commands.js";
 import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
-import { BrowserToolOutputSchema, BrowserToolSchema } from "./src/browser-tool.schema.js";
+import {
+  BrowserToolOutputSchema,
+  createBrowserToolSchema,
+  resolveBrowserToolCapabilities,
+} from "./src/browser-tool.schema.js";
+import { resolveBrowserConfig, resolveProfile } from "./src/browser/config.js";
+import { getBrowserProfileCapabilities } from "./src/browser/profile-capabilities.js";
 import { initializeBrowserSessionTabStore } from "./src/browser/session-tab-store.js";
 import {
   configureSystemProfileImportStateStore,
@@ -63,23 +69,26 @@ const BROWSER_CLI_DESCRIPTOR = {
   machineOutput: isBrowserMachineOutput,
 };
 
-function createLazyBrowserTool(opts?: {
-  sandboxBridgeUrl?: string;
-  allowHostControl?: boolean;
-  agentSessionKey?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  activeModel?: {
-    provider?: string;
-    model?: string;
-  };
-  mediaScope?: {
-    sessionKey?: string;
-    channel?: string;
-    chatType?: string;
-  };
-  runToolBinding?: unknown;
-}): AnyAgentTool {
+function createLazyBrowserTool(
+  opts?: {
+    sandboxBridgeUrl?: string;
+    allowHostControl?: boolean;
+    agentSessionKey?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+    activeModel?: {
+      provider?: string;
+      model?: string;
+    };
+    mediaScope?: {
+      sessionKey?: string;
+      channel?: string;
+      chatType?: string;
+    };
+    runToolBinding?: unknown;
+  },
+  config?: OpenClawPluginToolContext["runtimeConfig"],
+): AnyAgentTool {
   const bindingResult =
     opts?.runToolBinding === undefined
       ? undefined
@@ -90,17 +99,32 @@ function createLazyBrowserTool(opts?: {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
+  const boundProfile =
+    bindingResult?.ok && bindingResult.binding.target === "host"
+      ? resolveProfile(resolveBrowserConfig(config?.browser, config), bindingResult.binding.profile)
+      : undefined;
+  const capabilities = resolveBrowserToolCapabilities({
+    tabBound: bindingResult?.ok,
+    evaluateEnabled: config?.browser?.evaluateEnabled !== false,
+    ...(boundProfile ? { profileCapabilities: getBrowserProfileCapabilities(boundProfile) } : {}),
+  });
   return {
     label: "Browser",
     name: "browser",
     resultContentSource: "network",
-    description: describeBrowserTool({ targetDefault, hostHint }),
-    parameters: BrowserToolSchema,
+    description: describeBrowserTool({ targetDefault, hostHint, capabilities }),
+    parameters: createBrowserToolSchema(capabilities),
     outputSchema: BrowserToolOutputSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
       const tool = createBrowserTool(
-        bindingResult?.ok ? { ...opts, runToolBinding: bindingResult.binding } : opts,
+        bindingResult?.ok
+          ? {
+              ...opts,
+              runToolBinding: bindingResult.binding,
+              toolCapabilities: capabilities,
+            }
+          : { ...opts, toolCapabilities: capabilities },
       );
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
@@ -244,8 +268,10 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       maxEntries: 1,
     }),
   );
-  api.registerTool(((ctx: OpenClawPluginToolContext) =>
-    createLazyBrowserTool(createBrowserToolOptions(ctx))) as OpenClawPluginToolFactory);
+  api.registerTool(((ctx: OpenClawPluginToolContext) => {
+    const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+    return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
+  }) as OpenClawPluginToolFactory);
   api.registerCli(
     async ({ program }) => {
       const { registerBrowserCli } = await import("./src/cli/browser-cli.js");

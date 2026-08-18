@@ -20,13 +20,9 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const selectAgentHarnessMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../agents/harness/selection.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/harness/selection.js")>();
-  return {
-    ...actual,
-    selectAgentHarness: (...args: unknown[]) => selectAgentHarnessMock(...args),
-  };
-});
+vi.mock("../../agents/harness/selection.js", () => ({
+  selectAgentHarness: (...args: unknown[]) => selectAgentHarnessMock(...args),
+}));
 
 const { resolveVisibleRepliesPolicy } = await import("./dispatch-from-config.harness-defaults.js");
 

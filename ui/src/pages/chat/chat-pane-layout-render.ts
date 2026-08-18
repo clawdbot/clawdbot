@@ -148,6 +148,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
       primary,
+      requestUpdate: state.requestUpdate!,
     });
     return html`${content}${renderChatImageLightbox(
       state.imageLightbox,

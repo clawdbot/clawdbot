@@ -369,13 +369,17 @@ vi.mock("../daemon/service.js", () => ({
         : undefined),
     };
     args?.validateEnvBeforeStatusRead?.(env);
-    const [loaded, runtime] = await Promise.all([
-      serviceLoaded({ env }).catch(() => false),
+    const [loadState, runtime] = await Promise.all([
+      serviceLoaded({ env })
+        .then((loaded: boolean) =>
+          loaded ? ({ status: "loaded" } as const) : ({ status: "not-loaded" } as const),
+        )
+        .catch((error: unknown) => ({ status: "unknown" as const, detail: String(error) })),
       serviceReadRuntime(env).catch(() => undefined),
     ]);
     return {
       installed: command !== null,
-      loaded,
+      loadState,
       running: runtime?.status === "running",
       env,
       command,

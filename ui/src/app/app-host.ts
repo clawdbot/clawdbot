@@ -178,6 +178,30 @@ class OpenClawShell
   didConsiderNativeRouteRestore = false;
   pendingNativeNewSession = false;
   readonly settingsPreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
+  // Settings navigation is needed only after entering the settings takeover.
+  // Keep its search, update-card, and sidebar rendering graph off the startup path.
+  @state() settingsSidebarRenderer:
+    | typeof import("../components/settings-sidebar.ts").renderSettingsSidebar
+    | null = null;
+  @state() settingsSidebarLoadFailed = false;
+  private settingsSidebarRuntime: Promise<unknown> | null = null;
+
+  loadSettingsSidebarRenderer(): void {
+    this.settingsSidebarRuntime ??= import("../components/settings-sidebar.ts")
+      .then((module) => {
+        this.settingsSidebarRenderer = module.renderSettingsSidebar;
+        this.settingsSidebarLoadFailed = false;
+      })
+      .catch(() => {
+        this.settingsSidebarLoadFailed = true;
+        this.settingsSidebarRuntime = null;
+      });
+  }
+
+  retrySettingsSidebarRenderer(): void {
+    this.settingsSidebarLoadFailed = false;
+    this.loadSettingsSidebarRenderer();
+  }
   // Lazy: the critical-notice module stays out of the startup chunk (perf
   // budget); loaded on the first session.observer digest after boot.
   criticalNoticeRuntime: Promise<

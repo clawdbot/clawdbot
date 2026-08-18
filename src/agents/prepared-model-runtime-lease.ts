@@ -99,6 +99,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   options: {
     retainIdleRunOwner?: boolean;
     catalogMode?: PreparedModelRuntimeCatalogMode;
+    pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
   let normalizedInput = normalizePreparedModelRuntimeInput({
@@ -109,6 +110,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   if (
     provenance === "run" &&
     context.getGatewayLifecycleActive() &&
+    !options.pluginGeneration &&
     !context.getPendingReplacement()
   ) {
     try {
@@ -143,7 +145,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       if (context.getPendingReplacement()) {
         continue;
       }
-      if (provenance === "run") {
+      if (provenance === "run" && !options.pluginGeneration) {
         input = rebindInputToCommittedConfiguredOwner(context.owners, input);
         key = ownerKey(input);
       }
@@ -157,6 +159,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     if (
       context.getGatewayLifecycleActive() &&
       provenance === "run" &&
+      !options.pluginGeneration &&
       (!existing || staleDynamicOwner)
     ) {
       // Dynamic workspaces still inherit the committed agent/config generation. Only their
@@ -184,11 +187,9 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       }
     }
     try {
-      const reusablePluginGeneration = resolveReusableConfiguredPluginGeneration(
-        input,
-        workspacePluginRootPresent,
-        context,
-      );
+      const reusablePluginGeneration =
+        options.pluginGeneration ??
+        resolveReusableConfiguredPluginGeneration(input, workspacePluginRootPresent, context);
       if (existing && !staleDynamicOwner) {
         snapshot = await context.prepareSnapshot(input);
       } else {

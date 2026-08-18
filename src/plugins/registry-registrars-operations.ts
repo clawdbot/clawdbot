@@ -19,6 +19,7 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
 import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
+import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import type {
@@ -58,6 +59,44 @@ export function canClaimReservedCommandOwnership(
 
 export function createOperationRegistrars(state: PluginRegistryState) {
   const { registry, pushDiagnostic } = state;
+
+  const registerWidgetPresenter = (record: PluginRecord, presenter: WidgetPresenter) => {
+    const description = normalizeOptionalString(presenter.description);
+    if (
+      presenter.target !== "node_panel" ||
+      !description ||
+      description.length > 160 ||
+      typeof presenter.availability !== "function" ||
+      typeof presenter.present !== "function"
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "invalid widget presenter registration",
+      });
+      return;
+    }
+    const existing = registry.widgetPresenters.find(
+      (registration) => registration.presenter.target === presenter.target,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `widget presenter already registered for ${presenter.target} (${existing.pluginId})`,
+      });
+      return;
+    }
+    registry.widgetPresenters.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      presenter: { ...presenter, description },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
 
   const registerCli = (
     record: PluginRecord,
@@ -444,6 +483,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
   };
 
   return {
+    registerWidgetPresenter,
     registerCli,
     registerReload,
     registerNodeHostCommand,

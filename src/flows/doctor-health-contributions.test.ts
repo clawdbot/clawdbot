@@ -273,6 +273,16 @@ vi.mock("../daemon/service.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/service.js")>();
   return {
     ...actual,
+    readGatewayServiceState: async () => ({
+      installed: true,
+      loadState: {
+        status: (await mocks.gatewayServiceIsLoaded()) ? "loaded" : "not-loaded",
+      },
+      running: false,
+      env: {},
+      command: null,
+      runtime: { status: "stopped" },
+    }),
     resolveGatewayService: mocks.resolveGatewayService,
   };
 });

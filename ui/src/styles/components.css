@@ -135,6 +135,14 @@ openclaw-session-owner-chip {
   transition: transform var(--duration-fast) ease;
 }
 
+.channel-avatar {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
 .session-glyph__emoji {
   font-size: 15px;
   line-height: 1;
@@ -1112,7 +1120,8 @@ openclaw-session-progress-hovercard-provider {
 
 .field input,
 .field textarea,
-.field select {
+.field select,
+.input {
   border: 1px solid var(--input);
   background: var(--card);
   border-radius: var(--radius-md);
@@ -1125,21 +1134,25 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .field input:not([type="checkbox"]):not([type="radio"]),
-.field select {
+.field select,
+input.input:not([type="checkbox"]):not([type="radio"]),
+select.input {
   height: 38px;
 }
 
 @media (hover: none) and (pointer: coarse) {
   .field input,
   .field textarea,
-  .field select {
+  .field select,
+  .input {
     font-size: 16px;
   }
 }
 
 .field input:focus-visible,
 .field textarea:focus-visible,
-.field select:focus-visible {
+.field select:focus-visible,
+.input:focus-visible {
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
 }
@@ -2949,10 +2962,6 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.chat-queue__item--steered {
-  background: var(--info-subtle);
-}
-
 /* The edited row keeps its slot so the operator can see where the corrected
    message lands; the outline says the composer owns it right now.
    Editing is an active state, not a failure, so it uses the informational
@@ -3035,10 +3044,6 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
-.chat-queue__item--steered .chat-queue__icon {
-  color: var(--info);
-}
-
 /* Reconnect rows mirror the connection pill's amber status dot so the queue
    reads as quiet auto-retry status, not a failure needing action. */
 .chat-queue__dot {
@@ -3067,11 +3072,6 @@ td.data-table-key-col {
   font-weight: 600;
   line-height: 1.5;
   white-space: nowrap;
-}
-
-.chat-queue__badge--steered {
-  background: color-mix(in srgb, var(--info) 16%, transparent);
-  color: var(--info);
 }
 
 .chat-queue__item--failed .chat-queue__badge {
@@ -3139,8 +3139,7 @@ td.data-table-key-col {
   margin-left: auto;
 }
 
-.chat-queue__steer,
-.chat-queue__retry {
+.chat-queue__action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -3155,8 +3154,7 @@ td.data-table-key-col {
   cursor: var(--cursor-action);
 }
 
-.chat-queue__steer svg,
-.chat-queue__retry svg {
+.chat-queue__action svg {
   width: 12px;
   height: 12px;
   fill: none;
@@ -3166,8 +3164,7 @@ td.data-table-key-col {
   stroke-linejoin: round;
 }
 
-.chat-queue__steer:hover:not(:disabled),
-.chat-queue__retry:hover:not(:disabled) {
+.chat-queue__action:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 

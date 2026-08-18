@@ -1,7 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import type { BoardCommand, BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
-import { setFallbackGatewayContext } from "../../gateway/server-plugin-fallback-context.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDashboardTool } from "./dashboard-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
@@ -186,28 +186,29 @@ describe("dashboard tool", () => {
     ["set_chat_dock", { dock: "left" }],
   ])("reports %s as unavailable when no Control UI is connected", async (action, args) => {
     const broadcastToConnIds = vi.fn();
-    const clearContext = setFallbackGatewayContext({
+    const context = {
       broadcastToConnIds,
       getClientConnIds: () => new Set(),
-    } as never);
-    try {
-      const tool = createDashboardTool({ agentSessionKey: "agent:main:main" });
-      const result = await tool.execute("command", { action, ...args });
-      expect(result.details).toEqual({
-        status: "unavailable",
-        code: "UNAVAILABLE",
-        message: "Connect Control UI and retry.",
-      });
-      expect(result.content[0]).toMatchObject({
-        text: expect.stringMatching(/Control UI.*retry/i),
-      });
-      expect(broadcastToConnIds).toHaveBeenCalledWith(
-        "board.command",
-        expect.any(Object),
-        new Set(),
-      );
-    } finally {
-      clearContext();
-    }
+    } as never;
+    await withPluginRuntimeGatewayRequestScope(
+      { context, isWebchatConnect: () => false },
+      async () => {
+        const tool = createDashboardTool({ agentSessionKey: "agent:main:main" });
+        const result = await tool.execute("command", { action, ...args });
+        expect(result.details).toEqual({
+          status: "unavailable",
+          code: "UNAVAILABLE",
+          message: "Connect Control UI and retry.",
+        });
+        expect(result.content[0]).toMatchObject({
+          text: expect.stringMatching(/Control UI.*retry/i),
+        });
+        expect(broadcastToConnIds).toHaveBeenCalledWith(
+          "board.command",
+          expect.any(Object),
+          new Set(),
+        );
+      },
+    );
   });
 });

@@ -872,7 +872,7 @@ class SessionsPage extends OpenClawLightDomElement {
   private async stopCloudWorker(row: GatewaySessionRow) {
     const label = normalizeOptionalString(row.label) ?? row.key;
     const stopAction = resolveCloudWorkerStopAction(row.placement);
-    if (!stopAction || (stopAction.method === "sessions.reclaim" && row.hasActiveRun === true)) {
+    if (!stopAction || (stopAction.blocksActiveRun && row.hasActiveRun === true)) {
       return;
     }
     const scope = this.captureRequestScope();
@@ -892,18 +892,10 @@ class SessionsPage extends OpenClawLightDomElement {
     let mutationError: string | null = null;
     try {
       const agentId = parseAgentSessionKey(row.key)?.agentId;
-      const result = await requestCloudWorkerStop(scope.client, stopAction, {
+      await requestCloudWorkerStop(scope.client, {
         key: row.key,
         ...(agentId ? { agentId } : {}),
       });
-      if (result && this.isRequestScopeCurrent(scope)) {
-        showToast({
-          message: t("sessionsView.cloudWorkerStopResult", {
-            session: label,
-            state: result.worker?.state ?? result.status,
-          }),
-        });
-      }
       if (this.isRequestScopeCurrent(scope)) {
         await this.refreshSessionList(scope);
       }

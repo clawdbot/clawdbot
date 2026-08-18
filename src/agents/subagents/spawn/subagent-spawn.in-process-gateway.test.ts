@@ -19,10 +19,7 @@ import type {
   GatewayRequestOptions,
 } from "../../../gateway/server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import {
-  clearFallbackGatewayContext,
-  type dispatchGatewayMethodInProcess,
-} from "../../../gateway/server-plugins.js";
+import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import type { WorkerSessionTurnClaim } from "../../../gateway/worker-environments/placement-record.js";
 import type {
   WorkerTurnExecutionIdentity,
@@ -161,7 +158,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
-    clearFallbackGatewayContext();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     subagentRegistryTesting.setDepsForTest({
@@ -213,7 +209,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   });
 
   afterEach(async () => {
-    clearFallbackGatewayContext();
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });

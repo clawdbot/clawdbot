@@ -169,6 +169,10 @@ export type MessageActionResult =
       dryRun: boolean;
     };
 
+export const isMessageBroadcastSuccessful = (
+  result: Extract<MessageActionResult, { kind: "broadcast" }>,
+): boolean => result.payload.results.every((entry) => entry.ok);
+
 export type ResolvedActionContext = {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;

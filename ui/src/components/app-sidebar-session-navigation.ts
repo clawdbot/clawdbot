@@ -87,6 +87,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       }),
     getSelectedAgentId: () => this.selectedAgentIdForSessions(),
     getGateway: () => this.context?.gateway,
+    getSessions: () => this.context?.sessions,
   });
 
   protected readonly compareSidebarSessionRows = (
@@ -338,7 +339,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       catalogIds:
         this.sessionsStatusFilter === "archived"
           ? []
-          : this.sessionData.sessionCatalogs.map((catalog) => catalog.id),
+          : this.visibleSessionCatalogs().map((catalog) => catalog.id),
       collapsedSections: this.collapsedSessionSections,
       hideEmptyOwnerFilteredGroup: (category, rowCount) =>
         this.sessionOwnerFilterActive && Boolean(category) && rowCount === 0,

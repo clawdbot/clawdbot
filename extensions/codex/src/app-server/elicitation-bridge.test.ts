@@ -356,6 +356,28 @@ describe("Codex app-server elicitation bridge", () => {
     ]);
   });
 
+  it("declines timed-out MCP approvals with explanatory metadata", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-timeout", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-timeout",
+        decision: "deny",
+        terminalReason: "timeout",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildApprovalElicitation(),
+      paramsForRun: createParams(),
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({
+      action: "decline",
+      content: null,
+      _meta: { message: "Approval timed out before an operator responded." },
+    });
+  });
+
   it("does not treat inherited request-time MCP decisions as final", async () => {
     const inheritedDecisionResult = Object.assign(Object.create({ decision: null }), {
       id: "plugin:approval-inherited",

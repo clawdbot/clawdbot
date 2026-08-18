@@ -30,6 +30,9 @@ describe("AppSidebar session section visibility", () => {
 
     expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
     expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(threads?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
+      "Other",
+    );
     expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
     expect(threads?.querySelector('[aria-label="Show more"]')).not.toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-session-pagination")).toHaveLength(2);
@@ -43,7 +46,7 @@ describe("AppSidebar session section visibility", () => {
     expect(threads?.querySelector('[aria-label="Show more"]')).toBeNull();
   });
 
-  it("keeps global thread actions when every unpinned thread has a custom group", async () => {
+  it("keeps global session actions when every unpinned thread has a custom group", async () => {
     const harness = createSessionsHarness("main", [
       "agent:main:main",
       "agent:main:research",
@@ -69,18 +72,62 @@ describe("AppSidebar session section visibility", () => {
 
     expect(sidebar.querySelector('[data-session-section="category:Research"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-section="category:Operations"]')).not.toBeNull();
-    expect(threads).not.toBeNull();
-    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
+    expect(threads).toBeNull();
 
-    const sort = threads?.querySelector<HTMLButtonElement>('[aria-label="Sort sessions"]');
-    expect(sort).not.toBeNull();
-    expect(threads?.querySelector('[aria-label="New session"]')).not.toBeNull();
-    sort?.click();
+    const toolbar = sidebar.querySelector(".sidebar-session-toolbar");
+    expect(toolbar?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
+      "Sessions",
+    );
+    const filter = toolbar?.querySelector<HTMLButtonElement>(".sidebar-session-sort");
+    expect(filter).not.toBeNull();
+    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
+    expect(toolbar?.querySelector('[aria-label="New session"]')).not.toBeNull();
+    filter?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
   });
 
-  it("hides empty Threads at rest but keeps empty categories and the drag drop target", async () => {
+  it("renders a lone ungrouped list without a header despite stale collapsed state", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:other"]),
+    );
+
+    sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set(["ungrouped"]));
+    await sidebar.updateComplete;
+
+    const ungrouped = sidebar.querySelector('[data-session-section="ungrouped"]');
+    expect(ungrouped?.querySelector(".sidebar-recent-sessions__head")).toBeNull();
+    expect(ungrouped?.querySelector('[data-session-key="agent:main:other"]')).not.toBeNull();
+  });
+
+  it("marks the toolbar filter when the status is not active", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:other"]),
+    );
+    const filter = sidebar.querySelector<HTMLButtonElement>(
+      ".sidebar-session-toolbar .sidebar-session-sort",
+    );
+    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
+    expect(filter?.classList.contains("sidebar-session-sort--filtered")).toBe(false);
+
+    filter?.click();
+    await sidebar.updateComplete;
+    sidebar.querySelector(".sidebar-session-sort-menu")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: "status:all" } },
+      }),
+    );
+    await sidebar.updateComplete;
+
+    expect(filter?.classList.contains("sidebar-session-sort--filtered")).toBe(true);
+  });
+
+  it("hides empty Other at rest but keeps empty categories and the drag drop target", async () => {
     const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:alpha"]);
     const result = harness.sessions.state.result;
     const alpha = result?.sessions.find((row) => row.key === "agent:main:alpha");
@@ -94,7 +141,7 @@ describe("AppSidebar session section visibility", () => {
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
 
     // Empty user-created groups stay visible (creation and drag targets);
-    // only the bare Threads header disappears while nothing lives in it.
+    // only the bare Other header disappears while nothing lives in it.
     expect(sidebar.querySelector('[data-session-section="category:Empty"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).toBeNull();
 

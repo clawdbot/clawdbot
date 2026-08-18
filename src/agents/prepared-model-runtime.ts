@@ -290,6 +290,7 @@ export async function acquireAgentRunPreparedModelRuntime(
   options: {
     retainIdleRunOwner?: boolean;
     catalogMode?: PreparedModelRuntimeCatalogMode;
+    pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
   return await acquirePreparedModelRuntimeLeaseFromOwners(
@@ -490,6 +491,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     // candidates, while a newer config epoch stops every remaining build in this publication.
     isBuildCurrent: () => publicationEpoch === refreshRequestEpoch,
     onBuildStats: options.onBuildStats,
+    pluginMetadataSnapshot: options.pluginMetadataSnapshot,
     registerEntriesAfterBuildStart: true,
   });
 }

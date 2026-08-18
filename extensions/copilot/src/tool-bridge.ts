@@ -435,6 +435,7 @@ function buildOpenClawCodingToolsOptions(
     sessionId: input.sessionId,
     runId: a.runId,
     agentDir,
+    preparedModelRuntime: a.preparedModelRuntime,
     workspaceDir,
     cwd,
     // Sandbox parity with PI

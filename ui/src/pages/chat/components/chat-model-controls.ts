@@ -52,6 +52,7 @@ type ChatModelControlsProps = {
   onModelSetup?: () => void;
   onModelPickerOpen?: () => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
+  onModelPickerTargetRetry?: (groupId: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
@@ -387,6 +388,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         onOpen: props.onModelPickerOpen,
         onModelSelect: async (next, targetSessionKey) =>
           props.onModelSelect?.(next, targetSessionKey),
+        onTargetRetry: props.onModelPickerTargetRetry,
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}

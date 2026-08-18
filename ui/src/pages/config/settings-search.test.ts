@@ -174,6 +174,21 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("omits admin-only static and schema results for non-admin viewers", () => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "security",
+        schema: {
+          type: "object",
+          properties: { security: { type: "object", title: "Security" } },
+        },
+        value: {},
+        uiHints: {},
+        canAdmin: false,
+      }),
+    ).toEqual([]);
+  });
+
   it("routes uncurated schema sections to the Advanced page", () => {
     const matches = findSettingsSearchBlocks({
       query: "secrets",

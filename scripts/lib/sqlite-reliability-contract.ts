@@ -1,4 +1,4 @@
-export type ProfileId = "smoke" | "default" | "large";
+type ProfileId = "smoke" | "default" | "large";
 
 export type IndexRepairJournalMode = "delete" | "wal";
 

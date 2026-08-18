@@ -74,6 +74,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private readonly place: DraftPlaceState;
   private readonly submission: DraftSubmissionFlow;
   private readonly subscriptions: SubscriptionsController;
+  private readonly flushDraft = () => this.submission.draftPersistence.persistNow();
 
   constructor() {
     super();
@@ -223,11 +224,13 @@ export class NewSessionPage extends OpenClawLightDomElement {
     super.connectedCallback();
     document.addEventListener("keydown", this, true);
     document.addEventListener("pointerdown", this, true);
+    window.addEventListener("beforeunload", this.flushDraft);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this, true);
     document.removeEventListener("pointerdown", this, true);
+    window.removeEventListener("beforeunload", this.flushDraft);
     retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
     this.subscriptions.clear();
     this.gateway.invalidateDiscovery(
@@ -266,7 +269,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const resolvedAgentId = this.data?.agentId ?? "";
     const groupDefaults = catalog.groupDefaultsKey(this.data);
     if (this.openedFor !== openKey) {
-      this.submission.draftPersistence.persistNow();
       const ownedMessage = this.messageOwnerKey === openKey ? this.submission.message : "";
       this.openedFor = openKey;
       this.openedGroupDefaults = groupDefaults;
@@ -377,7 +379,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const whereState = resolveWhereChip({
       execNodes: this.place.isAdmin() ? executionNodes : [],
       environments: this.place.isAdmin() ? this.gateway.environments : [],
-      cloudProfiles: this.place.isAdmin() ? cloudProfiles : [],
+      cloudProfiles: this.place.canWrite() ? cloudProfiles : [],
       cloudProfileId: this.place.cloudProfileId,
       machineClass: this.place.machineClass,
       execNode: this.place.execNode,

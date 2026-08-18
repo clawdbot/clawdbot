@@ -165,7 +165,7 @@ describe("renderChatComposer controls", () => {
       onQueueSteer,
       queue: [
         { id: "queued-1", text: "tighten the plan", createdAt: 1 },
-        { id: "steered-1", text: "already sent", createdAt: 2, kind: "steered" },
+        { id: "pending-1", text: "already sent", createdAt: 2, pendingRunId: "run-1" },
         { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
         {
           id: "waiting-idle-1",
@@ -175,7 +175,7 @@ describe("renderChatComposer controls", () => {
         },
       ],
     });
-    const steer = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer")];
+    const steer = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
     expect(steer).toHaveLength(2);
     steer[0]?.click();
     steer[1]?.click();

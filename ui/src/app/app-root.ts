@@ -17,9 +17,11 @@ import { isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
+import { dashboardDocumentSession, isDashboardOnlyView } from "./dashboard-document-mode.ts";
 import { desktopDocumentOptions, isDesktopOnlyView } from "./desktop-document-mode.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
+  DASHBOARD_DOCUMENT_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
   preloadOptionalElement,
@@ -86,6 +88,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
     globalThis.location,
     resolveControlUiBasePath(globalThis.location?.pathname ?? "/"),
   );
+  private readonly dashboardOnly = isDashboardOnlyView(globalThis.location);
+  private readonly dashboardSession = dashboardDocumentSession(globalThis.location);
   private readonly desktopOptions = desktopDocumentOptions(globalThis.location);
   private runtime: ApplicationRuntime | undefined;
   private readonly contextProvider = new ContextProvider(this, {
@@ -129,6 +133,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     if (this.desktopOnly) {
       preloadOptionalElement(this, DESKTOP_PANEL_ELEMENT);
+    }
+    if (this.dashboardOnly) {
+      preloadOptionalElement(this, DASHBOARD_DOCUMENT_ELEMENT);
     }
     if (this.runtime.documentMode?.kind === "approval") {
       preloadOptionalElement(this, APPROVAL_PAGE_ELEMENT);
@@ -201,6 +208,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.loginShowGatewayPassword = false;
   }
 
+  private closeDocument(basePath: string): void {
+    if (globalThis.history.length > 1) {
+      globalThis.history.back();
+    } else {
+      globalThis.location.assign(basePath || "/");
+    }
+  }
+
   override render() {
     const context = this.context;
     const runtime = this.runtime;
@@ -271,13 +286,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .documentSource=${this.desktopOptions.source}
           .documentSession=${this.desktopOptions.session}
           .documentControl=${this.desktopOptions.control}
-          .onDocumentClose=${() => {
-            if (globalThis.history.length > 1) {
-              globalThis.history.back();
-            } else {
-              globalThis.location.assign(context.basePath || "/");
-            }
-          }}
+          .onDocumentClose=${() => this.closeDocument(context.basePath)}
         ></openclaw-desktop-panel>
         ${!gatewayConnected && gatewaySnapshot.lastError === null
           ? renderConnectingSplash(gatewayStartupStatus)
@@ -287,6 +296,23 @@ export class OpenClawApp extends OpenClawLightDomElement {
           : nothing}
         ${!desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="desktop-view-unavailable">${t("desktop.unavailable")}</div>`
+          : nothing}
+      `;
+    }
+    // Dashboard documents reuse the live board provider and widget bridge while
+    // keeping the application shell, transcript, and navigation chrome unmounted.
+    if (this.dashboardOnly) {
+      return html`
+        <openclaw-board-document
+          .gatewaySnapshot=${gatewaySnapshot}
+          .sessionKey=${this.dashboardSession}
+          .onDocumentClose=${() => this.closeDocument(context.basePath)}
+        ></openclaw-board-document>
+        ${!gatewayConnected && gatewaySnapshot.lastError === null
+          ? renderConnectingSplash(gatewayStartupStatus)
+          : nothing}
+        ${!isOptionalElementDefined(DASHBOARD_DOCUMENT_ELEMENT) && gatewayConnected
+          ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
       `;
     }

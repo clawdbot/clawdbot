@@ -3,6 +3,7 @@
  */
 
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
@@ -63,7 +64,6 @@ export type ChatQueueItem = {
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
-  kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   /** Transcript id of the replied-to message; Gateway hydrates reply context. */
@@ -74,13 +74,12 @@ export type ChatQueueItem = {
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
-  /** Immutable active run selected when this row first became a steer. */
-  steerTargetRunId?: string;
+  /** One-send override retained with the durable row for reconnect and retry. */
+  queueMode?: QueueMode;
   sendState?:
     | "waiting-model"
     | "waiting-idle"
     | "executing-command"
-    | "steering"
     | "sending"
     | "waiting-reconnect"
     | "unconfirmed"

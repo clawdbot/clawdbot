@@ -34,7 +34,10 @@ vi.mock("./agent-turn/internal-facade.runtime.js", () => ({
   },
 }));
 
-type ServerPluginsModule = typeof import("./server-plugins.js");
+type ServerPluginsModule = typeof import("./server-plugins.js") & {
+  clearFallbackGatewayContext: () => void;
+  setFallbackGatewayContext: (context: GatewayRequestContext) => void;
+};
 type GatewayRequestScopeModule = typeof import("../plugins/runtime/gateway-request-scope.js");
 type SubagentRequesterContextModule =
   typeof import("../plugins/runtime/subagent-requester-context.js");
@@ -53,8 +56,21 @@ function createTestContext(label: string, cfg: OpenClawConfig): GatewayRequestCo
 }
 
 async function loadServerPlugins(): Promise<ServerPluginsModule> {
-  return await import("./server-plugins.js");
+  const actual = await import("./server-plugins.js");
+  return {
+    ...actual,
+    clearFallbackGatewayContext: () => {
+      testGatewayContext = undefined;
+    },
+    setFallbackGatewayContext: (context) => {
+      testGatewayContext = context;
+    },
+    createGatewaySubagentRuntime: (resolveGatewayContext) =>
+      actual.createGatewaySubagentRuntime(resolveGatewayContext ?? (() => testGatewayContext)),
+  } as ServerPluginsModule;
 }
+
+let testGatewayContext: GatewayRequestContext | undefined;
 
 async function loadGatewayScope(): Promise<GatewayRequestScopeModule> {
   return await import("../plugins/runtime/gateway-request-scope.js");

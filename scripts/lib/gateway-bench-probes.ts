@@ -162,14 +162,22 @@ function requestStatus(port: number, pathname: string): Promise<number> {
 }
 
 function parsePsCpuTimeMs(raw: string): number | null {
-  const parts = raw.trim().split(":").map(Number);
-  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
+  const value = raw.trim();
+  const [dayText, clockText] = value.includes("-") ? value.split("-", 2) : ["0", value];
+  const days = Number(dayText);
+  const parts = expectDefined(clockText, "process CPU clock").split(":").map(Number);
+  if (
+    !Number.isFinite(days) ||
+    days < 0 ||
+    parts.some((part) => !Number.isFinite(part) || part < 0)
+  ) {
     return null;
   }
   if (parts.length === 2) {
     const [minutes, seconds] = parts;
     return Math.round(
-      (expectDefined(minutes, "process CPU minutes") * 60 +
+      (days * 24 * 60 * 60 +
+        expectDefined(minutes, "process CPU minutes") * 60 +
         expectDefined(seconds, "process CPU seconds")) *
         1000,
     );
@@ -177,7 +185,8 @@ function parsePsCpuTimeMs(raw: string): number | null {
   if (parts.length === 3) {
     const [hours, minutes, seconds] = parts;
     return Math.round(
-      (expectDefined(hours, "process CPU hours") * 60 * 60 +
+      (days * 24 * 60 * 60 +
+        expectDefined(hours, "process CPU hours") * 60 * 60 +
         expectDefined(minutes, "process CPU minutes") * 60 +
         expectDefined(seconds, "process CPU seconds")) *
         1000,

@@ -136,6 +136,12 @@ const gatewayLog = {
   error: vi.fn(),
 };
 const flushLogger = vi.fn(async () => {});
+const cancelShutdownHardExitWatchdog = vi.fn();
+const armShutdownHardExitWatchdog = vi.fn(
+  (_params: { delayMs: number; onError: (error: unknown) => void }) => ({
+    cancel: cancelShutdownHardExitWatchdog,
+  }),
+);
 
 vi.mock("../../infra/gateway-lock.js", () => ({
   acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
@@ -253,6 +259,11 @@ vi.mock("../../logging/logger.js", () => ({
 
 vi.mock("../../gateway/server-reload-contracts.js", () => ({
   abortPendingChannelReloads: () => abortPendingChannelReloads(),
+}));
+
+vi.mock("./shutdown-hard-exit.js", () => ({
+  armShutdownHardExitWatchdog: (params: { delayMs: number; onError: (error: unknown) => void }) =>
+    armShutdownHardExitWatchdog(params),
 }));
 
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
@@ -383,6 +394,7 @@ function createSignaledStart(close: GatewayCloseFn, startupSettled = Promise.res
 async function runLoopWithStart(params: {
   start: ReturnType<typeof vi.fn>;
   runtime: LoopRuntime;
+  ownsProcessLifecycle?: boolean;
   lockPort?: number;
   healthHost?: string;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
@@ -392,6 +404,7 @@ async function runLoopWithStart(params: {
   const loopPromise = runGatewayLoop({
     start: params.start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
     runtime: params.runtime,
+    ownsProcessLifecycle: params.ownsProcessLifecycle,
     lockPort: params.lockPort,
     healthHost: params.healthHost,
     waitForHealthyChild: params.waitForHealthyChild,
@@ -628,6 +641,7 @@ describe("runGatewayLoop", () => {
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(flushLogger).toHaveBeenCalledOnce();
+      expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
     });
   });
 
@@ -2411,32 +2425,41 @@ describe("runGatewayLoop", () => {
       await withIsolatedSignals(async ({ captureSignal }) => {
         const { start, started } = createSignaledStart(close);
         const { runtime, exited } = createRuntimeWithExitSignal();
-        await runLoopWithStart({ start, runtime });
+        await runLoopWithStart({ start, runtime, ownsProcessLifecycle: true });
         await waitForStart(started);
         const sigusr1 = captureSignal("SIGUSR1");
 
-        sigusr1();
-        await waitForLoopCondition(
-          () => close.mock.calls.length === 1,
-          "restart close did not start",
-        );
-        sigusr1();
-        await waitForLoopCondition(
-          () =>
-            gatewayLog.info.mock.calls.some(([message]) =>
-              String(message).includes("upgrading to update.auto"),
-            ),
-          "accepted restart was not upgraded",
-        );
+        try {
+          sigusr1();
+          await waitForLoopCondition(
+            () => close.mock.calls.length === 1,
+            "restart close did not start",
+          );
+          expect(armShutdownHardExitWatchdog).toHaveBeenCalledTimes(1);
+          sigusr1();
+          await waitForLoopCondition(
+            () =>
+              gatewayLog.info.mock.calls.some(([message]) =>
+                String(message).includes("upgrading to update.auto"),
+              ),
+            "accepted restart was not upgraded",
+          );
+          expect(cancelShutdownHardExitWatchdog).toHaveBeenCalledTimes(1);
+          expect(armShutdownHardExitWatchdog).toHaveBeenCalledTimes(2);
 
-        releaseClose();
-        await expect(exited).resolves.toBe(0);
-        expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
-        expectRestartHandoffCall({
-          restartKind: "update-process",
-          reason: "update.auto",
-          supervisorMode: "external",
-        });
+          releaseClose();
+          await expect(exited).resolves.toBe(0);
+          expect(cancelShutdownHardExitWatchdog).toHaveBeenCalledTimes(2);
+          expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
+          expectRestartHandoffCall({
+            restartKind: "update-process",
+            reason: "update.auto",
+            supervisorMode: "external",
+          });
+        } finally {
+          releaseClose();
+          await exited;
+        }
       });
     } finally {
       if (originalPlatformDescriptor) {

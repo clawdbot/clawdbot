@@ -28,7 +28,6 @@ type ReplyMessageInjectionRejectionReason =
   | "no_active_run"
   | "not_running"
   | "stale_run"
-  | "run_mismatch"
   | "injection_unavailable"
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
@@ -100,7 +99,6 @@ function resolveReplyBackendMessageInjection(
 
 export function resolveReplyMessageInjectionRejection(params: {
   operation: ReplyOperation | undefined;
-  expectedRunId?: string;
   options?: ReplyBackendQueueMessageOptions;
 }):
   | {
@@ -116,9 +114,6 @@ export function resolveReplyMessageInjectionRejection(params: {
   if (operation.result || operation.phase !== "running") {
     return { reason: "not_running" };
   }
-  const expectedRunId = normalizeOptionalString(params.expectedRunId);
-  // Exact run identity supersedes the operation's immutable origin leaf. The
-  // same run advances its transcript leaf during ordinary tool/output progress.
   if (isReplyRunEvidenceStale(operation)) {
     return { reason: "stale_run" };
   }
@@ -126,9 +121,6 @@ export function resolveReplyMessageInjectionRejection(params: {
   const injection = backend ? resolveReplyBackendMessageInjection(backend) : undefined;
   if (!backend || !injection) {
     return { reason: "injection_unavailable" };
-  }
-  if (expectedRunId && normalizeOptionalString(backend.runId) !== expectedRunId) {
-    return { reason: "run_mismatch" };
   }
   try {
     if (!injection.isAvailable()) {
@@ -185,7 +177,6 @@ export function beginReplyMessageInjectionTarget(
     : undefined;
   const resolved = resolveReplyMessageInjectionRejection({
     operation,
-    expectedRunId: target.identity === "run" ? target.runId : undefined,
     options: queueOptions,
   });
   if (!("injection" in resolved)) {

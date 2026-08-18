@@ -462,6 +462,12 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       });
     },
 
+    cancelPlacementMove(input: { operationId: string; sessionId: string }): void {
+      write((db) => {
+        deleteExactMove(db, requireExactMove(db, input));
+      });
+    },
+
     completePlacementMoveSourceToLocal(input: {
       operationId: string;
       sessionId: string;

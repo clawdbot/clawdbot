@@ -233,16 +233,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 13366
   },
   "openClawDeveloperInstructions": {
-    "chars": 4479,
-    "roughTokens": 1120
+    "chars": 4499,
+    "roughTokens": 1125
   },
   "totalTextOnly": {
-    "chars": 28862,
-    "roughTokens": 7216
+    "chars": 28882,
+    "roughTokens": 7221
   },
   "totalWithDynamicToolsJson": {
-    "chars": 82325,
-    "roughTokens": 20582
+    "chars": 82345,
+    "roughTokens": 20587
   },
   "userInputText": {
     "chars": 1300,
@@ -433,7 +433,7 @@ Deferred searchable OpenClaw dynamic tools available: automations, gateway, node
 
 Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
+Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 

@@ -12,6 +12,7 @@ import type {
 import {
   describeGatewayServiceRestart,
   inspectGatewayServiceStartRepair,
+  readGatewayServiceLoadState,
   startGatewayService,
 } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
@@ -114,24 +115,24 @@ async function resolveServiceLoadedOrFail(params: {
   service: GatewayService;
   fail: ReturnType<typeof createDaemonActionContext>["fail"];
   acceptInstalledDefinition?: boolean;
+  inspectionFailureMessage?: string;
 }): Promise<boolean | null> {
   // Keep native scope discovery in the adapter and failure emission in the action context.
   const hasInstalledDefinition = async () =>
     params.service.hasInstalledDefinition
       ? await params.service.hasInstalledDefinition({ env: process.env }).catch(() => false)
       : Boolean(await params.service.readCommand(process.env).catch(() => null));
-  try {
-    const loaded = await params.service.isLoaded({ env: process.env });
-    return (
-      loaded || (Boolean(params.acceptInstalledDefinition) && (await hasInstalledDefinition()))
+  const loadState = await readGatewayServiceLoadState(params.service, { env: process.env });
+  if (loadState.status === "unknown") {
+    params.fail(
+      `${params.inspectionFailureMessage ?? `${params.serviceNoun} service check failed`}: ${loadState.detail}`,
     );
-  } catch (err) {
-    if (params.acceptInstalledDefinition && (await hasInstalledDefinition())) {
-      return true;
-    }
-    params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return null;
   }
+  return (
+    loadState.status === "loaded" ||
+    (Boolean(params.acceptInstalledDefinition) && (await hasInstalledDefinition()))
+  );
 }
 
 export async function runServiceUninstall(params: {
@@ -157,11 +158,14 @@ export async function runServiceUninstall(params: {
     }
   }
 
-  let loaded;
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
+  let loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+    inspectionFailureMessage: `${params.serviceNoun} uninstall aborted because service status is unknown; resolve the inspection error before retrying`,
+  });
+  if (loaded === null) {
+    return;
   }
   if (loaded && params.stopBeforeUninstall) {
     try {
@@ -176,10 +180,14 @@ export async function runServiceUninstall(params: {
     fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
     return;
   }
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
+  loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+    inspectionFailureMessage: `${params.serviceNoun} uninstall verification failed because service status is unknown`,
+  });
+  if (loaded === null) {
+    return;
   }
   if (loaded && params.assertNotLoadedAfterUninstall) {
     fail(`${params.serviceNoun} service still loaded after uninstall.`);
@@ -334,10 +342,11 @@ export async function runServiceStart(params: {
       );
       return;
     }
+    const serviceLoaded = startResult.state.loadState.status === "loaded";
     emit({
       ok: true,
       result: "started",
-      service: buildDaemonServiceSnapshot(params.service, startResult.state.loaded),
+      service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
       warnings: warnings.length ? warnings : undefined,
     });
   } catch (err) {
@@ -437,16 +446,19 @@ export async function runServiceStop(params: {
     return;
   }
 
-  let stopped;
-  try {
-    stopped = await params.service.isLoaded({ env: process.env });
-  } catch {
-    stopped = false;
+  const finalLoaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+    inspectionFailureMessage: `${params.serviceNoun} stop verification failed because service status is unknown`,
+  });
+  if (finalLoaded === null) {
+    return;
   }
   emit({
     ok: true,
     result: "stopped",
-    service: buildDaemonServiceSnapshot(params.service, stopped),
+    service: buildDaemonServiceSnapshot(params.service, finalLoaded),
   });
 }
 

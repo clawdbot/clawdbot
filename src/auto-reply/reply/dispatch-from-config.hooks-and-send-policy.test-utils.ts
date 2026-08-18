@@ -1716,11 +1716,16 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
   });
 
   it.each([
-    { name: "no placement", activePlacement: false },
-    { name: "active placement", activePlacement: true },
+    { name: "no placement", blocked: false, suppliedOwner: false },
+    { name: "active placement", blocked: true, suppliedOwner: false },
+    {
+      name: "owning Gateway proves failed environment is gone",
+      blocked: false,
+      suppliedOwner: true,
+    },
   ])(
     "restores admitted archived channel work before reply-operation admission: $name",
-    async ({ activePlacement }) => {
+    async ({ blocked, suppliedOwner }) => {
       setNoAbort();
       const sessionId = "archived-channel-session";
       const sessionKey = "agent:main:discord:channel:restored-test";
@@ -1731,11 +1736,29 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         archivedAt,
         archivedBy: { type: "human", id: "profile-operator" },
       };
-      if (activePlacement) {
+      if (blocked || suppliedOwner) {
         placementContextMocks.getMany.mockReturnValue(
           new Map([[sessionId, { state: "active" } as WorkerSessionPlacementRecord]]),
         );
       }
+      const ownerGetMany = vi.fn(
+        () =>
+          new Map([
+            [
+              sessionId,
+              {
+                state: "failed",
+                environmentId: "environment-a",
+              } as WorkerSessionPlacementRecord,
+            ],
+          ]),
+      );
+      const sessionWorkerPlacementContext = suppliedOwner
+        ? {
+            workerEnvironmentService: { get: vi.fn(() => undefined) },
+            workerSessionPlacementService: { getMany: ownerGetMany },
+          }
+        : undefined;
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => ({ text: "restored reply" }) satisfies ReplyPayload);
       const ctx = buildTestCtx({
@@ -1762,9 +1785,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         cfg: emptyConfig,
         dispatcher,
         replyResolver,
+        ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
       });
 
-      if (activePlacement) {
+      if (blocked) {
         await expect(dispatch).rejects.toThrow(/is archived/i);
         expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
         expect(sessionStoreMocks.currentEntry?.archivedBy).toEqual({
@@ -1781,6 +1805,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(sessionStoreMocks.currentEntry?.sessionId).toBe(sessionId);
       expect(sessionStoreMocks.currentEntry?.archivedAt).toBeUndefined();
       expect(sessionStoreMocks.currentEntry?.archivedBy).toBeUndefined();
+      if (suppliedOwner) {
+        expect(ownerGetMany).toHaveBeenCalledWith([sessionId]);
+        expect(placementContextMocks.resolveSessionWorkerPlacementContext).not.toHaveBeenCalled();
+      }
       expect(replyResolver).toHaveBeenCalledTimes(1);
       expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "restored reply" });
     },

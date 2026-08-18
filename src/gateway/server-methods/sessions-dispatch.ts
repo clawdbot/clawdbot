@@ -18,7 +18,6 @@ import {
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
-import type { WorkerPlacementDispatchContract } from "../worker-environments/service-contract.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -28,13 +27,6 @@ import {
 } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-type InternalTransitionDispatchService = {
-  dispatch(
-    request: Parameters<WorkerPlacementDispatchContract["dispatch"]>[0],
-    onTransition?: (placement: WorkerSessionPlacementRecord) => void,
-  ): ReturnType<WorkerPlacementDispatchContract["dispatch"]>;
-};
 
 function respondInvalidWorkerSession(respond: RespondFn, message: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
@@ -256,10 +248,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      // Dispatch is session-id addressed after this point; reject a replacement before handing
-      // the captured instance to the asynchronous worker service.
-      sessionMutationAuthorization?.assertCurrent();
-      const placement = await (dispatchService as InternalTransitionDispatchService).dispatch(
+      const placement = await dispatchService.dispatch(
         {
           sessionId,
           sessionKey: target.canonicalKey,
@@ -272,6 +261,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             reason: "dispatch",
             sessionKey: target.canonicalKey,
           }),
+        sessionMutationAuthorization?.assertCurrent,
       );
       respondWorkerPlacement({ respond, key: target.canonicalKey, sessionId, placement });
     } catch (error) {
@@ -325,7 +315,6 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      sessionMutationAuthorization?.assertCurrent();
       const placement = await placementService.move(
         {
           sessionId,
@@ -339,6 +328,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             reason: "move",
             sessionKey: target.canonicalKey,
           }),
+        sessionMutationAuthorization?.assertCurrent,
       );
       respondWorkerMove({
         respond,
@@ -347,6 +337,9 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         placement,
       });
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
       emitSessionsChanged(context, { reason: "move", sessionKey: target.canonicalKey });
       respondWorkerDispatchError(error, respond);
     }
@@ -376,27 +369,8 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     }
     const { target, entry, sessionId } = resolved;
     const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
-    if (existingPlacement?.state === "reclaimed") {
-      respondWorkerPlacement({
-        respond,
-        key: target.canonicalKey,
-        sessionId,
-        placement: existingPlacement,
-      });
-      return;
-    }
     if (
-      existingPlacement?.state !== "active" &&
-      existingPlacement?.state !== "draining" &&
-      existingPlacement?.state !== "failed"
-    ) {
-      respondInvalidWorkerSession(
-        respond,
-        `session cannot stop cloud worker from placement ${existingPlacement?.state ?? "local"}`,
-      );
-      return;
-    }
-    if (
+      existingPlacement?.state !== "failed" &&
       !hasManagedSessionWorktree({
         entry,
         sessionKey: target.canonicalKey,
@@ -407,12 +381,14 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      sessionMutationAuthorization?.assertCurrent();
-      const placement = await placementService.reclaim({
-        sessionId,
-        sessionKey: target.canonicalKey,
-        agentId: target.target.agentId,
-      });
+      const placement = await placementService.reclaim(
+        {
+          sessionId,
+          sessionKey: target.canonicalKey,
+          agentId: target.target.agentId,
+        },
+        sessionMutationAuthorization?.assertCurrent,
+      );
       respondWorkerPlacement({ respond, key: target.canonicalKey, sessionId, placement });
     } catch (error) {
       respondWorkerDispatchError(error, respond);

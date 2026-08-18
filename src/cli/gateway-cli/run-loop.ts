@@ -28,6 +28,10 @@ import {
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
 } from "../../state/openclaw-agent-db-migration-required.js";
 import { formatActiveTaskRestartBlocker } from "../../tasks/task-restart-blocker.js";
+import {
+  armShutdownHardExitWatchdog,
+  type ShutdownHardExitWatchdog,
+} from "./shutdown-hard-exit.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
@@ -36,6 +40,7 @@ const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 const LOG_FLUSH_EXIT_TIMEOUT_MS = 4_000;
+const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
@@ -109,6 +114,8 @@ export async function runGatewayLoop(params: {
     requestHotReloadRecovery?: GatewayRestartEmitter;
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
+  /** Grants this run-loop authority to hard-kill the process it exclusively owns. */
+  ownsProcessLifecycle?: boolean;
   lockPort?: number;
   healthHost?: string;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
@@ -502,6 +509,7 @@ export async function runGatewayLoop(params: {
       activeRestartRequest = acceptedRequest;
     }
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
+    let hardExitWatchdog: ShutdownHardExitWatchdog | null = null;
     const armForceExitTimer = (forceExitMs: number) => {
       if (forceExitTimer) {
         return;
@@ -524,13 +532,24 @@ export async function runGatewayLoop(params: {
           }
         })();
       }, forceExitMs);
+      if (params.ownsProcessLifecycle === true) {
+        hardExitWatchdog = armShutdownHardExitWatchdog({
+          delayMs: forceExitMs + HARD_EXIT_WATCHDOG_GRACE_MS,
+          onError: (error) => {
+            gatewayLog.warn(
+              `hard-exit watchdog failed; retaining main-thread shutdown timer: ${formatErrorMessage(error)}`,
+            );
+          },
+        });
+      }
     };
     const clearForceExitTimer = () => {
-      if (!forceExitTimer) {
-        return;
+      if (forceExitTimer) {
+        clearTimeout(forceExitTimer);
+        forceExitTimer = null;
       }
-      clearTimeout(forceExitTimer);
-      forceExitTimer = null;
+      hardExitWatchdog?.cancel();
+      hardExitWatchdog = null;
     };
     if (isRestart) {
       forceActiveRestartExit = () => {

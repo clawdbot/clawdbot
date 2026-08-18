@@ -7809,9 +7809,11 @@ class NodeRuntime private constructor(
       disconnectedSummary = GatewayDreamingSummary(),
       failureText = nativeText("Could not load dreaming."),
     ) { gatewayScope ->
-      val statusResponse = requestGatewayData(gatewayScope, "doctor.memory.status", "{}")
+      val agentId = resolveActiveAgentId().takeIf { it.isNotEmpty() } ?: error("No active agent")
+      val paramsJson = buildJsonObject { put("agentId", JsonPrimitive(agentId)) }.toString()
+      val statusResponse = requestGatewayData(gatewayScope, "doctor.memory.status", paramsJson)
       val statusRoot = json.parseToJsonElement(statusResponse).asObjectOrNull()
-      val diaryResponse = requestGatewayData(gatewayScope, "doctor.memory.dreamDiary", "{}")
+      val diaryResponse = requestGatewayData(gatewayScope, "doctor.memory.dreamDiary", paramsJson)
       val diaryRoot = json.parseToJsonElement(diaryResponse).asObjectOrNull()
       parseDreamingSummary(dreaming = statusRoot?.get("dreaming").asObjectOrNull(), diary = diaryRoot)
     }

@@ -8,6 +8,7 @@ import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import {
   isSessionSkillEnabled,
@@ -34,7 +35,7 @@ import {
   readSkillFrontmatterSafe,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
-import { resolvePluginSkillDirs } from "./plugin-skills.js";
+import { resolvePluginSkillDirs, resolvePluginSkillDirsFromMetadata } from "./plugin-skills.js";
 import type { Skill } from "./skill-contract.js";
 import { compactSkillPath, resolveSkillsUserHomeDir } from "./skill-paths.js";
 import {
@@ -74,6 +75,7 @@ type WorkspaceSkillLoadOptions = {
   eligibility?: SkillEligibilityContext;
   workspaceOnly?: boolean;
   includeArchived?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export function normalizeWorkspaceSkillRoots(roots: WorkspaceSkillRoots): WorkspaceSkillRoots {
@@ -94,6 +96,29 @@ function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagnostic):
     consoleMessage:
       `Skipping invalid skill: file=${compactSkillPath(diagnostic.path)} ` +
       `error=${diagnostic.message}`,
+  });
+}
+
+// Shared by both merge paths so a dropped skill is never silent: the by-name merge in
+// loadSkillEntries and the execution-directory filter in loadMergedWorkspaceSkills.
+function warnSkillPrecedenceCollision(winner: Skill, loser: Skill): void {
+  // One file reachable through two roots is not a collision. normalizeWorkspaceSkillRoots only
+  // rejects the literal <agentWorkspaceDir>/skills path, so a symlinked execution dir still
+  // arrives here with both sides naming the same skill.
+  if (canonicalizePath(winner.filePath) === canonicalizePath(loser.filePath)) {
+    return;
+  }
+  const collisionName = winner.name.slice(0, 128);
+  skillsLogger.warn("Skill precedence collision resolved.", {
+    skill: collisionName,
+    winnerSource: winner.source,
+    loserSource: loser.source,
+    winnerPath: winner.filePath,
+    loserPath: loser.filePath,
+    consoleMessage:
+      `Skill precedence collision: skill="${collisionName}" ` +
+      `winner=${winner.source}:${compactSkillPath(winner.filePath)} ` +
+      `loser=${loser.source}:${compactSkillPath(loser.filePath)}`,
   });
 }
 
@@ -311,6 +336,7 @@ function loadSkillEntries(
     workspaceSkillsDir?: string;
     workspaceOnly?: boolean;
     includeArchived?: boolean;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
   const limits = resolveSkillDiscoveryLimits(opts?.config);
@@ -329,7 +355,14 @@ function loadSkillEntries(
   const extraDirs = normalizeTrimmedStringList(extraDirsRaw);
   const pluginSkillDirs = workspaceOnly
     ? []
-    : resolvePluginSkillDirs({ workspaceDir, config: opts?.config, pluginSkillsDir });
+    : opts?.pluginMetadataSnapshot
+      ? resolvePluginSkillDirsFromMetadata({
+          workspaceDir,
+          config: opts.config,
+          pluginSkillsDir,
+          metadataSnapshot: opts.pluginMetadataSnapshot,
+        })
+      : resolvePluginSkillDirs({ workspaceDir, config: opts?.config, pluginSkillsDir });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
   const bundledSkills = bundledSkillsDir
@@ -370,22 +403,8 @@ function loadSkillEntries(
       return;
     }
     const replaced = merged.get(record.skill.name);
-    if (
-      replaced &&
-      canonicalizePath(replaced.skill.filePath) !== canonicalizePath(record.skill.filePath)
-    ) {
-      const collisionName = record.skill.name.slice(0, 128);
-      skillsLogger.warn("Skill precedence collision resolved.", {
-        skill: collisionName,
-        winnerSource: record.skill.source,
-        loserSource: replaced.skill.source,
-        winnerPath: record.skill.filePath,
-        loserPath: replaced.skill.filePath,
-        consoleMessage:
-          `Skill precedence collision: skill="${collisionName}" ` +
-          `winner=${record.skill.source}:${compactSkillPath(record.skill.filePath)} ` +
-          `loser=${replaced.skill.source}:${compactSkillPath(replaced.skill.filePath)}`,
-      });
+    if (replaced) {
+      warnSkillPrecedenceCollision(record.skill, replaced.skill);
     }
     merged.set(record.skill.name, record);
   };
@@ -472,6 +491,7 @@ export function resolveWorkspaceSkillPromptEntries(
     skillFilter?: string[];
     skillOverrides?: Record<string, boolean>;
     eligibility?: SkillEligibilityContext;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): { eligible: SkillEntry[]; skillFilter: string[] | undefined } {
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
@@ -531,12 +551,19 @@ export function loadMergedWorkspaceSkills(
     canExec: params.eligibility?.nodeSkills?.canExec,
     node: params.eligibility?.nodeSkills?.node,
   });
-  const agentNames = new Set(agentEntries.map((entry) => entry.skill.name));
+  const agentEntriesByName = new Map(agentEntries.map((entry) => [entry.skill.name, entry]));
   const executionEntries = loadSkillEntries(agentWorkspaceDir, {
     ...params,
     workspaceOnly: true,
     workspaceSkillsDir: executionSkillsDir,
-  }).filter((entry) => !agentNames.has(entry.skill.name));
+  }).filter((entry) => {
+    const agentEntry = agentEntriesByName.get(entry.skill.name);
+    if (!agentEntry) {
+      return true;
+    }
+    warnSkillPrecedenceCollision(agentEntry.skill, entry.skill);
+    return false;
+  });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(params);
   return filterSkillEntries(
     [...agentEntries, ...executionEntries],
@@ -557,6 +584,7 @@ export function loadVisibleSkills(
     skillOverrides?: Record<string, boolean>;
     agentId?: string;
     eligibility?: SkillEligibilityContext;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
   const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {

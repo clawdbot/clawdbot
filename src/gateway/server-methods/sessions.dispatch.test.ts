@@ -42,6 +42,7 @@ describe("sessions.dispatch", () => {
     const codexHarness: AgentHarness & { cloudPlacement: { mode: "remote-exec" } } = {
       id: "codex",
       label: "Codex",
+      autoSelection: { providerIds: ["codex", "openai"] },
       cloudPlacement: { mode: "remote-exec" },
       supports: () => ({ supported: true, priority: 10 }),
       async runAttempt() {
@@ -212,6 +213,7 @@ describe("sessions.dispatch", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ executionMode: "remote-exec" }),
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -278,6 +280,7 @@ describe("sessions.dispatch", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "test", machineClass: "large" }),
       expect.any(Function),
+      undefined,
     );
   });
 
@@ -375,6 +378,7 @@ describe("sessions.dispatch", () => {
         target: { kind: "gateway" },
       },
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -420,6 +424,7 @@ describe("sessions.dispatch", () => {
         target: { kind: "profile", profileId: "test", machineClass: "beast" },
       }),
       expect.any(Function),
+      undefined,
     );
   });
 
@@ -503,6 +508,7 @@ describe("sessions.dispatch", () => {
         profileId: "test",
       }),
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -796,6 +802,7 @@ describe("sessions.dispatch", () => {
         profileId: "test",
       }),
       expect.any(Function),
+      undefined,
     );
     expect(readSessionsMutationVersion(context)).toBe(priorMutationVersion + 5);
     expect(respond).toHaveBeenCalledWith(

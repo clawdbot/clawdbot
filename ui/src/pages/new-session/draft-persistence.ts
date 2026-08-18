@@ -35,6 +35,7 @@ type DraftSnapshot = {
 
 const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
 const loadDurableComposerStore = () => durableComposerStore;
+const NEW_SESSION_DRAFT_PERSIST_DELAY_MS = 200;
 
 export class NewSessionDraftPersistence {
   private gatewayOwner = "";
@@ -45,6 +46,7 @@ export class NewSessionDraftPersistence {
   private restoreGeneration = 0;
   private restoredIdentity = "";
   private pending: DraftSnapshot | null = null;
+  private timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private incognitoRetirement: Promise<void> = Promise.resolve();
   private readonly committedByScope = new Map<string, number>();
   private readonly committedWriteIdByScope = new Map<string, string>();
@@ -69,6 +71,7 @@ export class NewSessionDraftPersistence {
     if (currentOwner === nextOwner) {
       return;
     }
+    const routeKey = this.routeKey;
     this.persistNow();
     this.restoreGeneration += 1;
     this.restoredIdentity = "";
@@ -77,6 +80,10 @@ export class NewSessionDraftPersistence {
     this.recoveryScope = recoveryScope;
     if (currentOwner && !preserveCurrent) {
       this.apply("", [], true);
+    }
+    // The route may win the startup race; activate it as soon as its owner exists.
+    if (!preserveCurrent) {
+      this.activateRoute(routeKey);
     }
   }
 
@@ -98,13 +105,13 @@ export class NewSessionDraftPersistence {
   }
 
   selectRoute(routeKey: string) {
-    if (!this.gatewayOwner || !this.recoveryScope || !routeKey) {
+    if (!routeKey) {
       return;
     }
     if (this.routeKey !== routeKey) {
+      this.persistNow();
       this.routeKey = routeKey;
       this.revision = 0;
-      this.pending = null;
     }
   }
 
@@ -136,19 +143,20 @@ export class NewSessionDraftPersistence {
     if (this.read().incognito) {
       return;
     }
+    this.discardPending();
     const snapshot = this.snapshot();
     if (!snapshot) {
       return;
     }
     this.pending = snapshot;
-    this.persistNow();
+    this.timer = globalThis.setTimeout(() => this.persistNow(), NEW_SESSION_DRAFT_PERSIST_DELAY_MS);
   }
 
   retireActive(): Promise<void> {
     this.mutationGeneration += 1;
+    this.discardPending();
     const requestedRevision = nextDraftRevision(this.revision);
     this.revision = requestedRevision;
-    this.pending = null;
     const scope = this.scope();
     if (!scope) {
       return Promise.resolve();
@@ -168,8 +176,8 @@ export class NewSessionDraftPersistence {
   }
 
   clearSubmittedDraft(): Promise<void> {
+    this.persistNow();
     this.mutationGeneration += 1;
-    this.pending = null;
     const scope = this.scope();
     if (!scope) {
       return Promise.resolve();
@@ -235,11 +243,16 @@ export class NewSessionDraftPersistence {
   }
 
   persistNow() {
+    this.clearTimer();
     const snapshot = this.pending;
-    this.pending = null;
-    if (!snapshot || this.read().incognito) {
+    if (!snapshot) {
       return;
     }
+    if (this.read().incognito) {
+      this.discardPending();
+      return;
+    }
+    this.pending = null;
     void this.enqueueWrite(async () => {
       const identity = durableComposerScopeIdentity(snapshot.scope);
       try {
@@ -288,6 +301,7 @@ export class NewSessionDraftPersistence {
   }
 
   disconnect() {
+    this.persistNow();
     this.restoreGeneration += 1;
   }
 
@@ -400,9 +414,32 @@ export class NewSessionDraftPersistence {
   }
 
   private enqueueWrite(run: () => Promise<void>): Promise<void> {
-    // Register each IndexedDB transaction before page teardown. Store ordering and
-    // revision CAS serialize snapshots without delaying attachments behind text.
+    // Flush timers before teardown, then start each IndexedDB transaction independently.
+    // Store ordering and revision CAS serialize writes without promise-chain delays.
     return run();
+  }
+
+  private clearTimer() {
+    if (this.timer === null) {
+      return;
+    }
+    globalThis.clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  private discardPending() {
+    this.clearTimer();
+    const snapshot = this.pending;
+    this.pending = null;
+    if (!snapshot) {
+      return;
+    }
+    const identity = durableComposerScopeIdentity(snapshot.scope);
+    const localWriteIds = this.localWriteIdsByScope.get(identity);
+    localWriteIds?.delete(snapshot.writeId);
+    if (localWriteIds?.size === 0) {
+      this.localWriteIdsByScope.delete(identity);
+    }
   }
 
   private rememberLocalWriteId(identity: string, writeId: string) {

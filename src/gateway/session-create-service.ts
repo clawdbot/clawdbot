@@ -1190,6 +1190,7 @@ export async function createGatewaySession(params: {
         const forkResult = await forkSessionFromParentWithDecision({
           parentEntry: currentParentSessionEntry,
           agentId: parentSessionTarget.agentId,
+          ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
           parentSessionKey: forkParentSessionKey,
           sessionKey: target.canonicalKey,
           storePath: parentSessionTarget.storePath,

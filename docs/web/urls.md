@@ -123,6 +123,11 @@ own `?session=` parameter because that parameter expands a row; it is not a
 session deep link. The one-shot composer value `?draft=` remains supported on
 chat and dashboard session paths.
 
+This canonical-link restriction applies to application routes. The standalone
+dashboard document described below intentionally uses
+`/?view=dashboard&session=<sessionKey>` because it is a special document, not a
+session route.
+
 ## Route table
 
 This table lists every Control UI application route. A dash means the route has
@@ -205,6 +210,10 @@ These Gateway-served documents sit outside the application route table:
 - `/?view=terminal` opens the same terminal-only document in the WebView/embed
   form used by the mobile apps. Terminal availability in either form still
   requires `gateway.terminal.enabled` and `operator.admin`.
+- `/?view=dashboard&session=<sessionKey>` opens that session's interactive
+  dashboard full-window without application or chat chrome. The document stays
+  connected to live board updates and shows a visible empty state when the
+  session or board is unavailable.
 - `/approve/<approvalId>` opens a standalone approval document. With a base
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
   never authorizes it; normal Gateway authentication still applies.

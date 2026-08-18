@@ -71,6 +71,7 @@ export type PreparedAgentRunDispatch = {
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
   dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  unpersistedOffloadedRefs: OffloadedRef[];
   userTurn: PreparedAgentRunUserTurn;
   restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
     MainSessionRecoveryPendingTarget | undefined
@@ -559,6 +560,7 @@ export async function prepareAgentRunDispatch(params: {
     lifecycleStorePath,
     resolvedThreadId,
     dispatchTaskTrackingMode,
+    unpersistedOffloadedRefs: userTurn.recorder ? [] : params.offloadedRefs,
     userTurn,
     restoreAdmittedRestartRecoveryInterrupted,
   };

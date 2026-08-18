@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 344395,
-  "reason": "Absorb accumulated startup creep from landed PRs to current main CI bytes (main red at 344395 B vs 343289 B baseline; run 32131816085)",
+  "startupJsGzipBytes": 344429,
+  "reason": "Channel conversation avatars (PR #125668): lead-slot render branch + row plumbing on top of the 344395 B main baseline; avatar element itself is code-split out of startup",
   "updatedAt": "2026-08-18"
 }

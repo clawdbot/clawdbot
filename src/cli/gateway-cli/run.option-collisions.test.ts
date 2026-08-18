@@ -45,6 +45,8 @@ type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unkn
 type GatewayLoopParams = {
   start: GatewayLoopStart;
   completeBoot?: (completion: unknown) => void;
+  ownsProcessLifecycle?: boolean;
+  runtime?: unknown;
 };
 const runGatewayLoop = vi.fn(async ({ start }: GatewayLoopParams) => {
   await start();
@@ -506,6 +508,9 @@ describe("gateway run option collisions", () => {
 
     expect(beforeRun).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+    expect(runGatewayLoop).toHaveBeenCalledWith(
+      expect.objectContaining({ ownsProcessLifecycle: true, runtime: defaultRuntime }),
+    );
   });
 
   it("rejects invalid gateway ports before startup", async () => {

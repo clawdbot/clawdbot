@@ -30,7 +30,6 @@ import {
 } from "../task-suggestion-registry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { listWorkerProfiles } from "./environments.js";
-import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
@@ -196,7 +195,6 @@ async function sendSuggestedTaskPrompt(params: {
   sessionKey: string;
   agentId: string;
   sessionId?: string;
-  activeRunId?: string;
 }): Promise<Parameters<RespondFn> | undefined> {
   let response: Parameters<RespondFn> | undefined;
   const chatParams = {
@@ -204,9 +202,7 @@ async function sendSuggestedTaskPrompt(params: {
     agentId: params.agentId,
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     message: params.suggestion.prompt,
-    ...(params.activeRunId
-      ? { queueMode: "steer" as const, expectedRunId: params.activeRunId }
-      : {}),
+    queueMode: "steer" as const,
     idempotencyKey: `task-suggestion:${params.taskId}`,
   };
   await handleChatSend({
@@ -384,33 +380,6 @@ async function deliverSuggestedTaskToSourceSession(params: {
   if (lifecycleError) {
     return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
   }
-  let activeRunState: ReturnType<typeof resolveVisibleActiveSessionRunState>;
-  try {
-    activeRunState = resolveVisibleActiveSessionRunState({
-      context: params.options.context,
-      requestedKey: params.suggestion.sessionKey,
-      canonicalKey: source.canonicalKey,
-      sessionId: source.entry.sessionId,
-      agentId,
-    });
-  } catch (error) {
-    return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-  }
-  if (activeRunState.active && activeRunState.runIds.length !== 1) {
-    const message =
-      activeRunState.runIds.length === 0
-        ? "active session run has no exact dispatch identity; refresh and retry"
-        : "session has multiple active runs; choose the target run before accepting the task suggestion";
-    return fail(
-      errorShape(ErrorCodes.INVALID_REQUEST, message, {
-        retryable: false,
-        details: {
-          code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
-          sessionKey: params.suggestion.sessionKey,
-        },
-      }),
-    );
-  }
   let sendResponse: Parameters<RespondFn> | undefined;
   try {
     sendResponse = await sendSuggestedTaskPrompt({
@@ -420,7 +389,6 @@ async function deliverSuggestedTaskToSourceSession(params: {
       sessionKey: params.suggestion.sessionKey,
       agentId,
       sessionId: source.entry.sessionId,
-      activeRunId: activeRunState.runIds[0],
     });
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));

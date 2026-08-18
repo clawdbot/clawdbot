@@ -52,7 +52,7 @@ extensions/browser/src/browser-proxy-envelope.ts	8
 extensions/browser/src/browser-proxy-upload.ts	2
 extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	3
-extensions/browser/src/browser-tool.actions.ts	17
+extensions/browser/src/browser-tool.actions.ts	14
 extensions/browser/src/browser-tool.snapshot.ts	2
 extensions/browser/src/browser-tool.ts	18
 extensions/browser/src/browser/bridge-server.ts	3
@@ -219,7 +219,7 @@ extensions/codex/src/app-server/remote-workspace-media.ts	6
 extensions/codex/src/app-server/request.ts	2
 extensions/codex/src/app-server/run-attempt-context.ts	2
 extensions/codex/src/app-server/run-attempt-prompt.ts	2
-extensions/codex/src/app-server/run-attempt-resources.ts	14
+extensions/codex/src/app-server/run-attempt-resources.ts	13
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
 extensions/codex/src/app-server/run-attempt-server-requests.ts	2
 extensions/codex/src/app-server/run-attempt-tool-setup.ts	1
@@ -2012,7 +2012,6 @@ src/agents/run-timeout-attribution.ts	1
 src/agents/run-wait.ts	8
 src/agents/runtime-plan/build.ts	4
 src/agents/runtime-plan/tools.ts	5
-src/agents/runtime-plugins.ts	1
 src/agents/runtime/proxy.ts	7
 src/agents/sandbox-paths.ts	1
 src/agents/sandbox-tool-policy.ts	1
@@ -2292,8 +2291,8 @@ src/auto-reply/tokens.ts	1
 src/auto-reply/usage-bar/template.ts	1
 src/auto-reply/usage-bar/translator.ts	4
 src/boards/board-store.ts	1
-src/boards/sqlite-board-codec.ts	9
-src/boards/sqlite-board-store.ts	5
+src/boards/sqlite-board-codec.ts	7
+src/boards/sqlite-board-store.ts	3
 src/bootstrap/node-extra-ca-certs.ts	2
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	2
@@ -2965,7 +2964,7 @@ src/gateway/server-broadcast.ts	2
 src/gateway/server-channels.ts	1
 src/gateway/server-chat-state.ts	1
 src/gateway/server-chat.ts	5
-src/gateway/server-close.ts	2
+src/gateway/server-close.ts	1
 src/gateway/server-core-runtime.ts	2
 src/gateway/server-cron-reconciled.ts	1
 src/gateway/server-cron.ts	5
@@ -3047,7 +3046,6 @@ src/gateway/server-methods/sessions-abort.ts	3
 src/gateway/server-methods/sessions-archive-lifecycle.ts	3
 src/gateway/server-methods/sessions-compact.ts	1
 src/gateway/server-methods/sessions-create.ts	1
-src/gateway/server-methods/sessions-dispatch.ts	1
 src/gateway/server-methods/sessions-messaging.ts	11
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/sessions-read.ts	2
@@ -4178,7 +4176,6 @@ ui/src/pages/chat/chat-progress.ts	2
 ui/src/pages/chat/chat-queue.ts	1
 ui/src/pages/chat/chat-realtime.ts	1
 ui/src/pages/chat/chat-send-ack.ts	2
-ui/src/pages/chat/chat-send-actions.ts	2
 ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-send-request.ts	1
 ui/src/pages/chat/chat-send-timing.ts	6

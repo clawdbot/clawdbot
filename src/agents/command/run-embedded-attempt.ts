@@ -61,7 +61,6 @@ import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-
 import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
-
 const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
@@ -495,6 +494,7 @@ export async function runEmbeddedAgentAttempt(params: {
             storePath: params.suppressVisibleSessionEffects ? undefined : storePath,
             pluginsEnabled,
             ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
+            pluginGeneration: params.prepared.commandRuntimeContext?.pluginGeneration,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             sessionHasHistory:
               !isNewSession ||
@@ -511,7 +511,6 @@ export async function runEmbeddedAgentAttempt(params: {
             onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
             onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
               lifecycleGeneration = nextLifecycleGeneration;
-              // Outer cleanup owns the run context, so publish before the attempt can reject.
               params.onLifecycleGenerationChanged(nextLifecycleGeneration);
             },
             onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
@@ -705,5 +704,3 @@ export async function runEmbeddedAgentAttempt(params: {
     terminal,
   };
 }
-
-export type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;

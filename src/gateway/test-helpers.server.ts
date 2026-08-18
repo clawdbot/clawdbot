@@ -103,6 +103,7 @@ let tempControlUiRoot: string | undefined;
 let suiteConfigRootSeq = 0;
 let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
+let gatewayReplyRuntimePrepared = false;
 let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
 // Gateway tests exercise RPC/server behavior, not production bind auto-detection by default.
@@ -478,6 +479,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetAgentEventsForTest();
   const mod = await getServerModule();
   await mod.resetPreparedModelCatalogForTest();
+  gatewayReplyRuntimePrepared = false;
   agentDiscoveryMock.enabled = false;
   agentDiscoveryMock.discoverCalls = 0;
   agentDiscoveryMock.models = [];
@@ -525,6 +527,28 @@ async function resetGatewayTestRuntimeOnly() {
     drainSystemEvents(sessionKey);
   }
   resetAgentEventsForTest({ preserveListeners: true });
+  gatewayReplyRuntimePrepared = false;
+}
+
+export async function prepareGatewayReplyRuntimeForTest(options?: {
+  force?: boolean;
+}): Promise<void> {
+  if (
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1" ||
+    (!options?.force && gatewayReplyRuntimePrepared)
+  ) {
+    return;
+  }
+  const [preparedRuntime, configRuntime] = await Promise.all([
+    import("../agents/prepared-model-runtime.js"),
+    import("../config/io.js"),
+  ]);
+  await preparedRuntime.refreshPreparedModelRuntimeSnapshots(configRuntime.getRuntimeConfig(), {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+    allowGatewaySubagentBinding: true,
+  });
+  gatewayReplyRuntimePrepared = true;
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -1229,6 +1253,9 @@ export async function rpcReq<T extends Record<string, unknown>>(
   // observes the updated test fixture state.
   resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
+  if (method === "agent" || method === "chat.send") {
+    await prepareGatewayReplyRuntimeForTest();
+  }
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   const responsePromise = onceMessage<{

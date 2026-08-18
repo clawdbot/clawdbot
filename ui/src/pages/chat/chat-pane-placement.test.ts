@@ -51,7 +51,7 @@ function activePlacementSession(
 }
 
 describe("chat pane placement", () => {
-  it("does not reclaim a provisioning placement with a destroyable environment", async () => {
+  it("reclaims a provisioning placement through its session", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane } = createTestChatPane({
       client: { request } as unknown as GatewayBrowserClient,
@@ -59,7 +59,7 @@ describe("chat pane placement", () => {
     });
     pane.context.gateway.snapshot.hello = {
       features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     } as never;
 
     const session = {
@@ -77,16 +77,20 @@ describe("chat pane placement", () => {
       reclaimingKey: null,
       row: session,
     });
-    const dialogsBefore = document.body.querySelectorAll("openclaw-modal-dialog").length;
-    await pane.reclaimHeaderPlacement(session);
+    const reclaim = pane.reclaimHeaderPlacement(session);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    await reclaim;
 
     expect(placement).toEqual({
       moving: false,
       moveDisabledReason: "This Gateway does not support this session action.",
-      reclaimDisabledReason: "This Gateway does not support this session action.",
+      reclaimDisabledReason: undefined,
     });
-    expect(document.body.querySelectorAll("openclaw-modal-dialog")).toHaveLength(dialogsBefore);
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: session.key, agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
+    );
   });
 
   it("reclaims an active placement after the operator confirms", async () => {
@@ -104,7 +108,7 @@ describe("chat pane placement", () => {
     });
     pane.context.gateway.snapshot.hello = {
       features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     } as never;
     const session = activePlacementSession();
 
@@ -139,7 +143,7 @@ describe("chat pane placement", () => {
     });
     pane.context.gateway.snapshot.hello = {
       features: { methods: ["sessions.move"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     } as never;
     const session = { ...activePlacementSession(), hasActiveRun: true };
 
@@ -196,7 +200,7 @@ describe("chat pane placement", () => {
     });
     pane.context.gateway.snapshot.hello = {
       features: { methods: ["sessions.move"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     } as never;
     const session = activePlacementSession();
 

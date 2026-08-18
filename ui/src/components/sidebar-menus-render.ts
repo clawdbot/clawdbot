@@ -165,7 +165,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
   const cloudWorkerStopAllowed = Boolean(
     !batchRows &&
     cloudWorkerStopAction &&
-    (cloudWorkerStopAction.method !== "sessions.reclaim" || !session.hasActiveRun) &&
+    (!cloudWorkerStopAction.blocksActiveRun || !session.hasActiveRun) &&
     context &&
     isGatewayMethodAdvertised(context.gateway.snapshot, cloudWorkerStopAction.method) === true,
   );

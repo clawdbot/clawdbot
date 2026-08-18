@@ -48,6 +48,9 @@ type HandleGatewayRequestOptions = GatewayRequestOptions & {
 const handleGatewayRequest = vi.hoisted(() =>
   vi.fn(async (_opts: HandleGatewayRequestOptions) => {}),
 );
+const dispatchReplyFromConfig = vi.hoisted(() =>
+  vi.fn(async () => ({ counts: {}, queuedFinal: false })),
+);
 
 vi.mock("../plugins/loader.js", () => ({
   loadAndActivateRootPluginRegistry: loadOpenClawPlugins,
@@ -82,6 +85,10 @@ vi.mock("../channels/plugins/configured-binding-registry.js", async () => {
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
+}));
+
+vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
+  dispatchReplyFromConfig,
 }));
 
 vi.mock("./agent-turn/internal-facade.js", () => ({
@@ -215,7 +222,13 @@ function createLookUpTableForTest(params: {
   };
 }
 
-type ServerPluginsModule = typeof import("./server-plugins.js");
+type ServerPluginsModule = typeof import("./server-plugins.js") & {
+  clearFallbackGatewayContext: () => void;
+  setFallbackGatewayContext: (context: GatewayRequestContext) => () => void;
+  setFallbackGatewayContextResolver: (
+    resolve: () => GatewayRequestContext | undefined,
+  ) => () => void;
+};
 type ServerPluginBootstrapModule = typeof import("./server-plugin-bootstrap.js");
 type PluginRuntimeModule = typeof import("../plugins/runtime/index.js");
 type PluginRuntimeRegistryModule = typeof import("../plugins/runtime.js");
@@ -230,6 +243,7 @@ let runtimeRegistryModule: PluginRuntimeRegistryModule;
 let gatewayRequestScopeModule: GatewayRequestScopeModule;
 let methodScopesModule: MethodScopesModule;
 let getActivePluginRegistryWorkspaceDirFromState: typeof import("../plugins/runtime-state.js").getActivePluginRegistryWorkspaceDirFromState;
+let resolveTestGatewayContext: () => GatewayRequestContext | undefined = () => undefined;
 
 function createTestLog() {
   return {
@@ -275,13 +289,6 @@ function getLastPluginLoadOptions(): Record<string, unknown> {
 
 function getLastPluginLoadOption(key: string) {
   return getLastPluginLoadOptions()[key];
-}
-
-function getLastDispatchedContext(): GatewayRequestContext | undefined {
-  const call = getLastMockFirstArg(handleGatewayRequest, "gateway request") as
-    | HandleGatewayRequestOptions
-    | undefined;
-  return call?.context;
 }
 
 function getLastDispatchedParams(): Record<string, unknown> | undefined {
@@ -333,7 +340,43 @@ function getLastPluginLoadLogger(): {
 }
 
 async function loadTestModules() {
-  serverPluginsModule = await import("./server-plugins.js");
+  const actualServerPlugins = await import("./server-plugins.js");
+  serverPluginsModule = {
+    ...actualServerPlugins,
+    clearFallbackGatewayContext: () => {
+      resolveTestGatewayContext = () => undefined;
+    },
+    setFallbackGatewayContext: (context) => {
+      resolveTestGatewayContext = () => context;
+      return () => {
+        if (resolveTestGatewayContext() === context) {
+          resolveTestGatewayContext = () => undefined;
+        }
+      };
+    },
+    setFallbackGatewayContextResolver: (resolve) => {
+      resolveTestGatewayContext = resolve;
+      return () => {
+        if (resolveTestGatewayContext === resolve) {
+          resolveTestGatewayContext = () => undefined;
+        }
+      };
+    },
+    dispatchGatewayMethodInProcess: (method, params, options) =>
+      actualServerPlugins.dispatchGatewayMethodInProcess(method, params, {
+        ...options,
+        resolveGatewayContext: resolveTestGatewayContext,
+      }),
+    dispatchGatewayMethodInProcessRaw: (method, params, options) =>
+      actualServerPlugins.dispatchGatewayMethodInProcessRaw(method, params, {
+        ...options,
+        resolveGatewayContext: resolveTestGatewayContext,
+      }),
+    getInProcessGatewayRequestContext: () =>
+      actualServerPlugins.getInProcessGatewayRequestContext(resolveTestGatewayContext),
+    hasInProcessGatewayContext: () =>
+      actualServerPlugins.hasInProcessGatewayContext(resolveTestGatewayContext),
+  } as ServerPluginsModule;
   serverPluginBootstrapModule = await import("./server-plugin-bootstrap.js");
   runtimeModule = await import("../plugins/runtime/index.js");
   runtimeRegistryModule = await import("../plugins/runtime.js");
@@ -383,13 +426,6 @@ function registerActivePluginToolOwnership(
   });
 }
 
-async function reloadFallbackGatewayContextModule() {
-  // Existing runtimes retain the old module graph; only the process-global state owner
-  // must reload to prove a restarted Gateway can replace their fallback context.
-  vi.resetModules();
-  return await import("./server-plugin-fallback-context.js");
-}
-
 function loadGatewayPluginsForTest(
   overrides: Partial<Parameters<ServerPluginsModule["loadGatewayPlugins"]>[0]> = {},
 ) {
@@ -400,6 +436,7 @@ function loadGatewayPluginsForTest(
     log,
     coreGatewayHandlers: {},
     baseMethods: [],
+    resolveGatewayContext: () => resolveTestGatewayContext(),
     ...overrides,
   });
   // The mocked root loader returns a value without performing its production
@@ -418,6 +455,7 @@ function loadGatewayStartupPluginsForTest(
     log,
     coreGatewayHandlers: {},
     baseMethods: [],
+    resolveGatewayContext: () => resolveTestGatewayContext(),
     ...overrides,
   });
   runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
@@ -440,6 +478,7 @@ beforeEach(() => {
     .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   normalizeProviderModelIdWithRuntime.mockReset().mockReturnValue(undefined);
+  dispatchReplyFromConfig.mockClear();
   pluginRuntimeLoaderLogger.info.mockClear();
   pluginRuntimeLoaderLogger.warn.mockClear();
   pluginRuntimeLoaderLogger.error.mockClear();
@@ -542,6 +581,32 @@ describe("loadGatewayPlugins", () => {
     });
     expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["discord", "telegram"]);
     expect(getLastPluginLoadOption("preferBuiltPluginArtifacts")).toBe(true);
+  });
+
+  test("binds channel reply dispatch to the owning Gateway context", async () => {
+    const context = {
+      label: "channel-reply-owner",
+      workerSessionPlacementService: { getMany: vi.fn(() => new Map()) },
+    } as unknown as GatewayRequestContext;
+    serverPluginsModule.setFallbackGatewayContext(context);
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayPluginsForTest();
+    const runtimeOptions = getLastPluginLoadOption("runtimeOptions") as
+      | Parameters<PluginRuntimeModule["createPluginRuntime"]>[0]
+      | undefined;
+    const boundDispatch = runtimeOptions?.dispatchReplyFromConfig;
+    if (!boundDispatch) {
+      throw new Error("Expected gateway plugin load to bind channel reply dispatch");
+    }
+    const params = {} as Parameters<typeof boundDispatch>[0];
+
+    await boundDispatch(params);
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledWith({
+      ...params,
+      sessionWorkerPlacementContext: context,
+    });
   });
 
   test("injects the process HOME-isolation fact into registry construction", () => {
@@ -1276,7 +1341,7 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-request"));
-    const runtime = runtimeModule.createPluginRuntime();
+    const runtime = createRuntimeFromLastGatewayLoad();
 
     await gatewayRequestScopeModule.withPluginRuntimePluginScope(
       { pluginId: "google-meet", pluginOrigin: "bundled" },
@@ -1292,7 +1357,7 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-admin"));
-    const runtime = runtimeModule.createPluginRuntime();
+    const runtime = createRuntimeFromLastGatewayLoad();
 
     await gatewayRequestScopeModule.withPluginRuntimePluginScope(
       { pluginId: "google-meet", pluginOrigin: "bundled" },
@@ -1309,7 +1374,9 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("reports whether trusted in-process Gateway dispatch is available", async () => {
-    const runtime = runtimeModule.createPluginRuntime();
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    loadGatewayStartupPluginsForTest();
+    const runtime = createRuntimeFromLastGatewayLoad();
 
     expect(await runtime.gateway.isAvailable()).toBe(false);
     serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-available"));
@@ -1328,7 +1395,7 @@ describe("loadGatewayPlugins", () => {
       } as GatewayRequestOptions["client"],
       isWebchatConnect: () => false,
     } satisfies PluginRuntimeGatewayRequestScope;
-    const runtime = runtimeModule.createPluginRuntime();
+    const runtime = createRuntimeFromLastGatewayLoad();
 
     await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
       gatewayRequestScopeModule.withPluginRuntimePluginScope(
@@ -1353,7 +1420,7 @@ describe("loadGatewayPlugins", () => {
         details: { manualActionRequired: true, reason: "not-authenticated" },
       });
     });
-    const runtime = runtimeModule.createPluginRuntime();
+    const runtime = createRuntimeFromLastGatewayLoad();
 
     const request = gatewayRequestScopeModule.withPluginRuntimePluginScope(
       { pluginId: "google-meet", pluginOrigin: "bundled" },
@@ -1373,7 +1440,7 @@ describe("loadGatewayPlugins", () => {
     );
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-rejected"));
-    const runtime = runtimeModule.createPluginRuntime();
+    const runtime = createRuntimeFromLastGatewayLoad();
 
     await expect(
       gatewayRequestScopeModule.withPluginRuntimePluginScope(
@@ -1741,6 +1808,38 @@ describe("loadGatewayPlugins", () => {
     expect(normalizeProviderModelIdWithRuntime).toHaveBeenCalledOnce();
   });
 
+  test("keeps fallback model policy bound to the runtime that loaded it", async () => {
+    const allowedRuntime = await createSubagentRuntime(serverPluginsModule, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    const deniedRuntime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("fallback-policy-binding"));
+    const run = (runtime: PluginRuntime["subagent"]) =>
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        runtime.run({
+          sessionKey: "s-policy-binding",
+          message: "use trusted override",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          deliver: false,
+        }),
+      );
+
+    await expect(run(allowedRuntime)).resolves.toMatchObject({ runId: expect.any(String) });
+    await expect(run(deniedRuntime)).rejects.toThrow(
+      'plugin "voice-call" is not trusted for fallback provider/model override requests.',
+    );
+  });
+
   test("tags plugin fallback subagent runs with the creating plugin id", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
@@ -2053,134 +2152,6 @@ describe("loadGatewayPlugins", () => {
     const params = getRequiredLastDispatchedParams();
     expect(params.sessionKey).toBe("s-auto-enabled-bootstrap-policy");
     expect(params.model).toBe("openai/gpt-5.4");
-  });
-
-  test("shares fallback context across module reloads for existing runtimes", async () => {
-    const first = serverPluginsModule;
-    const runtime = await createSubagentRuntime(first);
-
-    const staleContext = createTestContext("stale");
-    first.setFallbackGatewayContext(staleContext);
-    await runtime.run({ sessionKey: "s-1", message: "hello" });
-    expect(getLastDispatchedContext()).toBe(staleContext);
-
-    const reloaded = await reloadFallbackGatewayContextModule();
-    const freshContext = createTestContext("fresh");
-    reloaded.setFallbackGatewayContext(freshContext);
-
-    await runtime.run({ sessionKey: "s-1", message: "hello again" });
-    expect(getLastDispatchedContext()).toBe(freshContext);
-  });
-
-  test("uses updated fallback context after context replacement", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
-    const firstContext = createTestContext("before-restart");
-    const secondContext = createTestContext("after-restart");
-
-    serverPlugins.setFallbackGatewayContext(firstContext);
-    await runtime.run({ sessionKey: "s-2", message: "before restart" });
-    expect(getLastDispatchedContext()).toBe(firstContext);
-
-    serverPlugins.setFallbackGatewayContext(secondContext);
-    await runtime.run({ sessionKey: "s-2", message: "after restart" });
-    expect(getLastDispatchedContext()).toBe(secondContext);
-  });
-
-  test("reflects fallback context object mutation at dispatch time", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
-    const context = { marker: "before-mutation" } as GatewayRequestContext & {
-      marker: string;
-    };
-
-    serverPlugins.setFallbackGatewayContext(context);
-    context.marker = "after-mutation";
-
-    await runtime.run({ sessionKey: "s-3", message: "mutated context" });
-    const dispatched = getLastDispatchedContext() as
-      | (GatewayRequestContext & { marker: string })
-      | undefined;
-    expect(dispatched?.marker).toBe("after-mutation");
-  });
-
-  test("resolves fallback context lazily when a resolver is registered", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
-    let currentContext = createTestContext("before-resolver-update");
-
-    expect(serverPlugins.hasInProcessGatewayContext()).toBe(false);
-    serverPlugins.setFallbackGatewayContextResolver(() => currentContext);
-    expect(serverPlugins.hasInProcessGatewayContext()).toBe(true);
-    await runtime.run({ sessionKey: "s-4", message: "before resolver update" });
-    expect(getLastDispatchedContext()).toBe(currentContext);
-
-    currentContext = createTestContext("after-resolver-update");
-    expect(serverPlugins.hasInProcessGatewayContext()).toBe(true);
-    await runtime.run({ sessionKey: "s-4", message: "after resolver update" });
-    expect(getLastDispatchedContext()).toBe(currentContext);
-  });
-
-  test("prefers resolver output over an older fallback context snapshot", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
-    const staleContext = createTestContext("stale-snapshot");
-    const freshContext = createTestContext("fresh-resolver");
-
-    serverPlugins.setFallbackGatewayContext(staleContext);
-    serverPlugins.setFallbackGatewayContextResolver(() => freshContext);
-
-    await runtime.run({ sessionKey: "s-5", message: "prefer resolver" });
-    expect(getLastDispatchedContext()).toBe(freshContext);
-  });
-
-  test("clears fallback context snapshots when a resolver is registered", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
-    const staleContext = createTestContext("stale-snapshot");
-
-    serverPlugins.setFallbackGatewayContext(staleContext);
-    serverPlugins.setFallbackGatewayContextResolver(() => undefined);
-
-    await expect(runtime.run({ sessionKey: "s-6", message: "stale fallback" })).rejects.toThrow(
-      "No scope set and no fallback context available",
-    );
-  });
-
-  test("clears fallback context and resolver state", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
-    const context = createTestContext("clear-context");
-
-    serverPlugins.setFallbackGatewayContextResolver(() => context);
-    await runtime.run({ sessionKey: "s-7", message: "before clear" });
-    expect(getLastDispatchedContext()).toBe(context);
-
-    serverPlugins.clearFallbackGatewayContext();
-
-    expect(serverPlugins.hasInProcessGatewayContext()).toBe(false);
-    await expect(runtime.run({ sessionKey: "s-7", message: "after clear" })).rejects.toThrow(
-      "No scope set and no fallback context available",
-    );
-  });
-
-  test("resolver cleanup only clears the resolver it registered", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
-    const firstContext = createTestContext("first-owner");
-    const secondContext = createTestContext("second-owner");
-
-    const clearFirst = serverPlugins.setFallbackGatewayContextResolver(() => firstContext);
-    const clearSecond = serverPlugins.setFallbackGatewayContextResolver(() => secondContext);
-
-    clearFirst();
-    await runtime.run({ sessionKey: "s-8", message: "after first cleanup" });
-    expect(getLastDispatchedContext()).toBe(secondContext);
-
-    clearSecond();
-    await expect(
-      runtime.run({ sessionKey: "s-8", message: "after second cleanup" }),
-    ).rejects.toThrow("No scope set and no fallback context available");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -232,7 +232,13 @@ export function renderChannelDetail(params: {
             >
               ${t("common.docs")}
             </a>
-            <button type="button" class="btn btn--sm" @click=${() => params.onSetup()}>
+            <button
+              type="button"
+              class="btn btn--sm"
+              title=${params.props.canAdmin ? "" : t("channels.hub.adminRequired")}
+              ?disabled=${!params.props.canAdmin}
+              @click=${() => params.onSetup()}
+            >
               ${t("channels.hub.runSetup")}
             </button>
             <button

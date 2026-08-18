@@ -365,9 +365,6 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       transformSystemPrompt: vi.fn((context: { systemPrompt: string }) => context.systemPrompt),
     },
     tools: {
-      preparedPlanning: {
-        loadMetadataSnapshot: () => ({}),
-      },
       normalize: vi.fn((tools) => tools),
       logDiagnostics: vi.fn(),
     },

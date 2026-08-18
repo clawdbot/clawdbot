@@ -1033,7 +1033,7 @@ describe("Codex app-server native code mode config", () => {
     );
     expect(instructions).toContain("call the matching entry through `tools`");
     expect(instructions).toContain(
-      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.",
     );
   });
 

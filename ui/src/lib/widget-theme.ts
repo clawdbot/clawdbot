@@ -68,28 +68,29 @@ export function buildWidgetThemeMessage(): {
 }
 
 export function postWidgetTheme(frame: HTMLIFrameElement, targetOrigin = "*"): void {
-  // Canvas widgets have opaque origins and require "*". Authenticated
-  // cross-origin embeds instead supply their exact, validated origin.
   frame.contentWindow?.postMessage(buildWidgetThemeMessage(), targetOrigin);
 }
 
-let widgetThemeObserverInstalled = false;
+const widgetThemeObserverWindows = new WeakSet<Window>();
 
-export function installWidgetThemeObserver(getFrames: () => Iterable<HTMLIFrameElement>): void {
+export function installWidgetThemeObserver(): void {
   if (
-    widgetThemeObserverInstalled ||
+    typeof window === "undefined" ||
     typeof document === "undefined" ||
     typeof MutationObserver === "undefined"
   ) {
     return;
   }
-  widgetThemeObserverInstalled = true;
+  if (widgetThemeObserverWindows.has(window)) {
+    return;
+  }
+  widgetThemeObserverWindows.add(window);
   const root = document.documentElement;
   new MutationObserver(() => {
-    for (const frame of getFrames()) {
-      if (frame.isConnected) {
-        postWidgetTheme(frame);
-      }
+    for (const frame of document.querySelectorAll<HTMLIFrameElement>(
+      ".chat-tool-card__preview-frame, .board-widget__frame",
+    )) {
+      postWidgetTheme(frame);
     }
   }).observe(root, {
     attributes: true,

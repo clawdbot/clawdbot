@@ -24,6 +24,7 @@ import {
 } from "./placement-teardown.js";
 import type {
   WorkerPlacementDispatchRequest,
+  WorkerPlacementAuthorization,
   WorkerPlacementMoveDestination,
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
@@ -54,6 +55,7 @@ type WorkerLocalDispatchBarrier = (params: {
   sessionKey: string;
   agentId: string;
   executionMode: WorkerPlacementDispatchRequest["executionMode"];
+  authorize?: WorkerPlacementAuthorization;
   startDispatch: () => WorkerDispatchPlacement;
 }) => Promise<WorkerDispatchPlacement>;
 
@@ -61,6 +63,7 @@ type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state:
 type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
 type WorkerPlacementReclaimBarrier = (
   params: WorkerPlacementReclaimRequest & {
+    authorize?: WorkerPlacementAuthorization;
     begin: () => WorkerDrainingDispatchPlacement;
     reclaim: (
       localPath: string,
@@ -69,12 +72,23 @@ type WorkerPlacementReclaimBarrier = (
   },
 ) => Promise<WorkerReclaimPlacement>;
 
-type WorkerPlacementDispatchOptions = {
+type WorkerPlacementFailedReclaimBarrier = (
+  params: WorkerPlacementReclaimRequest & {
+    authorize?: WorkerPlacementAuthorization;
+    reclaim: () => Promise<WorkerReclaimPlacement>;
+  },
+) => Promise<WorkerReclaimPlacement>;
+
+export type WorkerPlacementReclaimBarriers = {
+  runReclaimBarrier: WorkerPlacementReclaimBarrier;
+  runFailedReclaimBarrier: WorkerPlacementFailedReclaimBarrier;
+};
+
+type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   placements: WorkerDispatchPlacementStore;
   environments: WorkerDispatchEnvironmentService;
   runLocalBarrier: WorkerLocalDispatchBarrier;
   runActivationBarrier: WorkerActivationBarrier;
-  runReclaimBarrier: WorkerPlacementReclaimBarrier;
   runMoveBarrier: WorkerPlacementMoveBarrier;
   resolveMoveDestination: (
     identity: Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">,
@@ -146,7 +160,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     environments,
     failure,
     placements,
-    runActivationBarrier: options.runActivationBarrier,
     resolveWorkspacePath: options.resolveWorkspacePath,
     reportWorkspaceResultConflict: options.reportWorkspaceResultConflict,
     resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
@@ -168,6 +181,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const dispatch = async (
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<WorkerActiveDispatchPlacement> => {
     let placement: WorkerDispatchPlacement | undefined;
     let environmentId: string | null = null;
@@ -178,6 +192,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         sessionKey: request.sessionKey,
         agentId: request.agentId,
         executionMode: request.executionMode,
+        authorize,
         startDispatch: () => {
           placement = placements.startDispatch({
             sessionId: request.sessionId,
@@ -270,6 +285,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         sessionKey: request.sessionKey,
         agentId: request.agentId,
         executionMode: request.executionMode,
+        authorize,
         activate: () => {
           const activated = placements.transition({
             sessionId: request.sessionId,
@@ -323,9 +339,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const reclaimOnce = async (
     request: WorkerPlacementReclaimRequest,
     moveIntent?: WorkerPlacementMoveIntent,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<WorkerReclaimPlacement> =>
     await options.runReclaimBarrier({
       ...request,
+      authorize,
       begin: () => {
         const current = placements.get(request.sessionId);
         if ((current?.state !== "active" && current?.state !== "draining") || current.turnClaim) {
@@ -575,6 +593,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const reclaimInFlight = new Map<string, Promise<WorkerReclaimPlacement>>();
   const reclaim = async (
     request: WorkerPlacementReclaimRequest,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<WorkerReclaimPlacement> => {
     const current = placements.get(request.sessionId);
     if (current?.state === "reclaimed") {
@@ -587,26 +606,41 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     const operation = (async () => {
       const owned = placements.get(request.sessionId);
       if (owned?.state === "failed") {
-        if (
-          !isFailedWorkerPlacementEnvironmentGone({
-            environmentService: environments,
-            placement: owned,
-          })
-        ) {
-          throw new Error("Failed cloud worker environment must be stopped before reclaim");
-        }
-        const local = placements.transition({
-          sessionId: request.sessionId,
-          from: "failed",
-          to: "local",
-          expectedGeneration: owned.generation,
+        return await options.runFailedReclaimBarrier({
+          ...request,
+          authorize,
+          reclaim: async () => {
+            const failedPlacement = placements.get(request.sessionId);
+            if (failedPlacement?.state !== "failed") {
+              throw new Error("Failed cloud worker placement changed during reclaim");
+            }
+            await failure.retryFailedTeardown(failedPlacement);
+            const failed = placements.get(request.sessionId);
+            if (failed?.state !== "failed") {
+              throw new Error("Failed cloud worker placement changed during reclaim");
+            }
+            if (
+              !isFailedWorkerPlacementEnvironmentGone({
+                environmentService: environments,
+                placement: failed,
+              })
+            ) {
+              throw new Error("Failed cloud worker environment cleanup is still pending");
+            }
+            const local = placements.transition({
+              sessionId: request.sessionId,
+              from: "failed",
+              to: "local",
+              expectedGeneration: failed.generation,
+            });
+            if (local.state !== "local") {
+              throw new Error("Failed cloud worker reclaim did not produce a local placement");
+            }
+            return local;
+          },
         });
-        if (local.state !== "local") {
-          throw new Error("Failed cloud worker reclaim did not produce a local placement");
-        }
-        return local;
       }
-      return await reclaimOnce(request);
+      return await reclaimOnce(request, undefined, authorize);
     })().catch((error: unknown) => {
       // Another teardown path can win after this call has crossed its durable completion fence.
       // Report the committed terminal state instead of leaking a stale tunnel error to callers.

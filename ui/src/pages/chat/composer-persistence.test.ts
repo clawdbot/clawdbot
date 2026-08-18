@@ -66,23 +66,58 @@ afterEach(() => {
 });
 
 describe("chat composer persistence", () => {
-  it("round-trips only the immutable steer run identity", () => {
+  it("loads legacy steer rows as generic mode-bearing sends and never rewrites old fields", () => {
     const state = createState();
-    const steer: ChatQueueItem = {
+    const gatewayUrl = state.settings?.gatewayUrl;
+    const storageKey = storageKeyForGateway(gatewayUrl);
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: {
+          [`${state.sessionKey}\u0000agent:lily`]: {
+            queue: [
+              {
+                id: "steer-reload",
+                text: "keep the target",
+                createdAt: 1,
+                kind: "steered",
+                sendRunId: "steer-request",
+                sendState: "steering",
+                steerTargetRunId: "active-run",
+              },
+            ],
+            updatedAt: 1,
+          },
+        },
+      }),
+    );
+
+    const restored = loadChatComposerSnapshot(state, state.sessionKey)?.queue[0];
+    expect(restored).toMatchObject({
       id: "steer-reload",
-      text: "keep the target",
-      createdAt: 1,
-      kind: "steered",
+      queueMode: "steer",
       sendRunId: "steer-request",
       sendState: "unconfirmed",
-      steerTargetRunId: "active-run",
-    };
-
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, steer)).toBe(true);
-
-    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue[0]).toMatchObject({
-      steerTargetRunId: "active-run",
     });
+    expect(restored).not.toHaveProperty("kind");
+    expect(restored).not.toHaveProperty("steerTargetRunId");
+
+    expect(
+      updateStoredChatComposerQueueItem(
+        state,
+        state.sessionKey,
+        restored!,
+        { ...restored!, text: "updated" },
+        restored?.agentId,
+      ),
+    ).toBe(true);
+    const written = sessionStorage.getItem(storageKey) ?? "";
+    expect(written).toContain('"queueMode":"steer"');
+    expect(written).not.toContain('"kind":"steered"');
+    expect(written).not.toContain("steerTargetRunId");
+    expect(written).not.toContain('"sendState":"steering"');
   });
 
   it("notifies stored outbox subscribers on draft presence transitions and queue writes", () => {

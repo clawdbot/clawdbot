@@ -248,7 +248,7 @@ export class DraftSubmissionFlow {
     }
     return readSessionMethodAccess(gateway, {
       method: "sessions.dispatch",
-      requiredScope: "operator.admin",
+      requiredScope: "operator.write",
     });
   }
 

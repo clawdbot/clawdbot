@@ -159,11 +159,14 @@ Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
 with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
 or fully dynamic tool registration.
 
-| Method                                 | What it registers                                                                                                                        |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerTool(tool, opts?)`        | Agent tool (required or `{ optional: true }`)                                                                                            |
-| `api.registerCommand(def)`             | Custom command (bypasses the LLM)                                                                                                        |
-| `api.registerNodeHostCommand(command)` | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
+| Method                                   | What it registers                                                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerTool(tool, opts?)`          | Agent tool (required or `{ optional: true }`)                                                                                            |
+| `api.registerCommand(def)`               | Custom command (bypasses the LLM)                                                                                                        |
+| `api.registerNodeHostCommand(command)`   | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
+| `api.registerWidgetPresenter(presenter)` | Destination that can present a hosted `show_widget` document                                                                             |
+
+Widget presenters declare a model-visible target, a short description, current availability, and a `present(...)` callback. Return the closed presentation result codes (`no_eligible_node` or `node_error`) instead of throwing for expected device failures; core then keeps the widget available inline and gives the agent a recovery step.
 
 Computer Use providers use `registerComputerUseProvider(api, provider)` from
 `openclaw/plugin-sdk/computer-use`. It registers the shared
@@ -388,6 +391,17 @@ plugins.
 | `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
 | `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
+| `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
+
+`registerBoardWidgetContentKind(...)` is for plugins that own a declarative
+widget source format. The registration supplies a globally unique lowercase
+`kind`, a short label, one capability-scoped plugin surface plus its renderer
+resource paths, a synchronous `validateSource(source)` callback, and a
+synchronous `composeDocument(...)` callback. Core adds the document shell,
+sandbox, theme, and ticket-bound action bridge. Registrations exist only while
+their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
+Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
+not for renderer registration.
 
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway

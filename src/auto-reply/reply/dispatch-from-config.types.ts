@@ -1,5 +1,6 @@
 // Shared type contracts for dispatch-from-config runtime execution.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { FormatAbortReplyText, TryFastAbortFromMessage } from "./abort.runtime-types.js";
@@ -39,6 +40,8 @@ export type DispatchFromConfigParams = {
   formatAbortReplyTextResolver?: FormatAbortReplyText;
   /** Optional patch applied to the current runtime config before reply resolution. */
   configOverride?: OpenClawConfig;
+  /** Gateway-owned worker services for archive recovery outside a request scope. */
+  sessionWorkerPlacementContext?: SessionWorkerPlacementContext;
   /**
    * Channel turns consume the Gateway's committed model-runtime owner even when the global
    * config snapshot is unavailable during startup or durable ingress replay.

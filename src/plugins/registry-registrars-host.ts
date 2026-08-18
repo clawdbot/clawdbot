@@ -1,4 +1,5 @@
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
+import { createPluginBoardWidgetContentKindRegistrar } from "./board-widget-content-kinds.js";
 import {
   getPluginSessionSchedulerJobGeneration,
   registerPluginSessionSchedulerJob,
@@ -708,6 +709,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
     registerTrustedToolPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
+    registerBoardWidgetContentKind: createPluginBoardWidgetContentKindRegistrar(registry),
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
     registerSessionSchedulerJob,

@@ -18,7 +18,7 @@ type CloudStartOutcome =
   | { status: "send-rejected"; error: string; messageId: string };
 
 type PlacementReadResult =
-  | { status: "read"; placement?: SessionPlacement }
+  | { status: "read"; placement?: SessionPlacement; sessionId?: string }
   | { status: "missing" }
   | { status: "rejected"; error: string }
   | { status: "unavailable" };
@@ -55,12 +55,17 @@ async function readPlacement(
 ): Promise<PlacementReadResult> {
   try {
     const described = await client.request<{
-      session?: { placement?: SessionPlacement } | null;
+      session?: { placement?: SessionPlacement; sessionId?: string } | null;
     }>("sessions.describe", { key });
     if (described?.session === null) {
       return { status: "missing" };
     }
-    return { status: "read", placement: described?.session?.placement };
+    const sessionId = described?.session?.sessionId;
+    return {
+      status: "read",
+      placement: described?.session?.placement,
+      ...(typeof sessionId === "string" && sessionId.trim() ? { sessionId } : {}),
+    };
   } catch (error) {
     if (!isAmbiguousDispatchError(error)) {
       return {
@@ -72,31 +77,17 @@ async function readPlacement(
   }
 }
 
-function placementEnvironmentId(placement: SessionPlacement | undefined): string | undefined {
-  if (!placement || !("environmentId" in placement)) {
-    return undefined;
-  }
-  const environmentId = placement.environmentId;
-  return typeof environmentId === "string" && environmentId.trim() ? environmentId : undefined;
-}
-
-async function cancelActivePlacement(
+async function reclaimSessionPlacement(
   client: Pick<GatewayBrowserClient, "request">,
-  params: { key: string; agentId: string; environmentId: unknown; abortRun: boolean },
+  params: { key: string; agentId: string; abortRun: boolean },
 ): Promise<string | undefined> {
   if (params.abortRun) {
-    // Stop accepted inference first. Destroying the worker is the hard safety
-    // boundary when the abort response is lost or the run has not registered yet.
     await client
       .request("sessions.abort", { key: params.key, agentId: params.agentId })
       .catch(() => undefined);
   }
-  const environmentId = params.environmentId;
-  if (typeof environmentId !== "string" || !environmentId.trim()) {
-    return "cloud worker cleanup lost its environment identity";
-  }
   try {
-    await client.request("environments.destroy", { environmentId });
+    await client.request("sessions.reclaim", { key: params.key, agentId: params.agentId });
     return undefined;
   } catch (error) {
     return formatUiError(error);
@@ -114,7 +105,6 @@ async function resolveActivePlacement(
   isCurrent: () => boolean,
 ): Promise<PlacementResolution> {
   let next = params.initial ? ({ status: "read", placement: params.initial } as const) : undefined;
-  let lastKnownEnvironmentId = placementEnvironmentId(params.initial);
   let lookupFailures = 0;
   let emptyPlacements = 0;
   for (let attempt = 0; attempt < DISPATCH_RECONCILE_ATTEMPTS; attempt += 1) {
@@ -133,31 +123,22 @@ async function resolveActivePlacement(
         if (!params.cleanupOnCancellation && submissionCancelled) {
           return { status: "interrupted" };
         }
-        if (lastKnownEnvironmentId) {
-          // The last successful placement read still proves worker ownership.
-          // Destroy it before returning, or a lookup outage can orphan paid capacity.
-          const cleanupError = await cancelActivePlacement(client, {
-            key: params.key,
-            agentId: params.agentId,
-            environmentId: lastKnownEnvironmentId,
-            abortRun: false,
-          });
-          if (submissionCancelled) {
-            return cleanupError
-              ? { status: "cleanup-rejected", error: cleanupError }
-              : { status: "cancelled" };
-          }
-          const placementError = "cloud worker placement could not be verified";
-          return {
-            status: "cleanup-rejected",
-            error: cleanupError
-              ? `${placementError}; cleanup failed: ${cleanupError}`
-              : placementError,
-          };
+        const cleanupError = await reclaimSessionPlacement(client, {
+          key: params.key,
+          agentId: params.agentId,
+          abortRun: false,
+        });
+        if (submissionCancelled) {
+          return cleanupError
+            ? { status: "cleanup-rejected", error: cleanupError }
+            : { status: "cancelled" };
         }
+        const placementError = "cloud worker placement could not be verified";
         return {
           status: "cleanup-rejected",
-          error: "cloud worker placement could not be verified",
+          error: cleanupError
+            ? `${placementError}; cleanup failed: ${cleanupError}`
+            : placementError,
         };
       }
       await new Promise<void>((resolve) => {
@@ -168,12 +149,6 @@ async function resolveActivePlacement(
     lookupFailures = 0;
     if (result.status === "read") {
       const placement = result.placement;
-      if (placement) {
-        const environmentId = placementEnvironmentId(placement);
-        if (environmentId) {
-          lastKnownEnvironmentId = environmentId;
-        }
-      }
       if (!placement) {
         emptyPlacements += 1;
         if (emptyPlacements >= EMPTY_PLACEMENT_LIMIT) {
@@ -189,37 +164,21 @@ async function resolveActivePlacement(
         if (!params.cleanupOnCancellation) {
           return { status: "interrupted" };
         }
-        const cleanupEnvironmentId = placementEnvironmentId(placement) ?? lastKnownEnvironmentId;
-        if (cleanupEnvironmentId) {
-          const cleanupError = await cancelActivePlacement(client, {
-            key: params.key,
-            agentId: params.agentId,
-            environmentId: cleanupEnvironmentId,
-            abortRun: false,
-          });
-          return cleanupError
-            ? { status: "cleanup-rejected", error: cleanupError }
-            : { status: "cancelled" };
-        }
-        if (placement?.state === "active") {
-          return {
-            status: "cleanup-rejected",
-            error: "cloud worker cleanup lost its environment identity",
-          };
-        }
-        if (placement && !PENDING_PLACEMENT_STATES.has(placement.state)) {
-          return { status: "cancelled" };
-        }
+        const cleanupError = await reclaimSessionPlacement(client, {
+          key: params.key,
+          agentId: params.agentId,
+          abortRun: false,
+        });
+        return cleanupError
+          ? { status: "cleanup-rejected", error: cleanupError }
+          : { status: "cancelled" };
       } else if (placement?.state === "active") {
         return { status: "active", placement };
       } else if (placement && !PENDING_PLACEMENT_STATES.has(placement.state)) {
-        if (lastKnownEnvironmentId) {
-          // A terminal provisioning failure may still own an allocated worker.
-          // Tear it down before the draft session and its recovery record vanish.
-          const cleanupError = await cancelActivePlacement(client, {
+        if (placement.state === "failed") {
+          const cleanupError = await reclaimSessionPlacement(client, {
             key: params.key,
             agentId: params.agentId,
-            environmentId: lastKnownEnvironmentId,
             abortRun: false,
           });
           if (cleanupError) {
@@ -235,6 +194,16 @@ async function resolveActivePlacement(
   }
   if (!params.cleanupOnCancellation && !isCurrent()) {
     return { status: "interrupted" };
+  }
+  if (!isCurrent()) {
+    const cleanupError = await reclaimSessionPlacement(client, {
+      key: params.key,
+      agentId: params.agentId,
+      abortRun: false,
+    });
+    return cleanupError
+      ? { status: "cleanup-rejected", error: cleanupError }
+      : { status: "cancelled" };
   }
   return {
     status: "cleanup-rejected",
@@ -252,11 +221,61 @@ export async function deleteCloudDraftSession(
   if (!client) {
     return "gateway unavailable during draft cleanup";
   }
-  try {
-    await client.request("sessions.delete", { key, agentId, deleteTranscript: true });
+  const existing = await readPlacement(client, key);
+  if (existing.status === "missing") {
     return undefined;
+  }
+  if (existing.status === "rejected") {
+    return existing.error;
+  }
+  if (existing.status === "unavailable") {
+    return "cloud draft session could not be verified";
+  }
+  if (!existing.sessionId) {
+    return "cloud draft session identity is unavailable";
+  }
+  return archiveAndDeleteCloudDraft(client, { key, agentId, sessionId: existing.sessionId });
+}
+
+async function archiveAndDeleteCloudDraft(
+  client: Pick<GatewayBrowserClient, "request">,
+  params: { key: string; agentId: string; sessionId: string },
+): Promise<string | undefined> {
+  try {
+    await client.request("sessions.patch", {
+      key: params.key,
+      agentId: params.agentId,
+      archived: true,
+      expectedSessionId: params.sessionId,
+    });
   } catch (error) {
     return formatUiError(error);
+  }
+  try {
+    const deleted = await client.request<{ deleted?: boolean }>("sessions.delete", {
+      key: params.key,
+      agentId: params.agentId,
+      deleteTranscript: true,
+      expectedSessionId: params.sessionId,
+      archivedOnly: true,
+    });
+    if (deleted.deleted !== true) {
+      throw new Error("cloud draft session was not deleted");
+    }
+    return undefined;
+  } catch (error) {
+    const deleteError = formatUiError(error);
+    try {
+      await client.request("sessions.patch", {
+        key: params.key,
+        agentId: params.agentId,
+        archived: false,
+        expectedSessionId: params.sessionId,
+      });
+    } catch (restoreError) {
+      return `${deleteError}; restoring the cloud draft failed: ${formatUiError(restoreError)}`;
+    }
+    return deleteError;
   }
 }
 
@@ -279,23 +298,15 @@ export async function deleteRecoveredCloudDraftSession(
     return "cloud worker placement could not be verified";
   }
   if (existing.placement) {
-    // Recovery can resume after dispatch. Destroy that placement before its
-    // durable session identity is removed, or the worker becomes untrackable.
-    const resolution = await resolveActivePlacement(
-      client,
-      { key, agentId, initial: existing.placement, cleanupOnCancellation: true },
-      () => false,
-    );
-    if (resolution.status === "cleanup-rejected") {
-      return resolution.error;
-    }
-    if (resolution.status === "active") {
-      return "cloud worker cleanup did not cancel its active placement";
+    const cleanupError = await reclaimSessionPlacement(client, { key, agentId, abortRun: false });
+    if (cleanupError) {
+      return cleanupError;
     }
   }
-  // sessions.delete shares the server lifecycle barrier that starts dispatch.
-  // If placement is still invisible, deletion wins first or observes it under that lock.
-  return deleteCloudDraftSession(client, key, agentId);
+  if (!existing.sessionId) {
+    return "cloud draft session identity is unavailable";
+  }
+  return archiveAndDeleteCloudDraft(client, { key, agentId, sessionId: existing.sessionId });
 }
 
 export async function startCloudInitialTurn(
@@ -395,15 +406,13 @@ export async function startCloudInitialTurn(
       error: dispatchError || (state ? `cloud worker placement became ${state}` : ""),
     };
   }
-  const placement = resolution.placement;
   if (!isCurrent()) {
     if (!cleanupOnCancellation) {
       return { status: "interrupted" };
     }
-    const cleanupError = await cancelActivePlacement(client, {
+    const cleanupError = await reclaimSessionPlacement(client, {
       key: params.key,
       agentId: params.agentId,
-      environmentId: placementEnvironmentId(placement),
       abortRun: false,
     });
     if (cleanupError) {
@@ -413,10 +422,9 @@ export async function startCloudInitialTurn(
   }
   const messageId = params.messageId ?? generateUUID();
   if (!beforeSend()) {
-    const cleanupError = await cancelActivePlacement(client, {
+    const cleanupError = await reclaimSessionPlacement(client, {
       key: params.key,
       agentId: params.agentId,
-      environmentId: placementEnvironmentId(placement),
       abortRun: false,
     });
     return cleanupError
@@ -435,10 +443,9 @@ export async function startCloudInitialTurn(
       if (!cleanupOnCancellation) {
         return { status: "interrupted" };
       }
-      const cleanupError = await cancelActivePlacement(client, {
+      const cleanupError = await reclaimSessionPlacement(client, {
         key: params.key,
         agentId: params.agentId,
-        environmentId: placementEnvironmentId(placement),
         abortRun: true,
       });
       return cleanupError
@@ -458,10 +465,9 @@ export async function startCloudInitialTurn(
       if (!cleanupOnCancellation) {
         return { status: "interrupted" };
       }
-      const cleanupError = await cancelActivePlacement(client, {
+      const cleanupError = await reclaimSessionPlacement(client, {
         key: params.key,
         agentId: params.agentId,
-        environmentId: placementEnvironmentId(placement),
         abortRun: true,
       });
       return cleanupError
@@ -469,10 +475,9 @@ export async function startCloudInitialTurn(
         : { status: "cancelled" };
     }
     if (!isAmbiguousDispatchError(error)) {
-      const cleanupError = await cancelActivePlacement(client, {
+      const cleanupError = await reclaimSessionPlacement(client, {
         key: params.key,
         agentId: params.agentId,
-        environmentId: placementEnvironmentId(placement),
         abortRun: false,
       });
       return cleanupError

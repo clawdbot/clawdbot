@@ -13,6 +13,7 @@ import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import { type FetchLike, fetchWithRuntimeDispatcher, saveRemoteMedia } from "./media.runtime.js";
+import { isGovSlackClient } from "./slack-client-kind.js";
 import { logVerbose } from "./thread.runtime.js";
 export type { SlackMediaResult } from "./media-types.js";
 export {
@@ -20,22 +21,6 @@ export {
   resolveSlackThreadHistory,
   resolveSlackThreadStarter,
 } from "./thread.js";
-
-function isGovSlackClient(client?: SlackWebClient): boolean {
-  if (!client?.slackApiUrl) {
-    return false;
-  }
-  try {
-    const apiUrl = new URL(client.slackApiUrl);
-    return (
-      apiUrl.protocol === "https:" &&
-      !apiUrl.port &&
-      normalizeHostname(apiUrl.hostname) === "slack-gov.com"
-    );
-  } catch {
-    return false;
-  }
-}
 
 function isSlackHostname(hostname: string, govSlack: boolean): boolean {
   const normalized = normalizeHostname(hostname);

@@ -6,6 +6,7 @@
  */
 import { sleepWithAbort } from "@openclaw/retry";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { GatewayDrainingError } from "../../process/gateway-work-admission.js";
 import {
   createIngressDrainOwnerId,
   deregisterLiveIngressDrainInstance,
@@ -319,6 +320,12 @@ export function createChannelIngressDrain<
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     err: unknown,
   ) => {
+    if (err instanceof GatewayDrainingError) {
+      // Root dispatch closes before durable transport admission during restart.
+      // Preserve the row for the successor without spending its failure budget.
+      await releaseClaim(claim, { recordAttempt: false });
+      return;
+    }
     const disposition = resolveIngressFailureDisposition({
       err,
       event: claim,

@@ -131,6 +131,7 @@ describe("buildChannelInboundEventContext", () => {
         label: "Room One",
         spaceId: "workspace",
         threadId: "thread-1",
+        avatar: "/media/inbound/conversation-avatar.png",
       },
       route: {
         agentId: "main",
@@ -269,6 +270,7 @@ describe("buildChannelInboundEventContext", () => {
       },
       MessageThreadId: "thread-1",
       NativeChannelId: "native-room-1",
+      ConversationAvatar: "/media/inbound/conversation-avatar.png",
       OriginatingChannel: "test",
       OriginatingTo: "test:room:room-1",
       ThreadStarterBody: "thread starter",

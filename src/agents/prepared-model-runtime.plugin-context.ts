@@ -1,9 +1,6 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import {
-  projectPluginMetadataSnapshotWorkspace,
-  resolvePluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -32,9 +29,10 @@ function preparePluginLoadContext(
   registry: PluginRegistry | undefined,
   metadataSnapshot: PluginMetadataSnapshot,
 ): PluginRuntimeLoadContext & { metadataSnapshot: PluginMetadataSnapshot } {
-  const { config, workspaceDir } = input;
-  // The prepared owner already resolved metadata for this exact config/env/workspace tuple.
-  // Missing discovery facts stay empty here instead of reopening cold channel discovery.
+  const { config } = input;
+  const workspaceDir = metadataSnapshot.workspaceDir ?? input.workspaceDir;
+  // The prepared owner already selected the exact metadata generation for this runtime.
+  // Missing discovery facts stay empty here instead of reopening cold plugin discovery.
   const preparedMetadataSnapshot = metadataSnapshot.discovery
     ? metadataSnapshot
     : { ...metadataSnapshot, discovery: emptyPluginDiscovery };
@@ -61,25 +59,23 @@ export function prepareOwnedPluginLoadContext(
   input: PreparedModelRuntimeInput,
   env: NodeJS.ProcessEnv,
   registry: PluginRegistry | undefined,
+  preparedMetadataSnapshot?: PluginMetadataSnapshot,
 ): PluginMetadataSnapshot {
-  const resolvedMetadataSnapshot = resolvePluginMetadataSnapshot({
+  const metadataSnapshot = preparedMetadataSnapshot ?? resolveColdMetadataSnapshot(input, env);
+  preparePluginLoadContext(input, env, registry, metadataSnapshot);
+  return metadataSnapshot;
+}
+
+function resolveColdMetadataSnapshot(
+  input: PreparedModelRuntimeInput,
+  env: NodeJS.ProcessEnv,
+): PluginMetadataSnapshot {
+  const resolvedMetadataSnapshot = loadPluginMetadataSnapshot({
     config: input.config,
     env,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    ...(input.workspacePluginRootPresent === undefined
-      ? {}
-      : { workspacePluginRootPresent: input.workspacePluginRootPresent }),
   });
-  const metadataSnapshot = input.workspaceDir
-    ? projectPluginMetadataSnapshotWorkspace({
-        snapshot: resolvedMetadataSnapshot,
-        config: input.config,
-        env,
-        workspaceDir: input.workspaceDir,
-      })
-    : resolvedMetadataSnapshot;
-  preparePluginLoadContext(input, env, registry, metadataSnapshot);
-  return metadataSnapshot;
+  return resolvedMetadataSnapshot;
 }
 
 /** Reads plugin facts carried by a lifecycle-owned prepared runtime snapshot. */

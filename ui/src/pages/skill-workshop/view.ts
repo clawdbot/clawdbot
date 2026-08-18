@@ -14,6 +14,7 @@ import "../../styles/skill-workshop.css";
 import {
   filterSkillWorkshopProposals,
   type SkillWorkshopActionNotice,
+  type SkillWorkshopAppliedDiffMode,
   type SkillWorkshopAppliedSkill,
   type SkillWorkshopEvaluation,
   type SkillWorkshopEvaluationFinding,
@@ -21,7 +22,13 @@ import {
   type SkillWorkshopProposal,
   type SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
-import { renderLazyAppliedHistory, resolveAppliedHistory } from "./applied-history.ts";
+import {
+  renderLazyAppliedHistory,
+  renderLazyAppliedRevisionDiff,
+  resolveAppliedBodyView,
+  resolveAppliedHistory,
+  type SkillWorkshopBodyView,
+} from "./applied-history.ts";
 import { renderBoardEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
 import { renderSkillWorkshopHistoryScan } from "./history-scan.ts";
 import { renderSkillWorkshopProposalList } from "./proposal-list.ts";
@@ -309,6 +316,53 @@ function renderLifecycleTabs(props: SkillWorkshopProps) {
   `;
 }
 
+function renderBodyModeButton(
+  props: SkillWorkshopProps,
+  mode: SkillWorkshopAppliedDiffMode,
+  label: string,
+) {
+  const active = props.appliedDiffMode === mode;
+  return html`
+    <button
+      class="sw-body-mode__button ${active ? "is-active" : ""}"
+      aria-pressed=${active ? "true" : "false"}
+      @click=${() => props.onAppliedDiffModeChange(mode)}
+    >
+      ${label}
+    </button>
+  `;
+}
+
+function renderBodyModeToggle(props: SkillWorkshopProps) {
+  return html`
+    <div class="sw-body-mode" role="group" aria-label=${t("skillWorkshop.diff.viewLabel")}>
+      ${renderBodyModeButton(props, "changes", t("skillWorkshop.diff.changes"))}
+      ${renderBodyModeButton(props, "full", t("skillWorkshop.diff.fullBody"))}
+    </div>
+  `;
+}
+
+function renderRevisionBody(view: SkillWorkshopBodyView, proposal: SkillWorkshopProposal) {
+  if (view.kind === "diff") {
+    return renderLazyAppliedRevisionDiff(view.previous.body, proposal.body);
+  }
+  if (view.kind === "loadingPrevious") {
+    return html`<p class="sw-muted" aria-busy="true">
+      ${t("skillWorkshop.diff.loadingPrevious")}
+    </p>`;
+  }
+  if (view.kind === "previousUnavailable") {
+    return html`
+      <p class="sw-muted">${t("skillWorkshop.diff.previousUnavailable")}</p>
+      ${renderProposalBody(proposal.body)}
+    `;
+  }
+  if (view.kind === "tooLarge") {
+    return html`<p class="sw-muted">${t("skillWorkshop.diff.tooLarge")}</p>`;
+  }
+  return renderProposalBody(proposal.body);
+}
+
 function renderDetail(
   props: SkillWorkshopProps,
   proposal: SkillWorkshopProposal,
@@ -319,8 +373,12 @@ function renderDetail(
   const createdLabel = editedAt
     ? t("skillWorkshop.detail.edited", { time: formatRelative(editedAt) })
     : t("skillWorkshop.detail.created", { time: formatRelative(proposal.createdAt) });
-  const detailLoading = props.inspectingKey === proposal.key && !proposal.body;
+  const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
   const firstSupportFile = proposal.supportFiles[0];
+  const previousRevision =
+    appliedSkill?.revisions.find(({ proposal: revision }) => revision.key === proposal.key)
+      ?.previous ?? null;
+  const bodyView = resolveAppliedBodyView(props, proposal, previousRevision);
 
   return html`
     <div class="sw-detail">
@@ -359,10 +417,13 @@ function renderDetail(
 
       <div class="sw-detail__body">
         <div class="sw-body-card">
-          <h1>${proposal.slug}</h1>
+          <div class="sw-body-card__head">
+            <h1>${proposal.slug}</h1>
+            ${previousRevision ? renderBodyModeToggle(props) : nothing}
+          </div>
           ${detailLoading
             ? html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
-            : renderProposalBody(proposal.body)}
+            : renderRevisionBody(bodyView, proposal)}
         </div>
 
         ${appliedSkill ? renderLazyAppliedHistory(props, appliedSkill) : nothing}

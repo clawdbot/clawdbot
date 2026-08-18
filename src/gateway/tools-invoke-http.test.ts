@@ -9,7 +9,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
-import { setFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
   agentTerminalOwner,
@@ -1219,19 +1219,22 @@ describe("tools.invoke Gateway RPC", () => {
     if (!oldSession.ok) {
       throw new Error("expected old terminal session");
     }
-    const clearContext = setFallbackGatewayContext({
+    const context = {
       terminalSessions: manager,
       isTerminalEnabled: () => true,
       resolveTerminalLaunchPolicy: () => ({
         ok: true,
         plan: { agentId: "main", cwd: "/tmp", shell: "/bin/sh", args: [] },
       }),
-    } as never);
+    } as never;
 
     try {
-      const call = await invokeToolsRpc(
-        { name: "terminal", args: { action: "open" }, sessionKey: "main" },
-        ["operator.admin"],
+      const call = await withPluginRuntimeGatewayRequestScope(
+        { context, isWebchatConnect: () => false },
+        () =>
+          invokeToolsRpc({ name: "terminal", args: { action: "open" }, sessionKey: "main" }, [
+            "operator.admin",
+          ]),
       );
       expect(call?.[1]?.ok).toBe(true);
       expect(lastCreateOpenClawToolsContext?.sessionId).toBe("S2");
@@ -1252,9 +1255,12 @@ describe("tools.invoke Gateway RPC", () => {
       expect(manager.writeAgent(currentOwner, openedSessionId, "current")).toEqual({ ok: true });
 
       sessionEntries.delete(sessionKey);
-      const missing = await invokeToolsRpc(
-        { name: "terminal", args: { action: "open" }, sessionKey: "main" },
-        ["operator.admin"],
+      const missing = await withPluginRuntimeGatewayRequestScope(
+        { context, isWebchatConnect: () => false },
+        () =>
+          invokeToolsRpc({ name: "terminal", args: { action: "open" }, sessionKey: "main" }, [
+            "operator.admin",
+          ]),
       );
       expect(missing?.[1]).toMatchObject({
         ok: false,
@@ -1262,7 +1268,6 @@ describe("tools.invoke Gateway RPC", () => {
       });
       expect(lastCreateOpenClawToolsContext?.sessionId).toBeUndefined();
     } finally {
-      clearContext();
       manager.disposeAll();
     }
   });

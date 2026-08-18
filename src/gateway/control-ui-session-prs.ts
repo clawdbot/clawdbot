@@ -136,7 +136,7 @@ async function resolveSessionPullRequestGitContext(
   if (!root) {
     return null;
   }
-  return resolveCachedGitContext(root, deps);
+  return resolveCachedGitContext(root, deps, params.refresh === true);
 }
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base
@@ -269,6 +269,7 @@ async function resolveSessionBranch(
   context: SessionPullRequestGitContext,
   mergedHeads: readonly MergedPullHead[],
   deps: LoadSessionPullRequestDeps,
+  refresh: boolean,
 ): Promise<ControlUiSessionBranch | undefined> {
   const root = context.root;
   if (!root) {
@@ -303,6 +304,7 @@ async function resolveSessionBranch(
       // No createUrl until GitHub can compare, but local changes still get a row.
       return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
     },
+    refresh,
   );
   if (!facts) {
     return undefined;
@@ -612,14 +614,14 @@ export async function loadControlUiSessionPullRequests(
   if (!context) {
     return { pullRequests: [], rateLimited: false };
   }
-  // Local Git uses a separate short TTL; refresh only forces the GitHub layer.
-  // Branch resolution follows the snapshot because merged head SHAs affect it.
+  // Normal polling keeps the short local-Git TTL; forced structural refreshes
+  // must observe the replacement checkout before publishing its branch facts.
   const { mergedHeads, ...snapshot } = await cachedBranchPullRequests(
     context,
     deps,
     params.refresh === true,
   );
-  const branch = await resolveSessionBranch(context, mergedHeads, deps);
+  const branch = await resolveSessionBranch(context, mergedHeads, deps, params.refresh === true);
   return branch ? { ...snapshot, branch } : snapshot;
 }
 

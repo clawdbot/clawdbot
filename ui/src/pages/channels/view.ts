@@ -102,7 +102,10 @@ export function renderChannels(props: ChannelsProps) {
           description: t("channels.hub.addSubtitle"),
         },
         html`
-          ${available.map((key) => renderAvailableRow(key, props))} ${renderBrowseAllRow(props)}
+          ${!props.canAdmin
+            ? html`<div class="callout info" role="note">${t("channels.hub.adminRequired")}</div>`
+            : html`${available.map((key) => renderAvailableRow(key, props))}
+              ${renderBrowseAllRow(props)}`}
         `,
       )}
     `)}
@@ -116,24 +119,26 @@ export function renderChannels(props: ChannelsProps) {
           onSetup: () => props.onStartSetup(selected),
         })
       : nothing}
-    ${renderChannelWizard({
-      wizard: props.wizard,
-      channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
-      multiselectValues: props.wizardMultiselect,
-      onToggleMultiselect: props.onWizardToggleMultiselect,
-      textValue: props.wizardTextValue,
-      secretVisible: props.wizardSecretVisible,
-      onTextInput: props.onWizardTextInput,
-      onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
-      onAnswer: props.onWizardAnswer,
-      onClose: props.onWizardClose,
-      whatsappQrDataUrl: props.whatsappQrDataUrl,
-      whatsappMessage: props.whatsappMessage,
-      whatsappConnected: props.whatsappConnected,
-      whatsappBusy: props.whatsappBusy,
-      onWhatsAppStart: props.onWhatsAppStart,
-      onWhatsAppWait: props.onWhatsAppWait,
-    })}
+    ${props.canAdmin
+      ? renderChannelWizard({
+          wizard: props.wizard,
+          channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
+          multiselectValues: props.wizardMultiselect,
+          onToggleMultiselect: props.onWizardToggleMultiselect,
+          textValue: props.wizardTextValue,
+          secretVisible: props.wizardSecretVisible,
+          onTextInput: props.onWizardTextInput,
+          onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
+          onAnswer: props.onWizardAnswer,
+          onClose: props.onWizardClose,
+          whatsappQrDataUrl: props.whatsappQrDataUrl,
+          whatsappMessage: props.whatsappMessage,
+          whatsappConnected: props.whatsappConnected,
+          whatsappBusy: props.whatsappBusy,
+          onWhatsAppStart: props.onWhatsAppStart,
+          onWhatsAppWait: props.onWhatsAppWait,
+        })
+      : nothing}
     ${renderChannelPairingPrompt(props)}
   `;
 }

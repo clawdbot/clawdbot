@@ -9,6 +9,7 @@ import {
   waitForFixtureLogEntry,
   type FixtureLogEntry,
 } from "./tui-pty-harness-assertion-test-support.js";
+import { TUI_PTY_RECONNECT_FIXTURE } from "./tui-pty-reconnect-fixture-test-support.js";
 import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-support.js";
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
@@ -98,8 +99,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         ...(thinkingLabel ? [{ id: "fixture-thinking", label: thinkingLabel }] : []),
         ...(safeThinkingLabel ? [{ id: "fixture-thinking-safe", label: safeThinkingLabel }] : []),
       ];
-      const disconnectReason = process.env.OPENCLAW_TUI_PTY_DISCONNECT_REASON;
-      let disconnectPending = disconnectReason !== undefined;
+      ${TUI_PTY_RECONNECT_FIXTURE.variables}
       const enablePickerFixture = process.env.OPENCLAW_TUI_PTY_PICKER_FIXTURE === "1";
       const pickerModelValue = process.env.OPENCLAW_TUI_PTY_PICKER_MODEL_VALUE ?? "fixture-provider/fixture-model-2";
       const pickerModelName = process.env.OPENCLAW_TUI_PTY_PICKER_MODEL_NAME ?? "Fixture 2";
@@ -194,14 +194,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         onDisconnected?: TuiBackend["onDisconnected"];
         onGap?: TuiBackend["onGap"];
 
-        emitDisconnect() {
-          if (!disconnectPending || disconnectReason === undefined) {
-            return;
-          }
-          disconnectPending = false;
-          record("disconnect");
-          this.onDisconnected?.(disconnectReason);
-        }
+        ${TUI_PTY_RECONNECT_FIXTURE.disconnect}
 
         start() {
           if (pendingPluginApproval) {
@@ -224,6 +217,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
+          ${TUI_PTY_RECONNECT_FIXTURE.sendChat}
           if (opts.message.startsWith("live reply dedupe proof: ")) {
             const reply = opts.message.endsWith("first") ? "TUI_LIVE_FIRST" : "TUI_LIVE_SECOND";
             const userSequence = ++liveReplySequence;
@@ -463,6 +457,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           record("loadHistory", { sessionKey });
           const gapHistory = loadGapHistory(sessionKey);
           if (gapHistory) { return gapHistory; }
+          ${TUI_PTY_RECONNECT_FIXTURE.loadHistory}
           if (liveReplyHistory.length > 0) {
             return { messages: [...liveReplyHistory] };
           }
@@ -585,6 +580,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
 
         async getGatewayStatus() {
           record("getGatewayStatus");
+          this.reconnectSessionSubscription();
           this.emitDisconnect();
           return gatewayStatus;
         }

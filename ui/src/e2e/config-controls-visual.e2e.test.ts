@@ -235,6 +235,7 @@ suite.define(() => {
               "chat.startup",
               "config.apply",
               "config.patch",
+              "config.schema",
               "config.set",
             ],
             methodResponses: {

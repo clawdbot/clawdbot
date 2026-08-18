@@ -83,6 +83,7 @@ export function createPluginApiFactory(
     registerReload,
     registerNodeHostCommand,
     registerNodeInvokePolicy,
+    registerWidgetPresenter,
     registerSecurityAuditCollector,
     registerInteractiveHandler,
     registerConversationBindingResolvedHandler,
@@ -95,6 +96,7 @@ export function createPluginApiFactory(
     registerTrustedToolPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
+    registerBoardWidgetContentKind,
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
     registerSessionSchedulerJob,
@@ -222,6 +224,7 @@ export function createPluginApiFactory(
               registerNodeHostCommand: (command) => registerNodeHostCommand(record, command),
               registerNodeInvokePolicy: (policy) =>
                 registerNodeInvokePolicy(record, policy, params.pluginConfig),
+              registerWidgetPresenter: (presenter) => registerWidgetPresenter(record, presenter),
               registerSecurityAuditCollector: (collector) =>
                 registerSecurityAuditCollector(record, collector),
               registerInteractiveHandler: (registration) =>
@@ -265,6 +268,8 @@ export function createPluginApiFactory(
               registerToolMetadata: (metadata) => registerToolMetadata(record, metadata),
               registerControlUiDescriptor: (descriptor) =>
                 registerControlUiDescriptor(record, descriptor),
+              registerBoardWidgetContentKind: (definition) =>
+                registerBoardWidgetContentKind(record, definition),
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),

@@ -70,6 +70,12 @@ export const DESKTOP_PANEL_ELEMENT = {
   loadModule: () => import("../components/desktop/desktop-panel.ts"),
 } satisfies OptionalCustomElement;
 
+export const DASHBOARD_DOCUMENT_ELEMENT = {
+  tagName: "openclaw-board-document",
+  label: "dashboard document",
+  loadModule: () => import("../components/board/board-document.ts"),
+} satisfies OptionalCustomElement;
+
 export const CUSTODIAN_PANEL_ELEMENT = {
   tagName: "openclaw-custodian-panel",
   label: "custodian panel",

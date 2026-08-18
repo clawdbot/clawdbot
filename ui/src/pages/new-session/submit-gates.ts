@@ -128,8 +128,7 @@ export function resolveNewSessionSubmitBlock(
       host.cloudProfileForSubmission() &&
       host.pendingCloud.agentId &&
       host.pendingCloud.gatewayUrl === connection.connection.gatewayUrl &&
-      host.pendingCloud.recoveryScope === client.recoveryScope &&
-      place.isAdmin(),
+      host.pendingCloud.recoveryScope === client.recoveryScope,
     );
     // Recovery retries own the remaining draft state; the place gates
     // below intentionally do not apply to a restored cloud draft.
@@ -149,8 +148,7 @@ export function resolveNewSessionSubmitBlock(
   const cloudProfileId = host.cloudProfileForSubmission();
   if (
     cloudProfileId &&
-    (!place.isAdmin() ||
-      !client.recoveryScope ||
+    (!client.recoveryScope ||
       !client.recoveryScopeReady ||
       !gateway.cloudProfilesReady ||
       gateway.cloudProfilesPending ||

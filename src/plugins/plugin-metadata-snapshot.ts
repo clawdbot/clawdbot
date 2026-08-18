@@ -4,7 +4,10 @@ import {
   getActiveDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+} from "./current-plugin-metadata-snapshot.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -335,7 +338,7 @@ export function completePluginMetadataSnapshot(params: {
 }
 
 /** Reuses process-stable plugin facts for a workspace proven to have no plugin root. */
-export function projectPluginMetadataSnapshotWorkspace(params: {
+function projectPluginMetadataSnapshotWorkspace(params: {
   snapshot: PluginMetadataSnapshot;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -418,7 +421,7 @@ export function resolvePluginMetadataSnapshot(
       }
       return loadPluginMetadataSnapshot(params);
     }
-    if (!params.index) {
+    if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
       return current;
     }
     if (

@@ -28,7 +28,7 @@ import {
   wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
-import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
+import { validateNativeA2UIJsonl } from "./a2ui-jsonl.js";
 import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
 
@@ -302,7 +302,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");
           }
-          validateSupportedA2UIJsonl(jsonl);
+          validateNativeA2UIJsonl(jsonl);
           const { node } = await invoke("canvas.a2ui.pushJSONL", { jsonl });
           return jsonResult({ ok: true, node });
         }
