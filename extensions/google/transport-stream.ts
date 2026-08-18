@@ -1130,39 +1130,54 @@ async function openGoogleSseAttempt(params: {
       ? createChildSignal(params.parentSignal, params.firstResponseTimeoutMs)
       : undefined;
   const signal = attemptSignal?.signal ?? params.parentSignal;
-  try {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
-      signal,
-    });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, params.errorPrefix);
-    }
-    await notifyGoogleTransportHttpResponse(params.model, params.options, response);
-    const chunks = parseGoogleSseChunks(response, signal);
-    const iterator = chunks[Symbol.asyncIterator]();
-    const first = await iterator.next();
-    attemptSignal?.clearDeadline();
-    if (first.done) {
-      return {
-        type: "ready",
-        chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
-      };
-    }
-    return {
-      type: "ready",
-      firstChunk: first.value,
-      chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
-    };
-  } catch (error) {
+  const handleTimedOperationError = (error: unknown): GoogleSseAttempt => {
     attemptSignal?.cleanup();
     if (attemptSignal?.timedOut() && !params.parentSignal?.aborted) {
       return { type: "timeout" };
     }
     throw error;
+  };
+  let response: Response;
+  try {
+    response = await params.guardedFetch(params.url, {
+      method: "POST",
+      headers: params.headers,
+      body: serializeGoogleRequest(params.request, params.videoSlots),
+      signal,
+    });
+  } catch (error) {
+    return handleTimedOperationError(error);
   }
+  if (!response.ok) {
+    attemptSignal?.cleanup();
+    throw await createProviderHttpError(response, params.errorPrefix);
+  }
+  try {
+    await notifyGoogleTransportHttpResponse(params.model, params.options, response);
+  } catch (error) {
+    attemptSignal?.cleanup();
+    throw error;
+  }
+  const chunks = parseGoogleSseChunks(response, signal);
+  const iterator = chunks[Symbol.asyncIterator]();
+  let first: IteratorResult<GoogleSseChunk>;
+  try {
+    first = await iterator.next();
+  } catch (error) {
+    return handleTimedOperationError(error);
+  }
+  attemptSignal?.clearDeadline();
+  if (first.done) {
+    return {
+      type: "ready",
+      chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
+    };
+  }
+  return {
+    type: "ready",
+    firstChunk: first.value,
+    chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
+  };
 }
 
 async function openGoogleSseChunks(params: {

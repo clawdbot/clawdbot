@@ -1443,6 +1443,37 @@ describe("google transport stream", () => {
     },
   );
 
+  it("does not retry when a slow provider acceptance callback rejects", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
+
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options: {
+        reasoning: "high",
+        onProviderAccepted: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          throw new Error("acceptance callback failed");
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance callback failed",
+    });
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(cancelCalled).toBe(true);
+  });
+
   it("keeps oversized-video shedding in the Gemini 3 retry payload", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock
