@@ -11,6 +11,7 @@ import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/co
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createChannelSetupTransaction } from "../flows/channel-setup.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
@@ -622,6 +623,7 @@ export async function runConfigureWizard(
     let didPersistConfig = false;
     let daemonSetupOutcome: DaemonSetupOutcome | undefined;
     let healthCheckOutcome: GatewayHealthCheckOutcome | undefined;
+    const channelSetup = createChannelSetupTransaction({ runtime });
 
     const persistPendingConfig = async () => {
       if (!hasPendingConfig) {
@@ -632,11 +634,14 @@ export async function runConfigureWizard(
         mode: metadataMode,
       });
 
-      nextConfig = await writeWizardConfigFile(nextConfig, {
-        mergeBase: mergeBaseConfig,
-        writeOptions: configWriteOwnership,
+      nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
+        const committedConfig = await writeWizardConfigFile(configToCommit, {
+          mergeBase: mergeBaseConfig,
+          writeOptions: configWriteOwnership,
+        });
+        mergeBaseConfig = structuredClone(committedConfig);
+        return committedConfig;
       });
-      mergeBaseConfig = structuredClone(nextConfig);
       hasPendingConfig = false;
       didPersistConfig = true;
       logConfigUpdated(runtime);
@@ -731,6 +736,7 @@ export async function runConfigureWizard(
           deferStatusUntilSelection: true,
           skipConfirm: true,
           skipStatusNote: true,
+          onPostWriteHook: channelSetup.onPostWriteHook,
         });
       } else {
         nextConfig = await removeChannelConfigWizard(nextConfig, runtime);

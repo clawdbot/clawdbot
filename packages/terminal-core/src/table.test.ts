@@ -2,8 +2,8 @@
 import path from "node:path";
 import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { visibleWidth } from "./ansi.js";
-import { resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
+import { stripAnsi, visibleWidth } from "./ansi.js";
+import { note, resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
 
 function mockProcessPlatform(platform: NodeJS.Platform): void {
@@ -808,6 +808,24 @@ describe("wrapNoteMessage", () => {
     expect(rendered).toContain(
       "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock",
     );
+  });
+
+  it("routes notes and wrapping through the selected output", () => {
+    const writes: string[] = [];
+    const output = {
+      columns: 120,
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    note("word ".repeat(18).trim(), "Wide note", output);
+
+    const rendered = stripAnsi(writes.join(""));
+    expect(rendered).toContain("word ".repeat(17).trim());
+    expect(stdoutWrite).not.toHaveBeenCalled();
   });
 
   it("coerces nullish and non-string note messages before wrapping", () => {

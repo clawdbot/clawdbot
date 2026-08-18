@@ -262,14 +262,14 @@ describe("agent command registration", () => {
     );
   });
 
-  it("runs agents add and computes hasFlags based on explicit options", async () => {
+  it("runs agents add and detects explicit automation options", async () => {
     await runCli(["agents", "add", "alpha"]);
     const [alphaOptions, alphaRuntime, alphaFlags] = commandCall(agentsAddCommandMock, 0);
     expect((alphaOptions as { name?: string }).name).toBe("alpha");
     expect((alphaOptions as { workspace?: string }).workspace).toBeUndefined();
     expect((alphaOptions as { bind?: string[] }).bind).toEqual([]);
     expect(alphaRuntime).toBe(runtime);
-    expect(alphaFlags).toEqual({ hasFlags: false, hasAutomationFlags: false });
+    expect(alphaFlags).toEqual({ hasAutomationFlags: false });
 
     await runCli([
       "agents",
@@ -291,10 +291,10 @@ describe("agent command registration", () => {
     expect((betaOptions as { nonInteractive?: boolean }).nonInteractive).toBe(true);
     expect((betaOptions as { json?: boolean }).json).toBe(true);
     expect(betaRuntime).toBe(runtime);
-    expect(betaFlags).toEqual({ hasFlags: true, hasAutomationFlags: true });
+    expect(betaFlags).toEqual({ hasAutomationFlags: true });
   });
 
-  it("keeps JSON-only agent creation non-interactive", async () => {
+  it("keeps JSON-only agent creation in wizard mode", async () => {
     await runCli(["agents", "add", "alpha", "--json"]);
 
     const [options, callRuntime, flags] = commandCall(agentsAddCommandMock);
@@ -302,7 +302,7 @@ describe("agent command registration", () => {
       expect.objectContaining({ name: "alpha", json: true, nonInteractive: false }),
     );
     expect(callRuntime).toBe(runtime);
-    expect(flags).toEqual({ hasFlags: true, hasAutomationFlags: false });
+    expect(flags).toEqual({ hasAutomationFlags: false });
   });
 
   it("runs agents list when root agents command is invoked", async () => {

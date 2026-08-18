@@ -21,7 +21,10 @@ import {
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import {
+  loadPersistedAuthProfileStore,
+  mergeAuthProfileStores,
+} from "../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
@@ -34,6 +37,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { createChannelSetupTransaction } from "../flows/channel-setup.js";
 import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
@@ -97,12 +101,12 @@ function formatSkippedOAuthProfilesMessage(
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
-  params?: { hasFlags?: boolean; hasAutomationFlags?: boolean },
+  params?: { hasAutomationFlags?: boolean },
 ) {
-  const hasFlags = params?.hasFlags === true;
-  const hasAutomationFlags = params?.hasAutomationFlags ?? hasFlags;
-  const nonInteractive = opts.nonInteractive === true || hasFlags;
-  if (!opts.nonInteractive && !hasAutomationFlags && !isTerminalInteractive()) {
+  const hasAutomationFlags = params?.hasAutomationFlags === true;
+  const nonInteractive = opts.nonInteractive === true || hasAutomationFlags;
+  const wizardOutput = opts.json ? process.stderr : process.stdout;
+  if (!nonInteractive && !isTerminalInteractive(wizardOutput)) {
     runtime.error(
       `Agent creation needs an interactive TTY. Use \`${formatCliCommand("openclaw agents add <id> --non-interactive --workspace <dir>")}\` for automation.`,
     );
@@ -216,7 +220,10 @@ export async function agentsAddCommand(
     return;
   }
 
-  const prompter = createClackPrompter();
+  const prompter = createClackPrompter(wizardOutput);
+  const wizardRuntime: RuntimeEnv = opts.json
+    ? { ...runtime, log: (...args) => runtime.error(...args) }
+    : runtime;
   try {
     await prompter.intro("Add OpenClaw agent");
     const name =
@@ -289,6 +296,7 @@ export async function agentsAddCommand(
       workspace: workspaceDir,
       agentDir,
     });
+    let finalizePortableAuthCopy: (() => Promise<void>) | undefined;
 
     const defaultAgentId = resolveDefaultAgentId(cfg);
     if (defaultAgentId !== agentId) {
@@ -310,6 +318,10 @@ export async function agentsAddCommand(
         const portable = sourceStore
           ? buildPortableAuthProfileStoreForAgentCopy(sourceStore)
           : undefined;
+        const skippedOAuthProfiles =
+          sourceStore && portable
+            ? hasOAuthProfiles(sourceStore, portable.skippedProfileIds)
+            : false;
         if (
           sourceStore &&
           portable &&
@@ -321,40 +333,50 @@ export async function agentsAddCommand(
             initialValue: false,
           });
           if (shouldCopy) {
-            await fs.mkdir(agentDir, { recursive: true });
-            saveAuthProfileStore(portable.store, agentDir, {
-              filterExternalAuthProfiles: false,
-              syncExternalCli: false,
-            });
-            const persistedDestStore = loadPersistedAuthProfileStore(agentDir);
-            const copiedCount = portable.copiedProfileIds.filter(
-              (profileId) => persistedDestStore?.profiles[profileId] !== undefined,
-            ).length;
-            const skippedOAuthProfiles =
-              hasOAuthProfiles(sourceStore, portable.skippedProfileIds) ||
-              portable.copiedProfileIds.some(
-                (profileId) =>
-                  sourceStore.profiles[profileId]?.type === "oauth" &&
-                  persistedDestStore?.profiles[profileId] === undefined,
-              );
-            const copiedText =
-              copiedCount > 0
-                ? `Copied ${copiedCount} portable auth profile${copiedCount === 1 ? "" : "s"} from "${defaultAgentId}".`
+            const portableStore = portable.store;
+            const copiedProfileIds = portable.copiedProfileIds;
+            const copiedOAuthProfileIds = copiedProfileIds.filter(
+              (profileId) => sourceStore.profiles[profileId]?.type === "oauth",
+            );
+            const sourceAgentId = defaultAgentId;
+            const sourceInheritedMain = sourceIsInheritedMain;
+            const destinationAgentDir = agentDir;
+            finalizePortableAuthCopy = async () => {
+              await fs.mkdir(destinationAgentDir, { recursive: true });
+              const destinationStore = loadPersistedAuthProfileStore(destinationAgentDir);
+              const storeToPersist = destinationStore
+                ? mergeAuthProfileStores(portableStore, destinationStore)
+                : portableStore;
+              saveAuthProfileStore(storeToPersist, destinationAgentDir, {
+                filterExternalAuthProfiles: false,
+                syncExternalCli: false,
+              });
+              const persisted = loadPersistedAuthProfileStore(destinationAgentDir);
+              const persistedIds = new Set(Object.keys(persisted?.profiles ?? {}));
+              const copiedCount = copiedProfileIds.filter((profileId) =>
+                persistedIds.has(profileId),
+              ).length;
+              const skippedOAuth =
+                skippedOAuthProfiles ||
+                copiedOAuthProfileIds.some((profileId) => !persistedIds.has(profileId));
+              const copied = copiedCount
+                ? `Copied ${copiedCount} portable auth profile${copiedCount === 1 ? "" : "s"} from "${sourceAgentId}".`
                 : "";
-            const skippedText = skippedOAuthProfiles
-              ? ` ${formatSkippedOAuthProfilesMessage(defaultAgentId, sourceIsInheritedMain)}`
-              : "";
-            await prompter.note(`${copiedText}${skippedText}`.trim(), "Auth profiles");
+              const skipped = skippedOAuth
+                ? ` ${formatSkippedOAuthProfilesMessage(sourceAgentId, sourceInheritedMain)}`
+                : "";
+              await prompter.note(`${copied}${skipped}`.trim(), "Auth profiles");
+            };
           }
-        } else if (
-          sourceStore &&
-          portable &&
-          hasOAuthProfiles(sourceStore, portable.skippedProfileIds)
-        ) {
-          await prompter.note(
-            formatSkippedOAuthProfilesMessage(defaultAgentId, sourceIsInheritedMain),
-            "Auth profiles",
-          );
+        } else if (skippedOAuthProfiles) {
+          const sourceAgentId = defaultAgentId;
+          const sourceInheritedMain = sourceIsInheritedMain;
+          finalizePortableAuthCopy = async () => {
+            await prompter.note(
+              formatSkippedOAuthProfilesMessage(sourceAgentId, sourceInheritedMain),
+              "Auth profiles",
+            );
+          };
         }
       }
     }
@@ -379,7 +401,7 @@ export async function agentsAddCommand(
           authChoice,
           config: nextConfig,
           prompter,
-          runtime,
+          runtime: wizardRuntime,
           agentDir,
           setDefaultModel: false,
           agentId,
@@ -404,9 +426,10 @@ export async function agentsAddCommand(
       validateCatalog: false,
     });
 
+    const channelSetup = createChannelSetupTransaction({ runtime: wizardRuntime });
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
-    nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+    nextConfig = await setupChannels(nextConfig, wizardRuntime, prompter, {
       allowIMessageInstall: true,
       allowSignalInstall: true,
       onSelection: (value) => {
@@ -416,6 +439,7 @@ export async function agentsAddCommand(
       onAccountId: (channel, accountId) => {
         channelAccountIds[channel] = accountId;
       },
+      onPostWriteHook: channelSetup.onPostWriteHook,
     });
 
     if (selection.length > 0) {
@@ -457,15 +481,17 @@ export async function agentsAddCommand(
 
     let payload: { agentId: string; name: string; workspace: string; agentDir: string };
     if (existingAgent) {
-      const committed = await commitConfigWithPendingPluginInstalls({
-        nextConfig,
-        ...(baseHash !== undefined ? { baseHash } : {}),
-      });
-      nextConfig = committed.config;
       const target = resolveOnboardingAgentTarget(nextConfig, agentId);
-      await ensureOnboardingAgentWorkspace(target, runtime, {
+      await ensureOnboardingAgentWorkspace(target, wizardRuntime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+      });
+      nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
+        const committed = await commitConfigWithPendingPluginInstalls({
+          nextConfig: configToCommit,
+          ...(baseHash !== undefined ? { baseHash } : {}),
+        });
+        return committed.config;
       });
       payload = {
         agentId: target.agentId,
@@ -496,8 +522,12 @@ export async function agentsAddCommand(
         workspace: created.workspace,
         agentDir: created.agentDir,
       };
+      await channelSetup.runPostWriteHooks(nextConfig);
     }
-    logConfigUpdated(runtime);
+    await finalizePortableAuthCopy?.();
+    if (!opts.json) {
+      logConfigUpdated(runtime);
+    }
     if (opts.json) {
       writeRuntimeJson(runtime, payload);
     }
