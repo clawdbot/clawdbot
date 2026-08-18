@@ -408,8 +408,7 @@
   cursor: var(--cursor-action);
 }
 
-:is(.chat-text, .chat-thinking)
-  :where(details > summary)::-webkit-details-marker {
+:is(.chat-text, .chat-thinking) :where(details > summary)::-webkit-details-marker {
   display: none;
 }
 
@@ -796,9 +795,7 @@
 
 /* The preview lines plus the code element's own 4px/8px/6px vertical box. */
 .code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-viewport {
-  max-height: calc(
-    var(--code-block-line-height) * var(--code-block-preview-lines) + 18px
-  );
+  max-height: calc(var(--code-block-line-height) * var(--code-block-preview-lines) + 18px);
   overflow-y: hidden;
 }
 

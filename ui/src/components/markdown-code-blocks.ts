@@ -45,12 +45,18 @@ for (const [language, definition] of Object.entries({
 }
 hljs.registerAliases("shell", { languageName: "bash" });
 
+function codeBlockRenderEnv(env: unknown): Partial<MarkdownRenderEnv> | undefined {
+  // SAFETY: markdown-it types renderer env as unknown; this internal renderer
+  // receives the normalized options object, or undefined from direct calls.
+  return env as Partial<MarkdownRenderEnv> | undefined;
+}
+
 function shouldRenderCodeBlockCopy(env: unknown): boolean {
-  return (env as Partial<MarkdownRenderEnv> | undefined)?.codeBlockChrome !== "none";
+  return codeBlockRenderEnv(env)?.codeBlockChrome !== "none";
 }
 
 function shouldRenderCodeBlockInteraction(env: unknown): boolean {
-  return (env as Partial<MarkdownRenderEnv> | undefined)?.codeBlockInteraction === "interactive";
+  return codeBlockRenderEnv(env)?.codeBlockInteraction === "interactive";
 }
 
 function encodeBlockArtCodeBlockCopyPayload(value: string): string {
