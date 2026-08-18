@@ -534,31 +534,20 @@ describe("session state events", () => {
     });
   });
 
-  it("registers the main watcher once only under dmScope main", () => {
+  it("registers one ambient main watcher for a distinct group session", () => {
     const database = createDatabaseOptions();
     expect(
       registerMainSessionGroupWatch(
-        { sessionKey: group, agentId: "main", dmScope: "main" },
+        { sessionKey: group, agentId: "main" },
         { ...database, now: 100 },
       ),
     ).toBe(true);
     expect(
       registerMainSessionGroupWatch(
-        { sessionKey: group, agentId: "main", dmScope: "main" },
+        { sessionKey: group, agentId: "main" },
         { ...database, now: 200 },
       ),
     ).toBe(true);
-    expect(
-      registerMainSessionGroupWatch(
-        {
-          sessionKey: "agent:main:slack:channel:room-2",
-          agentId: "main",
-          dmScope: "per-channel-peer",
-        },
-        database,
-      ),
-    ).toBe(false);
-
     const rows = openOpenClawStateDatabase(database)
       .db.prepare(
         `SELECT watcher_session_key, target_session_key, provenance, updated_at
@@ -595,37 +584,11 @@ describe("session state events", () => {
           agentId: "main",
           mainKey: "work",
           entry: { sessionId: "session-main", updatedAt: 100, chatType: "group" },
-          dmScope: "main",
         },
         database,
       ),
     ).toBe(false);
     expect(listAmbientGroupWatchTargets(mainSessionKey, database)).toEqual(new Set());
-  });
-
-  it("revokes ambient watches outside main scope but preserves explicit watches", () => {
-    const database = createDatabaseOptions();
-    registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
-      database,
-    );
-    expect(
-      registerMainSessionGroupWatch(
-        { sessionKey: group, agentId: "main", dmScope: "per-channel-peer" },
-        database,
-      ),
-    ).toBe(false);
-    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
-    expect(readCursor(database, watcher, group)).toBeUndefined();
-
-    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
-    expect(
-      registerMainSessionGroupWatch(
-        { sessionKey: group, agentId: "main", dmScope: "per-channel-peer" },
-        database,
-      ),
-    ).toBe(false);
-    expect(readCursor(database, watcher, group)).toBeDefined();
   });
 
   it("records and coalesces group activity without an immediate wake", async () => {
@@ -635,10 +598,7 @@ describe("session state events", () => {
     await vi.advanceTimersByTimeAsync(300);
     wakes.mockClear();
     const database = createDatabaseOptions();
-    registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
-      database,
-    );
+    registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
     for (const actorId of ["human-1", "human-2"]) {
       recordSessionHumanDirectMessage(
@@ -667,11 +627,11 @@ describe("session state events", () => {
     const dormantGroup = "agent:main:slack:channel:dormant";
     const registeredAt = 100;
     registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
+      { sessionKey: group, agentId: "main" },
       { ...database, now: registeredAt },
     );
     registerMainSessionGroupWatch(
-      { sessionKey: dormantGroup, agentId: "main", dmScope: "main" },
+      { sessionKey: dormantGroup, agentId: "main" },
       { ...database, now: registeredAt },
     );
 
@@ -731,10 +691,7 @@ describe("session state events", () => {
     await vi.advanceTimersByTimeAsync(300);
     wakes.mockClear();
     const database = createDatabaseOptions();
-    registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
-      database,
-    );
+    registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
 
     registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
@@ -748,10 +705,7 @@ describe("session state events", () => {
         .get(watcher, group),
     ).toEqual({ provenance: "explicit" });
     // Later inbound group registration must not downgrade the explicit watch.
-    registerMainSessionGroupWatch(
-      { sessionKey: group, agentId: "main", dmScope: "main" },
-      database,
-    );
+    registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
     recordSessionHumanDirectMessage(
       {

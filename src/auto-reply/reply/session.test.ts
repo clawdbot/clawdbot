@@ -37,7 +37,10 @@ import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import {
+  listAmbientGroupWatchTargets,
+  listSessionStateEventsSince,
+} from "../../sessions/session-state-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -434,6 +437,34 @@ afterEach(async () => {
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState guarded initialization", () => {
+  it("registers per-group ambient visibility when direct messages use isolated sessions", async () => {
+    const stateDir = await makeCaseDir("openclaw-per-group-main-watch-");
+    const storePath = path.join(stateDir, "sessions.json");
+    const groupSessionKey = "agent:main:telegram:group:family";
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await initSessionState({
+        ctx: {
+          Body: "hello group",
+          ChatType: "group",
+          DmScope: "per-channel-peer",
+          From: "telegram:group:family",
+          Provider: "telegram",
+          SessionKey: groupSessionKey,
+        },
+        cfg: {
+          session: {
+            store: storePath,
+            dmScope: "per-channel-peer",
+            groupScope: "per-group",
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(listAmbientGroupWatchTargets("agent:main:main")).toEqual(new Set([groupSessionKey]));
+    });
+  });
+
   it("pins an admitted non-default-agent incognito session to its process-local store", async () => {
     const stateDir = await makeCaseDir("openclaw-session-incognito-init-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
