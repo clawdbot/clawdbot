@@ -159,7 +159,3 @@ export async function resolveSlackChannelType(params: {
 }): Promise<"channel" | "group" | "dm" | "unknown"> {
   return (await resolveSlackConversationInfo(params)).type;
 }
-
-export function resetSlackChannelTypeCacheForTest(): void {
-  SLACK_CONVERSATION_INFO_CACHE.clear();
-}

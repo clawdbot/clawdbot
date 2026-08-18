@@ -16,11 +16,6 @@ import { type FetchLike, fetchWithRuntimeDispatcher, saveRemoteMedia } from "./m
 import { isGovSlackClient } from "./slack-client-kind.js";
 import { logVerbose } from "./thread.runtime.js";
 export type { SlackMediaResult } from "./media-types.js";
-export {
-  resetSlackThreadStarterCacheForTest,
-  resolveSlackThreadHistory,
-  resolveSlackThreadStarter,
-} from "./thread.js";
 
 function isSlackHostname(hostname: string, govSlack: boolean): boolean {
   const normalized = normalizeHostname(hostname);
