@@ -368,6 +368,46 @@ describe("createBeamMirrorRunner", () => {
     },
   );
 
+  it("logs a terminal redirect block after a recent transient warning", async () => {
+    const warnings: string[] = [];
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      void readRequestBody(req).then(
+        () => {
+          requestCount += 1;
+          res.statusCode = requestCount === 1 ? 503 : 307;
+          res.end();
+        },
+        (error: unknown) => {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+    try {
+      const origin = await listenOnLoopback(server);
+      const runner = createBeamMirrorRunner({
+        runtime: fakeRuntime(mirrorConfig({ endpoint: `${origin}/beam` })),
+        logger: { warn: (message) => warnings.push(message), info: () => {} },
+        now: () => NOW,
+        listCatalogs: () => [
+          fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+        ],
+      });
+
+      await runner.tick();
+      await runner.tick();
+      await runner.tick();
+
+      expect(requestCount).toBe(2);
+      expect(warnings).toEqual([
+        "beam mirror upload failed (503) for claude",
+        "beam mirror upload blocked for claude: receiver returned redirect (307); redirects are not followed; configure the final endpoint",
+      ]);
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+
   it("rechecks once after runner restart and resumes after the endpoint changes", async () => {
     const requests: string[] = [];
     const server = createServer((req, res) => {
