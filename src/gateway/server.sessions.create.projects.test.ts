@@ -91,7 +91,10 @@ test("sessions.create provisions a managed worktree from a registered project at
   let worktreeId: string | undefined;
   try {
     const created = await directSessionReq<{
-      entry?: { spawnedCwd?: string };
+      entry?: {
+        spawnedCwd?: string;
+        worktree?: { canonicalWorkspaceDir?: string };
+      };
       worktree?: { id: string; path: string };
     }>(
       "sessions.create",
@@ -102,6 +105,7 @@ test("sessions.create provisions a managed worktree from a registered project at
     expect(created.ok).toBe(true);
     worktreeId = created.payload?.worktree?.id;
     expect(created.payload?.entry?.spawnedCwd).toBe(created.payload?.worktree?.path);
+    expect(created.payload?.entry?.worktree?.canonicalWorkspaceDir).toBe(projectRoot);
   } finally {
     if (worktreeId) {
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });

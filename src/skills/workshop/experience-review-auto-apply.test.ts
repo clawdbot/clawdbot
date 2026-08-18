@@ -12,7 +12,6 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
 import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";
 
@@ -98,11 +97,20 @@ describe("experience review auto apply", () => {
     const canonicalWorkspaceDir = await tempDirs.make("openclaw-experience-canonical-");
     const worktreeWorkspaceDir = await tempDirs.make("openclaw-experience-worktree-");
     const skillDir = path.join(canonicalWorkspaceDir, "skills", "deployment-preflight");
-    await writeSkill({
-      dir: skillDir,
+    const seedTool = createSkillWorkshopTool({
+      workspaceDir: canonicalWorkspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
+    const seeded = await seedTool.execute("seed-create", {
+      action: "create",
       name: "deployment-preflight",
       description: "Check deployment prerequisites before retrying.",
-      body: "# Deployment Preflight\n\nOperator-authored preflight steps.\n",
+      proposal_content: "# Deployment Preflight\n\nOperator-authored preflight steps.\n",
+    });
+    await seedTool.execute("seed-apply", {
+      action: "apply",
+      proposal_id: (seeded.details as { id: string }).id,
+      reason: "seed live skill",
     });
     await fs.cp(skillDir, path.join(worktreeWorkspaceDir, "skills", "deployment-preflight"), {
       recursive: true,
