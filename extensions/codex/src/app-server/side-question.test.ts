@@ -475,6 +475,10 @@ async function runSideQuestionWithManagedWebSearchCall(
   } = {},
 ) {
   const client = createFakeClient();
+  let resolveTurnStarted!: () => void;
+  const turnStarted = new Promise<void>((resolve) => {
+    resolveTurnStarted = resolve;
+  });
   if (!options.preserveToolFactory) {
     createOpenClawCodingToolsMock.mockReturnValue([
       {
@@ -493,6 +497,7 @@ async function runSideQuestionWithManagedWebSearchCall(
       return {};
     }
     if (method === "turn/start") {
+      queueMicrotask(resolveTurnStarted);
       return turnStartResult("turn-1");
     }
     if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -503,7 +508,8 @@ async function runSideQuestionWithManagedWebSearchCall(
   getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
   const run = runCodexAppServerSideQuestion(params);
-  const toolResponse = await handleClientRequestWhenReady(client, {
+  await turnStarted;
+  const toolResponse = await client.handleRequest({
     id: 42,
     method: "item/tool/call",
     params: {
@@ -513,6 +519,7 @@ async function runSideQuestionWithManagedWebSearchCall(
       arguments: options.toolArguments ?? { query: "service providers" },
     },
   });
+  expect(toolResponse).not.toBeUndefined();
   client.emit(turnCompleted("side-thread", "turn-1", "Search answer."));
   const result = await run;
   const forkCall = client.request.mock.calls.find(([method]) => method === "thread/fork");
@@ -1276,14 +1283,31 @@ describe("runCodexAppServerSideQuestion", () => {
       success: true,
     },
   ])("applies native search domains to side-question web_fetch and $name", async (testCase) => {
-    const actualAgentHarness = await vi.importActual<
-      typeof import("openclaw/plugin-sdk/agent-harness")
-    >("openclaw/plugin-sdk/agent-harness");
-    createOpenClawCodingToolsMock.mockImplementation((options) =>
-      actualAgentHarness
-        .createOpenClawCodingTools(options as never)
-        .filter((tool) => tool.name === "web_search" || tool.name === "web_fetch"),
-    );
+    const { createWebFetchTool } = await vi.importActual<
+      typeof import("../../../../src/agents/tools/web-fetch.js")
+    >("../../../../src/agents/tools/web-fetch.js");
+    createOpenClawCodingToolsMock.mockImplementation((options) => {
+      const toolOptions = options as NonNullable<
+        Parameters<
+          (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]
+        >[0]
+      >;
+      const webFetchTool = createWebFetchTool({
+        config: toolOptions.config,
+        sandboxed: toolOptions.sandbox?.enabled === true,
+        lateBindRuntimeConfig: true,
+        hostnameAllowlistRef: toolOptions.webFetchHostnameAllowlistRef,
+      });
+      return [
+        {
+          name: "web_search",
+          description: "Search the web",
+          parameters: { type: "object", properties: {}, additionalProperties: true },
+          execute: toolExecuteMock,
+        },
+        ...(webFetchTool ? [webFetchTool] : []),
+      ];
+    });
     const fetchMock = vi.fn(
       async () =>
         new Response("permitted", { status: 200, headers: { "content-type": "text/plain" } }),

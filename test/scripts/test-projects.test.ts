@@ -39,7 +39,7 @@ import {
 } from "../vitest/vitest.contracts-shared.ts";
 
 const normalizeRepoPath = toRepoPath;
-const CODEX_TEST_PROCESS_FILE_LIMIT = 20;
+const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 1;
 

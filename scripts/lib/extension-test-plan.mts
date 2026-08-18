@@ -89,9 +89,9 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   // overstates its real wall-clock cost during CI shard planning.
   "test/vitest/vitest.extensions.config.ts": 1.1,
 };
-// A 34-file changed shard starved real-time watches on 4-vCPU CI while the same
-// inventory completed normally when split or run without host contention (#125768).
-const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 20;
+// A 34-file changed shard starved real-time watches and the no-output watchdog.
+// Keep serial, non-isolated Codex processes small enough for prompt output (#125768, #125839).
+const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 12;
 const MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
 const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 1;
 const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 10;
