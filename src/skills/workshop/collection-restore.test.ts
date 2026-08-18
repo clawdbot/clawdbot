@@ -606,6 +606,9 @@ describe("skill collection backup and restore", () => {
     }
 
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
+    expect(listWritableSkillCollection(workspaceDir, { env: testState.env })).toEqual([
+      expect.objectContaining({ name: "obsolete", workshopOwned: true }),
+    ]);
   });
 
   it("preserves a concurrent edit when backup commit and rollback fail", async () => {

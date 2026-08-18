@@ -108,7 +108,7 @@ describe("Skill Workshop SQLite store", () => {
     expect(
       reopened.db
         .prepare(
-          "SELECT name, type, notnull FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?",
+          "SELECT name, type, \"notnull\" FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?",
         )
         .get("claim_released_time"),
     ).toEqual({ name: "claim_released_time", type: "INTEGER", notnull: 0 });
@@ -135,7 +135,7 @@ describe("Skill Workshop SQLite store", () => {
     expect(
       reopened.db
         .prepare(
-          "SELECT name, type, notnull FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?",
+          "SELECT name, type, \"notnull\" FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?",
         )
         .get("claim_released_time"),
     ).toEqual({ name: "claim_released_time", type: "INTEGER", notnull: 0 });

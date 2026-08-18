@@ -258,6 +258,11 @@ describe("outbound message progress companion", () => {
     expect(
       tableExists(openOpenClawStateDatabase(database).db, "outbound_message_execution_bindings"),
     ).toBe(true);
+    // This pinned reader predates the Workshop's first-use column and requires present lazy tables
+    // to retain its exact shape; project that unrelated table to the reader's historical contract.
+    openOpenClawStateDatabase(database).db.exec(
+      "ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;",
+    );
     closeOpenClawStateDatabaseForTest();
 
     const repositoryRoot = process.cwd();

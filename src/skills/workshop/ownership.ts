@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { logWarn } from "../../logger.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { parseSkillProposalRow } from "./store-sqlite-record.js";
 import {
@@ -47,15 +48,29 @@ function setWorkshopOwnershipClaimRelease(
   );
 }
 
+function writeWorkshopOwnershipClaimRelease(
+  workspaceDir: string,
+  skillDirs: readonly string[],
+  releaseTime: number | null,
+  options: SkillWorkshopStoreOptions,
+): void {
+  if (skillDirs.length === 0) {
+    return;
+  }
+  ensureSkillWorkshopSchema(options);
+  runOpenClawStateWriteTransaction(
+    ({ db }) => setWorkshopOwnershipClaimRelease(db, workspaceDir, skillDirs, releaseTime),
+    databaseOptions(options),
+  );
+}
+
 export function releaseWorkshopOwnershipClaims(
-  database: DatabaseSync,
   workspaceDir: string,
   skillDirs: readonly string[],
   releaseTime: number,
+  options: SkillWorkshopStoreOptions = {},
 ): void {
-  // A drop ends the claim: a later hand-created skill at the same path is
-  // user-authored and must remain read-only to autonomous reconciliation.
-  setWorkshopOwnershipClaimRelease(database, workspaceDir, skillDirs, releaseTime);
+  writeWorkshopOwnershipClaimRelease(workspaceDir, skillDirs, releaseTime, options);
 }
 
 export function restoreWorkshopOwnershipClaims(
@@ -63,11 +78,19 @@ export function restoreWorkshopOwnershipClaims(
   skillDirs: readonly string[],
   options: SkillWorkshopStoreOptions = {},
 ): void {
-  ensureSkillWorkshopSchema(options);
-  runOpenClawStateWriteTransaction(
-    ({ db }) => setWorkshopOwnershipClaimRelease(db, workspaceDir, skillDirs, null),
-    databaseOptions(options),
-  );
+  writeWorkshopOwnershipClaimRelease(workspaceDir, skillDirs, null, options);
+}
+
+export function restoreWorkshopOwnershipClaimsBestEffort(
+  workspaceDir: string,
+  skillDirs: readonly string[],
+  options: SkillWorkshopStoreOptions = {},
+): void {
+  try {
+    restoreWorkshopOwnershipClaims(workspaceDir, skillDirs, options);
+  } catch (error) {
+    logWarn(`skill-workshop: failed to reclaim ownership after rollback: ${String(error)}`);
+  }
 }
 
 /** Paths claimed by a successfully applied Workshop create proposal. */

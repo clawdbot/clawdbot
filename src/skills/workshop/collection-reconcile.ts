@@ -58,7 +58,12 @@ import {
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearCuratedSkillLifecycle } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import { listWorkshopOwnedSkillDirs, restoreWorkshopOwnershipClaims } from "./ownership.js";
+import {
+  listWorkshopOwnedSkillDirs,
+  releaseWorkshopOwnershipClaims,
+  restoreWorkshopOwnershipClaims,
+  restoreWorkshopOwnershipClaimsBestEffort,
+} from "./ownership.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { prepareSkillProposalDraft } from "./proposal-draft.js";
 import { withSkillCollectionLock } from "./target-lock.js";
@@ -245,6 +250,20 @@ export async function reconcileSkillCollection(params: {
           await discardPendingCollectionBackup(backup);
           throw error;
         }
+        const droppedSkillDirs = plan.flatMap((entry) => {
+          if (entry.action !== "drop") {
+            return [];
+          }
+          return [currentByName.get(entry.name)!.baseDir];
+        });
+        // Claims end before filesystem mutation so hand-recreated paths are user-authored/read-only.
+        // Reclaim is safe only after rollback has restored the original Workshop directories.
+        releaseWorkshopOwnershipClaims(
+          workspaceDir,
+          droppedSkillDirs,
+          Date.now(),
+          params.env ? { env: params.env } : {},
+        );
         const appliedWrites: PreparedWorkspaceSkillMutation[] = [];
         const droppedSkills: Array<
           Pick<WritableSkillCollectionEntry, "name" | "baseDir"> & { stagedDir: string }
@@ -275,6 +294,11 @@ export async function reconcileSkillCollection(params: {
               { cause: restoreError },
             );
           }
+          restoreWorkshopOwnershipClaimsBestEffort(
+            workspaceDir,
+            droppedSkillDirs,
+            params.env ? { env: params.env } : {},
+          );
           await discardPendingCollectionBackup(backup);
           throw error;
         }
@@ -305,7 +329,6 @@ export async function reconcileSkillCollection(params: {
           Date.now(),
           result,
           params.env ? { env: params.env } : {},
-          droppedSkills.map((skill) => skill.baseDir),
         );
         await pruneOlderSkillCollectionBackups(backup.backupRoot, backup.manifest.id);
         const changes: SkillCollectionChange[] = [];

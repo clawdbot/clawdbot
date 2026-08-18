@@ -4,7 +4,10 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -170,6 +173,35 @@ describe("skill collection reconciliation", () => {
         plan: [{ action: "drop", name: "foo", reason: "Remove replacement" }],
       }),
     ).rejects.toThrow("Skill Workshop does not own this skill path: foo");
+  });
+
+  it("keeps a dropped path released when outcome persistence fails", async () => {
+    await writeWorkshopOwnedSkills([
+      { name: "foo", description: "Workshop procedure", body: "# Workshop\n" },
+    ]);
+    openOpenClawStateDatabase({ env: testState.env }).db.exec(`
+      CREATE TRIGGER fail_collection_review_insert
+      BEFORE INSERT ON skill_workshop_collection_reviews
+      BEGIN
+        SELECT RAISE(FAIL, 'forced outcome write failure');
+      END;
+    `);
+
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...(await readCollectionReceipt()),
+        plan: [{ action: "drop", name: "foo", reason: "No longer needed" }],
+      }),
+    ).rejects.toThrow("forced outcome write failure");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "foo", description: "Operator procedure", body: "# Operator\n" },
+    ]);
+
+    expect(listWritableSkillCollection(workspaceDir, { env: testState.env })).toEqual([
+      expect.objectContaining({ name: "foo", workshopOwned: false }),
+    ]);
   });
 
   it.runIf(process.platform !== "win32")(
