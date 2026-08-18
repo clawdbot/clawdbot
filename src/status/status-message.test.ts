@@ -146,7 +146,6 @@ describe("buildStatusMessage context window", () => {
         agents: {
           defaults: {
             model: "openai/gpt-5.6-sol",
-            contextTokens: 1_000_000,
           },
         },
         models: {
@@ -158,7 +157,7 @@ describe("buildStatusMessage context window", () => {
           },
         },
       },
-      agent: { model: "openai/gpt-5.6-sol", contextTokens: 1_000_000 },
+      agent: { model: "openai/gpt-5.6-sol" },
       runtimeContextTokens: 1_000_000,
       resolvedHarness: "codex",
       sessionEntry: {
@@ -185,7 +184,7 @@ describe("buildStatusMessage context window", () => {
 
   it("preserves a locked legacy session window", () => {
     const text = buildStatusMessage({
-      agent: { model: "openai/gpt-5.6-sol", contextTokens: 1_000_000 },
+      agent: { model: "openai/gpt-5.6-sol" },
       runtimeContextTokens: 1_000_000,
       resolvedHarness: "codex",
       sessionEntry: {
