@@ -816,14 +816,12 @@ For OpenClaw workspace parity, local tool notes live in the `## Tools` section o
 - Heartbeat turns receive generic initiative guidance through collaboration
   mode. Monitor cron scratch is appended to the heartbeat prompt instead of
   injected as workspace context.
-- `MEMORY.md` content from the configured agent workspace is not pasted into
-  native Codex turn input when memory tools are available for that
-  workspace; when it exists, the harness adds a small workspace-memory
-  pointer to turn-scoped collaboration developer instructions and Codex
-  should use `memory_search` or `memory_get` when durable memory is relevant.
-  If tools are disabled, memory search is unavailable, or the active
-  workspace differs from the agent memory workspace, `MEMORY.md` uses the
-  normal bounded turn-context path instead.
+- `MEMORY.md` content from the configured agent workspace uses the normal
+  bounded turn-context path for native Codex turns, even when memory tools
+  are available for that workspace. The injected root memory is intended
+  for sparse bootstrap facts; Codex should still use `memory_search` or
+  `memory_get` when durable memory is relevant beyond that bounded
+  bootstrap context.
 - `BOOTSTRAP.md`, when present, is forwarded as OpenClaw turn input reference
   context.
 

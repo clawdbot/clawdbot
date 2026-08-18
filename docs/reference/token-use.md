@@ -26,12 +26,12 @@ OpenClaw assembles its own system prompt on every run. It includes:
   `agents.defaults.bootstrapMaxChars` (default: `20000`); total bootstrap
   injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default:
   `60000`).
-  - Native Codex turns do not paste raw `MEMORY.md` when memory tools are
-    available for that workspace; they get a small memory pointer in
-    turn-scoped collaboration developer instructions instead and use memory
-    tools on demand. If tools are disabled, memory search is unavailable, or
-    the active workspace differs from the agent memory workspace, `MEMORY.md`
-    falls back to the normal bounded turn-context path.
+  - Native Codex turns paste root `MEMORY.md` from the configured agent
+    workspace through the normal bounded turn-context path, even when
+    memory tools are available for that workspace. The injected root memory
+    is intended for sparse bootstrap facts; Codex should still use memory
+    tools on demand for durable memory beyond that bounded bootstrap
+    context.
   - Lowercase root `memory.md` is never injected. It is legacy repair input
     for `openclaw doctor --fix`, which migrates it into `MEMORY.md`.
   - `memory/*.md` daily files are not part of the normal bootstrap prompt;
