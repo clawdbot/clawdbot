@@ -5,7 +5,7 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveTrustedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
+import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
@@ -243,6 +243,7 @@ export async function getStatusSummary(
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
+    resolveAuthoredModelContextTokens,
     resolveContextTokensForModel,
     resolveSessionRuntime,
     resolveSessionModelRef,
@@ -460,20 +461,19 @@ export async function getStatusSummary(
           agentId,
           sessionKey: key,
         });
-        const trustedSessionContextTokens = resolveTrustedSessionContextTokens({
-          entry,
-          provider: lookupModel.provider,
-          model: lookupModelId,
-          agentHarnessId: runtime.id,
-        });
         const contextTokens =
-          entry?.modelSelectionLocked === true && trustedSessionContextTokens !== undefined
-            ? trustedSessionContextTokens
-            : trustedSessionContextTokens === undefined
-              ? (resolvedContextTokens ?? null)
-              : resolvedContextTokens === undefined
-                ? trustedSessionContextTokens
-                : Math.min(trustedSessionContextTokens, resolvedContextTokens);
+          resolveProjectedSessionContextTokens({
+            entry,
+            provider: lookupModel.provider,
+            model: lookupModelId,
+            agentHarnessId: runtime.id,
+            resolvedContextTokens,
+            authoredContextTokens: resolveAuthoredModelContextTokens({
+              cfg,
+              provider: lookupModel.provider,
+              model: lookupModelId,
+            }),
+          }) ?? null;
         const total = resolveSessionTotalTokens(entry);
         const freshTotal = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh = freshTotal !== undefined;

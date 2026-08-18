@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveTrustedSessionContextTokens } from "./context-token-provenance.js";
+import {
+  resolveProjectedSessionContextTokens,
+  resolveTrustedSessionContextTokens,
+} from "./context-token-provenance.js";
 
 const currentSelection = {
   provider: "openai",
@@ -60,5 +63,60 @@ describe("resolveTrustedSessionContextTokens", () => {
         ...currentSelection,
       }),
     ).toBe(272_000);
+  });
+});
+
+describe("resolveProjectedSessionContextTokens", () => {
+  const matchingRuntimeEntry = {
+    modelProvider: "openai",
+    model: "gpt-5.6-sol",
+    agentHarnessId: "codex",
+    contextTokens: 272_000,
+    contextTokensSource: "runtime" as const,
+  };
+
+  it("uses an authored effective cap instead of older matching telemetry", () => {
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: matchingRuntimeEntry,
+        ...currentSelection,
+        resolvedContextTokens: 1_000_000,
+        authoredContextTokens: 1_000_000,
+      }),
+    ).toBe(1_000_000);
+  });
+
+  it("keeps matching runtime telemetry below a higher native window", () => {
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: matchingRuntimeEntry,
+        ...currentSelection,
+        resolvedContextTokens: 1_000_000,
+      }),
+    ).toBe(272_000);
+  });
+
+  it("falls back to current resolution when producer provenance differs", () => {
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: { ...matchingRuntimeEntry, agentHarnessId: "openclaw" },
+        ...currentSelection,
+        resolvedContextTokens: 1_000_000,
+      }),
+    ).toBe(1_000_000);
+  });
+
+  it("preserves a locked native window ahead of current configuration", () => {
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: {
+          modelSelectionLocked: true,
+          contextTokens: 1_000_000,
+        },
+        ...currentSelection,
+        resolvedContextTokens: 272_000,
+        authoredContextTokens: 272_000,
+      }),
+    ).toBe(1_000_000);
   });
 });

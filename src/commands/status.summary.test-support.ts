@@ -105,6 +105,30 @@ export function registerStatusSummarySessionRowCases(params: {
       expect(summary.sessions.recent[0]?.contextTokens).toBe(272_000);
     });
 
+    it("replaces matching runtime telemetry with a newly authored effective cap", async () => {
+      vi.mocked(params.getStatusSummaryRuntime().resolveAuthoredModelContextTokens).mockReturnValue(
+        1_000_000,
+      );
+      vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
+        1_000_000,
+      );
+      params.setSessions({
+        "agent:main:main": {
+          sessionId: "authored-context-cap",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "openclaw",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        },
+      });
+
+      const summary = await params.getStatusSummary();
+
+      expect(summary.sessions.recent[0]?.contextTokens).toBe(1_000_000);
+    });
+
     it("preserves the native window owned by a locked legacy session", async () => {
       vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
         272_000,

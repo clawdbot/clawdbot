@@ -7,14 +7,16 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
-import { resolveContextTokensForModelFromCache as resolveContextTokensForModel } from "../agents/context-resolution.js";
+import {
+  resolveAuthoredModelContextTokens,
+  resolveContextTokensForModelFromCache as resolveContextTokensForModel,
+} from "../agents/context-resolution.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -209,29 +211,16 @@ function resolveSessionRuntime(params: {
       })
     : params.sessionKey;
   const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
-  const configuredRuntime = resolveModelAgentRuntimeMetadata({
+  const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId ?? "",
     provider: params.provider,
     model: params.model,
     sessionKey: acpSessionKey,
+    sessionEntry: params.entry,
     acpRuntime: acpMeta != null,
     acpBackend: acpMeta?.backend,
   });
-  const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
-    provider: params.provider,
-    entry: params.entry,
-    cfg: params.cfg,
-  });
-  // agentHarnessId records the producer of the existing transcript. Only a
-  // locked owner or explicit runtime override may replace current model policy.
-  const runtime =
-    acpMeta || !sessionRuntime
-      ? configuredRuntime
-      : {
-          id: sessionRuntime,
-          source: params.entry?.modelSelectionLocked === true ? "session" : "session-key",
-        };
   const id = normalizeOptionalLowercaseString(runtime.id);
   // OpenClaw/auto are generic labels; concrete harness ids give better operator signal.
   const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
@@ -248,6 +237,7 @@ function resolveSessionRuntime(params: {
 
 export const statusSummaryRuntime = {
   waitForContextWindowCacheLoad,
+  resolveAuthoredModelContextTokens,
   resolveContextTokensForModel,
   classifySessionKey: classifySessionKind,
   resolveSessionModelRef,

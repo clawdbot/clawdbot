@@ -97,6 +97,7 @@ vi.mock("../status/summary.runtime.js", () => ({
         ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
         : null,
     ),
+    resolveAuthoredModelContextTokens: vi.fn(() => undefined),
     resolveContextTokensForModel: vi.fn(() => 200_000),
     waitForContextWindowCacheLoad: vi.fn(async () => "idle" as const),
   },
@@ -266,6 +267,7 @@ describe("getStatusSummary", () => {
           : undefined,
     );
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
+    vi.mocked(statusSummaryRuntime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
     vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
     vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
       id: "openclaw",

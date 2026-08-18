@@ -26,7 +26,7 @@ import {
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
-  resolveTrustedSessionContextTokens,
+  resolveProjectedSessionContextTokens,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
@@ -428,25 +428,14 @@ export function buildGatewaySessionRow(params: {
       model: rowModel,
     }),
   );
-  const persistedContextTokens = resolvePositiveNumber(entry?.contextTokens);
-  const trustedPersistedContextTokens = resolveTrustedSessionContextTokens({
+  const contextTokens = resolveProjectedSessionContextTokens({
     entry,
     provider: rowModelProvider,
     model: rowModel,
     agentHarnessId: thinkingProjection.agentRuntime.id,
+    resolvedContextTokens: resolvedCurrentContextTokens,
+    authoredContextTokens,
   });
-  // An authored effective cap wins. Other resolved windows only constrain matching
-  // telemetry, so native capacity cannot inflate a smaller observed runtime budget.
-  const currentContextTokens =
-    authoredContextTokens !== undefined
-      ? resolvedCurrentContextTokens
-      : trustedPersistedContextTokens !== undefined && resolvedCurrentContextTokens !== undefined
-        ? Math.min(trustedPersistedContextTokens, resolvedCurrentContextTokens)
-        : (trustedPersistedContextTokens ?? resolvedCurrentContextTokens);
-  const contextTokens =
-    entry?.modelSelectionLocked === true
-      ? (persistedContextTokens ?? currentContextTokens)
-      : currentContextTokens;
   const fastModeState = resolveFastModeState({
     cfg,
     provider: selectedModelProvider,

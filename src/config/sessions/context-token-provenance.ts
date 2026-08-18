@@ -11,6 +11,10 @@ type SessionContextTokenOwner = Pick<
   | "modelSelectionLocked"
 >;
 
+function resolvePositiveContextTokens(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 /** Returns persisted telemetry only when it belongs to the current producing selection. */
 export function resolveTrustedSessionContextTokens(params: {
   entry: SessionContextTokenOwner | undefined;
@@ -18,8 +22,8 @@ export function resolveTrustedSessionContextTokens(params: {
   model: string | null | undefined;
   agentHarnessId: string | null | undefined;
 }): number | undefined {
-  const contextTokens = params.entry?.contextTokens;
-  if (typeof contextTokens !== "number" || !Number.isFinite(contextTokens) || contextTokens <= 0) {
+  const contextTokens = resolvePositiveContextTokens(params.entry?.contextTokens);
+  if (contextTokens === undefined) {
     return undefined;
   }
   // Locked sessions own their native window, including rows created before
@@ -51,4 +55,29 @@ export function resolveTrustedSessionContextTokens(params: {
     entryHarness === currentHarness
     ? contextTokens
     : undefined;
+}
+
+/** Projects the context window owned by the current session selection. */
+export function resolveProjectedSessionContextTokens(params: {
+  entry: SessionContextTokenOwner | undefined;
+  provider: string | null | undefined;
+  model: string | null | undefined;
+  agentHarnessId: string | null | undefined;
+  resolvedContextTokens: number | null | undefined;
+  authoredContextTokens?: number | null | undefined;
+}): number | undefined {
+  const resolvedContextTokens = resolvePositiveContextTokens(params.resolvedContextTokens);
+  const authoredContextTokens = resolvePositiveContextTokens(params.authoredContextTokens);
+  const trustedContextTokens = resolveTrustedSessionContextTokens(params);
+  // An authored effective cap owns the current selection. Otherwise current
+  // model capacity only constrains telemetry from that exact producer tuple.
+  const currentContextTokens =
+    authoredContextTokens !== undefined
+      ? resolvedContextTokens
+      : trustedContextTokens !== undefined && resolvedContextTokens !== undefined
+        ? Math.min(trustedContextTokens, resolvedContextTokens)
+        : (trustedContextTokens ?? resolvedContextTokens);
+  return params.entry?.modelSelectionLocked === true
+    ? (trustedContextTokens ?? currentContextTokens)
+    : currentContextTokens;
 }
