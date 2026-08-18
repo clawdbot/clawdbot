@@ -973,7 +973,7 @@ describe("grouped chat rendering", () => {
     expect(collapseToggle.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("does not collapse a long single-line user message", () => {
+  it("collapses a long single-line user message without truncating its DOM", () => {
     const container = document.createElement("div");
     const markdownContent = `${"a".repeat(699)}😀`;
 
@@ -984,8 +984,9 @@ describe("grouped chat rendering", () => {
       { onToggleUserMessageExpanded: vi.fn() },
     );
 
-    expect(container.querySelector(".chat-message-disclosure")).toBeNull();
-    expect(expectElement(container, ".chat-text", HTMLDivElement).textContent).toContain("😀");
+    const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
+    expect(disclosure.querySelector(".chat-message-disclosure__toggle")).not.toBeNull();
+    expect(expectElement(disclosure, ".chat-text", HTMLDivElement).textContent).toContain("😀");
   });
 
   it("does not add prompt disclosure controls to short user or assistant messages", () => {

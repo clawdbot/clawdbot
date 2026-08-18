@@ -5,7 +5,7 @@
 .chat-thinking {
   margin-bottom: 10px;
   padding: 10px 12px;
-  border-radius: 50%;
+  border-radius: var(--radius-md);
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
@@ -42,7 +42,6 @@
   top: -5px;
   right: -5px;
   display: grid;
-  align-items: center;
   width: 36px;
   height: 36px;
   padding: 0;

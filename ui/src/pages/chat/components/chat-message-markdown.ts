@@ -193,9 +193,14 @@ export function renderReplyButton(
 }
 
 const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 5;
+const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 700;
 
 function shouldCollapseUserMessage(markdown: string): boolean {
-  return markdown.split("\n", USER_MESSAGE_COLLAPSED_LINE_LIMIT + 1).length > USER_MESSAGE_COLLAPSED_LINE_LIMIT;
+  return (
+    markdown.length > USER_MESSAGE_COLLAPSED_CHAR_LIMIT ||
+    markdown.split("\n", USER_MESSAGE_COLLAPSED_LINE_LIMIT + 1).length >
+      USER_MESSAGE_COLLAPSED_LINE_LIMIT
+  );
 }
 
 export function renderUserMessageMarkdown(
