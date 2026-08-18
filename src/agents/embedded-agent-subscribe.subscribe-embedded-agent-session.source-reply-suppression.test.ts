@@ -9,6 +9,13 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 
+const retryingCompactionEnd = () =>
+  ({
+    type: "compaction_end",
+    reason: "overflow",
+    outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: true },
+  }) as const;
+
 function createBlockReplyHarness(
   blockReplyBreak: "message_end" | "text_end",
   options: {
@@ -221,7 +228,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       to: null,
       result: { details: { deliveryStatus: "sent" } },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     await Promise.resolve();
     emitAssistantMessageEnd(emit, "Done after compaction.");
     await Promise.resolve();
@@ -247,7 +254,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         },
       },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     await Promise.resolve();
 
     expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([

@@ -110,11 +110,22 @@ suite.define(() => {
           idleTimeout: "45m",
         },
       };
+      // Keep the mocked config.get consistent with the patch response: the
+      // config store may reconcile with a refetch, and a stale empty config
+      // would flap the snapshot and silently drop the next save.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
+          "cloud-workers-2",
+        ),
+      );
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-2",
         config: { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
       });
+
       await page.getByText("Advertised", { exact: true }).waitFor();
       await page.getByText("Gateway restart required.", { exact: true }).waitFor();
 
@@ -163,11 +174,22 @@ suite.define(() => {
           binary: "/opt/bin/crabbox",
         },
       };
+      // Keep the mocked config.get consistent with the patch response: the
+      // config store may reconcile with a refetch, and a stale empty config
+      // would flap the snapshot and silently drop the next save.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": editedFleet } } },
+          "cloud-workers-3",
+        ),
+      );
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-3",
         config: { cloudWorkers: { profiles: { "build-fleet": editedFleet } } },
       });
+
       await page.getByText(/Class: ccx53/).waitFor();
 
       await page.getByRole("button", { name: "Add profile" }).click();
@@ -199,6 +221,13 @@ suite.define(() => {
           idleTimeout: "45m",
         },
       };
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": editedFleet, pending } } },
+          "cloud-workers-4",
+        ),
+      );
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-4",

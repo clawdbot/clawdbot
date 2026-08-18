@@ -105,6 +105,9 @@ RECOVERY_CURRENT_RECEIPT_SHA=""
 RECOVERY_RESTORED_MIGRATION_IDENTITY=""
 RECOVERY_RELAUNCHED_ADOPTED_PID=""
 RECOVERY_RESUMED=0
+UNSAFE_ELEVATION_APP_QUARANTINE=""
+UNSAFE_ELEVATION_APP_WAS_QUARANTINED=0
+ELEVATION_APP_OWNER_WAS_EVIDENCED=0
 OPENCLAW_CLI=()
 
 fail() {
@@ -360,12 +363,189 @@ verify_universal_machos() {
   done < <(find "$app" -type f -perm -111 -print0)
 }
 
+elevation_app_is_cua_free() {
+  local app="$1"
+  local cua_driver="$app/Contents/Resources/cua-driver"
+  [[ ! -e "$cua_driver" && ! -L "$cua_driver" ]]
+}
+
+elevation_plist_binds_app() {
+  local plist="$1" args executable label program
+  [[ -n "$plist" && -f "$plist" && ! -L "$plist" ]] || return 1
+  label="$(plist_file_value "$plist" Label)"
+  [[ "$label" == "$ELEVATION_LABEL" ]] || return 1
+  executable="$APP_PATH/Contents/MacOS/OpenClaw"
+  if program="$(plutil -extract Program raw -o - "$plist" 2>/dev/null)"; then
+    [[ "$program" == "$executable" ]] || return 1
+  elif plutil -extract Program xml1 -o /dev/null "$plist" 2>/dev/null; then
+    return 1
+  fi
+  args="$(plutil -extract ProgramArguments json -o - "$plist" 2>/dev/null)" || return 1
+  [[ "$(jq -c . <<<"$args")" == \
+    "$(jq -cn --arg executable "$executable" '[$executable,"--elevation-host"]')" ]]
+}
+
+elevation_receipt_binds_app() {
+  local receipt="$1"
+  [[ -n "$receipt" && -f "$receipt" && ! -L "$receipt" ]] || return 1
+  jq -e \
+    --arg appPath "$APP_PATH" \
+    --arg plistPath "$PLIST_PATH" '
+      type == "object" and
+      .appPath == $appPath and
+      .plistPath == $plistPath and
+      (
+        (.schemaVersion == 3 and .kind == "openclaw-elevation-install") or
+        (
+          (has("schemaVersion") | not) and (has("kind") | not) and
+          keys == ["appPath","archiveSha256","backupPath","peekabooCommit","plistPath","previousPlist","sourceCommit"]
+        )
+      )
+    ' "$receipt" >/dev/null 2>&1
+}
+
+loaded_elevation_job_binds_app() {
+  local snapshot program
+  snapshot="$(job_snapshot "$job_domain")"
+  [[ -n "$snapshot" ]] || return 1
+  program="$(awk -F' = ' '/^[[:space:]]*program = / {print $2; exit}' <<<"$snapshot")"
+  [[ "$program" == "$APP_PATH/Contents/MacOS/OpenClaw" ]] || return 1
+  grep -Eq '^[[:space:]]*--elevation-host[[:space:]]*$' <<<"$snapshot"
+}
+
+elevation_ownership_is_evidenced() {
+  local candidate
+  loaded_elevation_job_binds_app && return 0
+  for candidate in "$PLIST_PATH" "$ROLLBACK_ELEVATION_PLIST" "$RECOVERY_CURRENT_PLIST"; do
+    elevation_plist_binds_app "$candidate" && return 0
+  done
+  for candidate in \
+    "$RECEIPT_PATH" \
+    "$FINAL_RECEIPT_PATH" \
+    "$PENDING_RECEIPT_PATH" \
+    "$ROLLBACK_INSTALL_RECEIPT" \
+    "$RECOVERY_CURRENT_RECEIPT"
+  do
+    elevation_receipt_binds_app "$candidate" && return 0
+  done
+  return 1
+}
+
+quarantine_elevation_plist() {
+  local description="$1" quarantine_path source_identity source_sha="" source_kind
+  [[ -e "$PLIST_PATH" || -L "$PLIST_PATH" ]] || return 0
+  source_identity="$(path_identity "$PLIST_PATH")" || return 1
+  if [[ -f "$PLIST_PATH" && ! -L "$PLIST_PATH" ]]; then
+    source_kind="file"
+    source_sha="$(shasum -a 256 "$PLIST_PATH" | awk '{print $1}')" || return 1
+    [[ "$source_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  elif [[ -L "$PLIST_PATH" ]]; then
+    source_kind="symlink"
+  else
+    return 1
+  fi
+  quarantine_path="$(mktemp -u "$STATE_DIR/elevation-host.quarantined-launch-agent.XXXXXX")" || return 1
+  [[ ! -e "$quarantine_path" && ! -L "$quarantine_path" ]] || return 1
+  rename_app_exclusively "$PLIST_PATH" "$quarantine_path" || return 1
+  [[ ! -e "$PLIST_PATH" && ! -L "$PLIST_PATH" ]] || return 1
+  [[ "$(path_identity "$quarantine_path")" == "$source_identity" ]] || return 1
+  if [[ "$source_kind" == "file" ]]; then
+    backup_file_matches "$quarantine_path" "$source_sha" || return 1
+  else
+    [[ -L "$quarantine_path" ]] || return 1
+  fi
+  fsync_parent "$PLIST_PATH" || return 1
+  printf 'Quarantined %s elevation LaunchAgent outside launchd discovery at %s\n' \
+    "$description" "$quarantine_path" >&2
+}
+
+ensure_elevation_job_absent() {
+  local state
+  state="$(job_loaded_state "$job_domain")"
+  if [[ "$state" != "absent" ]]; then
+    launchctl bootout "$job_domain" >/dev/null 2>&1 || true
+    state="$(job_loaded_state "$job_domain")"
+  fi
+  [[ "$state" == "absent" ]]
+}
+
+neutralize_unsafe_elevation_launch_agent() {
+  local description="$1" evidence_path="$2" evidence_sha="$3" neutralization_failed=0
+  if ! quarantine_elevation_plist "$description"; then
+    if [[ -e "$PLIST_PATH" || -L "$PLIST_PATH" ]]; then
+      rm -f -- "$PLIST_PATH" || neutralization_failed=1
+    fi
+    fsync_parent "$PLIST_PATH" || neutralization_failed=1
+    printf 'Removed unquarantinable %s elevation LaunchAgent; exact evidence remains at %s\n' \
+      "$description" "$evidence_path" >&2
+  fi
+  [[ ! -e "$PLIST_PATH" && ! -L "$PLIST_PATH" ]] || neutralization_failed=1
+  ensure_elevation_job_absent || neutralization_failed=1
+  if [[ -n "$evidence_path" ]]; then
+    backup_file_matches "$evidence_path" "$evidence_sha" || neutralization_failed=1
+  fi
+  [[ "$neutralization_failed" == "0" ]]
+}
+
+quarantine_entry_unsafe_elevation_app() {
+  local app_identity app_kind quarantine_container quarantine_app quarantine_failed=0
+  ELEVATION_APP_OWNER_WAS_EVIDENCED=0
+  elevation_ownership_is_evidenced || return 0
+  # Keep this fact across neutralization: launchd and its plist may be gone before
+  # rollback decides whether the displaced CUA-bearing app can return to APP_PATH.
+  ELEVATION_APP_OWNER_WAS_EVIDENCED=1
+  [[ -e "$APP_PATH" || -L "$APP_PATH" ]] || return 0
+  elevation_app_is_cua_free "$APP_PATH" && return 0
+
+  neutralize_unsafe_elevation_launch_agent 'entry for unsafe elevation app' '' '' ||
+    quarantine_failed=1
+  if [[ -L "$APP_PATH" ]]; then
+    app_kind="symlink"
+    app_identity="$(path_identity "$APP_PATH")" || quarantine_failed=1
+  elif [[ -d "$APP_PATH" ]]; then
+    app_kind="bundle"
+    app_identity="$(durable_path_identity "$APP_PATH")" || quarantine_failed=1
+  else
+    quarantine_failed=1
+  fi
+  if [[ "$quarantine_failed" == "0" ]]; then
+    if quarantine_container="$(mktemp -d "$STATE_DIR/elevation-host.quarantined-app.XXXXXX")"; then
+      quarantine_app="$quarantine_container/OpenClaw.app"
+      rename_app_exclusively "$APP_PATH" "$quarantine_app" || quarantine_failed=1
+      if path_matches_identity "$quarantine_app" "$app_identity" &&
+        { [[ "$app_kind" == "symlink" && -L "$quarantine_app" ]] ||
+          { [[ "$app_kind" == "bundle" && -d "$quarantine_app" && ! -L "$quarantine_app" ]] &&
+            ! elevation_app_is_cua_free "$quarantine_app"; }; } &&
+        [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]]
+      then
+        UNSAFE_ELEVATION_APP_QUARANTINE="$quarantine_app"
+        UNSAFE_ELEVATION_APP_WAS_QUARANTINED=1
+        fsync_parent "$APP_PATH" || quarantine_failed=1
+      else
+        quarantine_failed=1
+      fi
+    else
+      quarantine_failed=1
+    fi
+  fi
+  [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || quarantine_failed=1
+  [[ ! -e "$PLIST_PATH" && ! -L "$PLIST_PATH" ]] || quarantine_failed=1
+  if [[ "$UNSAFE_ELEVATION_APP_WAS_QUARANTINED" == "1" ]]; then
+    printf 'Quarantined CUA-bearing elevation app outside its launchd path at %s\n' \
+      "$UNSAFE_ELEVATION_APP_QUARANTINE" >&2
+  fi
+  [[ "$quarantine_failed" == "0" ]]
+}
+
 # Canonical elevation identity check: a strict superset of verify_elevation_signature in
 # codesign-mac-app.sh, and the only one that runs post-notarization and on the target Mac at install
 # time. Dropping it lets the portable installer accept an archive nobody re-verified after signing.
 verify_elevation_app() {
   local app="$1"
   [[ -d "$app" && ! -L "$app" ]] || fail "elevation app not found or symlinked: $app"
+  local cua_driver="$app/Contents/Resources/cua-driver"
+  elevation_app_is_cua_free "$app" ||
+    fail "elevation app must not contain bundled CUA driver: $cua_driver"
   [[ "$(plist_value "$app" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] ||
     fail "elevation app bundle id must be $EXPECTED_BUNDLE_ID"
   local source_commit peekaboo_commit
@@ -531,6 +711,7 @@ restore_install_receipt_after_rollback() {
       "$ROLLBACK_INSTALL_RECEIPT_SHA" \
       600
   elif [[ -e "$RECEIPT_PATH" || -L "$RECEIPT_PATH" ]]; then
+    [[ "$ELEVATION_APP_OWNER_WAS_EVIDENCED" == "1" ]] || return 1
     [[ -f "$RECEIPT_PATH" && ! -L "$RECEIPT_PATH" ]] || return 1
     rm "$RECEIPT_PATH"
   fi
@@ -2163,12 +2344,28 @@ install_host() {
 
 recover_install() {
   local recovery_failed=0 elevation_state restored_state prior_owner_state
+  local unsafe_previous_elevation=0 rollback_app_candidate=""
+  quarantine_entry_unsafe_elevation_app || return 1
+  [[ "$UNSAFE_ELEVATION_APP_WAS_QUARANTINED" == "0" ]] || recovery_failed=1
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -n "$ROLLBACK_APP_PATH" ]]; then
     verify_recorded_rollback_app "$APP_PATH" ||
       verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || return 1
   fi
-  [[ -z "$ROLLBACK_ELEVATION_PLIST" ]] ||
-    backup_file_matches "$ROLLBACK_ELEVATION_PLIST" "$ROLLBACK_ELEVATION_PLIST_SHA" || return 1
+  if [[ "$ELEVATION_APP_OWNER_WAS_EVIDENCED" == "1" && -n "$ROLLBACK_APP_PATH" ]]
+  then
+    if [[ -d "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] &&
+      ! elevation_app_is_cua_free "$ROLLBACK_APP_PATH"
+    then
+      rollback_app_candidate="$ROLLBACK_APP_PATH"
+    elif [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]] && ! elevation_app_is_cua_free "$APP_PATH"; then
+      rollback_app_candidate="$APP_PATH"
+    fi
+    [[ -z "$rollback_app_candidate" ]] || unsafe_previous_elevation=1
+  fi
+  if [[ "$unsafe_previous_elevation" == "0" ]]; then
+    [[ -z "$ROLLBACK_ELEVATION_PLIST" ]] ||
+      backup_file_matches "$ROLLBACK_ELEVATION_PLIST" "$ROLLBACK_ELEVATION_PLIST_SHA" || return 1
+  fi
   [[ -z "$ROLLBACK_MIGRATION_PLIST" ]] ||
     backup_file_matches "$ROLLBACK_MIGRATION_PLIST" "$ROLLBACK_MIGRATION_PLIST_SHA" || return 1
   [[ -z "$ROLLBACK_INSTALL_RECEIPT" ]] ||
@@ -2221,7 +2418,21 @@ recover_install() {
     [[ -n "$ROLLBACK_APP_PATH" ]] &&
       verify_recorded_rollback_app "$APP_PATH" || return 1
   fi
-  if [[ -n "$ROLLBACK_APP_PATH" && -d "$ROLLBACK_APP_PATH" ]]; then
+  if [[ "$unsafe_previous_elevation" == "1" ]]; then
+    if [[ -d "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]]; then
+      verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || recovery_failed=1
+      [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || recovery_failed=1
+    elif verify_recorded_rollback_app "$APP_PATH"; then
+      [[ ! -e "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] || recovery_failed=1
+      if [[ "$recovery_failed" == "0" ]]; then
+        rename_app_exclusively "$APP_PATH" "$ROLLBACK_APP_PATH" || true
+        verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || recovery_failed=1
+        [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || recovery_failed=1
+      fi
+    else
+      recovery_failed=1
+    fi
+  elif [[ -n "$ROLLBACK_APP_PATH" && -d "$ROLLBACK_APP_PATH" ]]; then
     [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || return 1
     rename_app_exclusively "$ROLLBACK_APP_PATH" "$APP_PATH" || true
     verify_recorded_rollback_app "$APP_PATH" || recovery_failed=1
@@ -2229,23 +2440,42 @@ recover_install() {
   elif [[ -n "$ROLLBACK_APP_PATH" ]]; then
     verify_recorded_rollback_app "$APP_PATH" || recovery_failed=1
   fi
-  if [[ -n "$ROLLBACK_ELEVATION_PLIST" && -f "$ROLLBACK_ELEVATION_PLIST" ]]; then
-    restore_file_atomically \
-      "$ROLLBACK_ELEVATION_PLIST" \
-      "$PLIST_PATH" \
-      "$ROLLBACK_ELEVATION_PLIST_SHA" \
-      644 || recovery_failed=1
-    restored_state="$(job_loaded_state "$job_domain")"
-    [[ "$restored_state" != 'unknown' ]] || recovery_failed=1
-    if [[ "$recovery_failed" == "0" &&
-      "$ROLLBACK_ELEVATION_WAS_LOADED" == "1" && "$restored_state" == 'absent' ]]
-    then
-      launchctl bootstrap "$launch_domain" "$PLIST_PATH" >/dev/null 2>&1 || recovery_failed=1
-    elif [[ "$ROLLBACK_ELEVATION_WAS_LOADED" == "0" && "$restored_state" != 'absent' ]]; then
-      recovery_failed=1
+  if [[ "$unsafe_previous_elevation" == "1" ]]; then
+    if [[ -n "$ROLLBACK_ELEVATION_PLIST" ]]; then
+      neutralize_unsafe_elevation_launch_agent \
+        'replacement for unsafe previous' \
+        "$ROLLBACK_ELEVATION_PLIST" \
+        "$ROLLBACK_ELEVATION_PLIST_SHA" || recovery_failed=1
+      printf 'Preserved previous elevation app with bundled CUA driver at %s and LaunchAgent evidence at %s; refusing to restore it as elevation host\n' \
+        "$ROLLBACK_APP_PATH" "$ROLLBACK_ELEVATION_PLIST" >&2
+    else
+      neutralize_unsafe_elevation_launch_agent \
+        'replacement for unsafe previous' \
+        '' \
+        '' || recovery_failed=1
+      printf 'Preserved previous elevation app with bundled CUA driver at %s; no prior elevation LaunchAgent was recorded, and it will not be restored as elevation host\n' \
+        "$ROLLBACK_APP_PATH" >&2
     fi
-  else
+    recovery_failed=1
+  elif [[ -n "$ROLLBACK_ELEVATION_PLIST" && -f "$ROLLBACK_ELEVATION_PLIST" ]]; then
+      restore_file_atomically \
+        "$ROLLBACK_ELEVATION_PLIST" \
+        "$PLIST_PATH" \
+        "$ROLLBACK_ELEVATION_PLIST_SHA" \
+        644 || recovery_failed=1
+      restored_state="$(job_loaded_state "$job_domain")"
+      [[ "$restored_state" != 'unknown' ]] || recovery_failed=1
+      if [[ "$recovery_failed" == "0" &&
+        "$ROLLBACK_ELEVATION_WAS_LOADED" == "1" && "$restored_state" == 'absent' ]]
+      then
+        launchctl bootstrap "$launch_domain" "$PLIST_PATH" >/dev/null 2>&1 || recovery_failed=1
+      elif [[ "$ROLLBACK_ELEVATION_WAS_LOADED" == "0" && "$restored_state" != 'absent' ]]; then
+        recovery_failed=1
+      fi
+  elif [[ "$ELEVATION_APP_OWNER_WAS_EVIDENCED" == "1" ]]; then
     [[ ! -f "$PLIST_PATH" ]] || rm -f "$PLIST_PATH" || recovery_failed=1
+  elif [[ -e "$PLIST_PATH" || -L "$PLIST_PATH" ]]; then
+    recovery_failed=1
   fi
   if [[ -n "$ROLLBACK_MIGRATION_SOURCE" && -f "$ROLLBACK_MIGRATION_PLIST" ]]; then
     if [[ "$CUTOVER_MIGRATION_REMOVED" != "1" &&
@@ -2365,6 +2595,13 @@ recover_install() {
 
 restore_current_generation_after_recovery_failure() {
   local restore_failed=0 app_restore_failed=0 state
+  local unsafe_current_elevation=0 current_app_evidence_path=""
+  quarantine_entry_unsafe_elevation_app || return 1
+  if [[ "$UNSAFE_ELEVATION_APP_WAS_QUARANTINED" == "1" ]]; then
+    unsafe_current_elevation=1
+    current_app_evidence_path="$UNSAFE_ELEVATION_APP_QUARANTINE"
+    app_restore_failed=1
+  fi
 
   if [[ "$RECOVERY_RELAUNCHED_ADOPTED_PID" =~ ^[0-9]+$ ]]; then
     ADOPTION_PID="$RECOVERY_RELAUNCHED_ADOPTED_PID"
@@ -2414,7 +2651,35 @@ restore_current_generation_after_recovery_failure() {
     [[ "$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")" == "absent" ]] || return 1
   fi
 
-  if [[ "$RECOVERY_CURRENT_APP_STATE" == "absent" ]]; then
+  if [[ "$unsafe_current_elevation" == "0" &&
+    ( "$RECOVERY_CURRENT_APP_STATE" == "valid" ||
+    "$RECOVERY_CURRENT_APP_STATE" == "damaged" ) ]]
+  then
+    if [[ -n "$RECOVERED_FAILED_APP_PATH" && -d "$RECOVERED_FAILED_APP_PATH" &&
+      ! -L "$RECOVERED_FAILED_APP_PATH" ]] &&
+      ! elevation_app_is_cua_free "$RECOVERED_FAILED_APP_PATH"
+    then
+      unsafe_current_elevation=1
+      current_app_evidence_path="$RECOVERED_FAILED_APP_PATH"
+    elif [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]] && ! elevation_app_is_cua_free "$APP_PATH"; then
+      unsafe_current_elevation=1
+      if preserve_current_app_for_recovery 'unsafe current elevation app'; then
+        current_app_evidence_path="$RECOVERED_FAILED_APP_PATH"
+      elif [[ -n "$RECOVERED_FAILED_APP_PATH" ]] &&
+        verify_recorded_current_app "$RECOVERED_FAILED_APP_PATH"
+      then
+        current_app_evidence_path="$RECOVERED_FAILED_APP_PATH"
+        app_restore_failed=1
+      else
+        current_app_evidence_path="$APP_PATH"
+        app_restore_failed=1
+      fi
+    fi
+  fi
+
+  if [[ "$unsafe_current_elevation" == "1" && "$app_restore_failed" != "0" ]]; then
+    : # Preserve the unsafe classification and skip every normal restoration path.
+  elif [[ "$RECOVERY_CURRENT_APP_STATE" == "absent" ]]; then
     if [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]]; then
       [[ -z "$ROLLBACK_APP_PATH" ]] ||
         verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || app_restore_failed=1
@@ -2439,14 +2704,19 @@ restore_current_generation_after_recovery_failure() {
       ! -L "$RECOVERED_FAILED_APP_PATH" ]] &&
       path_matches_identity "$RECOVERED_FAILED_APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY"
     then
-      rename_app_exclusively "$RECOVERED_FAILED_APP_PATH" "$APP_PATH" || true
-      path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" || app_restore_failed=1
-      if [[ "$app_restore_failed" == "0" && "$RECOVERY_CURRENT_APP_STATE" == "valid" ]]; then
-        verify_recorded_current_app "$APP_PATH" || app_restore_failed=1
+      if [[ "$unsafe_current_elevation" == "1" ]]; then
+        verify_recorded_current_app "$RECOVERED_FAILED_APP_PATH" || app_restore_failed=1
+        [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || app_restore_failed=1
+      else
+        rename_app_exclusively "$RECOVERED_FAILED_APP_PATH" "$APP_PATH" || true
+        path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" || app_restore_failed=1
+        if [[ "$app_restore_failed" == "0" && "$RECOVERY_CURRENT_APP_STATE" == "valid" ]]; then
+          verify_recorded_current_app "$APP_PATH" || app_restore_failed=1
+        fi
+        [[ ! -e "$RECOVERED_FAILED_APP_PATH" && ! -L "$RECOVERED_FAILED_APP_PATH" ]] ||
+          app_restore_failed=1
+        rmdir "$(dirname "$RECOVERED_FAILED_APP_PATH")" 2>/dev/null || true
       fi
-      [[ ! -e "$RECOVERED_FAILED_APP_PATH" && ! -L "$RECOVERED_FAILED_APP_PATH" ]] ||
-        app_restore_failed=1
-      rmdir "$(dirname "$RECOVERED_FAILED_APP_PATH")" 2>/dev/null || true
     else
       app_restore_failed=1
     fi
@@ -2454,18 +2724,49 @@ restore_current_generation_after_recovery_failure() {
   case "$RECOVERY_CURRENT_APP_STATE" in
     absent) [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || app_restore_failed=1 ;;
     damaged)
-      [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]] &&
-        path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" || app_restore_failed=1
+      if [[ "$unsafe_current_elevation" == "1" ]]; then
+        [[ -n "$current_app_evidence_path" && ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] &&
+          path_matches_identity "$current_app_evidence_path" "$RECOVERY_CURRENT_APP_IDENTITY" &&
+          verify_recorded_current_app "$current_app_evidence_path" || app_restore_failed=1
+      else
+        [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]] &&
+          path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" || app_restore_failed=1
+      fi
       ;;
     valid)
-      path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" &&
-        verify_recorded_current_app "$APP_PATH" || app_restore_failed=1
+      if [[ "$unsafe_current_elevation" == "1" ]]; then
+        [[ -n "$current_app_evidence_path" && ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] &&
+          path_matches_identity "$current_app_evidence_path" "$RECOVERY_CURRENT_APP_IDENTITY" &&
+          verify_recorded_current_app "$current_app_evidence_path" || app_restore_failed=1
+      else
+        path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" &&
+          verify_recorded_current_app "$APP_PATH" || app_restore_failed=1
+      fi
       ;;
     *) app_restore_failed=1 ;;
   esac
-  [[ "$app_restore_failed" == "0" ]] || return 1
+  if [[ "$app_restore_failed" != "0" && "$unsafe_current_elevation" == "0" ]]; then
+    return 1
+  fi
 
-  if [[ -n "$RECOVERY_CURRENT_PLIST" ]]; then
+  if [[ "$unsafe_current_elevation" == "1" ]]; then
+    if [[ -n "$RECOVERY_CURRENT_PLIST" ]]; then
+      neutralize_unsafe_elevation_launch_agent \
+        'replacement for unsafe current' \
+        "$RECOVERY_CURRENT_PLIST" \
+        "$RECOVERY_CURRENT_PLIST_SHA" || restore_failed=1
+      printf 'Preserved current elevation app with bundled CUA driver at %s and LaunchAgent evidence at %s; refusing to restore it as elevation host\n' \
+        "$current_app_evidence_path" "$RECOVERY_CURRENT_PLIST" >&2
+    else
+      neutralize_unsafe_elevation_launch_agent \
+        'replacement for unsafe current' \
+        '' \
+        '' || restore_failed=1
+      printf 'Preserved current elevation app with bundled CUA driver at %s; no current elevation LaunchAgent was recorded, and it will not be restored as elevation host\n' \
+        "$current_app_evidence_path" >&2
+    fi
+    restore_failed=1
+  elif [[ -n "$RECOVERY_CURRENT_PLIST" ]]; then
     restore_file_atomically \
       "$RECOVERY_CURRENT_PLIST" \
       "$PLIST_PATH" \
@@ -2686,6 +2987,10 @@ recover_host() {
       fail 'recovery migration transaction binding is invalid'
     RECOVERY_RESTORED_MIGRATION_IDENTITY="$migration_identity"
   fi
+  if [[ "$INSTALL_RECEIPT_SCHEMA" != "legacy" ]]; then
+    RECOVERY_CURRENT_APP_CDHASH_ARM64="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
+    RECOVERY_CURRENT_APP_CDHASH_X86_64="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
+  fi
   if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' || "$RECOVERY_CURRENT_APP_STATE" != "valid" ||
     ("$RECOVERY_PENDING_INSTALL" == "1" && "$current_app_matches_receipt" != "1") ]]
   then
@@ -2713,8 +3018,6 @@ recover_host() {
     [[ -z "$ARCHIVE" && -z "$ARTIFACT_RECEIPT" && -z "$EXPECTED_ARTIFACT_RECEIPT_SHA256" ]] ||
       fail 'artifact helper inputs are valid only for legacy recovery'
     CONFIG_PATH="$(jq -r '.configPath' "$RECEIPT_PATH")"
-    RECOVERY_CURRENT_APP_CDHASH_ARM64="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
-    RECOVERY_CURRENT_APP_CDHASH_X86_64="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
     prepare_current_app_rename_helper
   fi
   if [[ "$pending_migration_identity_needs_record" == "1" ]]; then

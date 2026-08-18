@@ -324,7 +324,7 @@ function composerControlsHtml(crowded = false) {
           </details>
           <details class="chat-controls__inline-select chat-controls__effort-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
-            <span class="chat-controls__inline-select-label">High</span>
+            <span class="chat-controls__inline-select-label">Medium</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
             <div class="chat-controls__reasoning-panel">Effort</div>
@@ -509,8 +509,16 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     </div>
                   </div>
                   <div class="agent-chat__composer-footer">
-                    ${composerControlsHtml(opts.crowdedComposerFooter)}
                     <div class="agent-chat__composer-meta">
+                      <details class="chat-controls__inline-select chat-controls__permission-picker">
+                        <summary class="chat-controls__inline-select-trigger chat-controls__permission-trigger" data-chat-permission-select="true" aria-label="Permissions: Workspace">
+                          <span class="chat-controls__permission-icon" aria-hidden="true">${iconSvg()}</span>
+                          <span class="chat-controls__inline-select-label">Workspace</span>
+                        </summary>
+                      </details>
+                    </div>
+                    ${composerControlsHtml(opts.crowdedComposerFooter)}
+                    <div class="agent-chat__composer-context">
                       <div class="context-usage">
                         <details>
                           <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
@@ -2463,6 +2471,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         };
         return {
+          context: rectFor(".context-ring"),
           controls: rectFor(".agent-chat__composer-controls"),
           effort: rectFor(".chat-controls__effort-trigger"),
           footer: rectFor(".agent-chat__composer-footer"),
@@ -2470,6 +2479,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           model: rectFor(".chat-controls__model-trigger"),
           modelLabel: rectFor(".chat-controls__model-trigger .chat-controls__inline-select-label"),
           overrides: rectFor(".agent-chat__session-overrides-pill"),
+          permission: rectFor(".chat-controls__permission-trigger"),
           status: rectFor(".agent-chat__composer-run-status"),
           typing: rectFor(".agent-chat__typing-indicator--outside"),
         };
@@ -2481,6 +2491,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         layout.overrides,
         layout.model,
         layout.effort,
+        layout.permission,
+        layout.context,
         layout.typing,
       ]) {
         expect(control.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
@@ -2488,16 +2500,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           layout.footer.x + layout.footer.width + 1,
         );
       }
-      for (const trigger of [layout.model, layout.effort]) {
+      for (const trigger of [layout.permission, layout.model, layout.effort]) {
         expect(trigger.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(trigger.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       }
       expect(layout.modelLabel.scrollWidth).toBeLessThanOrEqual(layout.modelLabel.clientWidth + 1);
       for (const [left, right] of [
+        [layout.meta, layout.status],
         [layout.status, layout.overrides],
         [layout.overrides, layout.model],
         [layout.model, layout.effort],
-        [layout.effort, layout.meta],
+        [layout.effort, layout.context],
       ] as const) {
         expect(rectsOverlap(left, right)).toBe(false);
       }
@@ -2511,6 +2524,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [320, 568],
     [393, 852],
     [568, 320],
+    [1024, 768],
     [1366, 900],
     [1920, 1080],
   ] as const)(
@@ -2555,6 +2569,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             effortLabel: rectFor(
               ".chat-controls__effort-trigger .chat-controls__inline-select-label",
             ),
+            permission: rectFor(".chat-controls__permission-trigger"),
+            permissionLabel: rectFor(
+              ".chat-controls__permission-trigger .chat-controls__inline-select-label",
+            ),
             context: rectFor(".context-ring"),
             attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
             send: rectFor(".chat-send-btn"),
@@ -2576,6 +2594,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           "composer thinking trigger",
         );
         const effortLabel = expectControlRect(controls.effortLabel, "composer thinking label");
+        const permission = expectControlRect(controls.permission, "composer permission trigger");
+        const permissionLabel = expectControlRect(
+          controls.permissionLabel,
+          "composer permission label",
+        );
         const context = expectControlRect(controls.context, "composer context control");
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
@@ -2587,6 +2610,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           model,
           modelTrigger,
           effortTrigger,
+          permission,
           context,
           attach,
           send,
@@ -2609,6 +2633,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(send.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
         expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
         expect(rectsOverlap(model, send)).toBe(false);
+        expect(permission.x).toBeLessThan(model.x);
+        expect(rectsOverlap(permission, model)).toBe(false);
         const effortContextGap = context.x - (effortTrigger.x + effortTrigger.width);
         expect(effortContextGap).toBeGreaterThanOrEqual(-1);
         expect(effortContextGap).toBeLessThanOrEqual(9);
@@ -2619,18 +2645,18 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(composerFontSize).toBe(16);
           expect(model.width).toBeGreaterThanOrEqual(40);
           expect(model.width).toBeLessThanOrEqual(footer.width);
-          for (const trigger of [modelTrigger, effortTrigger]) {
+          for (const trigger of [permission, modelTrigger, effortTrigger]) {
             expect(trigger.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
             expect(trigger.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           }
-          for (const label of [modelLabel, effortLabel]) {
+          for (const label of [modelLabel, effortLabel, permissionLabel]) {
             expect(label.clientWidth).toBeDefined();
             expect(label.scrollWidth).toBeDefined();
             expect(label.scrollWidth ?? 0).toBeLessThanOrEqual((label.clientWidth ?? 0) + 1);
           }
           expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          for (const control of [model, context]) {
+          for (const control of [permission, model, context]) {
             expect(
               Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
             ).toBeLessThanOrEqual(2);
@@ -2638,6 +2664,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(footer.height).toBeLessThanOrEqual(49.1);
         } else {
           expect(composerFontSize).toBe(14);
+          for (const label of [permissionLabel, modelLabel, effortLabel]) {
+            expect(label.scrollWidth).toBeLessThanOrEqual((label.clientWidth ?? 0) + 1);
+          }
           expect(send.width).toBeCloseTo(36, 2);
           expect(send.height).toBeCloseTo(36, 2);
         }

@@ -53,7 +53,8 @@ export default definePluginEntry({
     api.registerService(
       createWorkboardLifecycleService({
         store,
-        readSessions: async () => await readWorkboardLifecycleSessions(api.runtime.gateway),
+        readSessions: async (options) =>
+          await readWorkboardLifecycleSessions(api.runtime.gateway, options),
       }),
     );
     api.on("subagent_ended", async (event) => {

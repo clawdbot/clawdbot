@@ -179,6 +179,14 @@ type GatewaySystemAgentSession = {
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
+    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+      wizardInputPending?: boolean;
+      question?: SystemAgentChatQuestion;
+      step?: import("../../wizard/session.js").WizardStep;
+    };
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
