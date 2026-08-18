@@ -32,6 +32,7 @@ import {
 } from "./matrix/client/url-validation.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
+import { isMatrixRoomId } from "./matrix/target-ids.js";
 import type { RuntimeEnv, WizardPrompter } from "./runtime-api.js";
 import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
 import { createMatrixSetupDmPolicy } from "./setup-dm-policy.js";
@@ -54,11 +55,7 @@ function isMatrixInviteAutoJoinPolicy(value: string): value is MatrixInviteAutoJ
 }
 
 function isMatrixInviteAutoJoinTarget(entry: string): boolean {
-  return (
-    entry === "*" ||
-    (entry.startsWith("!") && entry.includes(":")) ||
-    (entry.startsWith("#") && entry.includes(":"))
-  );
+  return entry === "*" || isMatrixRoomId(entry) || (entry.startsWith("#") && entry.includes(":"));
 }
 
 function resolveMatrixOnboardingAccountId(cfg: CoreConfig, accountId?: string): string {
@@ -312,7 +309,7 @@ async function configureMatrixAccessPrompts(params: {
               continue;
             }
             const cleaned = trimmed.replace(/^(room|channel):/i, "").trim();
-            if (cleaned.startsWith("!") && cleaned.includes(":")) {
+            if (isMatrixRoomId(cleaned)) {
               resolvedIds.push(cleaned);
               continue;
             }

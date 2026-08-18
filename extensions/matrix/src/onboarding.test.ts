@@ -475,6 +475,42 @@ describe("matrix onboarding", () => {
     expect(notes.join("\n")).toContain("Invalid: Project Room");
   });
 
+  it("accepts a room version 12 auto-join target (no :server suffix) on the first entry", async () => {
+    // Room version 12 (MSC4291) dropped the trailing ":server" from room IDs.
+    installMatrixTestRuntime();
+    const notes: string[] = [];
+    let inviteAllowlistPrompts = 0;
+
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
+      notes,
+      inviteAutoJoin: "allowlist",
+      onText: async (message) => {
+        if (message === "Matrix invite auto-join allowlist (comma-separated)") {
+          inviteAllowlistPrompts += 1;
+          return "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      },
+    });
+
+    const result = await runMatrixInteractiveConfigure({
+      cfg: createConfiguredMatrixTopLevelConfig(),
+      prompter,
+      configured: true,
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(inviteAllowlistPrompts).toBe(1);
+    expect(result.cfg.channels?.matrix?.autoJoin).toBe("allowlist");
+    expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual([
+      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70",
+    ]);
+  });
+
   it("reports account-scoped DM config keys for named accounts", () => {
     const resolveConfigKeys = matrixOnboardingAdapter.dmPolicy?.resolveConfigKeys;
     if (resolveConfigKeys === undefined) {
