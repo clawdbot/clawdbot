@@ -42,12 +42,13 @@ function isFirstUseAdditiveStateColumn({
 }: LazyAdditiveStateColumnDefinition): boolean {
   return (
     (tableName === "device_bootstrap_tokens" && columnName === "setup_id") ||
+    (tableName === "worker_session_placement_moves" && columnName === "target_machine_class") ||
     (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree"))
   );
 }
 
 // Most same-version columns repair during a writable shared-state open. These
-// feature-owned columns stay absent until setup or group defaults first uses them.
+// feature-owned columns stay absent until their feature first uses them.
 export const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS =
   CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.filter(
     (definition) => !isFirstUseAdditiveStateColumn(definition),
