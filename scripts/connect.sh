@@ -189,6 +189,17 @@ bash "$INSTALLER_PATH" --version "$VERSION" --prefix "$PREFIX" --no-onboard
 OPENCLAW_BIN="${PREFIX}/bin/openclaw"
 [[ -x "$OPENCLAW_BIN" ]] || fail "Installed OpenClaw CLI is missing at ${OPENCLAW_BIN}. Check the installer output and retry."
 
+CAPABILITY_ERROR="The selected exact version ${VERSION} does not support session-host onboarding. Choose a newer supporting exact version and retry."
+if ! CONNECT_HELP="$("$OPENCLAW_BIN" connect --help 2>&1)"; then
+  fail "$CAPABILITY_ERROR"
+fi
+for required_flag in --target-file --service --session-host; do
+  if ! grep -Eq -- "^[[:space:]]+${required_flag}([[:space:]=<]|$)" <<<"$CONNECT_HELP"; then
+    fail "$CAPABILITY_ERROR"
+  fi
+done
+unset CONNECT_HELP
+
 : >"$TARGET_FILE"
 chmod 0600 "$TARGET_FILE"
 printf '%s\n' "$JOIN_TARGET" >"$TARGET_FILE"

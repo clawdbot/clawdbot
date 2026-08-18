@@ -63,6 +63,16 @@ describe("connect cli", () => {
     mocks.runtime.exit.mockImplementation(() => {});
   });
 
+  it("advertises the wrapper-required connect options", () => {
+    const program = new Command();
+    registerConnectCli(program);
+    const help = program.commands[0]?.helpInformation() ?? "";
+
+    expect(help).toMatch(/^[ \t]+--target-file <path>(?:[ \t]|$)/mu);
+    expect(help).toMatch(/^[ \t]+--service(?:[ \t]|$)/mu);
+    expect(help).toMatch(/^[ \t]+--session-host(?:[ \t]|$)/mu);
+  });
+
   it.each([
     { name: "bare setup code", target: () => setupCode(), fetched: false },
     { name: "oc-pair wrapper", target: () => `oc-pair://${setupCode()}`, fetched: false },

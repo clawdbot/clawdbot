@@ -1,6 +1,6 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
 import fs from "node:fs/promises";
-import { Option, type Command } from "commander";
+import type { Command } from "commander";
 import {
   buildCloudflareAccessHeaders,
   CF_ACCESS_CLIENT_ID_HEADER,
@@ -262,7 +262,7 @@ export function registerConnectCli(program: Command): void {
       "Host worker sessions (process-scoped unless installed as a service)",
       false,
     )
-    .addOption(new Option("--target-file <path>").hideHelp())
+    .option("--target-file <path>", "Read the connect target from a private file and remove it")
     .option("--display-name <name>", "Override the node display name")
     .addHelpText(
       "after",

@@ -106,6 +106,10 @@ hosting and exact capacity from this durable consent when it starts.
 - an `oc-pair://<setup-code>` URL;
 - a bare base64url setup code.
 
+`--target-file <path>` reads the target from a private file and removes that file
+after reading it. The dormant installer wrapper uses this handoff to keep the
+single-use target out of child-process arguments.
+
 Join URLs must use HTTPS. Plain HTTP is accepted only for loopback Gateway URLs
 such as `http://127.0.0.1/j/<shortcode>`. Direct setup codes can carry the
 Gateway TLS certificate fingerprint, which lets the node host pin a self-signed

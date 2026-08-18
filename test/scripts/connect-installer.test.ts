@@ -1,25 +1,20 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/connect.sh";
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const path of tempDirs.splice(0)) {
-    rmSync(path, { force: true, recursive: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createFixture() {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-connect-installer-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-connect-installer-");
   const installer = join(root, "install-cli.sh");
   const installArgs = join(root, "install-args");
+  const helpArgs = join(root, "help-args");
   const connectArgs = join(root, "connect-args");
   const targetContent = join(root, "target-content");
+  const targetCreatedBeforeHelp = join(root, "target-created-before-help");
   const targetMode = join(root, "target-mode");
   const targetPath = join(root, "target-path");
   writeFileSync(
@@ -39,6 +34,19 @@ mkdir -p "$prefix/bin"
 cat >"$prefix/bin/openclaw" <<'OPENCLAW'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$#" -eq 2 && "$1" == "connect" && "$2" == "--help" ]]; then
+  printf '%s\n' "$@" >"$FAKE_HELP_ARGS"
+  target_files=("\${TMPDIR:-/tmp}"/openclaw-connect.*/join-target)
+  if [[ -e "\${target_files[0]}" ]]; then
+    : >"$FAKE_TARGET_CREATED_BEFORE_HELP"
+  fi
+  if [[ -n "\${FAKE_CONNECT_HELP:-}" ]]; then
+    printf '%s\n' "$FAKE_CONNECT_HELP"
+  else
+    printf '%s\n' '  --target-file <path>' '  --service' '  --session-host'
+  fi
+  exit "\${FAKE_HELP_EXIT:-0}"
+fi
 printf '%s\n' "$@" >"$FAKE_CONNECT_ARGS"
 target_file=""
 while [[ $# -gt 0 ]]; do
@@ -65,8 +73,10 @@ chmod 0755 "$prefix/bin/openclaw"
     root,
     installer,
     installArgs,
+    helpArgs,
     connectArgs,
     targetContent,
+    targetCreatedBeforeHelp,
     targetMode,
     targetPath,
   };
@@ -84,10 +94,13 @@ function runWrapper(
       ...process.env,
       OPENCLAW_INSTALL_CLI_URL: fixture.installer,
       FAKE_INSTALL_ARGS: fixture.installArgs,
+      FAKE_HELP_ARGS: fixture.helpArgs,
       FAKE_CONNECT_ARGS: fixture.connectArgs,
       FAKE_TARGET_CONTENT: fixture.targetContent,
+      FAKE_TARGET_CREATED_BEFORE_HELP: fixture.targetCreatedBeforeHelp,
       FAKE_TARGET_MODE: fixture.targetMode,
       FAKE_TARGET_PATH: fixture.targetPath,
+      TMPDIR: fixture.root,
       ...env,
     },
   });
@@ -105,18 +118,20 @@ describe("scripts/connect.sh", () => {
 
     const result = runWrapper(
       fixture,
-      ["--version", "2026.7.1-2", "--prefix", prefix, "--display-name", "Runner Node", target],
+      ["--version", "2026.8.1", "--prefix", prefix, "--display-name", "Runner Node", target],
       { HOME: undefined },
     );
 
     expect(result.status, result.stderr).toBe(0);
     expect(readArgs(fixture.installArgs)).toEqual([
       "--version",
-      "2026.7.1-2",
+      "2026.8.1",
       "--prefix",
       prefix,
       "--no-onboard",
     ]);
+    expect(readArgs(fixture.helpArgs)).toEqual(["connect", "--help"]);
+    expect(existsSync(fixture.targetCreatedBeforeHelp)).toBe(false);
     const connectArgs = readArgs(fixture.connectArgs);
     const privateTargetPath = readFileSync(fixture.targetPath, "utf8").trim();
     expect(connectArgs).toEqual([
@@ -135,6 +150,46 @@ describe("scripts/connect.sh", () => {
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(target);
     expect(existsSync(privateTargetPath)).toBe(false);
     expect(existsSync(dirname(privateTargetPath))).toBe(false);
+  });
+
+  it.each([
+    { name: "the help probe fails", env: { FAKE_HELP_EXIT: "2" } },
+    {
+      name: "help omits --target-file",
+      env: { FAKE_CONNECT_HELP: "  --service\n  --session-host" },
+    },
+    {
+      name: "help omits --service",
+      env: { FAKE_CONNECT_HELP: "  --target-file <path>\n  --session-host" },
+    },
+    {
+      name: "help omits --session-host",
+      env: { FAKE_CONNECT_HELP: "  --target-file <path>\n  --service" },
+    },
+  ])("rejects an installed CLI when $name", ({ env }) => {
+    const fixture = createFixture();
+    const prefix = join(fixture.root, "prefix");
+    const target = "oc-pair://private-join-target";
+
+    const result = runWrapper(
+      fixture,
+      ["--version", "2026.7.1-2", "--prefix", prefix, target],
+      env,
+    );
+
+    expect(result.status).toBe(1);
+    expect(readArgs(fixture.installArgs)).toContain("2026.7.1-2");
+    expect(readArgs(fixture.helpArgs)).toEqual(["connect", "--help"]);
+    expect(result.stderr).toContain(
+      "selected exact version 2026.7.1-2 does not support session-host onboarding",
+    );
+    expect(result.stderr).toContain("Choose a newer supporting exact version");
+    expect(result.stderr.match(/ERROR:/gu)).toHaveLength(1);
+    expect(existsSync(fixture.targetCreatedBeforeHelp)).toBe(false);
+    expect(existsSync(fixture.connectArgs)).toBe(false);
+    expect(existsSync(fixture.targetPath)).toBe(false);
+    expect(existsSync(fixture.targetContent)).toBe(false);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain(target);
   });
 
   it("respects OPENCLAW_PREFIX when --prefix is omitted", () => {

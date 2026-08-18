@@ -302,11 +302,13 @@ get here, Tailscale's key/device revocation split is the documented model):
 Repository preparation now includes a dormant `scripts/connect.sh` wrapper.
 It requires an exact OpenClaw version, installs that version into the dedicated
 CLI prefix, and hands the join target to `openclaw connect --service
---session-host` through a private temporary file. The wrapper is not hosted,
-website-synced, or emitted by the UI or devices CLI in this slice. Public
-activation still requires an explicitly authorized stable release and publish,
-followed by a separate activation change that hosts and emits the released
-wrapper.
+--session-host` through a private temporary file. Before creating that file, it
+verifies the installed exact CLI's `connect --help` advertises `--target-file`,
+`--service`, and `--session-host`; unsupported versions fail before the
+single-use target is handed off. The wrapper is not hosted, website-synced, or
+emitted by the UI or devices CLI in this slice. Public activation still requires
+an explicitly authorized stable release and publish, followed by a separate
+activation change that hosts and emits the released wrapper.
 
 ### Bundle and updates (milestone 7)
 
