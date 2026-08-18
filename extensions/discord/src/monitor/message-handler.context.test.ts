@@ -33,6 +33,16 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
     expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
   });
 
+  it("projects a cached conversation avatar into channel-owned context", async () => {
+    const ctx = await createBaseDiscordMessageContext({
+      conversationAvatar: "/media/inbound/discord-avatar.png",
+    });
+
+    const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
+
+    expect(result?.ctxPayload.ConversationAvatar).toBe("/media/inbound/discord-avatar.png");
+  });
+
   it("records the canonical guild id when no configured guild entry exists", async () => {
     const ctx = await createBaseDiscordMessageContext({
       data: { guild: { id: "guild-id", name: "Friendly Guild" } },
