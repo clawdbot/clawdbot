@@ -170,7 +170,7 @@ suite.define(() => {
       });
       await reconnectForBranchRediscovery(page, gateway);
 
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => trigger.count()).toBe(0);
       const storedWorktree = await page.evaluate(() => {
         const key = Array.from({ length: localStorage.length }, (_, index) =>
           localStorage.key(index),
@@ -183,9 +183,6 @@ suite.define(() => {
         return value?.agents?.main?.worktree;
       });
       expect(storedWorktree).toBe(false);
-      await trigger.click();
-      expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
-      await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("continue directly");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
@@ -231,7 +228,7 @@ suite.define(() => {
         "Couldn't verify Git for this folder. Choose it again to retry.",
       );
       await worktree.click();
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => trigger.count()).toBe(0);
       await expect.poll(() => start.isEnabled()).toBe(true);
       await page.keyboard.press("Escape");
 
@@ -262,15 +259,14 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await chooseCustomFolder(page, gateway);
+      const { place: project, trigger: projectTrigger } = await chooseCustomFolder(page, gateway);
       const whereTrigger = page.locator("#new-session-where-trigger");
       const where = page.locator("wa-popover.new-session-page__where-popover");
       const detailTrigger = page.locator("#new-session-detail-trigger");
-      const detail = page.locator("wa-popover.new-session-page__detail-popover");
       await whereTrigger.click();
       await where.getByRole("button", { name: "Cloud · aws" }).click();
       await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
+      expect(await detailTrigger.count()).toBe(0);
 
       await gateway.setMethodResponse("worktrees.branches", {
         branches: [],
@@ -279,7 +275,7 @@ suite.define(() => {
       await reconnectForBranchRediscovery(page, gateway);
 
       await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
+      expect(await detailTrigger.count()).toBe(0);
       await page.locator(".new-session-page__message").fill("do not run directly");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
@@ -290,10 +286,10 @@ suite.define(() => {
         "Couldn't verify Git for this folder. Choose it again to retry.",
       );
       await page.keyboard.press("Escape");
-      await detailTrigger.click();
-      const worktree = detail.getByRole("button", { name: "Worktree" });
-      expect(await worktree.getAttribute("aria-pressed")).toBe("true");
-      expect(await worktree.isDisabled()).toBe(true);
+      await projectTrigger.click();
+      await project.getByText("Advanced", { exact: true }).click();
+      await project.getByLabel("Base branch").waitFor();
+      await project.getByLabel("Checkout name").waitFor();
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     });
   });
@@ -514,10 +510,14 @@ suite.define(() => {
         await expect.poll(() => message.inputValue()).toBe("retry this draft after reconnect");
         await expect.poll(() => message.isEnabled()).toBe(true);
         await expect.poll(() => start.isDisabled()).toBe(true);
+        // The gate table also surfaces this reason in the Start tooltip, so
+        // scope to the page callout instead of a bare text match.
         await page
-          .getByText(
-            "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
-          )
+          .getByRole("alert")
+          .filter({
+            hasText:
+              "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
+          })
           .waitFor();
         expect(new URL(page.url()).pathname).toBe("/new");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);

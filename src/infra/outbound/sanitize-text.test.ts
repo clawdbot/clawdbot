@@ -82,6 +82,12 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText('<a href="https://example.com">link</a>')).toBe("link");
   });
 
+  it("strips colon- and dot-qualified tags", () => {
+    expect(
+      sanitizeForPlainText("<vendor:note>one</vendor:note><vendor.note>two</vendor.note>"),
+    ).toBe("onetwo");
+  });
+
   it("keeps stripping tags exposed by malformed tag text", () => {
     const sanitized = sanitizeForPlainText(
       "before <<script>script>alert(1)</<script>script> after",
@@ -168,6 +174,16 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("See <https://example.com/path?q=1> now")).toBe(
       "See https://example.com/path?q=1 now",
     );
+  });
+
+  it("preserves angle-addr email addresses", () => {
+    expect(sanitizeForPlainText("Contact us at Support <support@example.com> or reply here")).toBe(
+      "Contact us at Support <support@example.com> or reply here",
+    );
+  });
+
+  it("still strips tags whose name ends at a tag boundary", () => {
+    expect(sanitizeForPlainText("Ping <users/abc> for access")).toBe("Ping  for access");
   });
 
   // --- passthrough --------------------------------------------------------

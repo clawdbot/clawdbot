@@ -3,13 +3,12 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import {
-  createAlwaysConfiguredPluginConfig,
+  createActionHubPluginFixture,
   createGatewayActionPlugin,
   createPollForwardingPlugin,
   messageActionRunnerMocks as mocks,
@@ -51,70 +50,7 @@ describe("runMessageAction plugin dispatch", () => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        params,
-      }),
-    );
-
-    const actionHubPlugin: ChannelPlugin = {
-      id: "actionhub",
-      meta: {
-        id: "actionhub",
-        label: "Action Hub",
-        selectionLabel: "Action Hub",
-        docsPath: "/channels/actionhub",
-        blurb: "Action Hub action dispatch test plugin.",
-      },
-      capabilities: { chatTypes: ["direct", "channel"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetPrefixes: ["actionhub", "actionhub-alias"],
-        normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      actions: {
-        describeMessageTool: () => ({
-          actions: [
-            "pin",
-            "unpin",
-            "list-pins",
-            "member-info",
-            "channel-info",
-            "edit",
-            "thread-create",
-            "thread-reply",
-          ],
-        }),
-        messageActionTargetAliases: {
-          edit: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          pin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          unpin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-        },
-        supportsAction: ({ action }) =>
-          action === "pin" ||
-          action === "unpin" ||
-          action === "list-pins" ||
-          action === "member-info" ||
-          action === "channel-info" ||
-          action === "edit" ||
-          action === "thread-create" ||
-          action === "thread-reply",
-        handleAction,
-      },
-    };
+    const { handleAction, plugin: actionHubPlugin } = createActionHubPluginFixture();
 
     beforeEach(() => {
       setTestPlugin(actionHubPlugin, "actionhub");

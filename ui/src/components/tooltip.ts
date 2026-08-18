@@ -6,6 +6,8 @@ import { css, html } from "lit";
 import { property, query } from "lit/decorators.js";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
+const DESCRIBABLE_SELECTOR =
+  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
 const HOVER_DELAY = 150;
 const TOUCH_DELAY = 450;
 const TOUCH_VISIBLE = 900;
@@ -24,8 +26,132 @@ function normalizeTooltipText(text: string) {
   return text.replace(/\s+/gu, " ").trim();
 }
 
-function isHtmlElement(element: Element): element is HTMLElement {
-  return element.namespaceURI === "http://www.w3.org/1999/xhtml";
+function isHtmlElement(element: unknown): element is HTMLElement {
+  return (
+    typeof element === "object" &&
+    element !== null &&
+    "namespaceURI" in element &&
+    element.namespaceURI === "http://www.w3.org/1999/xhtml"
+  );
+}
+
+function isElementNode(node: Node): node is Element {
+  return node.nodeType === Node.ELEMENT_NODE;
+}
+
+function collectVisibleText(element: Element): string {
+  const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+  if (
+    (isHtmlElement(element) && element.hidden) ||
+    style?.display === "none" ||
+    style?.contentVisibility === "hidden"
+  ) {
+    return "";
+  }
+  const rendersOwnText =
+    style?.visibility !== "hidden" &&
+    style?.visibility !== "collapse" &&
+    (style?.display === "contents" ||
+      typeof element.checkVisibility !== "function" ||
+      element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+  return [...element.childNodes]
+    .map((node) => {
+      if (isElementNode(node)) {
+        return collectVisibleText(node);
+      }
+      return node.nodeType === Node.TEXT_NODE && rendersOwnText ? (node.textContent ?? "") : "";
+    })
+    .join(" ");
+}
+
+function hasTooltipOverflow(element: HTMLElement) {
+  return (
+    element.matches("[data-tooltip-overflow]") ||
+    element.scrollWidth > element.clientWidth ||
+    element.scrollHeight > element.clientHeight
+  );
+}
+
+function isTooltipTextRedundant(content: string, trigger: HTMLElement) {
+  const tooltipText = normalizeTooltipText(content);
+  if (!tooltipText || !normalizeTooltipText(trigger.textContent ?? "").includes(tooltipText)) {
+    return false;
+  }
+  const triggerText = normalizeTooltipText(collectVisibleText(trigger));
+  if (!triggerText.includes(tooltipText)) {
+    return false;
+  }
+  if (hasTooltipOverflow(trigger)) {
+    return false;
+  }
+  for (const element of trigger.querySelectorAll("*")) {
+    if (isHtmlElement(element) && hasTooltipOverflow(element)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function installNativeTitleGuard(ownerDocument: Document) {
+  const suppressed = new Map<HTMLElement, string>();
+  const restore = (trigger: HTMLElement) => {
+    const title = suppressed.get(trigger);
+    if (title === undefined) {
+      return;
+    }
+    suppressed.delete(trigger);
+    trigger.removeEventListener("pointerleave", handlePointerLeave);
+    if (trigger.getAttribute("title") === "") {
+      trigger.setAttribute("title", title);
+    }
+  };
+  const handlePointerLeave = (event: Event) => {
+    if (isHtmlElement(event.currentTarget)) {
+      restore(event.currentTarget);
+    }
+  };
+  const handlePointerOver = (event: PointerEvent) => {
+    if (event.pointerType === "touch") {
+      return;
+    }
+    const path = event.composedPath();
+    if (suppressed.size > 0) {
+      for (const trigger of suppressed.keys()) {
+        if (!path.includes(trigger)) {
+          restore(trigger);
+        }
+      }
+    }
+    for (const candidate of path) {
+      if (!isHtmlElement(candidate)) {
+        continue;
+      }
+      const title = candidate.getAttribute("title");
+      const previous = suppressed.get(candidate);
+      if (previous && title === "") {
+        continue;
+      }
+      if (previous !== undefined) {
+        candidate.removeEventListener("pointerleave", handlePointerLeave);
+        suppressed.delete(candidate);
+      }
+      if (title === null || !isTooltipTextRedundant(title, candidate)) {
+        continue;
+      }
+      suppressed.set(candidate, title);
+      // An empty title also blocks inherited native titles until the pointer
+      // truly leaves this trigger; removing the attribute would expose them.
+      candidate.setAttribute("title", "");
+      candidate.addEventListener("pointerleave", handlePointerLeave, { once: true });
+    }
+  };
+  ownerDocument.addEventListener("pointerover", handlePointerOver, true);
+  return () => {
+    ownerDocument.removeEventListener("pointerover", handlePointerOver, true);
+    for (const trigger of suppressed.keys()) {
+      restore(trigger);
+    }
+  };
 }
 
 class TooltipProvider extends OpenClawLitElement {
@@ -101,6 +227,7 @@ class Tooltip extends OpenClawLitElement {
   @query("wa-tooltip") private webAwesomeTooltip?: WaTooltip;
 
   private triggerElement: HTMLElement | null = null;
+  private describedElement: HTMLElement | null = null;
   private openTimer: number | null = null;
   private closeTimer: number | null = null;
   private touchTimer: number | null = null;
@@ -124,22 +251,28 @@ class Tooltip extends OpenClawLitElement {
 
     wa-tooltip {
       --max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
-      --wa-tooltip-arrow-size: 6px;
-      --wa-tooltip-background-color: color-mix(in srgb, var(--card) 94%, black 6%);
-      --wa-tooltip-border-color: color-mix(in srgb, var(--border-strong) 84%, transparent);
+      --wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px);
+      --wa-tooltip-background-color: var(
+        --openclaw-tooltip-background-color,
+        color-mix(in srgb, var(--bg-elevated) 97%, var(--text) 3%)
+      );
+      --wa-tooltip-border-color: var(
+        --openclaw-tooltip-border-color,
+        var(--overlay-border, var(--border-strong))
+      );
       --wa-tooltip-border-width: 1px;
       --wa-tooltip-border-style: solid;
       --wa-tooltip-content-color: var(--text);
-      --wa-tooltip-border-radius: var(--radius-md);
+      --wa-tooltip-border-radius: var(--openclaw-tooltip-border-radius, var(--radius-md));
       font-family: var(--font-body);
     }
 
     wa-tooltip::part(body) {
-      padding: 7px 9px;
-      box-shadow: var(--shadow-md);
-      font-size: 12px;
+      padding: var(--openclaw-tooltip-padding, 5px 7px);
+      box-shadow: var(--openclaw-tooltip-shadow, var(--overlay-shadow, var(--shadow-md)));
+      font-size: 11px;
       font-weight: 500;
-      line-height: 1.35;
+      line-height: 1.25;
       overflow-wrap: anywhere;
     }
 
@@ -364,7 +497,7 @@ class Tooltip extends OpenClawLitElement {
   };
 
   private scheduleOpen() {
-    if (this.webAwesomeTooltip?.open || this.openTimer !== null || this.isRedundant()) {
+    if (this.webAwesomeTooltip?.open || this.openTimer !== null) {
       return;
     }
     const delay = this.provider?.shouldDelayOpen() === false ? 0 : this.hoverDelay;
@@ -411,26 +544,34 @@ class Tooltip extends OpenClawLitElement {
     if (!trigger) {
       return false;
     }
-    const content = normalizeTooltipText(this.content);
-    const triggerText = normalizeTooltipText(trigger.textContent ?? "");
-    const clipsContent = [trigger, ...trigger.querySelectorAll("*")].some(
-      (element) => isHtmlElement(element) && element.scrollWidth > element.clientWidth,
-    );
-    return Boolean(content && triggerText && triggerText.includes(content) && !clipsContent);
+    return isTooltipTextRedundant(this.content, trigger);
+  }
+
+  private resolveDescribedElement(): HTMLElement | null {
+    const trigger = this.triggerElement;
+    if (!trigger) {
+      return null;
+    }
+    return trigger.matches(DESCRIBABLE_SELECTOR)
+      ? trigger
+      : (trigger.querySelector<HTMLElement>(DESCRIBABLE_SELECTOR) ?? trigger);
   }
 
   private syncDescription() {
-    const trigger = this.triggerElement;
+    const trigger = this.resolveDescribedElement();
     if (!trigger) {
       return;
     }
+    this.describedElement = trigger;
     const current = trigger.getAttribute("aria-describedby");
     if (!this.descriptionCaptured) {
       this.describedBy = current;
       this.descriptionCaptured = true;
     }
     if (!this.descriptionElement) {
-      const description = document.createElement("span");
+      // ownerDocument, not the global: slotchange can fire after a test
+      // environment tears down its window, where bare `document` throws.
+      const description = this.ownerDocument.createElement("span");
       description.id = this.descriptionId;
       description.hidden = true;
       this.append(description);
@@ -443,14 +584,16 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private restoreDescription() {
-    if (!this.triggerElement) {
+    const described = this.describedElement ?? this.triggerElement;
+    if (!described) {
       return;
     }
     if (this.describedBy) {
-      this.triggerElement.setAttribute("aria-describedby", this.describedBy);
+      described.setAttribute("aria-describedby", this.describedBy);
     } else {
-      this.triggerElement.removeAttribute("aria-describedby");
+      described.removeAttribute("aria-describedby");
     }
+    this.describedElement = null;
     this.descriptionElement?.remove();
     this.descriptionElement = null;
     this.describedBy = null;

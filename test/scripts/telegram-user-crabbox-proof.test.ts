@@ -32,7 +32,6 @@ import {
   runCommand,
   runSutContainerAction,
   selectCrabboxSshPort,
-  signalCommandTree,
   signalPidTree,
   stageFullSessionArtifacts,
   startLocalSut,
@@ -40,15 +39,13 @@ import {
   waitForLogAfterOffset,
   writeSutConfig,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const posixIt = process.platform === "win32" ? it.skip : it;
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
+// Proof subprocesses expose explicit ready files; the timeout only bounds broken fixtures and
+// must leave headroom for cold tsx startup on loaded maintainer hosts.
+const PROCESS_READY_TIMEOUT_MS = 30_000;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -97,7 +94,10 @@ function runProofCli(args: string[]) {
   );
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = PROCESS_READY_TIMEOUT_MS,
+): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (predicate()) {
@@ -518,7 +518,7 @@ describe("telegram user Crabbox proof log polling", () => {
         mode: "password",
         password: { id: "OPENCLAW_GATEWAY_PASSWORD", source: "env" },
       },
-      tailscale: { mode: "funnel", resetOnExit: true },
+      tailscale: { mode: "funnel" },
     });
     expect(config.mcp.servers.fixture).toEqual({
       args: ["/repo/scripts/e2e/mcp-app-conformance-server.mjs"],
@@ -1193,75 +1193,6 @@ setInterval(() => {}, 1000);
         process.kill(grandchildPid, "SIGKILL");
       }
     }
-  });
-
-  it("signals Windows proof command process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalCommandTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalCommandTree(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows proof command process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalCommandTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   posixIt("lets timed-out command descendants exit during kill grace", async () => {

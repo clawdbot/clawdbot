@@ -17,6 +17,7 @@ type OpenAIResponsesPayloadModel = {
   baseUrl?: unknown;
   id?: unknown;
   provider?: unknown;
+  contextTokens?: unknown;
   contextWindow?: unknown;
   compat?: unknown;
 };
@@ -285,10 +286,18 @@ function parsePositiveInteger(value: unknown): number | undefined {
   return undefined;
 }
 
-function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown }): number {
+function resolveOpenAIResponsesCompactThreshold(model: {
+  contextTokens?: unknown;
+  contextWindow?: unknown;
+}): number {
+  const contextTokens = parsePositiveInteger(model.contextTokens);
   const contextWindow = parsePositiveInteger(model.contextWindow);
-  if (contextWindow) {
-    return Math.max(1_000, Math.floor(contextWindow * 0.7));
+  const effectiveBudget =
+    contextTokens && contextWindow
+      ? Math.min(contextTokens, contextWindow)
+      : contextTokens || contextWindow;
+  if (effectiveBudget) {
+    return Math.max(1_000, Math.floor(effectiveBudget * 0.7));
   }
   return 80_000;
 }

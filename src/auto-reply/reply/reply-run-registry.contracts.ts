@@ -119,6 +119,11 @@ export type ReplyBackendHandle = {
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
+  claimPendingUserInputAnswer?: (
+    text: string,
+    options?: ReplyBackendQueueMessageOptions,
+  ) => Promise<boolean>;
+  cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
   cancel(reason?: ReplyBackendCancelReason): void;
   readonly messageInjection?: ReplyBackendMessageInjection;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
@@ -140,19 +145,14 @@ export type ReplyBackendHandle = {
 export const replyMessageInjectionTargetOperation = Symbol("replyMessageInjectionTargetOperation");
 export type ReplyMessageInjectionTarget = {
   readonly [replyMessageInjectionTargetOperation]: ReplyOperation;
-  /** Legacy targets stay leaf-bound even when their backend exposes a run id. */
-  readonly identity: "leaf" | "run";
+  readonly identity: "operation" | "run";
   readonly runId?: string;
-  readonly originatingLeafEntryId: string | null | undefined;
-  /** Tool authority captured with the exact active operation. */
-  readonly toolAuthorityFingerprint?: string;
 };
 
 type ReplyMessageInjectionRejectionReason =
   | "no_active_run"
   | "not_running"
   | "stale_run"
-  | "leaf_mismatch"
   | "run_mismatch"
   | "injection_unavailable"
   | ReplyBackendQueueMessageMismatch
@@ -165,8 +165,6 @@ export type ReplyMessageInjectionOutcome =
 export type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque operation target. */
   targetRunId: string | undefined;
-  /** Leaf-bound compatibility must reject before ACK instead of falling through. */
-  rejectBeforeAck?: true;
   /** Settles once the runtime accepts or rejects ownership of this exact message. */
   acceptance: Promise<boolean>;
   /** Settles after the backend confirms or rejects this exact injection. */
@@ -327,9 +325,12 @@ export type ReplyRunRegistry = {
   isActive(sessionKey: string): boolean;
   resolveMessageInjectionTarget(params: {
     sessionKey: string;
+    /** Retained in the internal call shape until expected-leaf removal; injection ignores it. */
     originatingLeafEntryId: string | null | undefined;
     expectedRunId?: string;
   }): ReplyMessageInjectionTarget | undefined;
+  /** Captures the current direct owner without requiring client-supplied run identity. */
+  resolveCurrentMessageInjectionTarget(sessionKey: string): ReplyMessageInjectionTarget | undefined;
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,

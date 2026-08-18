@@ -1,11 +1,7 @@
 // Codex catalog terminal ownership: validated resume commands and terminal plans.
 import { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  decodeNodePtyResumeParams,
-  resolveNodeHostExecutable,
-  runNodePtyCommand,
-} from "openclaw/plugin-sdk/node-host";
+import { decodeNodePtyResumeParams } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -26,6 +22,7 @@ import {
   NODE_INVOKE_TIMEOUT_MS,
   unwrapNodeInvokePayload,
 } from "./session-catalog-parsing.js";
+import { resolveNodeHostExecutable, runNodePtyCommand } from "./session-catalog-pty.runtime.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogPage,

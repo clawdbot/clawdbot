@@ -195,6 +195,27 @@ function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {
   return next;
 }
 
+/** Same-content merge detection; row values are wire scalars/plain objects, so one level suffices. */
+function isShallowEqualSessionRow(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow,
+): boolean {
+  const incomingKeys = Object.keys(incoming);
+  if (incomingKeys.length !== Object.keys(existing).length) {
+    return false;
+  }
+  return incomingKeys.every((key) => {
+    const a = (incoming as Record<string, unknown>)[key];
+    const b = (existing as Record<string, unknown>)[key];
+    return (
+      a === b ||
+      (a !== null && b !== null && typeof a === "object" && typeof b === "object"
+        ? JSON.stringify(a) === JSON.stringify(b)
+        : false)
+    );
+  });
+}
+
 function isOlderSessionSnapshot(
   incoming: GatewaySessionRow,
   existing: GatewaySessionRow | undefined,
@@ -456,14 +477,17 @@ export function reconcileSessionChanged(
   }
   const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
   const timestamped = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
+  const previousOwner = existing?.owner?.actor;
+  const nextOwner = row.owner?.actor;
   const ownershipChanged =
-    Object.hasOwn(rowFields, "createdActor") &&
-    (existing?.createdActor?.type !== row.createdActor?.type ||
-      existing?.createdActor?.id !== row.createdActor?.id ||
-      existing?.createdActor?.label !== row.createdActor?.label);
+    (Object.hasOwn(rowFields, "owner") || Object.hasOwn(rowFields, "createdActor")) &&
+    (previousOwner?.type !== nextOwner?.type ||
+      previousOwner?.id !== nextOwner?.id ||
+      previousOwner?.label !== nextOwner?.label ||
+      existing?.owner?.assignedAt !== row.owner?.assignedAt);
   // The facet covers unloaded pages, so an ownership event invalidates it until
   // the session capability's canonical list refresh supplies a complete replacement.
-  const reconciledResult = ownershipChanged ? { ...timestamped, creators: undefined } : timestamped;
+  const reconciledResult = ownershipChanged ? { ...timestamped, owners: undefined } : timestamped;
   const reconciledRow = reconciledResult.sessions.find((candidate) =>
     matchesExistingSession(
       candidate,
@@ -549,6 +573,16 @@ export function reconcileSessionHistory(
   if (isStaleForActiveSession(visibleSession, existing)) {
     // Keep result identity when nothing changed so the caller's
     // result === state.result publish gate can skip a spurious re-render.
+    return defaults ? { ...result, defaults: nextDefaults } : result;
+  }
+  if (
+    existing &&
+    isShallowEqualSessionRow(visibleSession, existing) &&
+    sessionMatchesArchivedFilter(visibleSession, archivedFilter)
+  ) {
+    // The same event reconciled twice (capability handler + chat page) must
+    // no-op the second pass; a fresh array here defeats every downstream
+    // result === state.result publish gate and re-renders per event.
     return defaults ? { ...result, defaults: nextDefaults } : result;
   }
   const sessions = sessionMatchesArchivedFilter(visibleSession, archivedFilter)

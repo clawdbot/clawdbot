@@ -22,7 +22,7 @@ export function createVoiceCallBaseConfig(params?: {
     maxConcurrentCalls: 1,
     sessionScope: "per-phone",
     serve: { port: 3334, bind: "127.0.0.1", path: "/voice/webhook" },
-    tailscale: { mode: "off", path: "/voice/webhook" },
+    tailscale: { mode: "off", port: 443, path: "/voice/webhook" },
     tunnel: {
       provider: params?.tunnelProvider ?? "none",
       allowNgrokFreeTierLoopbackBypass: false,

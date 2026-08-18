@@ -1,15 +1,23 @@
 // Control UI module implements app tool stream behavior.
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString as toTrimmedString,
+  normalizeLowercaseStringOrEmpty,
+} from "@openclaw/normalization-core/string-coerce";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatGuardianNotice,
+  ChatQueueItem,
+  ChatStreamSegment,
+} from "../../lib/chat/chat-types.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 const TOOL_STREAM_LIMIT = 50;
@@ -49,6 +57,7 @@ export type ToolStreamEntry = {
   /** Monotonic edit counts received while the tool arguments stream. */
   liveDiffStat?: DiffStat;
   isError?: boolean;
+  exitCode?: number;
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
   startedAt: number;
@@ -56,7 +65,7 @@ export type ToolStreamEntry = {
   message: Record<string, unknown>;
 };
 
-type ToolStreamHost = {
+export type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
@@ -71,8 +80,8 @@ type ToolStreamHost = {
   toolStreamOrder: string[];
   activityEventSeqById?: Map<string, number>;
   chatToolMessages: Record<string, unknown>[];
+  guardianNotices?: ChatGuardianNotice[];
   toolStreamSyncTimer: number | null;
-  planStatus?: PlanStatus | null;
   knownAgentRunIds?: Set<string>;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
@@ -123,7 +132,8 @@ function parseFallbackAttemptSummaries(value: unknown): string[] {
   }
   return value
     .map((entry) => toTrimmedString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+    .filter((entry): entry is string => Boolean(entry))
+    .map((entry) => formatUiError(entry));
 }
 
 function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
@@ -141,12 +151,13 @@ function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
     if (!provider || !model) {
       continue;
     }
-    const reason =
+    const reason = formatUiError(
       toTrimmedString(item.reason)?.replace(/_/g, " ") ??
-      toTrimmedString(item.code) ??
-      (typeof item.status === "number" ? `HTTP ${item.status}` : null) ??
-      toTrimmedString(item.error) ??
-      "error";
+        toTrimmedString(item.code) ??
+        (typeof item.status === "number" ? `HTTP ${item.status}` : null) ??
+        toTrimmedString(item.error) ??
+        "error",
+    );
     out.push({ provider, model, reason });
   }
   return out;
@@ -270,6 +281,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
       text: entry.output ?? "",
       ...(entry.details !== undefined ? { details: entry.details } : {}),
       ...(entry.isError !== undefined ? { isError: entry.isError } : {}),
+      ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : {}),
     });
   }
   return {
@@ -341,7 +353,6 @@ export function resetToolStream(host: ToolStreamHost) {
   host.activityEventSeqById?.clear();
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
-  host.planStatus = null;
   host.knownAgentRunIds?.clear();
   host.waitingApprovalStatuses?.clear();
   // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
@@ -391,16 +402,6 @@ export type FallbackStatus = {
   reason?: string;
   attempts: string[];
   occurredAt: number;
-};
-
-export type PlanStatus = {
-  /** Owning run: run-scoped terminal cleanup must not clear another run's plan. */
-  runId?: string;
-  explanation?: string;
-  steps: Array<{
-    step: string;
-    status: "pending" | "in_progress" | "completed";
-  }>;
 };
 
 export type WaitingApprovalStatus = {
@@ -751,7 +752,8 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
     return;
   }
 
-  const reason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
+  const rawReason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
+  const reason = rawReason ? formatUiError(rawReason) : null;
   const attempts = (() => {
     const summaries = parseFallbackAttemptSummaries(data.attemptSummaries);
     if (summaries.length > 0) {
@@ -759,7 +761,7 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
     }
     return parseFallbackAttempts(data.attempts).map((attempt) => {
       const modelRef = resolveModelLabel(attempt.provider, attempt.model);
-      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${attempt.reason}`;
+      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${formatUiExternalText(attempt.reason)}`;
     });
   })();
 
@@ -892,66 +894,44 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   return true;
 }
 
-function parsePlanSteps(value: unknown): PlanStatus["steps"] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const steps: PlanStatus["steps"] = [];
-  // Plan contract allows at most one in_progress step; demote extras so the
-  // collapsed summary has one unambiguous current step (matches iOS/Android).
-  let hasActiveStep = false;
-  for (const entry of value) {
-    if (typeof entry === "string") {
-      const step = toTrimmedString(entry);
-      if (step) {
-        steps.push({ step, status: "pending" });
-      }
-      continue;
-    }
-    const item = readRecord(entry);
-    const step = toTrimmedString(item?.step);
-    const status = item?.status;
-    if (!step || (status !== "pending" && status !== "in_progress" && status !== "completed")) {
-      continue;
-    }
-    const normalizedStatus = status === "in_progress" && hasActiveStep ? "pending" : status;
-    hasActiveStep ||= status === "in_progress";
-    steps.push({ step, status: normalizedStatus });
-  }
-  return steps;
-}
-
-export function normalizePlanSnapshot(
-  snapshot: { steps?: unknown; explanation?: unknown },
-  runIdValue?: unknown,
-): PlanStatus | null {
-  const steps = parsePlanSteps(snapshot.steps);
-  if (steps.length === 0) {
-    return null;
-  }
-  const explanation = toTrimmedString(snapshot.explanation);
-  const runId = toTrimmedString(runIdValue);
-  return {
-    ...(runId ? { runId } : {}),
-    ...(explanation ? { explanation } : {}),
-    steps,
-  };
-}
-
-function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
-  // Plan snapshots are run-owned: a stale or spawned-run event in the same
-  // session must not overwrite (or clear) the active run's checklist. Mirrors
-  // the compaction/fallback acceptance policy (session-scoped when idle).
-  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream !== "codex_app_server.guardian") {
     return false;
   }
   const data = payload.data ?? {};
-  if (data.phase !== "update") {
-    return false;
+  const phase = toTrimmedString(data.phase);
+  const status = toTrimmedString(data.status);
+  const kind =
+    phase === "warning"
+      ? "warning"
+      : phase === "completed" && (status === "approved" || status === "denied")
+        ? status
+        : null;
+  if (!kind) {
+    return true;
   }
-  host.planStatus = normalizePlanSnapshot(data, payload.runId);
-  host.requestUpdate?.();
-  return false;
+  const reviewId = toTrimmedString(data.reviewId) ?? String(payload.seq);
+  const command = toTrimmedString(data.command);
+  const riskLevel = toTrimmedString(data.riskLevel);
+  const rationale = toTrimmedString(data.rationale);
+  const message = toTrimmedString(data.message);
+  const notice: ChatGuardianNotice = {
+    key: `guardian:${payload.runId}:${reviewId}:${kind}`,
+    runId: payload.runId,
+    timestamp: typeof payload.ts === "number" ? payload.ts : Date.now(),
+    kind,
+    ...(command ? { command } : {}),
+    ...(riskLevel ? { riskLevel } : {}),
+    ...(rationale ? { rationale } : {}),
+    ...(message ? { message } : {}),
+  };
+  const current = host.guardianNotices ?? [];
+  const existingIndex = current.findIndex((candidate) => candidate.key === notice.key);
+  host.guardianNotices =
+    existingIndex === -1
+      ? [...current.slice(-49), notice]
+      : current.map((candidate, index) => (index === existingIndex ? notice : candidate));
+  return true;
 }
 
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
@@ -980,6 +960,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handleUsageEvent(host, payload)) {
+    return true;
+  }
+
+  if (handleGuardianEvent(host, payload)) {
     return true;
   }
 
@@ -1016,10 +1000,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return true;
   }
 
-  if (payload.stream === "plan") {
-    return handlePlanEvent(host, payload);
-  }
-
   if (payload.stream !== "tool") {
     return false;
   }
@@ -1051,6 +1031,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const resultDetails = phase === "result" ? readRecord(data.result)?.details : undefined;
   const resultIsError =
     phase === "result" && typeof data.isError === "boolean" ? data.isError : undefined;
+  const resultRecord = phase === "result" ? readRecord(data.result) : undefined;
+  const resultExitCode = resultRecord?.exitCode;
+  const exitCode =
+    typeof resultExitCode === "number" && Number.isInteger(resultExitCode)
+      ? resultExitCode
+      : undefined;
   const liveDiffStat = phase === "input_delta" ? readLiveDiffStat(data.diff) : undefined;
   if (name === "session_status" && phase === "result") {
     syncSessionStatusModelOverride(host, data);
@@ -1058,24 +1044,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   const now = Date.now();
   if (!entry) {
-    // Commit any in-progress streaming text as a segment so it renders
-    // above the tool card instead of below it.
-    if (
-      host.chatRunId &&
-      payload.runId === host.chatRunId &&
-      host.chatStream &&
-      host.chatStream.trim().length > 0
-    ) {
-      const segmentStartedAt = host.chatStreamStartedAt ?? now;
-      host.chatStreamSegments = [
-        ...host.chatStreamSegments,
-        { text: host.chatStream, ts: segmentStartedAt, runId: payload.runId, toolCallId },
-      ];
-      host.chatStream = null;
-      // The segment becomes the elapsed-time owner after the live tail is flushed.
-      // Preserve the run start or replaying a tool event resets the working timer.
-      host.chatStreamStartedAt = null;
-    }
+    // Commit in-progress text so it remains causally above the tool card.
+    rolloverChatStream(host, { runId: payload.runId, toolCallId, timestamp: now });
     entry = {
       toolCallId,
       runId: payload.runId,
@@ -1085,6 +1055,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       output: output || undefined,
       ...(resultDetails !== undefined ? { details: resultDetails } : {}),
       ...(resultIsError !== undefined ? { isError: resultIsError } : {}),
+      ...(exitCode !== undefined ? { exitCode } : {}),
       ...(liveDiffStat ? { liveDiffStat } : {}),
       ...(phase === "result" ? { resultReceived: true } : {}),
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
@@ -1106,6 +1077,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
     if (resultIsError !== undefined) {
       entry.isError = resultIsError;
+    }
+    if (exitCode !== undefined) {
+      entry.exitCode = exitCode;
     }
     if (liveDiffStat) {
       entry.liveDiffStat = liveDiffStat;

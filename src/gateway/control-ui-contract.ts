@@ -85,6 +85,22 @@ export type ControlUiGitHubPreview = {
   updatedAt: string;
 };
 
+/** Bounded session metadata rendered by Control UI session-link hover cards. */
+export type ControlUiSessionPreview =
+  | {
+      status: "ok";
+      sessionKey: string;
+      title?: string;
+      derivedTitle?: string;
+      agentId: string;
+      kind?: string;
+      channel?: string;
+      updatedAt?: number;
+      lastMessagePreview?: string;
+      archived?: boolean;
+    }
+  | { status: "unavailable" };
+
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
 /** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
@@ -108,6 +124,7 @@ export type ControlUiSessionPullRequest = {
   state: "open" | "draft" | "merged" | "closed";
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /** Latest check-run rollup for the head commit; absent when no checks ran. */
   checks?: ControlUiSessionPullRequestChecks;
   checksUrl?: string;
@@ -124,6 +141,7 @@ export type ControlUiSessionBranch = {
   /** Working-tree diff vs the merge base with the remote default branch. */
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /**
    * GitHub "open a pull request for this branch" page. Absent while the
    * branch is unpushed or has nothing to compare — the row then only reports

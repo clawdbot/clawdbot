@@ -2,7 +2,14 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn() }));
+
+vi.mock("../../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => logger,
+}));
+
 import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
@@ -38,6 +45,12 @@ const openaiModel = {
   id: "gpt-5.2",
   baseUrl: "https://api.openai.com/v1",
 } as Model<"openai-responses">;
+
+afterEach(() => {
+  logger.debug.mockReset();
+  logger.info.mockReset();
+  vi.unstubAllEnvs();
+});
 
 describe("createOpenAIFastModeWrapper", () => {
   it("resolves dynamic fast mode for each stream call", () => {
@@ -117,6 +130,8 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
 
 describe("createCodexNativeWebSearchWrapper", () => {
   it("keeps native_active web_search alongside the code mode tool surface", () => {
+    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", "1");
+    const secretFixture = `sk-${"fixture".repeat(6)}`;
     let observedOptions: Parameters<StreamFn>[2];
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (model, context, options) => {
@@ -127,7 +142,10 @@ describe("createCodexNativeWebSearchWrapper", () => {
           { type: "function", name: "exec" },
           { type: "function", name: "wait" },
           { type: "function", name: "web_search" },
+          { type: "function", name: "rogue" },
           { type: "web_search" },
+          { type: "file_search" },
+          { type: secretFixture },
         ],
       };
       options?.onPayload?.(payload, model);
@@ -186,7 +204,109 @@ describe("createCodexNativeWebSearchWrapper", () => {
       (observedOptions as { openclawCodeModeAllowedHostedToolTypes?: Set<string> } | undefined)
         ?.openclawCodeModeAllowedHostedToolTypes,
     ).toEqual(new Set(["web_search"]));
+    expect(logger.info).toHaveBeenCalledOnce();
+    const diagnostic = String(logger.info.mock.calls[0]?.[0]);
+    expect(diagnostic).toContain('"removedToolIdentities":["client:rogue"');
+    expect(diagnostic).toContain('"hosted:file_search"');
+    expect(diagnostic).not.toContain(secretFixture);
   });
+
+  it("emits one complete diagnostic through composed wrappers after async replacement", async () => {
+    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", "1");
+    let payloadResult: unknown;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      payloadResult = options?.onPayload?.(
+        {
+          tools: [
+            { type: "function", name: "exec" },
+            { type: "function", name: "wait" },
+            { type: "function", name: "computer" },
+            { type: "function", name: "image" },
+            { type: "file_search" },
+          ],
+        },
+        model,
+      );
+      return createAssistantMessageEventStream();
+    };
+    const inner = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
+    const wrapped = createCodexNativeWebSearchWrapper(inner, {
+      codeModeToolSurfaceEnabled: true,
+    });
+
+    void wrapped(
+      codexModel,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {
+        onPayload: async () => ({
+          tools: [
+            { type: "function", name: "exec" },
+            { type: "function", name: "wait" },
+            { type: "function", name: "browser" },
+            { type: "file_search" },
+          ],
+        }),
+      },
+    );
+    await payloadResult;
+
+    expect(logger.info).toHaveBeenCalledOnce();
+    const diagnostic = JSON.parse(
+      String(logger.info.mock.calls[0]?.[0]).slice("code-mode diagnostic ".length),
+    ) as {
+      boundary?: string;
+      removedToolIdentities?: string[];
+    };
+    expect(diagnostic.boundary).toBe("provider-tool-surface");
+    expect(new Set(diagnostic.removedToolIdentities)).toEqual(
+      new Set(["client:browser", "client:computer", "client:image", "hosted:file_search"]),
+    );
+  });
+
+  it.each(["", "0", "false", "off", "no"])(
+    "does not emit dedicated diagnostics for false-like flag %j",
+    (flag) => {
+      vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", flag);
+      const baseStreamFn: StreamFn = (model, _context, options) => {
+        options?.onPayload?.(
+          {
+            tools: [
+              { type: "function", name: "exec" },
+              { type: "function", name: "wait" },
+              { type: "file_search" },
+            ],
+          },
+          model,
+        );
+        return createAssistantMessageEventStream();
+      };
+      const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+        codeModeToolSurfaceEnabled: true,
+      });
+
+      void wrapped(
+        codexModel,
+        {
+          messages: [],
+          tools: [
+            { name: "exec", description: "", parameters: {} },
+            { name: "wait", description: "", parameters: {} },
+          ],
+        },
+        {},
+      );
+
+      expect(logger.info).not.toHaveBeenCalled();
+    },
+  );
 
   it("filters async replacement payloads when code mode owns the tool surface", async () => {
     let observedOptions: Parameters<StreamFn>[2];

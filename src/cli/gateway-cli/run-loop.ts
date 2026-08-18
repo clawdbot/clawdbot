@@ -28,6 +28,10 @@ import {
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
 } from "../../state/openclaw-agent-db-migration-required.js";
 import { formatActiveTaskRestartBlocker } from "../../tasks/task-restart-blocker.js";
+import {
+  armShutdownHardExitWatchdog,
+  type ShutdownHardExitWatchdog,
+} from "./shutdown-hard-exit.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
@@ -36,6 +40,7 @@ const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 const LOG_FLUSH_EXIT_TIMEOUT_MS = 4_000;
+const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
@@ -62,19 +67,6 @@ const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRun
 );
 
 const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
-
-function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
-  // The first loop starts fresh; subsequent iterations are in-process restarts.
-  let isFirstIteration = true;
-  return async () => {
-    if (isFirstIteration) {
-      isFirstIteration = false;
-      return false;
-    }
-    await onRestart();
-    return true;
-  };
-}
 
 async function waitForGatewayPortReady(host: string, port: number): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
@@ -122,6 +114,8 @@ export async function runGatewayLoop(params: {
     requestHotReloadRecovery?: GatewayRestartEmitter;
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
+  /** Grants this run-loop authority to hard-kill the process it exclusively owns. */
+  ownsProcessLifecycle?: boolean;
   lockPort?: number;
   healthHost?: string;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
@@ -515,6 +509,7 @@ export async function runGatewayLoop(params: {
       activeRestartRequest = acceptedRequest;
     }
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
+    let hardExitWatchdog: ShutdownHardExitWatchdog | null = null;
     const armForceExitTimer = (forceExitMs: number) => {
       if (forceExitTimer) {
         return;
@@ -537,13 +532,24 @@ export async function runGatewayLoop(params: {
           }
         })();
       }, forceExitMs);
+      if (params.ownsProcessLifecycle === true) {
+        hardExitWatchdog = armShutdownHardExitWatchdog({
+          delayMs: forceExitMs + HARD_EXIT_WATCHDOG_GRACE_MS,
+          onError: (error) => {
+            gatewayLog.warn(
+              `hard-exit watchdog failed; retaining main-thread shutdown timer: ${formatErrorMessage(error)}`,
+            );
+          },
+        });
+      }
     };
     const clearForceExitTimer = () => {
-      if (!forceExitTimer) {
-        return;
+      if (forceExitTimer) {
+        clearTimeout(forceExitTimer);
+        forceExitTimer = null;
       }
-      clearTimeout(forceExitTimer);
-      forceExitTimer = null;
+      hardExitWatchdog?.cancel();
+      hardExitWatchdog = null;
     };
     if (isRestart) {
       forceActiveRestartExit = () => {
@@ -790,7 +796,7 @@ export async function runGatewayLoop(params: {
           ...(closeDrainTimeoutMs !== null ? { drainTimeoutMs: closeDrainTimeoutMs } : {}),
         });
       } catch (err) {
-        gatewayLog.error(`shutdown error: ${String(err)}`);
+        gatewayLog.error(`shutdown step failed (gateway server close): ${formatErrorMessage(err)}`);
       } finally {
         server = null;
         if (isRestart) {
@@ -1005,7 +1011,7 @@ export async function runGatewayLoop(params: {
   process.on("SIGUSR1", onSigusr1);
 
   try {
-    const onIteration = createRestartIterationHook(async () => {
+    const onRestart = async () => {
       // After an in-process restart (SIGUSR1), reset command-queue lane state.
       // Interrupted tasks from the previous lifecycle may have left `active`
       // counts elevated (their finally blocks never ran), permanently blocking
@@ -1053,27 +1059,41 @@ export async function runGatewayLoop(params: {
       }
       reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");
-    });
+    };
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
-    let isFirstStart = true;
+    let isFirstIteration = true;
     for (;;) {
       // The restart hook reopens admission before reloading durable state. Clear
       // its local mirror first so a failed reload cannot skip the next drain.
       restartDrainingMarked = false;
       let startupFailedBeforeServerHandle = false;
+      const isRestartIteration = !isFirstIteration;
+      isFirstIteration = false;
       try {
-        await onIteration();
+        if (isRestartIteration) {
+          await onRestart();
+        }
         startupStartedAt = Date.now();
         await params.beginBoot?.(startupStartedAt);
-        server = await params.start({
+        const startedServer = await params.start({
           startupStartedAt,
           requestHotReloadRecovery: eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
         });
+        server = startedServer;
         startupFailedWithoutServerHandle = false;
-        isFirstStart = false;
+        await new Promise<void>((resolve, reject) => {
+          restartResolver = () => {
+            restartResolver = null;
+            resolve();
+          };
+          void startedServer.startupSettled.then(undefined, reject);
+          flushPendingStartupRequest();
+        });
       } catch (err) {
+        const failedServer = server;
+        server = null;
         const mediaMigrationRequired = findOpenClawAgentDatabaseMediaMigrationRequiredError(err);
         params.completeBoot?.({
           outcome: "startup_failed",
@@ -1085,14 +1105,20 @@ export async function runGatewayLoop(params: {
             ? { startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON }
             : {}),
         });
+        try {
+          await failedServer?.close({ reason: "gateway startup failed" });
+        } catch (closeError) {
+          gatewayLog.warn(
+            `failed to close gateway after startup failure: ${formatErrorMessage(closeError)}`,
+          );
+        }
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only
         // swallow errors on subsequent in-process restarts to keep the
         // process alive (a crash would lose macOS TCC permissions). (#35862)
-        if (isFirstStart) {
+        if (!isRestartIteration) {
           throw err;
         }
-        server = null;
         startupFailedWithoutServerHandle = true;
         startupFailedBeforeServerHandle = true;
         if (!pendingStartupRequest) {
@@ -1110,13 +1136,15 @@ export async function runGatewayLoop(params: {
             `Process will stay alive; fix the issue and restart.${errStack}`,
         );
       }
-      await new Promise<void>((resolve) => {
-        restartResolver = () => {
-          restartResolver = null;
-          resolve();
-        };
-        flushPendingStartupRequest({ allowMissingServer: startupFailedBeforeServerHandle });
-      });
+      if (startupFailedBeforeServerHandle) {
+        await new Promise<void>((resolve) => {
+          restartResolver = () => {
+            restartResolver = null;
+            resolve();
+          };
+          flushPendingStartupRequest({ allowMissingServer: true });
+        });
+      }
     }
   } finally {
     await releaseLockIfHeld();

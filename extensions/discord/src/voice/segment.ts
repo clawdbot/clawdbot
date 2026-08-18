@@ -169,6 +169,13 @@ export async function processDiscordVoiceSegment(params: {
     logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error ?? "unknown error"}`);
     return;
   }
+  const streamFailure = voiceReplyAudio.mode === "file" ? voiceReplyAudio.streamFailure : undefined;
+  if (streamFailure && !entry.ttsStreamFallbackWarned) {
+    entry.ttsStreamFallbackWarned = true;
+    logger.warn(
+      `discord voice: streaming TTS failed provider=${streamFailure.provider} reasonCode=${streamFailure.reasonCode}; using file fallback`,
+    );
+  }
   logVoiceVerbose(
     `tts ok (${voiceReplyAudio.speakText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
   );

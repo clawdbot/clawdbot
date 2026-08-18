@@ -16,6 +16,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  normalizeNodeHostCloudflareAccessConfig,
+  type NodeHostCloudflareAccessConfig,
+} from "./gateway-cloudflare-access.js";
 
 /** Gateway endpoint metadata persisted with node-host config. */
 export type NodeHostGatewayConfig = {
@@ -25,6 +29,8 @@ export type NodeHostGatewayConfig = {
   tlsFingerprint?: string;
   /** Gateway WebSocket context path (e.g. "/openclaw-gw"). */
   contextPath?: string;
+  /** Cloudflare Access service-token inputs bound to this exact Gateway origin. */
+  cloudflareAccess?: NodeHostCloudflareAccessConfig;
 };
 
 export type NodeHostConfig = {
@@ -99,6 +105,21 @@ function optionalInputString(value: string | undefined): string | undefined {
   return normalized || undefined;
 }
 
+function parseCloudflareAccessJson(
+  value: string | null,
+): NodeHostCloudflareAccessConfig | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  try {
+    return normalizeNodeHostCloudflareAccessConfig(JSON.parse(value) as unknown);
+  } catch (error) {
+    throw new Error("invalid node-host SQLite row: gateway_cloudflare_access_json", {
+      cause: error,
+    });
+  }
+}
+
 function validatePort(value: number | null | undefined, label: string): number | undefined {
   if (value === null || value === undefined) {
     return undefined;
@@ -126,12 +147,14 @@ function rowToNodeHostConfig(row: NodeHostConfigRuntimeRow): NodeHostConfig {
   if (row.installed_apps_sharing !== 0 && row.installed_apps_sharing !== 1) {
     throw new Error("invalid node-host SQLite row: installed_apps_sharing must be 0 or 1");
   }
+  const cloudflareAccess = parseCloudflareAccessJson(row.gateway_cloudflare_access_json);
   const gateway: NodeHostGatewayConfig = {
     host: optionalNonEmptyString(row.gateway_host, "gateway_host"),
     port: validatePort(row.gateway_port, "SQLite gateway_port"),
     tls: row.gateway_tls === null ? undefined : row.gateway_tls === 1,
     tlsFingerprint: optionalNonEmptyString(row.gateway_tls_fingerprint, "gateway_tls_fingerprint"),
     contextPath: optionalNonEmptyString(row.gateway_context_path, "gateway_context_path"),
+    ...(cloudflareAccess ? { cloudflareAccess } : {}),
   };
   const hasGateway = Object.values(gateway).some((value) => value !== undefined);
   return {
@@ -150,6 +173,7 @@ function normalizeGatewayConfig(gateway: NodeHostGatewayConfig): NodeHostGateway
     tls: gateway.tls,
     tlsFingerprint: optionalInputString(gateway.tlsFingerprint),
     contextPath: optionalInputString(gateway.contextPath),
+    cloudflareAccess: normalizeNodeHostCloudflareAccessConfig(gateway.cloudflareAccess),
   };
   return Object.values(normalized).some((value) => value !== undefined) ? normalized : undefined;
 }
@@ -170,6 +194,9 @@ function configToRow(params: {
     gateway_tls: gateway?.tls === undefined ? null : gateway.tls ? 1 : 0,
     gateway_tls_fingerprint: gateway?.tlsFingerprint ?? null,
     gateway_context_path: gateway?.contextPath ?? null,
+    gateway_cloudflare_access_json: gateway?.cloudflareAccess
+      ? JSON.stringify(gateway.cloudflareAccess)
+      : null,
     installed_apps_sharing: params.config.installedAppsSharing ? 1 : 0,
     updated_at_ms: params.updatedAtMs,
   };
@@ -192,6 +219,7 @@ function readNodeHostConfigRow(
         "gateway_tls",
         "gateway_tls_fingerprint",
         "gateway_context_path",
+        "gateway_cloudflare_access_json",
         "installed_apps_sharing",
         "updated_at_ms",
       ])

@@ -66,6 +66,7 @@ export function createNodeWorkerBundleTransferService(
       node: NodeWorkerSupervisorNodeProof;
       gatewayNamespace: string;
       artifact: WorkerBundleArtifact;
+      bundlePrewarm?: 1;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
     }): { token: string; input: NodeWorkerBundleInstallInput } {
@@ -109,6 +110,7 @@ export function createNodeWorkerBundleTransferService(
         token,
         input: {
           gatewayNamespace: params.gatewayNamespace,
+          ...(params.bundlePrewarm ? { bundlePrewarm: params.bundlePrewarm } : {}),
           build: {
             bundleHash: params.artifact.bundleHash,
             openclawVersion: params.artifact.openclawVersion,

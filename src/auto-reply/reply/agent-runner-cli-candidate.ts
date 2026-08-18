@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
@@ -90,6 +91,15 @@ export async function runCliFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const modelHasVision = Boolean(
+    turn.followupRun.run.thinkingCatalog
+      ?.find(
+        (entry) =>
+          normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.model,
+      )
+      ?.input?.includes("image"),
+  );
   const sessionKey = turn.sessionKey ?? turn.followupRun.run.sessionKey;
   const sessionTarget =
     sessionKey && turn.storePath
@@ -382,6 +392,7 @@ export async function runCliFallbackCandidate(params: {
             currentInboundContext: turn.followupRun.currentInboundContext,
             inputProvenance: turn.followupRun.run.inputProvenance,
             modelProvider: params.provider,
+            modelHasVision,
             provider: params.cliExecutionProvider,
             execOverrides: turn.followupRun.run.execOverrides,
             bashElevated: turn.followupRun.run.bashElevated,
@@ -399,6 +410,8 @@ export async function runCliFallbackCandidate(params: {
             extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
             sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: turn.followupRun.run.taskSuggestionDeliveryMode,
+            // Heartbeat ambient routes are never implicit message recipients.
+            ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
             silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
             allowEmptyAssistantReplyAsSilent: turn.followupRun.run.allowEmptyAssistantReplyAsSilent,
             extraSystemPromptStatic: turn.followupRun.run.extraSystemPromptStatic,
@@ -416,6 +429,7 @@ export async function runCliFallbackCandidate(params: {
               ],
             images: params.currentTurnImages.images,
             imageOrder: params.currentTurnImages.imageOrder,
+            mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             skillsSnapshot: turn.followupRun.run.skillsSnapshot,
             messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,
@@ -434,6 +448,7 @@ export async function runCliFallbackCandidate(params: {
             channelContext: turn.followupRun.run.channelContext,
             currentThreadTs: cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
             currentMessageId: cliCurrentMessageId,
+            replyToMode: turn.followupRun.originatingReplyToMode ?? turn.sessionCtx.ReplyToMode,
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
             senderIsOwner: turn.followupRun.run.senderIsOwner,

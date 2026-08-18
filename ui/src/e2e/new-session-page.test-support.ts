@@ -12,6 +12,7 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 export { controlUiSessionPath, controlUiSessionUrl, waitForConfirmModal };
 
@@ -191,6 +192,72 @@ export async function pastePng(target: Locator, count = 1) {
       );
     },
     { base64: ONE_PIXEL_PNG_B64, fileCount: count },
+  );
+}
+
+export async function waitForCommittedNewSessionDraft(
+  page: Page,
+  expectedText: string | null,
+  expectedAttachmentCount: number,
+): Promise<void> {
+  // Filling only proves DOM state. The durable read waits for the IndexedDB
+  // transaction so reload or navigation cannot beat the snapshot write.
+  await waitForCommittedState(
+    page,
+    async (expected) => {
+      const { text, attachmentCount } = expected;
+      if ((typeof text !== "string" && text !== null) || typeof attachmentCount !== "number") {
+        return false;
+      }
+      try {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            context: {
+              gateway: {
+                connection: { gatewayUrl: string };
+                snapshot: { client: { recoveryScope?: string } | null };
+              };
+            };
+          };
+        };
+        const gateway = app.runtime?.context.gateway;
+        const recoveryScope = gateway?.snapshot.client?.recoveryScope;
+        if (!gateway || !recoveryScope) {
+          return false;
+        }
+        const storeUrl = performance
+          .getEntriesByType("resource")
+          .map((entry) => entry.name)
+          .find((name) => /\/composer-draft-store\.runtime-[^/]+\.js$/u.test(name));
+        if (!storeUrl) {
+          return false;
+        }
+        const draftStore = (await import(
+          /* @vite-ignore */ storeUrl
+        )) as typeof import("../lib/chat/composer-draft-store.runtime.ts");
+        const params = new URLSearchParams(window.location.search);
+        const result = await draftStore.readDurableComposerDraft({
+          gatewayOwner: gateway.connection.gatewayUrl.trim() || "default",
+          recoveryScope,
+          scopeKey: JSON.stringify([
+            params.get("agent")?.trim() ?? "",
+            params.get("catalog")?.trim() ?? "",
+            params.get("group")?.trim() ?? "",
+          ]),
+        });
+        if (text === null) {
+          return result.status === "not-found" && result.revision !== undefined;
+        }
+        return (
+          result.status === "found" &&
+          result.draft.text === text &&
+          result.draft.attachments.length === attachmentCount
+        );
+      } catch {
+        return false;
+      }
+    },
+    { text: expectedText, attachmentCount: expectedAttachmentCount },
   );
 }
 

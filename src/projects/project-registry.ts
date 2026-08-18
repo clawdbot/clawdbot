@@ -163,16 +163,24 @@ function allocateProjectId(base: string, existing: ReadonlySet<string>): string 
   }
 }
 
+export async function resolveProjectDirectory(projectPath: string): Promise<string> {
+  const requested = await fs.realpath(projectPath).catch(() => {
+    throw new ProjectCheckoutError(`project path does not exist: ${projectPath}`);
+  });
+  const stat = await fs.stat(requested).catch(() => null);
+  if (!stat?.isDirectory()) {
+    throw new ProjectCheckoutError(`project path is not a directory: ${projectPath}`);
+  }
+  return requested;
+}
+
 export async function resolveProjectCheckout(projectPath: string): Promise<{
   path: string;
   repoRoot: string;
   originUrl?: string;
 }> {
-  const requested = await fs.realpath(projectPath).catch(() => {
-    throw new ProjectCheckoutError(`project path does not exist: ${projectPath}`);
-  });
-  const stat = await fs.stat(requested).catch(() => null);
-  if (!stat?.isDirectory() || !insideGitCheckout(requested)) {
+  const requested = await resolveProjectDirectory(projectPath);
+  if (!insideGitCheckout(requested)) {
     throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);
   }
   const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"]);

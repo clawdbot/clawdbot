@@ -5,7 +5,6 @@ import {
   NODE_PICKED,
   NODE_UNC,
   PICKED,
-  SESSION_LIST_DEFAULTS,
   WORKSPACE,
   captureProjectUiProof,
   captureUiProofEnabled,
@@ -16,7 +15,6 @@ import {
   pollLocatorText,
   prepareProjectUiProof,
   projectProofArtifactDir,
-  replaceGatewayClient,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -162,6 +160,24 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await page.locator(".new-session-page__message").waitFor();
 
+      // Incognito is a page-level choice on the far end of the same top rail
+      // as the shell controls, rather than an option inside the composer.
+      const incognitoToggle = page.getByRole("switch", { name: "Incognito" });
+      const incognitoBox = await incognitoToggle.boundingBox();
+      const commandPaletteBox = await page
+        .getByRole("button", { name: "Open command palette" })
+        .boundingBox();
+      expect(incognitoBox).not.toBeNull();
+      expect(commandPaletteBox).not.toBeNull();
+      expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
+      expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
+      expect(await page.locator('.new-session-page__composer [role="switch"]').count()).toBe(0);
+      expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
+      await incognitoToggle.click();
+      await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("true");
+      await incognitoToggle.click();
+      await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("false");
+
       // Unified layout: the trigger row (menus above the composer) sits
       // inside the start-screen welcome, below the hero.
       const heroBox = await page.locator(".agent-chat__welcome h2").boundingBox();
@@ -174,12 +190,15 @@ suite.define(() => {
       const footerBox = await page
         .locator(".new-session-page__composer .agent-chat__composer-footer")
         .boundingBox();
+      const attachmentButton = page.getByRole("button", { name: "Add attachment" });
+      const attachmentBox = await attachmentButton.boundingBox();
       expect(heroBox).not.toBeNull();
       expect(triggersBox).not.toBeNull();
       expect(composerBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
       expect(modelWrapperBox).not.toBeNull();
       expect(footerBox).not.toBeNull();
+      expect(attachmentBox).not.toBeNull();
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
         (triggersBox?.y ?? 0) + 1,
       );
@@ -194,6 +213,17 @@ suite.define(() => {
           .locator('[data-chat-model-select="true"]')
           .evaluate((element) => element.closest(".agent-chat__composer-footer") != null),
       ).toBe(true);
+      expect(
+        await attachmentButton.evaluate(
+          (element) => element.closest(".agent-chat__composer-footer") != null,
+        ),
+      ).toBe(true);
+      expect(
+        await attachmentButton.evaluate(
+          (element) => element.closest(".agent-chat__composer-input-row") == null,
+        ),
+      ).toBe(true);
+      expect(attachmentBox?.x ?? 0).toBeLessThan(modelWrapperBox?.x ?? 0);
       expect(modelWrapperBox?.x ?? 0).toBeGreaterThan(
         (footerBox?.x ?? 0) + (footerBox?.width ?? 0) / 2,
       );
@@ -206,6 +236,7 @@ suite.define(() => {
       expect(triggersBox?.width).toBeCloseTo(composerBox?.width ?? 0, 0);
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
+      await captureProjectUiProof(page, "new-session-control-layout.png");
 
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
@@ -277,93 +308,6 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath("agent:main:draft-e2e"));
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("runs directly in a custom non-Git Gateway folder", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "environments.list": {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
-        "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
-        "worktrees.branches": {
-          cases: [
-            {
-              match: { repoRoot: WORKSPACE },
-              response: {
-                branches: [{ kind: "local", name: "main" }],
-                defaultBranch: "main",
-                repositoryStatus: "git",
-              },
-            },
-            {
-              match: { repoRoot: "/home" },
-              response: { branches: [], repositoryStatus: "not_git" },
-            },
-          ],
-        },
-        "sessions.create": { key: "agent:main:plain-folder" },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      const trigger = page.locator("#new-session-project-trigger");
-      const place = page.locator("wa-popover.new-session-page__project-popover");
-      await trigger.click();
-      await place.getByRole("button", { name: "Browse folders" }).click();
-      await page.locator("input.new-session-page__browser-path").fill("/home");
-      await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
-        .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
-
-      const detailTrigger = page.locator("#new-session-detail-trigger");
-      await detailTrigger.click();
-      const detail = page.locator("wa-popover.new-session-page__detail-popover");
-      expect(await detail.getByRole("button", { name: "Worktree" }).count()).toBe(0);
-      await detail.getByText("Runs directly in the selected folder.", { exact: true }).waitFor();
-      await page.keyboard.press("Escape");
-      await page.locator("#new-session-where-trigger").click();
-      const where = page.locator("wa-popover.new-session-page__where-popover");
-      const cloud = where.getByRole("button", { name: "Cloud · aws" });
-      expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe("Cloud workers require a managed worktree");
-      await page.keyboard.press("Escape");
-
-      await page.locator(".new-session-page__message").fill("clone and inspect this project");
-      await page.getByRole("button", { name: "Start session" }).click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        agentId: "main",
-        cwd: "/home",
-        message: "clone and inspect this project",
-      });
-      expect(create.params).not.toHaveProperty("worktree");
-      expect(create.params).not.toHaveProperty("worktreeBaseRef");
     } finally {
       await context.close();
     }
@@ -448,9 +392,7 @@ suite.define(() => {
       await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("true");
       await where.getByRole("button", { name: "MacBook" }).click();
       await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("false");
-      await pollLocatorText(
-        page.locator("#new-session-detail-trigger .new-session-page__trigger-label"),
-      ).toBe("Node path");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
         .toBe("new-session-where-trigger");
@@ -489,249 +431,6 @@ suite.define(() => {
       });
       expect(create.params).not.toHaveProperty("cwd");
       expect(create.params).not.toHaveProperty("execNode");
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("uses advertised system info for Gateway place labels", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "system.info"],
-      methodResponses: {
-        "system.info": {
-          machineName: "Peters-Mac-Studio",
-          hostname: "peters-mac-studio.local",
-          platform: "darwin",
-        },
-        "node.list": {
-          nodes: [
-            {
-              nodeId: "macbook",
-              displayName: "MacBook",
-              connected: true,
-              commands: ["system.run"],
-            },
-          ],
-        },
-        "environments.list": { environments: [], profiles: [] },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("system.info");
-      const trigger = page.locator("#new-session-where-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
-      await trigger.click();
-      const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: /Local/u }).waitFor();
-      await page.keyboard.press("Escape");
-      await page.locator("#new-session-project-trigger").click();
-      await page
-        .locator("wa-popover.new-session-page__project-popover")
-        .getByRole("button", { name: "Browse folders" })
-        .click();
-      await expect
-        .poll(() =>
-          page.locator("input.new-session-page__browser-path").getAttribute("placeholder"),
-        )
-        .toBe("Gateway · Peters-Mac-Studio");
-
-      await gateway.setMethodResponse("node.list", { nodes: [] });
-      const nodeRequests = (await gateway.getRequests("node.list")).length;
-      await replaceGatewayClient(page);
-      await expect
-        .poll(async () => (await gateway.getRequests("node.list")).length)
-        .toBeGreaterThan(nodeRequests);
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
-      await trigger.click();
-      await place.getByRole("button", { name: /Local/u }).waitFor();
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("disambiguates duplicate node names without changing the selected chip", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "node.list": {
-          nodes: [
-            {
-              nodeId: "11111111aaaaaaaa",
-              displayName: "Mac Studio",
-              platform: "darwin",
-              modelIdentifier: "Mac14,12",
-              remoteIp: "192.168.1.11",
-              connected: true,
-              commands: ["system.run"],
-            },
-            {
-              nodeId: "22222222bbbbbbbb",
-              displayName: "Mac Studio",
-              platform: "darwin",
-              modelIdentifier: "Mac15,14",
-              remoteIp: "192.168.1.12",
-              connected: true,
-              commands: ["system.run"],
-            },
-            {
-              nodeId: "33333333cccccccc",
-              displayName: "iPhone",
-              platform: "iOS 26.4",
-              deviceFamily: "iPhone",
-              modelIdentifier: "iPhone17,2",
-              remoteIp: "192.168.1.30",
-              connected: true,
-              commands: ["system.run"],
-            },
-          ],
-        },
-        "environments.list": { environments: [], profiles: [] },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("node.list");
-      const trigger = page.locator("#new-session-where-trigger");
-      await trigger.click();
-      const first = page.locator('[data-value="node:11111111aaaaaaaa"]');
-      const second = page.locator('[data-value="node:22222222bbbbbbbb"]');
-      const phone = page.locator('[data-value="node:33333333cccccccc"]');
-      await pollLocatorText(first.locator(".session-menu__sub")).toBe("Mac14,12");
-      await pollLocatorText(second.locator(".session-menu__sub")).toBe("Mac15,14");
-      await pollLocatorText(phone.locator(".session-menu__text")).toBe("iPhone");
-      expect(await first.locator(".session-menu__icon svg").count()).toBe(1);
-      expect(await second.locator(".session-menu__icon svg").count()).toBe(1);
-      expect(await phone.locator(".session-menu__icon svg").count()).toBe(1);
-      expect(await first.getAttribute("title")).toBe("macOS · Mac14,12 · 192.168.1.11");
-      expect(await second.getAttribute("title")).toContain("192.168.1.12");
-      await second.click();
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Mac Studio");
-      expect(await trigger.textContent()).not.toContain("Mac15,14");
-      expect(await trigger.textContent()).not.toContain("192.168.1.12");
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("disambiguates duplicate recent basenames and applies the selected path", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "node.list": { nodes: [] },
-        "environments.list": { environments: [], profiles: [] },
-        "sessions.list": {
-          count: 2,
-          defaults: SESSION_LIST_DEFAULTS,
-          path: "",
-          sessions: [
-            { key: "agent:main:a", kind: "direct", updatedAt: 2, execCwd: "/a/openclaw" },
-            { key: "agent:main:b", kind: "direct", updatedAt: 1, execCwd: "/b/openclaw" },
-          ],
-          ts: Date.now(),
-        },
-        "sessions.create": { key: "agent:main:recent-collision" },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("node.list");
-      const trigger = page.locator("#new-session-project-trigger");
-      await trigger.click();
-      const first = page.locator('[data-value="recent::/a/openclaw"]');
-      const second = page.locator('[data-value="recent::/b/openclaw"]');
-      await pollLocatorText(first.locator(".session-menu__sub")).toBe("a");
-      await pollLocatorText(second.locator(".session-menu__sub")).toBe("b");
-      await second.click();
-      await page.locator(".new-session-page__message").fill("continue in work checkout");
-      await page.getByRole("button", { name: "Start session" }).click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        cwd: "/b/openclaw",
-        message: "continue in work checkout",
-      });
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("applies a recent folder and node as one place", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "node.list": {
-          nodes: [
-            {
-              nodeId: "macbook",
-              displayName: "MacBook",
-              connected: true,
-              commands: ["system.run", "fs.listDir"],
-            },
-          ],
-        },
-        "sessions.list": {
-          count: 2,
-          defaults: SESSION_LIST_DEFAULTS,
-          path: "",
-          sessions: [
-            {
-              key: "agent:main:recent-node",
-              kind: "direct",
-              updatedAt: 2,
-              execCwd: NODE_PICKED,
-              execNode: "macbook",
-            },
-            {
-              key: "agent:main:workspace",
-              kind: "direct",
-              updatedAt: 1,
-              execCwd: WORKSPACE,
-            },
-          ],
-          ts: Date.now(),
-        },
-        "sessions.create": { key: "agent:main:recent-place" },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("node.list");
-      const trigger = page.locator("#new-session-project-trigger");
-      await trigger.click();
-      await page
-        .locator("wa-popover.new-session-page__project-popover")
-        .getByRole("button", { name: /Projects.*MacBook/u })
-        .click();
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Projects");
-      await pollLocatorText(
-        page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
-      ).toBe("MacBook");
-
-      await page.locator(".new-session-page__message").fill("continue on the recent node");
-      await page.getByRole("button", { name: "Start session" }).click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        cwd: NODE_PICKED,
-        execNode: "macbook",
-        message: "continue on the recent node",
-      });
     } finally {
       await context.close();
     }
@@ -874,21 +573,13 @@ suite.define(() => {
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
       const projectLabel = projectTrigger.locator(".new-session-page__trigger-label");
-      const detailSelect = page.locator("wa-popover.new-session-page__detail-popover");
-      const detailTrigger = page.locator("#new-session-detail-trigger");
       const browserEntries = page.locator(".new-session-page__browser-list");
 
       // Pick the node from Your devices.
       await whereTrigger.click();
       await whereSelect.getByRole("button", { name: "MacBook" }).click();
       await pollLocatorText(whereLabel).toBe("MacBook");
-      await pollLocatorText(detailTrigger.locator(".new-session-page__trigger-label")).toBe(
-        "Node path",
-      );
-      await detailTrigger.click();
-      expect(await detailSelect.getByRole("button", { name: "Worktree" }).count()).toBe(0);
-      await detailSelect.getByLabel("Working directory").waitFor();
-      await page.keyboard.press("Escape");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
 
       // Manual path entry in the browser head preserves UNC paths; these
       // cannot be rediscovered by starting at the node home directory.
@@ -956,10 +647,12 @@ suite.define(() => {
 
       await whereTrigger.click();
       await whereSelect.getByRole("button", { name: "Old node" }).click();
-      await detailTrigger.click();
-      const nodeCwd = detailSelect.getByLabel("Working directory");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await projectTrigger.click();
+      const nodeCwd = projectSelect.getByLabel("Working directory");
       await expect.poll(() => nodeCwd.inputValue()).toBe("");
       await nodeCwd.fill(EXEC_ONLY_PICKED);
+      await captureProjectUiProof(page, "node-path-picker.png");
       await nodeCwd.press("Enter");
       expect(
         (await gateway.getRequests("fs.listDir")).filter(

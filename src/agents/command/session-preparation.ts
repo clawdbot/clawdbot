@@ -23,6 +23,7 @@ export async function prepareEmbeddedSessionState(params: {
   lifecycleGeneration: string;
   runId: string;
   workspaceDir: string;
+  executionSkillsDir: string;
   isNewSession: boolean;
   isSubagentLaneTurn: boolean;
   suppressVisibleSessionEffects: boolean;
@@ -64,6 +65,7 @@ export async function prepareEmbeddedSessionState(params: {
   });
   const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
     workspaceDir: params.workspaceDir,
+    executionSkillsDir: params.executionSkillsDir,
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,

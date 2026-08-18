@@ -39,7 +39,7 @@ import type {
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import type { GroupKeyResolution, SessionEntry } from "./types.js";
+import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 
 function projectSessionEntryForPersistenceRevision(params: {
   storePath: string;

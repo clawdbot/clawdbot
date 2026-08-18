@@ -11,13 +11,27 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { parseNodeRunnerInventoryDeclaration } from "../../infra/node-runner-inventory.js";
+import {
+  formatNodeRunnerUpdateRequired,
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
+  parseNodeRunnerInventoryDeclaration,
+} from "../../infra/node-runner-inventory.js";
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
-import { isNodeRunnerSessionHost, updateNodeRunnerInventory } from "../node-registry-private.js";
+import {
+  collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
+  collectNodeWorkerCapacityByNodeId,
+  isNodeRunnerSessionHost,
+  updateNodeRunnerInventory,
+} from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
@@ -89,12 +103,27 @@ async function listNodesForClient(params: {
     connectedNodes: params.connectedNodes,
     nodeRegistry: params.context.nodeRegistry,
   });
+  const issuesByNodeId = collectNodeRunnerIssuesByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
+  const workerSlotsByNodeId = collectNodeWorkerCapacityByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
+  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: params.pairedDevices,
     pairedNodes: params.pairedNodes,
     pendingNodes: params.pendingNodes,
     connectedNodes: params.connectedNodes,
     sessionHostNodeIds,
+    workerSlotsByNodeId,
+    workerBundleByNodeId,
+    issuesByNodeId,
   });
   const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
     params.context.logGateway.warn(
@@ -401,6 +430,23 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       : null;
     if (!nodeId || !updated) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    if (
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] ===
+        NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          formatNodeRunnerUpdateRequired(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+        ),
+      );
       return;
     }
     respond(true, { nodeId }, undefined);

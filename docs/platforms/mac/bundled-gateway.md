@@ -29,8 +29,11 @@ OpenClaw package.
 For a manual install, use Node 26 (recommended) or another supported release:
 Node 22.22.3+, Node 24.15+, or Node 25.9+. Install `openclaw` globally:
 
+The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
+
 ```bash
-npm install -g openclaw@<version>
+npm install -g openclaw@<version> --allow-scripts=openclaw
 ```
 
 Use **Retry setup** after a failed automatic setup. If that still fails,

@@ -943,18 +943,22 @@ describe("exec approvals CLI", () => {
     const filePath = path.join(dir, "oversized.json");
     fs.writeFileSync(filePath, Buffer.alloc(1024 * 1024 + 1, "x"));
 
-    await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
+    await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow(
+      "File exceeds 1048576 bytes",
+    );
 
-    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the directory read error", async () => {
     const dir = tempDirs.make("openclaw-approvals-file-directory-");
 
-    await expect(runNativeApprovalsFileCommand(dir)).rejects.toThrow("__exit__:1");
+    await expect(runNativeApprovalsFileCommand(dir)).rejects.toThrow(/EISDIR|directory/i);
 
-    expect(runtimeErrors[0]).toMatch(/EISDIR|directory/i);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 
@@ -985,12 +989,15 @@ describe("exec approvals CLI", () => {
     });
 
     try {
-      await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
+      await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow(
+        "File exceeds 1048576 bytes",
+      );
     } finally {
       openSpy.mockRestore();
     }
 
-    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 });

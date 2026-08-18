@@ -1506,6 +1506,54 @@ describe("loadWebMedia", () => {
     }
   });
 
+  it("bounds explicit-cap image fetches at the optimize headroom, not the document cap", async () => {
+    // 30MB declared original: over the 24MB image-optimize headroom but well
+    // under the old 100MB document bound. The Content-Length precheck must
+    // reject before any body bytes are read.
+    const declaredBytes = 30 * 1024 * 1024;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(new ReadableStream<Uint8Array>(), {
+          status: 200,
+          headers: {
+            "content-type": "image/png",
+            "content-length": String(declaredBytes),
+          },
+        }),
+    );
+
+    await expect(
+      loadWebMedia("https://example.test/huge.png", {
+        maxBytes: 5 * 1024 * 1024,
+        fetchImpl,
+        ssrfPolicy: { allowedHostnames: ["example.test"] },
+      }),
+    ).rejects.toThrow(/exceeds maxBytes/);
+  });
+
+  it("keeps compression headroom above an explicit cap for oversized originals", async () => {
+    // A 10MB-declared image is over the caller's 5MB cap but inside the
+    // optimize headroom: the fetch must proceed so compression can shrink it
+    // under the delivery cap.
+    const original = createSolidPngBuffer(64, 64, { r: 12, g: 34, b: 56 });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Buffer.from(original), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+
+    const result = await loadWebMedia("https://example.test/photo.png", {
+      maxBytes: 5 * 1024 * 1024,
+      fetchImpl,
+      ssrfPolicy: { allowedHostnames: ["example.test"] },
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeLessThanOrEqual(5 * 1024 * 1024);
+  });
+
   it("applies the shared remote read idle timeout for raw web media loads", async () => {
     const readIdleTimeoutMs = 20;
     const fetchImpl = makeStallingFetch(new Uint8Array([0x25, 0x50, 0x44, 0x46]));

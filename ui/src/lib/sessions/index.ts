@@ -328,7 +328,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           ? normalizeAgentId(options.resultAgentId)
           : state.agentId,
         deletedSessions: reconciled.deletedKey
-          ? [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }]
+          ? [
+              {
+                key: reconciled.deletedKey,
+                ...(reconciled.agentId ? { agentId: reconciled.agentId } : {}),
+                retireBeforeRevision: Date.now(),
+              },
+            ]
           : [],
       });
     }
@@ -400,6 +406,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             backgroundHydrate: true,
             force: true,
           });
+          if (connection.isCurrent(scope)) {
+            await roster.refreshManagedLists();
+          }
         }
       })();
     }
@@ -441,7 +450,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       retirePullRequestSummary(reconciled.deletedKey);
       publish({
         ...state,
-        deletedSessions: [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }],
+        deletedSessions: [
+          {
+            key: reconciled.deletedKey,
+            ...(reconciled.agentId ? { agentId: reconciled.agentId } : {}),
+            retireBeforeRevision: Date.now(),
+          },
+        ],
       });
     } else if ((eventReason === "create" || eventReason === "new") && eventInfo) {
       const remainingDeletedSessions = state.deletedSessions.filter(
@@ -460,13 +475,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         publish({ ...state, deletedSessions: remainingDeletedSessions });
       }
     }
-    // Gateway lists own filtering/order; events coalesce into one canonical refresh.
+    // Gateway lists own filtering/order; authoritative events invalidate every matching roster.
     roster.scheduleEvent({
       agentId:
         eventInfo?.agentId ??
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
-      filtered: event.event === "sessions.changed",
     });
   });
 
@@ -477,10 +491,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    captureConnectionScope: () => connection.capture(),
+    isConnectionScopeCurrent: (scope) => connection.isCurrent(scope),
     list: roster.list,
     listSnapshot: (scope) => roster.listSnapshot(scope),
     subscribeList(scope, listener) {
-      if (scope.archivedFilter && scope.archivedFilter !== "active") {
+      if (!roster.isPrimaryList(scope)) {
         return roster.subscribeList(scope, listener);
       }
       const notify = () => listener(roster.listSnapshot(scope));
@@ -488,7 +504,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(notify);
     },
     refreshList: (options) => roster.refreshList(options),
-    setCreatorFilter: (creatorId) => roster.setCreatorFilter(creatorId),
+    setOwnerFilter: (ownerId) => roster.setOwnerFilter(ownerId),
+    setInvolvingMeFilter: (enabled) => roster.setInvolvingMeFilter(enabled),
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,
@@ -498,6 +515,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create: mutations.create,
     recover: mutations.recover,
     patch: mutations.patch,
+    assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
     setModelOverride: mutations.setModelOverride,
     patchRowLocal: mutations.patchRowLocal,

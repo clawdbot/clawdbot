@@ -5,10 +5,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabases,
   closeOpenClawAgentDatabasesForTest,
   IncognitoAgentDatabasePathCollisionError,
+  listOpenClawRegisteredAgentDatabases,
   listOpenIncognitoAgentDatabases,
   openOpenClawAgentDatabase,
+  readOpenIncognitoAgentDatabaseGeneration,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 
@@ -80,12 +84,17 @@ describe("incognito agent database", () => {
     tempDirs.push(stateDir);
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+    const beforeGeneration = readOpenIncognitoAgentDatabaseGeneration();
 
     const first = openOpenClawAgentDatabase({ agentId: "main", env, path: sentinel });
+    const openedGeneration = readOpenIncognitoAgentDatabaseGeneration();
     const reopened = openOpenClawAgentDatabase({ agentId: "main", env, path: sentinel });
 
+    expect(openedGeneration).toBeGreaterThan(beforeGeneration);
+    expect(readOpenIncognitoAgentDatabaseGeneration()).toBe(openedGeneration);
     expect(reopened).toBe(first);
     expect(listOpenIncognitoAgentDatabases()).toEqual([{ agentId: "main", storePath: sentinel }]);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
     expect(
       withOpenClawAgentDatabaseReadOnly((database) => database.db === first.db, {
         agentId: "main",
@@ -103,5 +112,29 @@ describe("incognito agent database", () => {
     });
     expect(fs.existsSync(sentinel)).toBe(false);
     expect(fs.existsSync(path.dirname(sentinel))).toBe(false);
+
+    expect(closeOpenClawAgentDatabaseByPath(sentinel)).toBe(true);
+    const closedGeneration = readOpenIncognitoAgentDatabaseGeneration();
+    expect(closedGeneration).toBeGreaterThan(openedGeneration);
+    expect(closeOpenClawAgentDatabaseByPath(sentinel)).toBe(false);
+    expect(readOpenIncognitoAgentDatabaseGeneration()).toBe(closedGeneration);
+  });
+
+  it("advances once when close-all removes incognito membership", () => {
+    const stateDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-incognito-close-all-")),
+    );
+    tempDirs.push(stateDir);
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+    openOpenClawAgentDatabase({ agentId: "main", env, path: sentinel });
+    const openedGeneration = readOpenIncognitoAgentDatabaseGeneration();
+
+    closeOpenClawAgentDatabases();
+    const closedGeneration = readOpenIncognitoAgentDatabaseGeneration();
+    expect(closedGeneration).toBeGreaterThan(openedGeneration);
+
+    closeOpenClawAgentDatabases();
+    expect(readOpenIncognitoAgentDatabaseGeneration()).toBe(closedGeneration);
   });
 });

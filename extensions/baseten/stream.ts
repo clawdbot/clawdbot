@@ -4,6 +4,7 @@ import {
   createPayloadPatchStreamWrapper,
   normalizeOpenAICompatibleReasoningReplay,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { usesBasetenChatTemplateThinking } from "./models.js";
 
 const BASETEN_DEEPSEEK_V4_MODEL_ID = "deepseek-ai/deepseek-v4-pro";
@@ -43,4 +44,3 @@ export function createBasetenThinkingWrapper(
     };
   });
 }
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

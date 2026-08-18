@@ -1,9 +1,7 @@
 import type { OpenClawConfig } from "../types.openclaw.js";
-import type { SessionUnreferencedArtifactSweepResult } from "./disk-budget.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SessionResetBoundaryReason } from "./session-reset-boundary-event.js";
-import type { SessionMaintenanceApplyReport } from "./store-maintenance-operations.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;
@@ -73,7 +71,6 @@ export type DeleteSessionEntryLifecycleResult = {
   deleted: boolean;
   expectedEntryMismatch?: true;
   deletedEntry?: SessionEntry;
-  deletedSessionFile?: string;
   deletedSessionId?: string;
 };
 
@@ -84,6 +81,8 @@ export type DeleteSessionEntryLifecycleParams = {
   archiveTranscript: boolean;
   /** Delete transcript rows without writing an archive artifact. */
   deleteTranscriptWithoutArchive?: boolean;
+  /** Full teardown only: delete durable operations sourced from this logical session. */
+  deleteDeliveryArtifacts?: boolean;
   /** Optional exact row guard checked under the storage writer lock. */
   expectedEntry?: SessionEntry;
   /** Optional exact ordered transcript guard checked in the deleting SQLite transaction. */
@@ -131,6 +130,13 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
       }
   );
 
+export class SessionEntryLifecycleUpsertConflictError extends Error {
+  constructor(readonly sessionKey: string) {
+    super(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
+    this.name = "SessionEntryLifecycleUpsertConflictError";
+  }
+}
+
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
   resetBoundaryReason?: SessionResetBoundaryReason;
@@ -155,11 +161,13 @@ export type SessionArchivedTranscriptCleanupRule = {
 };
 
 export type SessionEntryLifecycleMutationResult = {
+  beforeCount: number;
   removedEntries: number;
   removedSessionKeys: string[];
+  modelRunPruned: number;
+  pruned: number;
+  capped: number;
   archivedTranscriptDirectories: string[];
-  unreferencedArtifacts: SessionUnreferencedArtifactSweepResult | null;
-  maintenanceReport: SessionMaintenanceApplyReport | null;
   afterCount: number;
   artifactCleanupError?: unknown;
 };

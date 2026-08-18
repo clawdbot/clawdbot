@@ -152,6 +152,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 4,
       deletions: 1,
+      changedFiles: 3,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
@@ -191,6 +192,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
@@ -207,6 +209,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
@@ -231,6 +234,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
@@ -286,6 +290,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
@@ -326,6 +331,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
@@ -366,6 +372,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
@@ -426,6 +433,7 @@ describe("session branch diff stats", () => {
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 

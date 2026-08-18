@@ -26,6 +26,7 @@ const runE2E =
   process.env.OPENCLAW_BROWSER_EXTENSION_E2E === "1" &&
   (process.platform === "linux" || process.platform === "darwin");
 const cleanups: Array<() => Promise<void>> = [];
+const STORE_ORIGIN = "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/";
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -249,6 +250,8 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         ]
           .toSorted()
           .map((id) => `chrome-extension://${id}/`);
+        expectedOrigins.push(STORE_ORIGIN);
+        expectedOrigins.sort();
         const relevantManifestPaths = chromeProductRoots(deps)
           .filter((productRoot) => productRoot.userDataDir === userDataDir)
           .map((productRoot) =>
@@ -392,6 +395,19 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         ) {
           throw new Error("native host did not use the custom installation context");
         }
+        const storeHostProbe = spawnSync(manifest.path, [STORE_ORIGIN], {
+          input: requestFrame,
+          env: browserEnv,
+          timeout: 30_000,
+        });
+        expect(
+          storeHostProbe.status,
+          `Store native host exit=${storeHostProbe.status} signal=${storeHostProbe.signal} stderr=${storeHostProbe.stderr.toString("utf8")}`,
+        ).toBe(0);
+        expect(decodeSingleNativeResponse(storeHostProbe.stdout)).toMatchObject({
+          ok: true,
+          nonce: "BwcHBwcHBwcHBwcHBwcHBw",
+        });
         process.stderr.write("[browser-extension-e2e] launcher probe passed\n");
 
         await expect

@@ -20,7 +20,6 @@ import {
   createSandboxedReadTool,
   createSandboxedWriteTool,
   wrapToolMemoryFlushAppendOnlyWrite,
-  wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -840,7 +839,7 @@ describe("FS tools with workspaceOnly=false", () => {
     const edit = createHostWorkspaceEditTool(workspaceDir, { workspaceOnly });
     const tools = [read, write, edit];
     return workspaceOnly
-      ? tools.map((tool) => wrapToolWorkspaceRootGuard(tool, workspaceDir))
+      ? tools.map((tool) => wrapToolWorkspaceRootGuardWithOptions(tool, workspaceDir))
       : tools;
   };
 
@@ -1063,10 +1062,7 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(hasToolError(result)).toBe(false);
     expect(result).toStrictEqual({
       content: [{ type: "text", text: "Appended content to memory/2026-03-07.md." }],
-      details: {
-        path: "memory/2026-03-07.md",
-        appendOnly: true,
-      },
+      details: { changed: true },
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
   });
@@ -1091,10 +1087,7 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(hasToolError(result)).toBe(false);
     expect(result).toStrictEqual({
       content: [{ type: "text", text: "Appended content to memory/2026-03-08.md." }],
-      details: {
-        path: "memory/2026-03-08.md",
-        appendOnly: true,
-      },
+      details: { changed: true },
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("new note");
   });

@@ -336,7 +336,11 @@ describe("gateway CPU scenario guard", () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.summary.steps.map((step) => step.name)).toEqual(["private QA build", "qa suite"]);
+    expect(result.summary.steps.map((step) => step.name)).toEqual([
+      "private QA build",
+      "node worker finalization gate",
+      "qa suite",
+    ]);
     expect(calls[0]?.args).toEqual(["--import", "tsx", "scripts/build-all.mts", "qaRuntime"]);
     expect(calls[0]?.env).toMatchObject({
       HOME: path.join(outputDir, "qa-state-root", "home"),
@@ -388,7 +392,10 @@ describe("gateway CPU scenario guard", () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.summary.steps.map((step) => step.name)).toEqual(["qa suite"]);
+    expect(result.summary.steps.map((step) => step.name)).toEqual([
+      "node worker finalization gate",
+      "qa suite",
+    ]);
     expect(calls.some((call) => call.args[0] === "scripts/build-all.mts")).toBe(false);
     expect(calls[0]?.env).toMatchObject({
       HOME: path.join(outputDir, "qa-state-root", "home"),

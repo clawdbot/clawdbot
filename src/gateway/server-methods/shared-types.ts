@@ -24,8 +24,10 @@ import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subag
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
-import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import type {
+  AgentRuntimeIdentity,
+  AgentRuntimeApprovalAuthorityValidator,
+} from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
@@ -78,6 +80,12 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
     must never get a second row. */
 export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 
+/** Caller identity captured by a built-in agent tool before trusted in-process dispatch. */
+export type TrustedAgentToolCaller = Readonly<{
+  agentId: string;
+  sessionKey: string;
+}>;
+
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
@@ -100,10 +108,6 @@ export type GatewayClient = {
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
   isDeviceTokenAuth?: boolean;
-  /** Temporary legacy migration session closed when normal enforcement resumes. */
-  isControlUiDeviceAuthMigrationSession?: boolean;
-  /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
-  isControlUiDeviceAuthMigration?: boolean;
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
@@ -113,6 +117,8 @@ export type GatewayClient = {
     senderAttribution?: { id: string; name?: string };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
     sessionCreation?: TrustedSessionCreation;
+    /** Trusted built-in agent tool caller; never accepted from Gateway wire params. */
+    agentToolCaller?: TrustedAgentToolCaller;
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
     cronRunContinuation?: boolean;
@@ -173,6 +179,14 @@ type GatewaySystemAgentSession = {
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
+    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+      wizardInputPending?: boolean;
+      question?: SystemAgentChatQuestion;
+      step?: import("../../wizard/session.js").WizardStep;
+    };
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
@@ -254,13 +268,6 @@ type GatewayKernelContext = {
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
-  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
-  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: {
-    deviceId: string;
-    publicKey: string;
-    scopes: string[];
-  }) => void;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;

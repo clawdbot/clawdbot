@@ -10,6 +10,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -88,28 +89,36 @@ describeControlUiE2e("session discussion toggle", () => {
     await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
     await gateway.waitForRequest("session.discussion.info");
 
-    const showDiscussion = page.getByRole("button", { name: "Show discussion" });
-    await expect.poll(() => showDiscussion.isVisible()).toBe(true);
-    await expect.poll(() => showDiscussion.getAttribute("aria-pressed")).toBe("false");
+    // An existing discussion stays closed until the operator asks for it, and
+    // showing it must never re-open the discussion on the gateway.
+    const discussionPanel = page.locator('.side-panel__panel[data-panel-slot="discussion"]');
+    const closeDiscussion = page.getByRole("button", { name: "Close Discussion" });
+    await expect.poll(() => discussionPanel.count()).toBe(0);
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDir, "discussion-initial-closed.png") });
     }
 
-    await showDiscussion.click();
+    await activateChatHeaderPanelAction(page, "Show discussion");
 
-    const hideDiscussion = page.getByRole("button", { name: "Hide discussion" });
-    const closeDiscussion = page.getByRole("button", { name: "Close Discussion" });
-    await expect.poll(() => hideDiscussion.getAttribute("aria-pressed")).toBe("true");
+    await expect.poll(() => discussionPanel.count()).toBe(1);
     await expect.poll(() => closeDiscussion.isVisible()).toBe(true);
+    // The tab must carry the upgraded panel, not an empty box: the element is
+    // defined lazily per slot, so a missing runtime registration renders as a
+    // silently blank tab.
+    await expect
+      .poll(() =>
+        page.locator("openclaw-session-discussion").evaluate((node) => node.childElementCount),
+      )
+      .toBeGreaterThan(0);
     expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDir, "discussion-open.png") });
     }
 
-    await hideDiscussion.click();
+    await activateChatHeaderPanelAction(page, "Hide discussion");
 
     await expect.poll(() => closeDiscussion.isVisible()).toBe(false);
-    await expect.poll(() => showDiscussion.getAttribute("aria-pressed")).toBe("false");
+    await expect.poll(() => discussionPanel.count()).toBe(0);
     expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDir, "discussion-closed.png") });
@@ -179,7 +188,7 @@ describeControlUiE2e("session discussion toggle", () => {
 
     await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
     await gateway.waitForRequest("session.discussion.info");
-    await page.getByRole("button", { name: "Show discussion" }).click();
+    await activateChatHeaderPanelAction(page, "Show discussion");
 
     const frameElement = page.locator("iframe.session-discussion__frame");
     await expect.poll(() => frameElement.count()).toBe(1);

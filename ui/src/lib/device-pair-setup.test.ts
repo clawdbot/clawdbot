@@ -245,7 +245,7 @@ describe("device pairing setup state", () => {
       phase: "error",
       source: "create",
       access: "full",
-      message: "Error: setup unavailable",
+      message: "setup unavailable",
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
@@ -266,7 +266,7 @@ describe("device pairing setup state", () => {
       source: "create",
       access: "full",
       message:
-        "Error: Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
+        "Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
@@ -502,7 +502,7 @@ describe("device pairing setup state", () => {
       async () => {
         throw new Error("offline");
       },
-      "Error: offline",
+      "offline",
     ],
     [
       "the recorded completion belongs to another setup",

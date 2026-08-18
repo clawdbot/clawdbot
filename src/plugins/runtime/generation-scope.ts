@@ -34,6 +34,7 @@ export function withPluginRuntimeGenerationScope<T>(
       ),
     {
       config: generation.config,
+      trustConfigIdentity: true,
       ...(generation.workspaceDir ? { workspaceDir: generation.workspaceDir } : {}),
     },
   );

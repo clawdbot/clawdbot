@@ -14,11 +14,9 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import {
-  inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
   resolveInstalledPluginIndexStorePath,
   writePersistedInstalledPluginIndex,
-  type InstalledPluginIndexStoreInspection,
   type InstalledPluginIndexStoreOptions,
 } from "../../../plugins/installed-plugin-index-store.js";
 import {
@@ -58,7 +56,6 @@ type PluginRegistryInstallMigrationResult =
       status: "migrated";
       migrated: true;
       preflight: PluginRegistryInstallMigrationPreflight;
-      inspection: InstalledPluginIndexStoreInspection;
       current: InstalledPluginIndex;
     };
 
@@ -321,7 +318,6 @@ export async function migratePluginRegistryForInstall(
     config,
     installRecords,
   };
-  const inspection = await inspectPersistedInstalledPluginIndex(migrationParams);
   const candidateIndex = loadInstalledPluginIndex({
     ...migrationParams,
   });
@@ -341,7 +337,6 @@ export async function migratePluginRegistryForInstall(
     status: "migrated",
     migrated: true,
     preflight,
-    inspection,
     current,
   };
 }

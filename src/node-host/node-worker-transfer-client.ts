@@ -4,6 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import path from "node:path";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
@@ -32,6 +33,12 @@ import {
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 const transferLog = createSubsystemLogger("node-host/worker-workspace");
+
+export type NodeWorkerTransferGateway = {
+  url: string;
+  tlsFingerprint?: string;
+  cloudflareAccess?: CloudflareAccessCredentials;
+};
 
 async function readResponseBody(response: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -359,6 +366,7 @@ async function replaceWorkspace(workspaceDir: string, staging: string): Promise<
 async function downloadWorkspace(params: {
   gatewayUrl: string;
   tlsFingerprint?: string;
+  cloudflareAccess?: CloudflareAccessCredentials;
   environmentId: string;
   workspaceDir: string;
   manifestHome: string;
@@ -371,6 +379,7 @@ async function downloadWorkspace(params: {
     {
       gatewayUrl: params.gatewayUrl,
       tlsFingerprint: params.tlsFingerprint,
+      cloudflareAccess: params.cloudflareAccess,
       routePath: nodeWorkspaceTransferManifestPath(
         params.environmentId,
         params.transfer.manifestRef,
@@ -397,6 +406,7 @@ async function downloadWorkspace(params: {
         request: {
           gatewayUrl: params.gatewayUrl,
           tlsFingerprint: params.tlsFingerprint,
+          cloudflareAccess: params.cloudflareAccess,
           routePath: nodeWorkspaceTransferPackPath(
             params.environmentId,
             params.transfer.manifestRef,
@@ -432,6 +442,7 @@ async function downloadWorkspace(params: {
         request: {
           gatewayUrl: params.gatewayUrl,
           tlsFingerprint: params.tlsFingerprint,
+          cloudflareAccess: params.cloudflareAccess,
           routePath: nodeWorkspaceTransferBlobPath(params.environmentId, entry.sha256),
           method: "GET",
           token: params.transfer.token,
@@ -486,6 +497,7 @@ async function uploadFile(request: ClientRequest, filePath: string): Promise<voi
 async function uploadWorkspace(params: {
   gatewayUrl: string;
   tlsFingerprint?: string;
+  cloudflareAccess?: CloudflareAccessCredentials;
   environmentId: string;
   workspaceDir: string;
   manifestHome: string;
@@ -533,6 +545,7 @@ async function uploadWorkspace(params: {
   const response = await openNodeWorkerTransferHttpRequest({
     gatewayUrl: params.gatewayUrl,
     tlsFingerprint: params.tlsFingerprint,
+    cloudflareAccess: params.cloudflareAccess,
     routePath: nodeWorkspaceTransferReconcilePath(
       params.environmentId,
       params.transfer.baseManifestRef,
@@ -572,6 +585,7 @@ async function uploadWorkspace(params: {
 export async function runNodeWorkerWorkspaceTransfer(params: {
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   environmentId: string;
   workspaceDir: string;
   manifestHome: string;
@@ -584,11 +598,13 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
       ? await downloadWorkspace({
           ...params,
           tlsFingerprint: params.gatewayTlsFingerprint,
+          cloudflareAccess: params.gatewayCloudflareAccess,
           transfer: params.transfer,
         })
       : await uploadWorkspace({
           ...params,
           tlsFingerprint: params.gatewayTlsFingerprint,
+          cloudflareAccess: params.gatewayCloudflareAccess,
           transfer: params.transfer,
         });
   } catch (error) {
@@ -596,6 +612,12 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
       throw error;
     }
     if (error instanceof NodeWorkerTransferHttpError) {
+      if (error.reason === "cloudflare-access-requires-tls") {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: Cloudflare Access credentials require HTTPS",
+          { cause: error },
+        );
+      }
       if (error.reason === "tls-fingerprint-mismatch") {
         throw new NodeWorkerWorkspaceTransferError(
           "workspace-transfer-failed: gateway TLS fingerprint mismatch",

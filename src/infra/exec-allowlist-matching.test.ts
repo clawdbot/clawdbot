@@ -4,6 +4,7 @@ import { matchAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
 
 describe("exec allowlist matching", () => {
   const baseResolution = {
+    kind: "executable" as const,
     rawExecutable: "rg",
     resolvedPath: "/opt/homebrew/bin/rg",
     executableName: "rg",
@@ -30,11 +31,13 @@ describe("exec allowlist matching", () => {
 
   it("does not let bare command-name patterns match path-selected executables", () => {
     const relativeResolution = {
+      kind: "executable" as const,
       rawExecutable: "./rg",
       resolvedPath: "/tmp/openclaw-workspace/rg",
       executableName: "rg",
     };
     const absoluteResolution = {
+      kind: "executable" as const,
       rawExecutable: "/tmp/openclaw-workspace/rg",
       resolvedPath: "/tmp/openclaw-workspace/rg",
       executableName: "rg",
@@ -58,6 +61,7 @@ describe("exec allowlist matching", () => {
 
   describe("argPattern path matches", () => {
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "python3",
       resolvedPath: "/usr/bin/python3",
       resolvedRealPath: "/usr/bin/python3",
@@ -175,6 +179,7 @@ describe("exec allowlist matching", () => {
     const cases = [
       baseResolution,
       {
+        kind: "executable" as const,
         rawExecutable: "python3",
         resolvedPath: "/usr/bin/python3",
         executableName: "python3",
@@ -190,6 +195,7 @@ describe("exec allowlist matching", () => {
     () => {
       expect(
         matchAllowlist([{ pattern: "/usr/bin/**" }], {
+          kind: "executable",
           rawExecutable: "/usr/bin/../../bin/sh",
           resolvedPath: "/usr/bin/../../bin/sh",
           executableName: "sh",
@@ -197,6 +203,7 @@ describe("exec allowlist matching", () => {
       ).toBeNull();
       expect(
         matchAllowlist([{ pattern: "/usr/bin/**" }], {
+          kind: "executable",
           rawExecutable: "/usr/bin/sub/../env",
           resolvedPath: "/usr/bin/sub/../env",
           executableName: "env",
@@ -209,6 +216,7 @@ describe("exec allowlist matching", () => {
     const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"] as const;
     for (const candidatePath of plusPathCases) {
       const match = matchAllowlist([{ pattern: candidatePath }], {
+        kind: "executable",
         rawExecutable: candidatePath,
         resolvedPath: candidatePath,
         executableName: candidatePath.split("/").at(-1) ?? candidatePath,
@@ -220,6 +228,7 @@ describe("exec allowlist matching", () => {
       {
         pattern: "/usr/bin/*++",
         resolution: {
+          kind: "executable",
           rawExecutable: "/usr/bin/g++",
           resolvedPath: "/usr/bin/g++",
           executableName: "g++",
@@ -228,6 +237,7 @@ describe("exec allowlist matching", () => {
       {
         pattern: "/opt/builds/tool[1](stable)",
         resolution: {
+          kind: "executable",
           rawExecutable: "/opt/builds/tool[1](stable)",
           resolvedPath: "/opt/builds/tool[1](stable)",
           executableName: "tool[1](stable)",
@@ -241,6 +251,7 @@ describe("exec allowlist matching", () => {
 
   it("matches path-shaped allowlist entries against the executable trust realpath", () => {
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "rg",
       resolvedPath: "/opt/homebrew/bin/rg",
       resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
@@ -256,6 +267,7 @@ describe("exec allowlist matching", () => {
 
   it("keeps basename allowlist entries on the PATH-resolved executable name", () => {
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "rg",
       resolvedPath: "/opt/homebrew/bin/rg",
       resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",

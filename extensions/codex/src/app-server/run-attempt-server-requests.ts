@@ -46,6 +46,7 @@ export function createCodexAttemptServerRequestController(
   const { connection } = runtime;
   const { params, computerUseConfig, runAbortController, appServer, sessionAgentId } = connection;
   const {
+    compactionPlanState,
     toolBridge,
     toolOutcomeOrdinals,
     suppressedDynamicToolOutcomeOrdinals,
@@ -133,8 +134,8 @@ export function createCodexAttemptServerRequestController(
             nativeHookRelay: resourceState.nativeHookRelay,
             autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
             signal,
-            onNativeToolFailureDisposition: (itemId, disposition) =>
-              projector?.recordNativeToolApprovalFailure(itemId, disposition),
+            onNativeToolFailureDisposition: (itemId, disposition, approvalKind) =>
+              projector?.recordNativeToolApprovalFailure(itemId, disposition, approvalKind),
           });
         }
         return undefined;
@@ -171,13 +172,6 @@ export function createCodexAttemptServerRequestController(
         phase: "tool_execution_started",
         tool: call.tool,
         toolCallId: call.callId,
-      });
-      emitDynamicToolStartedDiagnostic({
-        call,
-        agentId: sessionAgentId,
-        runId: params.runId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
       });
       const toolMeta = inferCodexDynamicToolMeta(
         call,
@@ -217,8 +211,15 @@ export function createCodexAttemptServerRequestController(
         }
       });
       try {
-        const { execution } = openClawDynamicToolExecutions.claim(call, () =>
-          handleDynamicToolCallWithTimeout({
+        const { execution } = openClawDynamicToolExecutions.claim(call, () => {
+          emitDynamicToolStartedDiagnostic({
+            call,
+            agentId: sessionAgentId,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+          });
+          return handleDynamicToolCallWithTimeout({
             call,
             toolBridge,
             signal,
@@ -241,8 +242,8 @@ export function createCodexAttemptServerRequestController(
                 timeoutMs: dynamicToolTimeoutMs,
               });
             },
-          }),
-        );
+          });
+        });
         const response = await execution;
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
         if (!protocolResponse.success && toolCallOrdinal !== undefined) {
@@ -266,8 +267,10 @@ export function createCodexAttemptServerRequestController(
           contentItems: protocolResponse.contentItems,
         });
         recordCodexDynamicToolResult(projector, call, response, protocolResponse);
-        if (protocolResponse.success && call.tool === "update_plan") {
-          projector?.recordDynamicPlanUpdate(response.executedArguments ?? call.arguments);
+        if (protocolResponse.success && call.tool === "progress_card") {
+          const progressCardInput = response.executedArguments ?? call.arguments;
+          await projector?.recordDynamicProgressCardUpdate(progressCardInput);
+          compactionPlanState.recordProgressCardInput(progressCardInput);
         }
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);

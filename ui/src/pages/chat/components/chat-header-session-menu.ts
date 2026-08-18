@@ -3,7 +3,11 @@ import { property } from "lit/decorators.js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "../../../components/menu-shortcuts.ts";
-import "../../../components/web-awesome.ts";
+import type { SessionOwnerOption } from "../../../components/session-owner-chip.ts";
+import {
+  renderSessionOwnerAssignmentMenu,
+  sessionOwnerAssignmentFromMenuValue,
+} from "../../../components/session-owner-menu.ts";
 import { t } from "../../../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -11,6 +15,7 @@ import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 export type HeaderMenuAction =
   | { kind: "open-in"; editor: EditorId; path: string }
   | { kind: "rename" }
+  | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
   | { kind: "fork" }
   | { kind: "continue-in-terminal" }
   | { kind: "toggle-archived" }
@@ -38,6 +43,9 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) layoutActions: HeaderMenuQuickAction[] = [];
+  @property({ attribute: false }) ownerOptions: readonly SessionOwnerOption[] = [];
+  @property({ attribute: false }) selfOwner: SessionOwnerOption | null = null;
+  @property({ attribute: false }) currentOwnerId: string | null = null;
   @property({ attribute: false }) actionDisabledReasons: Partial<
     Record<HeaderMenuActionKind, string>
   > = {};
@@ -93,6 +101,11 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       if (EDITOR_IDS.includes(editor)) {
         this.onAction({ kind: "open-in", editor, path: this.worktreePath });
       }
+      return;
+    }
+    const owner = sessionOwnerAssignmentFromMenuValue(value, this.selfOwner);
+    if (owner) {
+      this.onAction({ kind: "assign-owner", owner });
       return;
     }
     if (
@@ -238,6 +251,13 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           <span class="session-menu__text">${t("sessionsView.renameSessionMenu")}</span>
           ${menuShortcutHint("r")}
         </wa-dropdown-item>
+        ${renderSessionOwnerAssignmentMenu({
+          ownerOptions: this.ownerOptions,
+          selfOwner: this.selfOwner,
+          currentOwnerId: this.currentOwnerId,
+          disabled: this.actionDisabled("assign-owner"),
+          disabledReason: this.actionDisabledReasons["assign-owner"],
+        })}
         <wa-dropdown-item class="session-menu__item">
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.eye}</span>
           <span class="session-menu__text">${t("chat.view.menu")}</span>

@@ -2898,6 +2898,60 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("adds Git attribution only to provider-bound CLI and plugin prompts", async () => {
+    const attribution =
+      "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
+    const sessionKey = "agent:main:direct:coauthor-runtime-prompts";
+    const sessionEntry = makeSessionEntry("coauthor-runtime-prompts");
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli result"));
+
+    await runStoredAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      sessionEntry,
+      sessionKey,
+      body: "commit from CLI",
+      runId: "run-cli-coauthor-prompt",
+      opts: { gitCoauthorAttribution: attribution },
+      sessionStore,
+    });
+
+    const cliArg = firstRunCliAgentArg();
+    const attributionSuffix = `\n\n${attribution}`;
+    expect(cliArg.prompt).toEqual(expect.stringContaining("commit from CLI"));
+    expect(String(cliArg.prompt).endsWith(attributionSuffix)).toBe(true);
+    expect(cliArg.transcriptPrompt).toBe(String(cliArg.prompt).slice(0, -attributionSuffix.length));
+
+    const codexSessionKey = "agent:main:direct:coauthor-codex-prompt";
+    const codexSessionEntry = makeSessionEntry("coauthor-codex-prompt");
+    const codexSessionStore: Record<string, SessionEntry> = {
+      [codexSessionKey]: codexSessionEntry,
+    };
+    await writeSessionStoreSeed(codexSessionStore);
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runStoredAttempt({
+      agentHarnessRuntimeOverride: "codex",
+      body: "commit from Codex",
+      sessionEntry: codexSessionEntry,
+      sessionKey: codexSessionKey,
+      runId: "run-codex-coauthor-prompt",
+      opts: { gitCoauthorAttribution: attribution },
+      sessionStore: codexSessionStore,
+    });
+
+    const codexArg = firstEmbeddedAgentArg();
+    expectRecordFields(codexArg, {
+      agentHarnessId: "codex",
+      prompt: `commit from Codex\n\n${attribution}`,
+      transcriptPrompt: "commit from Codex",
+    });
+  });
+
   it("keeps live stream output for visible subagent lane runs", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
       opts: { lane: "subagent" },

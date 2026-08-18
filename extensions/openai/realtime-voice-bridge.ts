@@ -38,8 +38,12 @@ import {
   resolveOpenAIRealtimeEnvApiKey,
   resolveOpenAIRealtimeSecretInput,
   type OpenAIRealtimeUserMessageOptions,
+  type OpenAIRealtimeVoiceBridgeConfig,
   type RealtimeEvent,
 } from "./realtime-voice-session-policy.js";
+
+const OPENAI_REALTIME_MAX_BUFFERED_AUDIO_BYTES = 1024 * 1024;
+const OPENAI_REALTIME_AUDIO_DROP_WARN_INTERVAL_MS = 5_000;
 
 export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements RealtimeVoiceBridge {
   private static readonly DEFAULT_MODEL = OPENAI_REALTIME_DEFAULT_MODEL;
@@ -52,7 +56,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
 
   private ws: WebSocket | null = null;
 
-  private readonly lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI");
+  private readonly lifecycle: RealtimeVoiceSessionLifecycle;
 
   private connectionUrl = "";
 
@@ -65,6 +69,19 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
   private activeConnectionReason: string | undefined;
 
   private terminalError: Error | undefined;
+
+  private droppedInputAudioFrames = 0;
+
+  private lastInputAudioDropWarningAt = Number.NEGATIVE_INFINITY;
+
+  constructor(config: OpenAIRealtimeVoiceBridgeConfig) {
+    super(config);
+    this.lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI", {
+      pendingAudioOverflowPolicy: "drop-oldest",
+      onPendingAudioOverflow: () =>
+        this.config.logger.warn("OpenAI realtime input audio queue overflow; keeping newest audio"),
+    });
+  }
 
   async connect(): Promise<void> {
     if (this.terminalError) {
@@ -79,6 +96,18 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     }
     if (!this.lifecycle.isReady() || this.ws?.readyState !== WebSocket.OPEN) {
       this.lifecycle.enqueuePendingAudio(audio);
+      return;
+    }
+    if (this.ws.bufferedAmount > OPENAI_REALTIME_MAX_BUFFERED_AUDIO_BYTES) {
+      this.droppedInputAudioFrames += 1;
+      const now = Date.now();
+      if (now - this.lastInputAudioDropWarningAt >= OPENAI_REALTIME_AUDIO_DROP_WARN_INTERVAL_MS) {
+        this.config.logger.warn(
+          `OpenAI realtime input audio backpressure; droppedFrames=${this.droppedInputAudioFrames}`,
+        );
+        this.droppedInputAudioFrames = 0;
+        this.lastInputAudioDropWarningAt = now;
+      }
       return;
     }
     this.sendEvent({
@@ -462,6 +491,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     const auth = await requireOpenAIRealtimePlatformAuth({
       configuredApiKey: this.config.apiKey,
       cfg: this.config.cfg,
+      agentId: this.config.agentId,
     });
     return this.resolveApiKeyConnectionParams(auth.value, model);
   }

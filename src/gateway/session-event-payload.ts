@@ -34,6 +34,7 @@ export function buildGatewaySessionEventFields(params: {
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
+  status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
   activeRunIds?: string[];
 }): Record<string, unknown> {
@@ -43,6 +44,9 @@ export function buildGatewaySessionEventFields(params: {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
     createdActor: sessionRow.createdActor ?? null,
+    owner: sessionRow.owner ?? null,
+    participants: sessionRow.participants ?? [],
+    participantCount: sessionRow.participantCount ?? 0,
     kind: sessionRow.kind,
     visibility: sessionRow.visibility,
     channel: sessionRow.channel,
@@ -66,6 +70,10 @@ export function buildGatewaySessionEventFields(params: {
     swarmGroupId: sessionRow.swarmGroupId,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
+    permissionMode: sessionRow.permissionMode ?? null,
+    ...(sessionRow.permissionMode !== undefined && sessionRow.sessionRoot !== undefined
+      ? { sessionRoot: sessionRow.sessionRoot }
+      : {}),
     forkedFromParent: sessionEntryForkedFromParent(sessionRow) ? true : undefined,
     spawnDepth: sessionRow.spawnDepth,
     subagentRole: sessionRow.subagentRole,
@@ -109,7 +117,7 @@ export function buildGatewaySessionEventFields(params: {
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
     agentRuntime: sessionRow.agentRuntime,
-    status: sessionRow.status,
+    status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.

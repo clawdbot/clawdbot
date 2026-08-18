@@ -2,6 +2,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
+import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
+import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
 import type { AdmittedRunContext, OperationalRunInstanceRef } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
@@ -19,6 +21,10 @@ type GatewayToolCallerIdentity = {
   /** Opaque already-signed identity used only by isolated worker transports. */
   signedAgentRuntimeIdentityToken?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
+  /** Exact Gateway-owned worker claim; never sourced from model or RPC arguments. */
+  workerTurnClaim?: WorkerSessionTurnClaim;
+  /** Closure-bound Gateway capability; revalidates both owners at child admission. */
+  workerTurnExecutionIdentityCapability?: WorkerTurnExecutionIdentityCapability;
   /** Host-signed capability for the scheduled run's existing self-management surface. */
   cronSelfManagementJobId?: string;
   cronToolsAllowCapture?: "final-executable-surface";
@@ -107,6 +113,10 @@ export async function withGatewayToolCallerIdentity<T>(
     identity.signedAgentRuntimeIdentityToken?.trim();
   const executionIdentityToken =
     inheritedOwner?.executionIdentityToken ?? identity.executionIdentityToken;
+  const workerTurnClaim = inheritedOwner?.workerTurnClaim ?? identity.workerTurnClaim;
+  const workerTurnExecutionIdentityCapability =
+    inheritedOwner?.workerTurnExecutionIdentityCapability ??
+    identity.workerTurnExecutionIdentityCapability;
   const cronSelfManagementJobId =
     identity.cronSelfManagementJobId?.trim() ?? inheritedOwner?.cronSelfManagementJobId;
   const cronToolsAllowCapture =
@@ -134,6 +144,8 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
       ...(executionIdentityToken ? { executionIdentityToken } : {}),
+      ...(workerTurnClaim ? { workerTurnClaim } : {}),
+      ...(workerTurnExecutionIdentityCapability ? { workerTurnExecutionIdentityCapability } : {}),
       ...(turnSourceChannel ? { turnSourceChannel } : {}),
       ...(turnSourceLocal === true ? { turnSourceLocal: true } : {}),
       ...(turnSourceTo ? { turnSourceTo } : {}),

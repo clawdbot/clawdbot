@@ -1,3 +1,7 @@
+import type {
+  DispatchReplyWithBufferedBlockDispatcher,
+  DispatchReplyWithDispatcher,
+} from "../auto-reply/reply/provider-dispatcher.types.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 /**
  * Runtime SDK subpath for lazy reply dispatch and inbound-context helpers.
@@ -6,10 +10,6 @@ export { resolveChunkMode } from "../auto-reply/chunk.js";
 export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 export { finalizeInboundContextForSdk as finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
-import type {
-  DispatchReplyWithBufferedBlockDispatcher,
-  DispatchReplyWithDispatcher,
-} from "../auto-reply/reply/provider-dispatcher.types.js";
 
 export type {
   DispatchReplyWithBufferedBlockDispatcher,

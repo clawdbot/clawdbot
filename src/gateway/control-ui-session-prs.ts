@@ -312,7 +312,13 @@ async function resolveSessionBranch(
     repo: context.repo,
     branch: context.branch,
     ...(facts.creatable ? { createUrl: branchCreateUrl(context) } : {}),
-    ...(facts.stats ? { additions: facts.stats.additions, deletions: facts.stats.deletions } : {}),
+    ...(facts.stats
+      ? {
+          additions: facts.stats.additions,
+          deletions: facts.stats.deletions,
+          changedFiles: facts.stats.changedFiles,
+        }
+      : {}),
   };
 }
 
@@ -399,7 +405,7 @@ async function fetchDiffCounts(
   item: PullListItem,
   fetchImpl: typeof fetch,
   token: string | undefined,
-): Promise<{ additions?: number; deletions?: number }> {
+): Promise<{ additions?: number; deletions?: number; changedFiles?: number }> {
   const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
   try {
     const value = await fetchGitHubJson(url, fetchImpl, token);
@@ -409,6 +415,7 @@ async function fetchDiffCounts(
     return {
       additions: optionalNumber(value, "additions"),
       deletions: optionalNumber(value, "deletions"),
+      changedFiles: optionalNumber(value, "changed_files"),
     };
   } catch (error) {
     rethrowRateLimit(error);

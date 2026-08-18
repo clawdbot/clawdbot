@@ -13,6 +13,7 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
+  setMemorySourceCounts,
   setMemoryStatusDirty,
 } from "./memory-tool-manager.test-mocks.js";
 import { applyProjectRanking } from "./memory/project-ranking.js";
@@ -775,8 +776,10 @@ describe("memory_search corpus labels", () => {
 
   it("keeps ordinary memory_search on explicitly configured sources when recall indexing is enabled", async () => {
     let seenSources: readonly string[] | undefined;
+    let seenMaxResults: number | undefined;
     setMemorySearchImpl(async (opts) => {
       seenSources = opts?.sources;
+      seenMaxResults = opts?.maxResults;
       return [];
     });
     const tool = createMemorySearchToolOrThrow({
@@ -794,9 +797,10 @@ describe("memory_search corpus labels", () => {
       agentSessionKey: "agent:main:main",
     });
 
-    await tool.execute("ordinary-search", { query: "favorite food" });
+    await tool.execute("ordinary-search", { query: "favorite food", maxResults: 3 });
 
     expect(seenSources).toEqual(["memory"]);
+    expect(seenMaxResults).toBe(3);
   });
 
   it("applies active-project ranking through the production memory_search tool", async () => {
@@ -1057,6 +1061,126 @@ describe("memory_search corpus labels", () => {
     expect(details.results).toEqual([
       expect.objectContaining({ corpus: "memory", path: "MEMORY.md" }),
     ]);
+  });
+
+  it("widens ranked candidates to fill the visible session result window", async () => {
+    const searchedLimits: Array<number | undefined> = [];
+    const ranked = [
+      {
+        path: "sessions/missing-high-rank-a.jsonl",
+        startLine: 1,
+        endLine: 2,
+        score: 0.99,
+        snippet: "Invisible higher-ranked session",
+        source: "sessions" as const,
+      },
+      {
+        path: "sessions/missing-high-rank-b.jsonl",
+        startLine: 3,
+        endLine: 4,
+        score: 0.98,
+        snippet: "Another invisible higher-ranked session",
+        source: "sessions" as const,
+      },
+      {
+        path: "sessions/past-thread.jsonl",
+        startLine: 5,
+        endLine: 6,
+        score: 0.9,
+        snippet: "First visible session result",
+        source: "sessions" as const,
+      },
+      {
+        path: "sessions/past-thread.jsonl",
+        startLine: 7,
+        endLine: 8,
+        score: 0.8,
+        snippet: "Second visible session result",
+        source: "sessions" as const,
+      },
+    ];
+    setMemorySearchImpl(async (opts) => {
+      searchedLimits.push(opts?.maxResults);
+      return ranked.slice(0, opts?.maxResults);
+    });
+    setMemorySourceCounts([{ source: "sessions", files: 3, chunks: 4 }]);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: {
+          citations: "off",
+          search: {
+            sources: ["sessions"],
+            rememberAcrossConversations: true,
+          },
+        },
+        tools: { sessions: { visibility: "self" } },
+      },
+      agentSessionKey: "agent:main:main:active-memory:abcdef123456",
+      conversationRecall: {
+        anchorSessionKey: "agent:main:main",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    const result = await tool.execute("visible-backfill", {
+      query: "session result",
+      corpus: "memory",
+      maxResults: 2,
+    });
+    const details = result.details as {
+      results: Array<{ path: string; snippet: string }>;
+      debug?: {
+        hits: number;
+        candidateHits: number;
+        withheldHits: number;
+        searchWindow: number;
+      };
+    };
+
+    expect(details.results.map((entry) => entry.snippet)).toEqual([
+      "First visible session result",
+      "Second visible session result",
+    ]);
+    expect(details.results).toHaveLength(2);
+    expect(details.results.every((entry) => entry.path.startsWith("sessions/"))).toBe(true);
+    expect(searchedLimits).toEqual([4]);
+    expect(details.debug).toMatchObject({
+      hits: 2,
+      candidateHits: 4,
+      withheldHits: 2,
+      searchWindow: 4,
+    });
+
+    searchedLimits.length = 0;
+    const boundedResult = await tool.execute("indexed-candidate-bound", {
+      query: "session result",
+      maxResults: 5,
+    });
+    expect(searchedLimits).toEqual([4]);
+    expect(boundedResult.details).toMatchObject({
+      results: expect.arrayContaining([
+        expect.objectContaining({ snippet: "First visible session result" }),
+        expect.objectContaining({ snippet: "Second visible session result" }),
+      ]),
+      debug: { hits: 2, candidateHits: 4, withheldHits: 2, searchWindow: 4 },
+    });
+
+    searchedLimits.length = 0;
+    setMemorySourceCounts([]);
+    const bootstrapResult = await tool.execute("bootstrap-candidate-window", {
+      query: "session result",
+      maxResults: 2,
+    });
+    expect(searchedLimits).toEqual([200]);
+    expect(bootstrapResult.details).toMatchObject({
+      results: expect.arrayContaining([
+        expect.objectContaining({ snippet: "First visible session result" }),
+        expect.objectContaining({ snippet: "Second visible session result" }),
+      ]),
+      debug: { hits: 2, candidateHits: 4, withheldHits: 2, searchWindow: 200 },
+    });
   });
 
   it("preserves source corpus labels for memory and session transcript hits", async () => {

@@ -333,6 +333,24 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
   });
 
+  it.each(["bash", "write"])(
+    "includes a semantic %s timeout explanation at normal verbosity",
+    (toolName) => {
+      const timeoutExplanation = "approval wait expired";
+      const payloads = buildPayloads({
+        lastToolError: {
+          toolName,
+          error: timeoutExplanation,
+          errorCode: "approval_timeout",
+          timedOut: true,
+        },
+        verboseLevel: "on",
+      });
+
+      expect(payloads[0]?.text).toContain(timeoutExplanation);
+    },
+  );
+
   it("keeps exec-like tool error warnings for recoverable-looking errors when there is no reply", () => {
     const payloads = buildPayloads({
       lastToolError: {

@@ -7,6 +7,7 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -17,6 +18,11 @@ import {
 } from "../admitted-run-context.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import {
+  createModelGenerationFixture,
+  publishCurrentModelGeneration,
+  resetModelGenerationFixtureState,
+} from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -24,7 +30,7 @@ import type {
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
-import { maybeCompactAgentHarnessSession } from "./compaction.js";
+import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "./compaction.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
@@ -48,6 +54,10 @@ import type {
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
 } from "./types.js";
+
+type TestNativeCompactionParams = AgentHarnessCompactParams & {
+  nativeCompactionRequest: "required_preflight" | "after_context_engine";
+};
 
 const agentRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
   createAttemptResult("openclaw"),
@@ -152,6 +162,7 @@ let selectionAdmittedRunContext: AdmittedRunContext;
 
 beforeEach(async () => {
   resetAgentRunRegistryForTest();
+  resetModelGenerationFixtureState();
   selectionAdmission = prepareAgentRunAdmission({
     cfg: {},
     facts: {
@@ -210,6 +221,7 @@ afterEach(() => {
   selectionAdmission.close();
   resetAgentRunRegistryForTest();
   clearAgentHarnesses();
+  resetModelGenerationFixtureState();
   cliBackendsTesting.resetDepsForTest();
   agentRunAttempt.mockClear();
   compactAuthMocks.prepareAgentRuntimeAuth.mockClear();
@@ -431,7 +443,21 @@ function agentModelRuntimeConfig(
   } as OpenClawConfig;
 }
 
-type CompactSessionParams = Parameters<typeof maybeCompactAgentHarnessSession>[0];
+function maybeCompactAgentHarnessSession(
+  params: Parameters<typeof maybeCompactAgentHarnessSessionImpl>[0],
+  options: Partial<Parameters<typeof maybeCompactAgentHarnessSessionImpl>[1]> = {},
+) {
+  const preparedModelRuntime =
+    options.preparedModelRuntime ??
+    createModelGenerationFixture({
+      config: params.config ?? {},
+      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+      label: "harness-test",
+    }).preparedModelRuntime;
+  return maybeCompactAgentHarnessSessionImpl(params, { ...options, preparedModelRuntime });
+}
+
+type CompactSessionParams = Parameters<typeof maybeCompactAgentHarnessSessionImpl>[0];
 
 const OPENAI_PLATFORM_ROUTE = {
   provider: "openai",
@@ -1299,9 +1325,15 @@ describe("runAgentHarnessAttempt", () => {
   });
 
   it("isolates native tools unless every exact deny is explicitly safe", async () => {
-    const received: boolean[] = [];
+    const received: Array<{
+      restricted: boolean;
+      safeDeniedTools?: readonly string[];
+    }> = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
-      received.push(attempt.pluginHarnessToolPolicyRestricted === true);
+      received.push({
+        restricted: attempt.pluginHarnessToolPolicyRestricted === true,
+        safeDeniedTools: attempt.pluginHarnessToolPolicySafeDeniedTools,
+      });
       return createAttemptResult("codex");
     });
     const harness: AgentHarness = {
@@ -1311,6 +1343,7 @@ describe("runAgentHarnessAttempt", () => {
       conversationToolPolicySafeDenyTools: [
         "tts",
         "music_generate",
+        "image_generate",
         "browser",
         "unknown_native_tool",
       ],
@@ -1321,6 +1354,7 @@ describe("runAgentHarnessAttempt", () => {
     registerAgentHarness(harness, { ownerPluginId: "codex" });
 
     const policies = [
+      { deny: ["image_generate"] },
       { deny: ["tts", "music_generate"] },
       { deny: ["browser"] },
       { deny: ["exec"] },
@@ -1337,7 +1371,18 @@ describe("runAgentHarnessAttempt", () => {
       });
     }
 
-    expect(received).toEqual([false, false, true, true, true, true, true, true]);
+    expect(received.map((attempt) => attempt.restricted)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(received[0]?.safeDeniedTools).toEqual(["image_generate"]);
   });
 
   it("marks only explicit restrictive policy layers for plugin harness isolation", async () => {
@@ -2887,8 +2932,8 @@ describe("selectAgentHarness", () => {
       ok: true,
       compacted: true,
     }));
-    const compactAfterContextEngine = vi.fn(
-      async (_params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult> => ({
+    const compactNative = vi.fn(
+      async (_params: TestNativeCompactionParams): Promise<AgentHarnessCompactResult> => ({
         ok: true,
         compacted: false,
         result: {
@@ -2899,20 +2944,15 @@ describe("selectAgentHarness", () => {
         },
       }),
     );
-    const harness: AgentHarness & {
-      compactAfterContextEngine(
-        params: AgentHarnessCompactParams,
-      ): Promise<AgentHarnessCompactResult | undefined>;
-    } = {
+    const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
       supports: (ctx) =>
         ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
       runAttempt: vi.fn(async () => createAttemptResult("codex")),
       compact,
-      compactAfterContextEngine,
     };
-    registerAgentHarness(harness, { ownerPluginId: "codex" });
+    registerAgentHarness(harness, { ownerPluginId: "codex", nativeCompaction: compactNative });
 
     await expect(
       maybeCompactAgentHarnessSession(
@@ -2938,7 +2978,7 @@ describe("selectAgentHarness", () => {
       },
     });
     expect(compact).not.toHaveBeenCalled();
-    expect(compactAfterContextEngine).toHaveBeenCalledTimes(1);
+    expect(compactNative).toHaveBeenCalledTimes(1);
   });
 
   it("skips internal post-context-engine compaction when the harness lacks the private capability", async () => {
@@ -2973,6 +3013,157 @@ describe("selectAgentHarness", () => {
       ),
     ).resolves.toBeUndefined();
     expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("routes required-preflight compaction through the harness private capability", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    const compactNative = vi.fn(
+      async (params: TestNativeCompactionParams): Promise<AgentHarnessCompactResult> => ({
+        ok: true,
+        compacted: false,
+        result: {
+          summary: "codex owns automatic compaction",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 10,
+          details: {
+            request: params.nativeCompactionRequest,
+          },
+        },
+      }),
+    );
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      compact,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex", nativeCompaction: compactNative });
+    const onNativeCompactionCapabilityUsed = vi.fn();
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+          preflightRequired: true,
+        },
+        { nativeCompactionRequest: "required_preflight", onNativeCompactionCapabilityUsed },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      compacted: false,
+      result: {
+        summary: "codex owns automatic compaction",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 10,
+        details: { request: "required_preflight" },
+      },
+    });
+    expect(compact).not.toHaveBeenCalled();
+    expect(onNativeCompactionCapabilityUsed).toHaveBeenCalledTimes(1);
+    expect(compactNative).toHaveBeenCalledTimes(1);
+    expect(compactNative).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nativeCompactionRequest: "required_preflight",
+        preflightRequired: true,
+      }),
+    );
+  });
+
+  it("falls back to the regular compact hook when required-preflight capability is absent", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+    const onNativeCompactionCapabilityUsed = vi.fn();
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+          preflightRequired: true,
+        },
+        { nativeCompactionRequest: "required_preflight", onNativeCompactionCapabilityUsed },
+      ),
+    ).resolves.toEqual({ ok: true, compacted: true });
+    expect(onNativeCompactionCapabilityUsed).not.toHaveBeenCalled();
+    expect(compact).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a forged native-compaction property on a non-Codex harness", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    const compactNative = vi.fn(
+      async (_params: TestNativeCompactionParams): Promise<AgentHarnessCompactResult> => ({
+        ok: false,
+        compacted: false,
+        reason: "no copilot app-server thread binding",
+        failure: { reason: "missing_thread_binding" },
+      }),
+    );
+    const harness: AgentHarness & {
+      compactNative(
+        params: TestNativeCompactionParams,
+      ): Promise<AgentHarnessCompactResult | undefined>;
+    } = {
+      id: "copilot",
+      label: "Copilot",
+      supports: (ctx) =>
+        ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: vi.fn(async () => createAttemptResult("copilot")),
+      compact,
+      compactNative,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "copilot" });
+    const onNativeCompactionCapabilityUsed = vi.fn();
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "copilot",
+          preflightRequired: true,
+        },
+        { nativeCompactionRequest: "required_preflight", onNativeCompactionCapabilityUsed },
+      ),
+    ).resolves.toEqual({ ok: true, compacted: true });
+    expect(onNativeCompactionCapabilityUsed).not.toHaveBeenCalled();
+    expect(compactNative).not.toHaveBeenCalled();
+    expect(compact).toHaveBeenCalledTimes(1);
   });
 
   it("keeps compaction recoverable when auth profile lookup fails", async () => {
@@ -3180,6 +3371,111 @@ describe("selectAgentHarness", () => {
         runtimeModel: expect.objectContaining({
           baseUrl: "https://proxy.example/v1",
           id: "proxy-model",
+        }),
+      }),
+    );
+  });
+
+  it("keeps auth-route rematerialization on the caller-owned prepared generation", async () => {
+    const cfg = {} as OpenClawConfig;
+    const createStores = () => ({ authStorage: {} as never, modelRegistry: {} as never });
+    const generationA = createModelGenerationFixture({
+      config: cfg,
+      createStores,
+      label: "compact-a",
+      provider: "local-proxy",
+      requestProvider: "local-proxy",
+      modelId: "proxy-model",
+      runtimeApi: "openai-responses",
+    });
+    const generationB = createModelGenerationFixture({
+      config: cfg,
+      createStores,
+      label: "compact-b",
+      provider: "local-proxy",
+      requestProvider: "local-proxy",
+      modelId: "proxy-model",
+      runtimeApi: "openai-responses",
+    });
+    publishCurrentModelGeneration(generationA);
+    compactAuthMocks.resolveModelAsync.mockImplementation(
+      async (_provider, _modelId, _agentDir, _config, options) => {
+        const registry = options?.preparedModelRuntime?.pluginRegistry ?? getActivePluginRegistry();
+        const label = registry === generationA.pluginRegistry ? "A" : "B";
+        return {
+          model: {
+            provider: "local-proxy",
+            id: "proxy-model",
+            name: `Runtime ${label}`,
+            api: "openai-responses",
+            baseUrl: `https://generation-${label.toLowerCase()}.example.test/v1`,
+          },
+        };
+      },
+    );
+    compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {
+        "local-proxy:stale": {
+          type: "api_key",
+          provider: "local-proxy",
+          key: "stale-key",
+        },
+      },
+    });
+    const profilePlan = {
+      providerForAuth: "local-proxy",
+      authProfileProviderForAuth: "local-proxy",
+      forwardedAuthProfileId: "local-proxy:stale",
+      forwardedAuthProfileSource: "auto" as const,
+      selectedAuthMode: "api_key" as const,
+    };
+    const directPlan = {
+      providerForAuth: "local-proxy",
+      authProfileProviderForAuth: "local-proxy",
+      selectedAuthMode: "api_key" as const,
+    };
+    compactAuthMocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan: profilePlan,
+      attempts: [
+        {
+          kind: "profile" as const,
+          profileId: "local-proxy:stale",
+          plan: profilePlan,
+          allowAuthProfileFallback: false,
+        },
+        { kind: "direct" as const, plan: directPlan, requiresPriorProfileAttempt: true },
+      ],
+    });
+    compactAuthMocks.getApiKeyForModelCore.mockImplementation(async (params) => {
+      if (params.profileId === "local-proxy:stale") {
+        publishCurrentModelGeneration(generationB);
+        throw new Error("stale profile");
+      }
+      return { apiKey: "direct-key", source: "direct", mode: "api-key" };
+    });
+    const compact = registerTestCompactor({ id: "copilot", provider: "local-proxy" });
+    const options = { preparedModelRuntime: generationA.preparedModelRuntime };
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        createCompactionParams({
+          config: cfg,
+          provider: "local-proxy",
+          model: "proxy-model",
+          agentHarnessId: "copilot",
+        }),
+        options,
+      ),
+    ).resolves.toEqual({ ok: true, compacted: false });
+
+    expect(compactAuthMocks.resolveModelAsync).toHaveBeenCalledTimes(2);
+    expect(compact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeModel: expect.objectContaining({
+          name: "Runtime A",
+          api: "openai-responses",
+          baseUrl: "https://generation-a.example.test/v1",
         }),
       }),
     );

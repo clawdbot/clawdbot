@@ -175,13 +175,8 @@ export async function configureGatewayForSetup(
     }
   }
 
-  let tailscaleResetOnExit = quickstartGateway.tailscaleResetOnExit;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(t("wizard.gatewayTailscale.docsNote"), "Tailscale");
-    tailscaleResetOnExit = await prompter.confirm({
-      message: t("wizard.gateway.tailscaleReset"),
-      initialValue: tailscaleResetOnExit,
-    });
   }
 
   // Safety + constraints:
@@ -367,7 +362,6 @@ export async function configureGatewayForSetup(
       tailscale: {
         ...nextConfig.gateway?.tailscale,
         mode: tailscaleMode as GatewayTailscaleMode,
-        resetOnExit: tailscaleResetOnExit,
       },
     },
   };
@@ -390,7 +384,6 @@ export async function configureGatewayForSetup(
       authMode,
       gatewayToken,
       tailscaleMode: tailscaleMode as GatewayTailscaleMode,
-      tailscaleResetOnExit,
     },
   };
 }

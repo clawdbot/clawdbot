@@ -4,8 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsFilesListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { AgentsRouteData } from "./route.ts";
 import "./agents-page.ts";
+
+const AGENT_FILE_GATEWAY_HELLO = gatewayHelloForMethods(["agents.files.set"]);
 
 type TestAgentsPage = HTMLElement & {
   context: ApplicationContext;
@@ -32,7 +35,7 @@ function snapshot(client: GatewayBrowserClient): ApplicationGatewaySnapshot {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: AGENT_FILE_GATEWAY_HELLO,
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -105,7 +108,7 @@ describe("agent file lifecycle", () => {
     page.saveSelectedAgentFile("main", "AGENTS.md", "updated");
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(page.agentFilesError).toBe("Error: workspace write failed"));
+    await vi.waitFor(() => expect(page.agentFilesError).toBe("workspace write failed"));
     expect(refreshFiles).not.toHaveBeenCalled();
   });
 });

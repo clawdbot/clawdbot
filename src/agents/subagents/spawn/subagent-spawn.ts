@@ -6,12 +6,15 @@
 import { promises as fs } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
+import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { SubagentSpawnPreparation } from "../../../context-engine/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
+import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import {
   recordSessionCreated,
   recordSubagentSpawned,
@@ -27,6 +30,7 @@ import {
   startQueuedSubagentRun,
 } from "../registry/subagent-registry.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import {
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
@@ -50,6 +54,10 @@ import type {
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
 import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import {
+  buildSubagentExecutionSessionSpawnContext,
+  withSubagentGatewayExecutionIdentity,
+} from "./subagent-spawn-execution-identity.js";
 import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
@@ -183,6 +191,7 @@ export async function spawnSubagentDirect(
       childSessionKey,
       incognito,
       requesterInternalKey,
+      requesterAgentId,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
       spawnedWorkspaceDir,
       spawnedCwd,
@@ -373,11 +382,29 @@ export async function spawnSubagentDirect(
     });
     const launchChildRun = async () =>
       await callNativeSubagentGateway(
-        {
-          method: "agent",
-          params: childLaunch.request,
-          timeoutMs: childLaunch.timeoutMs,
-        },
+        withSubagentGatewayExecutionIdentity(
+          {
+            method: "agent",
+            params: childLaunch.request,
+            timeoutMs: childLaunch.timeoutMs,
+          },
+          {
+            sessionSpawnContext: buildSubagentExecutionSessionSpawnContext({
+              enabled: isExecutionIdentityCollectionEnabled(cfg),
+              backend: "subagent",
+              parentAgentId: requesterAgentId,
+              requesterRef: requesterInternalKey,
+              controllerRef: ownership.controllerSessionKey,
+              depth: childDepth,
+              maxDepth: maxSpawnDepth,
+              targetAgentId,
+              sandbox: sandboxMode,
+              inheritedToolAllowlist: ctx.inheritedToolAllowlist,
+              inheritedToolDenylist: ctx.inheritedToolDenylist,
+            }),
+            parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
+          },
+        ),
         childLaunch.authorization,
       );
 
@@ -431,6 +458,13 @@ export async function spawnSubagentDirect(
         const launch = await launchChildRun();
         taskRowOwnership = launch.taskRowOwnership;
         acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
+        recordSessionParticipantBestEffort({
+          actor: { type: "agent", id: requesterAgentId },
+          agentId: targetAgentId,
+          sessionKey: childSessionKey,
+          source: "agent",
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
+        });
         return { runId: acceptedChildRunId };
       },
       async cleanupOnFailure({ phase, state }) {
@@ -571,6 +605,15 @@ export async function spawnSubagentDirect(
             // Queued registration already owns the task row before either dispatch route starts.
             // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
             const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
+            recordSessionParticipantBestEffort({
+              actor: { type: "agent", id: requesterAgentId },
+              agentId: targetAgentId,
+              sessionKey: childSessionKey,
+              source: "agent",
+              storePath: resolveSessionStorePathCore(cfg.session?.store, {
+                agentId: targetAgentId,
+              }),
+            });
             try {
               if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
                 throw new Error(

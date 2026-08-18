@@ -9,6 +9,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
+import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -37,7 +38,7 @@ import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-g
 import {
   collectPresentOpenClawTools,
   shouldIncludeAskUserToolForOpenClawTools,
-  shouldIncludeUpdatePlanToolForOpenClawTools,
+  shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
@@ -77,6 +78,7 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createPortalTool } from "./tools/portal-tool.js";
+import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
@@ -91,7 +93,6 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
-import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -103,10 +104,7 @@ export function createOpenClawTools(
     allowHostBrowserControl?: boolean;
     agentSessionKey?: string;
     toolBindings?: Readonly<Record<string, unknown>>;
-    /**
-     * The durable store session key for the live run when it differs from the
-     * sandbox/policy session key used to construct the tool set.
-     */
+    /** Durable store key when it differs from the sandbox/policy session key. */
     runSessionKey?: string;
     agentChannel?: string;
     runId?: string;
@@ -132,11 +130,13 @@ export function createOpenClawTools(
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
     config?: OpenClawConfig;
+    webFetchHostnameAllowlistRef?: { value?: string[] };
     webSearchEnabled?: boolean;
     /** Capabilities declared by the gateway client that originated this run. */
     clientCaps?: string[];
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
+    runtimeToolAllowlist?: string[];
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
     cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
     cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
@@ -209,10 +209,7 @@ export function createOpenClawTools(
     sessionId?: string;
     /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
     conversationRecall?: ConversationRecallContext;
-    /**
-     * Explicit one-shot local CLI runs should not keep plugin-owned process
-     * resources alive after emitting their result.
-     */
+    /** One-shot local CLI runs release plugin-owned resources after their result. */
     oneShotCliRun?: boolean;
     /**
      * Workspace directory to pass to spawned subagents for inheritance.
@@ -224,13 +221,14 @@ export function createOpenClawTools(
     /** Current runtime directory used as the default project for follow-up suggestions. */
     cwd?: string;
     /** Callback invoked when sessions_yield tool is called. */
-    onYield?: (message: string) => Promise<void> | void;
+    onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext &
     ModelAwareToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config;
+  const sessionLinkBase = resolveControlUiSessionLinkBase(resolvedConfig);
   const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
   const availabilityConfig = selectApplicableRuntimeConfig({
@@ -291,8 +289,6 @@ export function createOpenClawTools(
     onYield: options?.onYield,
   });
   const taskKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
-  const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
-  const requesterTurnRunId = options?.runId;
   const imageTool =
     options?.agentDir &&
     resolveImageToolFactoryAvailable({
@@ -374,6 +370,7 @@ export function createOpenClawTools(
     sandboxed: options?.sandboxed,
     runtimeWebFetch: runtimeWebTools?.fetch,
     lateBindRuntimeConfig: true,
+    hostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
@@ -450,10 +447,21 @@ export function createOpenClawTools(
       denylist: explicitFactoryDenylist,
     });
   const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest;
-  const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
+  const sessionLookupToolOptions = {
+    agentSessionKey: options?.agentSessionKey,
+    sandboxed: options?.sandboxed,
     config: resolvedConfig,
-    pluginToolDenylist: options?.pluginToolDenylist,
-  });
+    callGateway: effectiveCallGateway,
+    sessionLinkBase,
+  };
+  const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
+    ...options,
+    agentId: sessionAgentId,
+  })
+    ? createProgressCardTool({
+        agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      })
+    : null;
   const includeAskUserTool = shouldIncludeAskUserToolForOpenClawTools({
     config: resolvedConfig,
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -518,6 +526,7 @@ export function createOpenClawTools(
                 createTerminalTool({
                   agentId: sessionAgentId,
                   agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+                  sessionId: options?.sessionId,
                   runId: options?.runId,
                 }),
                 createPortalTool(),
@@ -591,7 +600,7 @@ export function createOpenClawTools(
             run: options?.skillWorkshop,
           }),
         ]),
-    ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
+    ...collectPresentOpenClawTools([progressCardTool]),
     ...swarmToolGroups.structuredOutput,
     ...(includeAskUserTool
       ? [
@@ -603,26 +612,14 @@ export function createOpenClawTools(
         ]
       : []),
     createSessionsListTool({
-      agentSessionKey: options?.agentSessionKey,
+      ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: effectiveCallGateway,
     }),
     createSessionsHistoryTool({
-      agentSessionKey: options?.agentSessionKey,
+      ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: effectiveCallGateway,
     }),
-    createSessionsSearchTool({
-      agentId: sessionAgentId,
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: effectiveCallGateway,
-    }),
+    createSessionsSearchTool({ ...sessionLookupToolOptions, agentId: sessionAgentId }),
     ...(embedded
       ? []
       : [
@@ -689,9 +686,9 @@ export function createOpenClawTools(
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onBeforeYield: createRequesterYieldCallback({
-        requesterSessionKey,
+        requesterSessionKey: trimmedRunSessionKey || options?.agentSessionKey,
         requesterAgentId: sessionAgentId,
-        requesterTurnRunId,
+        requesterTurnRunId: options?.runId,
       }),
       onYield: options?.onYield,
     }),
@@ -721,10 +718,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
   let allTools = tools;
   if (!options?.disablePluginTools) {
-    const existingToolNames = new Set<string>();
-    for (const tool of tools) {
-      existingToolNames.add(tool.name);
-    }
+    const existingToolNames = new Set(tools.map((tool) => tool.name));
     allTools = [
       ...tools,
       ...resolveOpenClawPluginToolsForOptions({

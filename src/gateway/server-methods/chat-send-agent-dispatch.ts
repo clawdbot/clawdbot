@@ -13,6 +13,7 @@ import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gatewa
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -57,6 +58,7 @@ type StartChatDispatchParams = {
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
+  toolsAllow?: string[];
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
@@ -86,6 +88,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     attachments,
     client,
     context,
+    toolsAllow,
     cronCreatorAuthority,
     externalAuthorityAdmission,
     injection,
@@ -115,7 +118,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     clientRunId,
     entry,
     expectedLeafEntryId,
-    expectedRunId,
     requestedSessionId,
     resolvedSessionModel,
     selectedAgent,
@@ -221,19 +223,18 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             messageInjectionAttempt = beginCapturedMessageInjection();
           }
           if (messageInjectionAttempt) {
-            const outcome = await messageInjectionAttempt.outcome;
-            if (outcome.status === "accepted") {
-              acceptedMessageInjection = true;
+            if (
               await finalizeAcceptedChatSendMessageInjection({
+                attempt: messageInjectionAttempt,
                 context,
                 ctx,
-                outcome,
                 persistUserTurnTranscriptBestEffort: persistGatewayUserTurnTranscriptBestEffort,
                 session,
                 startedAt: admissionStartedAt,
                 target: messageInjectionTarget!,
-                targetRunId: messageInjectionAttempt.targetRunId,
-              });
+              })
+            ) {
+              acceptedMessageInjection = true;
               return {
                 queuedFinal: false,
                 counts: { tool: 0, block: 0, final: 0 },
@@ -245,6 +246,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
+              toolsAllow,
               dispatcherOptions: replyDispatch.dispatcherOptions,
               onSessionMetadataChanges: (changes) =>
                 changes.forEach((change) => emitSessionsChanged(context, change)),
@@ -300,13 +302,19 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 fastModeOverride: p.fastMode,
                 queueModeOverride: p.queueMode,
                 userTurnTranscriptRecorder: userTurnRecorder,
-                ...((messageInjectionTarget && !isInternalTextSlashCommandTurn) ||
-                (p.queueMode === "steer" && expectedRunId !== undefined)
-                  ? { messageInjectionAttempted: true as const }
+                ...(p.queueMode === "steer"
+                  ? { messageInjectionDisposition: "rejected" as const }
                   : {}),
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId) => {
+                  if (activeRunAbort.markExecutionStarted()) {
+                    emitSessionsChanged(context, {
+                      sessionKey,
+                      agentId,
+                      reason: "chat.run.started",
+                    });
+                  }
                   agentRunStarted = replyDispatch.captureAgentTranscriptStart();
                   emitServerTiming(
                     "agent-run-started",
@@ -392,19 +400,19 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.post_dispatch",
         async () => {
-          const returnedAgentErrorPayloads = agentRunStarted
-            ? replyDispatch.deliveredReplies
-                .map((entryInner) => entryInner.payload)
-                .filter((payload) => payload.isError)
-            : [];
+          const returnedAgentErrorPayloads = replyDispatch.deliveredReplies
+            .map((entryInner) => entryInner.payload)
+            .filter((payload) => payload.isError);
+          const hasReturnedAgentError =
+            returnedAgentErrorPayloads.length > 0 &&
+            (agentRunStarted || !isInternalTextSlashCommandTurn);
           const returnedAgentErrorMessage =
             returnedAgentErrorPayloads
               .map((payload) => payload.text?.trim())
               .filter((text): text is string => Boolean(text))
               .join(" | ") || undefined;
           if (
-            agentRunStarted &&
-            returnedAgentErrorPayloads.length > 0 &&
+            hasReturnedAgentError &&
             !userTurnRecorder.hasPersisted() &&
             !userTurnRecorder.isBlocked()
           ) {
@@ -423,7 +431,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           // Agent runs persist model-visible turns through SessionManager; this dispatcher owns
           // live delivery. Mirroring agent finals would duplicate normal assistant turns. The
           // non-agent branch has no runtime-owned turn, so it appends one before broadcasting.
-          if (!agentRunStarted && !queuedFollowup.isEnqueued()) {
+          if (!agentRunStarted && !queuedFollowup.isEnqueued() && !hasReturnedAgentError) {
             await finalizeChatSendNonAgentReplies({
               accountId,
               context,
@@ -440,12 +448,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               context,
               deliveredReplies: replyDispatch.deliveredReplies,
               emitFirstAssistantServerTiming,
-              hasReturnedAgentErrorPayloads: returnedAgentErrorPayloads.length > 0,
+              hasReturnedAgentErrorPayloads: hasReturnedAgentError,
               session,
             });
           }
-          const shouldBroadcastAgentError =
-            returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
+          const shouldBroadcastAgentError = hasReturnedAgentError && !broadcastedSourceReplyFinal;
           if (shouldBroadcastAgentError) {
             broadcastChatError({
               context,
@@ -507,17 +514,25 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     .catch(dispatchErrorLifecycle.handleError)
     .finally(() => {
       dispatchErrorLifecycle.finalize();
-      // Cosmetic title work starts only after the accepted turn finishes. Starting it
-      // before dispatch can make a cold utility runtime starve the user's real turn.
-      scheduleChatDashboardSessionTitle({
-        admittedSessionId,
-        agentId,
-        cfg,
-        context,
-        request,
-        sessionKey,
-        sessionLoadOptions: session.sessionLoadOptions,
-        storePath: session.storePath,
-      });
+      if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
+        // A blocked turn persists only the redacted block reason — no media
+        // markers — so the prepared inbound media stays unreferenced forever
+        // (sweep is off by default). Same custody rule as the pre-ACK owner
+        // in chat-send-admission.ts: unreferenced staged media is discarded.
+        void discardPreparedInboundMedia(attachments.offloadedRefs);
+      }
     });
+  // Title work starts at turn admission, concurrently with the launched run. It must never run
+  // serially before dispatch (a cold utility runtime can starve the turn) or wait for completion
+  // (long or interrupted first turns would silently remain untitled, and restart loses the chain).
+  scheduleChatDashboardSessionTitle({
+    admittedSessionId,
+    agentId,
+    cfg,
+    context,
+    request,
+    sessionKey,
+    sessionLoadOptions: session.sessionLoadOptions,
+    storePath: session.storePath,
+  });
 }
