@@ -184,7 +184,7 @@ describe("resolveSessionNavigation", () => {
     );
   });
 
-  it("keeps the selected archived session ahead of an active-filtered result", () => {
+  it("keeps the selected archived session out of the active sidebar projection", () => {
     const selectedSession = {
       key: "agent:main:archived",
       kind: "direct" as const,
@@ -199,15 +199,8 @@ describe("resolveSessionNavigation", () => {
       archivedFilter: "active",
     });
 
-    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
-      selectedSession.key,
-      "agent:main:recent",
-    ]);
-    expect(navigation.visibleSessions[0]).toMatchObject({
-      key: selectedSession.key,
-      archived: true,
-    });
-    expect(navigation.activeRowKey).toBe(selectedSession.key);
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual(["agent:main:recent"]);
+    expect(navigation.activeRowKey).toBeNull();
     expect(navigation.selectedSession).toMatchObject({
       key: selectedSession.key,
       archived: true,
