@@ -2,6 +2,7 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
+import type { Command } from "commander";
 import { listAgentIds, resolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
@@ -17,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 
@@ -123,6 +125,14 @@ export function resolveCapabilityProviderAgentId(
   return agentId;
 }
 
+export function resolveCapabilityAgentOption(
+  command: Command | undefined,
+  rawAgentId: unknown,
+): string | undefined {
+  return typeof rawAgentId === "string"
+    ? rawAgentId
+    : inheritOptionFromParent<string>(command, "agent");
+}
 function getAuthProfileIdsForProvider(
   cfg: OpenClawConfig,
   providerId: string,

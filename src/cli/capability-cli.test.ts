@@ -22,6 +22,15 @@ function runCapability(domain: string, action: string, ...argv: string[]): Promi
   return runCap("capability", domain, action, ...argv);
 }
 
+function runCapabilityWithParentAgent(
+  domain: string,
+  action: string,
+  agent: string,
+  ...argv: string[]
+): Promise<void> {
+  return runCap("capability", domain, "--agent", agent, action, ...argv);
+}
+
 function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
   mocks.resolveApiKeyForProviderCore.mockResolvedValueOnce({
     apiKey: mode === "token" ? "profile-openai-token" : "profile-openai-key",
@@ -1811,6 +1820,304 @@ describe("capability cli", () => {
 
     expect(firstImageGenerationCall()?.prompt).toBe("friendly lobster");
     expect(firstImageGenerationCall()?.timeoutMs).toBe(180000);
+  });
+
+  it("keeps image generation owner selection explicit in multi-agent fleets", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+    });
+
+    await expect(
+      runCapability("image", "generate", "--prompt", "friendly lobster", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("Multiple agents are configured");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { agent: "", message: "--agent must not be blank" },
+    { agent: "retired", message: 'Unknown agent id "retired"' },
+  ])(
+    "rejects invalid image generation agent '$agent' before dispatch",
+    async ({ agent, message }) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await expect(
+        runCapability(
+          "image",
+          "generate",
+          "--agent",
+          agent,
+          "--prompt",
+          "friendly lobster",
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains(message);
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "model run",
+      run: () => runCapability("model", "run", "--agent", "beta", "--prompt", "hello", "--json"),
+      selectedAgent: () => firstPreparedModelParams()?.agentId,
+      expectedAgent: "beta",
+    },
+    {
+      name: "image generate",
+      run: () => {
+        primeGeneratedImage("gpt-image-1", "provider-output.png");
+        return runCapability(
+          "image",
+          "generate",
+          "--agent",
+          "beta",
+          "--prompt",
+          "portrait",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstImageGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "image edit",
+      run: async () => {
+        const inputDir = tempDirs.make("openclaw-image-agent-");
+        const inputPath = path.join(inputDir, "input.png");
+        await fs.writeFile(inputPath, Buffer.from(PNG_1X1_BASE64, "base64"));
+        primeGeneratedImage("gpt-image-1", "provider-output.png");
+        await runCapability(
+          "image",
+          "edit",
+          "--agent",
+          "beta",
+          "--file",
+          inputPath,
+          "--prompt",
+          "crop it",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstImageGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "image describe",
+      run: () =>
+        runCapability("image", "describe", "--agent", "beta", "--file", "photo.png", "--json"),
+      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
+      expectedAgent: "beta",
+    },
+    {
+      name: "image describe-many",
+      run: () =>
+        runCapability("image", "describe-many", "--agent", "beta", "--file", "photo.png", "--json"),
+      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
+      expectedAgent: "beta",
+    },
+    {
+      name: "video generate",
+      run: () => {
+        mocks.generateVideo.mockResolvedValue({
+          provider: "minimax",
+          model: "MiniMax-Hailuo-2.3",
+          attempts: [],
+          videos: [
+            {
+              buffer: Buffer.from("video-bytes"),
+              mimeType: "video/mp4",
+              fileName: "provider-name.mp4",
+            },
+          ],
+        });
+        return runCapability("video", "generate", "--agent", "beta", "--prompt", "clip", "--json");
+      },
+      selectedAgent: () => firstVideoGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "embedding create",
+      run: () =>
+        runCapability("embedding", "create", "--agent", "beta", "--text", "hello", "--json"),
+      selectedAgent: () => firstEmbeddingProviderCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+  ])(
+    "routes --agent through $name owner selection",
+    async ({ run, selectedAgent, expectedAgent }) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await run();
+
+      expect(selectedAgent()).toBe(expectedAgent);
+    },
+  );
+
+  it.each([
+    {
+      name: "model run",
+      run: () =>
+        runCapabilityWithParentAgent("model", "run", "beta", "--prompt", "hello", "--json"),
+      selectedAgent: () => firstPreparedModelParams()?.agentId,
+      expectedAgent: "beta",
+    },
+    {
+      name: "image generate",
+      run: () => {
+        primeGeneratedImage("gpt-image-1", "provider-output.png");
+        return runCapabilityWithParentAgent(
+          "image",
+          "generate",
+          "beta",
+          "--prompt",
+          "portrait",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstImageGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "image edit",
+      run: async () => {
+        const inputDir = tempDirs.make("openclaw-image-parent-agent-");
+        const inputPath = path.join(inputDir, "input.png");
+        await fs.writeFile(inputPath, Buffer.from(PNG_1X1_BASE64, "base64"));
+        primeGeneratedImage("gpt-image-1", "provider-output.png");
+        await runCapabilityWithParentAgent(
+          "image",
+          "edit",
+          "beta",
+          "--file",
+          inputPath,
+          "--prompt",
+          "crop it",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstImageGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "image describe",
+      run: () =>
+        runCapabilityWithParentAgent("image", "describe", "beta", "--file", "photo.png", "--json"),
+      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
+      expectedAgent: "beta",
+    },
+    {
+      name: "image describe-many",
+      run: () =>
+        runCapabilityWithParentAgent(
+          "image",
+          "describe-many",
+          "beta",
+          "--file",
+          "photo.png",
+          "--json",
+        ),
+      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
+      expectedAgent: "beta",
+    },
+    {
+      name: "video generate",
+      run: () => {
+        mocks.generateVideo.mockResolvedValue({
+          provider: "minimax",
+          model: "MiniMax-Hailuo-2.3",
+          attempts: [],
+          videos: [
+            {
+              buffer: Buffer.from("video-bytes"),
+              mimeType: "video/mp4",
+              fileName: "provider-name.mp4",
+            },
+          ],
+        });
+        return runCapabilityWithParentAgent(
+          "video",
+          "generate",
+          "beta",
+          "--prompt",
+          "clip",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstVideoGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "embedding create",
+      run: () =>
+        runCapabilityWithParentAgent("embedding", "create", "beta", "--text", "hello", "--json"),
+      selectedAgent: () => firstEmbeddingProviderCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+  ])(
+    "inherits parent --agent through $name owner selection",
+    async ({ run, selectedAgent, expectedAgent }) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await run();
+
+      expect(selectedAgent()).toBe(expectedAgent);
+    },
+  );
+
+  it("prefers a leaf --agent over the parent selector", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+    });
+    primeGeneratedImage("gpt-image-1", "provider-output.png");
+
+    await runCap(
+      "capability",
+      "image",
+      "--agent",
+      "alpha",
+      "generate",
+      "--agent",
+      "beta",
+      "--prompt",
+      "portrait",
+      "--json",
+    );
+
+    expect(firstImageGenerationCall()?.agentDir).toBe("/tmp/agent-beta");
+  });
+
+  it.each([
+    { agent: "", message: "--agent must not be blank" },
+    { agent: "retired", message: 'Unknown agent id "retired"' },
+  ])("rejects invalid inherited agent '$agent' before dispatch", async ({ agent, message }) => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+    });
+
+    await expect(
+      runCapabilityWithParentAgent(
+        "image",
+        "generate",
+        agent,
+        "--prompt",
+        "friendly lobster",
+        "--json",
+      ),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains(message);
+    expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
   it("passes image output format and generic background hints through to generation runtime", async () => {

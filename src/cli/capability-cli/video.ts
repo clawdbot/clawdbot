@@ -39,6 +39,7 @@ import {
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
   requireProviderModelOverride,
+  resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
@@ -260,7 +261,10 @@ async function runVideoDescribe(params: { file: string; model?: string }) {
 }
 
 export function registerVideoCapabilityCommands(capability: Command): void {
-  const video = capability.command("video").description("Video generation and description");
+  const video = capability
+    .command("video")
+    .description("Video generation and description")
+    .option("--agent <id>", "Agent whose model and auth state should be used");
 
   video
     .command("generate")
@@ -280,10 +284,11 @@ export function registerVideoCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runVideoGenerate({
           prompt: String(opts.prompt),
+          agent: resolveCapabilityAgentOption(command, opts.agent),
           model: opts.model as string | undefined,
           output: opts.output as string | undefined,
           size: opts.size as string | undefined,
@@ -320,10 +325,13 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .description("List video generation and description providers")
     .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
+        const agentId = resolveCapabilityProviderAgentId(
+          cfg,
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
         const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
         );
