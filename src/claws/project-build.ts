@@ -185,8 +185,8 @@ export async function buildClawProject(
       {
         cwd: stagingRoot,
         file: temporaryArtifact,
-        // Disable version-dependent string matching so supported zlib builds emit identical bytes.
-        gzip: { level: 9, portable: true, strategy: zlibConstants.Z_HUFFMAN_ONLY },
+        // Stabilize supported zlib output without disabling normal match compression.
+        gzip: { level: 9, portable: true, strategy: zlibConstants.Z_FILTERED },
         mtime: new Date(0),
         portable: true,
         prefix: "package",

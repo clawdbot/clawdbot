@@ -9,7 +9,7 @@ import { ClawProjectError, createClawProject, validateClawProject } from "./proj
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const GOLDEN_ARTIFACT_INTEGRITY =
-  "sha256:5fba54933e519f4fc12422a3d555d076ce373be993eed3f6b3575a89aaa62618";
+  "sha256:10b8890c5e5b062c94ff79b1d424859c6a5572548535eec6e31ee0c6d7c08a3b";
 
 async function writeRichProject(root: string): Promise<void> {
   await mkdir(join(root, "workspace"), { recursive: true });
