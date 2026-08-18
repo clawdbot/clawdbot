@@ -55,6 +55,50 @@ async function pastePng(composer: Locator): Promise<void> {
   }, ONE_PIXEL_PNG_B64);
 }
 
+async function waitForDurableDraft(
+  page: Page,
+  sessionKey: string,
+  expected: { text: string; attachments: number },
+) {
+  await expect
+    .poll(() =>
+      page.evaluate(async (targetKey) => {
+        const requestResult = <T>(request: IDBRequest<T>) =>
+          new Promise<T>((resolve, reject) => {
+            request.addEventListener("success", () => resolve(request.result), { once: true });
+            request.addEventListener(
+              "error",
+              () => reject(request.error ?? new Error("IndexedDB request failed")),
+              { once: true },
+            );
+          });
+        try {
+          const database = await requestResult(indexedDB.open("openclaw-control-ui", 1));
+          if (!database.objectStoreNames.contains("composerDrafts")) {
+            database.close();
+            return null;
+          }
+          const records = (await requestResult(
+            database
+              .transaction("composerDrafts", "readonly")
+              .objectStore("composerDrafts")
+              .getAll(),
+          )) as Array<{ attachments?: unknown[]; scopeKey?: string; text?: string }>;
+          database.close();
+          const record = records.find(
+            (candidate) => candidate.scopeKey === `${targetKey}\u0000agent:main`,
+          );
+          return record
+            ? { text: record.text, attachments: record.attachments?.length ?? 0 }
+            : null;
+        } catch {
+          return null;
+        }
+      }, sessionKey),
+    )
+    .toEqual(expected);
+}
+
 suite.define(() => {
   it("restores isolated session drafts across fresh pages and retires sent or removed attachments", async () => {
     const firstSession = "agent:main:restart-session-a";
@@ -108,6 +152,14 @@ suite.define(() => {
           buffer: Buffer.from("remove this attachment"),
         });
       await expect.poll(() => activeAttachments(firstPage).count()).toBe(1);
+      await waitForDurableDraft(firstPage, firstSession, {
+        text: "restart draft A with image",
+        attachments: 1,
+      });
+      await waitForDurableDraft(firstPage, secondSession, {
+        text: "restart draft B with removable file",
+        attachments: 1,
+      });
       await firstPage.close();
 
       const restoredPage = await context.newPage();

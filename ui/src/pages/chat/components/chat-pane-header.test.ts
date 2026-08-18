@@ -119,7 +119,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
 }
 
 function mountIntegratedPresenceHeader(params: {
-  creators: NonNullable<SessionsListResult["creators"]>;
+  owners: NonNullable<SessionsListResult["owners"]>;
   presence: PresenceEntry[];
 }) {
   const client = { instanceId: "self-instance" } as unknown as GatewayBrowserClient;
@@ -134,7 +134,7 @@ function mountIntegratedPresenceHeader(params: {
     ts: 1,
     path: "",
     count: 1,
-    creators: params.creators,
+    owners: params.owners,
     defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions: [session],
   };
@@ -537,8 +537,8 @@ describe("chat pane header", () => {
 
   it.each([
     {
-      name: "excludes the creator when the owner chip is shown",
-      creators: [
+      name: "excludes the owner when the owner chip is shown",
+      owners: [
         { type: "human" as const, id: "profile-ada", label: "Ada" },
         { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
@@ -547,15 +547,15 @@ describe("chat pane header", () => {
       expectedViewers: ["profile-zoe"],
     },
     {
-      name: "keeps the creator when the owner chip is hidden",
-      creators: [{ type: "human" as const, id: "profile-ada", label: "Ada" }],
+      name: "keeps the owner when the owner chip is hidden",
+      owners: [{ type: "human" as const, id: "profile-ada", label: "Ada" }],
       viewers: ["profile-ada", "profile-zoe"],
       expectedChip: false,
       expectedViewers: ["profile-ada", "profile-zoe"],
     },
     {
       name: "omits the facepile when the shown owner is the only viewer",
-      creators: [
+      owners: [
         { type: "human" as const, id: "profile-ada", label: "Ada" },
         { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
@@ -563,10 +563,10 @@ describe("chat pane header", () => {
       expectedChip: true,
       expectedViewers: [],
     },
-  ])("$name", async ({ creators, viewers, expectedChip, expectedViewers }) => {
+  ])("$name", async ({ owners, viewers, expectedChip, expectedViewers }) => {
     const sessionKey = "agent:main:current";
     const { container } = mountIntegratedPresenceHeader({
-      creators,
+      owners,
       presence: viewers.map((id) => ({
         instanceId: `${id}-instance`,
         ts: 1,
@@ -593,7 +593,7 @@ describe("chat pane header", () => {
 
   it("updates the header owner vitality from live session presence", async () => {
     const sessionKey = "agent:main:current";
-    const creators = [
+    const owners = [
       { type: "human" as const, id: "profile-ada", label: "Ada" },
       { type: "human" as const, id: "profile-zoe", label: "Zoe" },
     ];
@@ -603,7 +603,7 @@ describe("chat pane header", () => {
       user: { id: "profile-zoe", name: "Zoe" },
       watchedSessions: [sessionKey],
     } satisfies PresenceEntry;
-    const mounted = mountIntegratedPresenceHeader({ creators, presence: [guest] });
+    const mounted = mountIntegratedPresenceHeader({ owners, presence: [guest] });
     const ownerChip = mounted.container.querySelector<
       HTMLElement & { updateComplete?: Promise<unknown> }
     >("openclaw-session-owner-chip");

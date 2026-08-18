@@ -3,7 +3,6 @@ import type {
   SessionsAssignOwnerParams,
   SessionsAssignOwnerResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   SessionsListResult,
@@ -50,26 +49,6 @@ type SessionMutationsHost = {
   notifyCreated: (key: string) => void;
   retirePullRequestSummary: (key: string) => void;
 };
-
-function scheduleDeletedComposerDraftRetirement(
-  client: GatewayBrowserClient,
-  key: string,
-  agentId?: string | null,
-) {
-  if (!client?.recoveryScopeReady || !client.recoveryScope) {
-    return;
-  }
-  const target = {
-    gatewayUrl: client.gatewayUrl,
-    recoveryScope: client.recoveryScope,
-    sessionKey: key,
-    ...(agentId ? { agentId } : {}),
-  };
-  void import("../chat/composer-draft-store.runtime.ts").then(
-    ({ retireDeletedComposerDraft }) => retireDeletedComposerDraft(target),
-    () => undefined,
-  );
-}
 
 export function createSessionMutations(host: SessionMutationsHost) {
   const pendingModelPatches = new Map<
@@ -434,11 +413,16 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope) || !confirmsSessionDeletion(response)) {
         return { deleted: false };
       }
-      scheduleDeletedComposerDraftRetirement(scope.client, key, options.agentId);
+      const retireBeforeRevision = Date.now();
       host.retirePullRequestSummary(key);
       confirmedArchives.delete(key.trim());
       preparedWorkSessionKeys.delete(key.trim());
-      host.publish({ ...host.readState(), deletedSessions: [{ key, agentId: options.agentId }] });
+      host.publish({
+        ...host.readState(),
+        deletedSessions: [
+          { key, ...(options.agentId ? { agentId: options.agentId } : {}), retireBeforeRevision },
+        ],
+      });
       setModelOverride(key, undefined);
       await host.refreshReplacement(options.agentId);
       return {
@@ -462,6 +446,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return { deleted: [], errors: [], preservedWorktrees: [] };
     }
     const deleted: string[] = [];
+    const deletionFacts: SessionState["deletedSessions"][number][] = [];
     const errors: string[] = [];
     const preservedWorktrees: SessionDeleteBatchResult["preservedWorktrees"] = [];
     for (const target of targets) {
@@ -474,8 +459,13 @@ export function createSessionMutations(host: SessionMutationsHost) {
           break;
         }
         if (confirmsSessionDeletion(response)) {
+          const retireBeforeRevision = Date.now();
           deleted.push(target.key);
-          scheduleDeletedComposerDraftRetirement(scope.client, target.key, target.agentId);
+          deletionFacts.push({
+            key: target.key,
+            ...(target.agentId ? { agentId: target.agentId } : {}),
+            retireBeforeRevision,
+          });
           if (response.worktreePreserved) {
             preservedWorktrees.push(response.worktreePreserved);
           }
@@ -492,7 +482,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       host.publish({
         ...host.readState(),
-        deletedSessions: targets.filter((target) => deleted.includes(target.key)),
+        deletedSessions: deletionFacts,
       });
       for (const key of deleted) {
         setModelOverride(key, undefined);

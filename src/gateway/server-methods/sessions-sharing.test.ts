@@ -428,7 +428,7 @@ describe("session sharing handlers", () => {
               totalCount: number;
               nextOffset: number | null;
               hasMore: boolean;
-              creators: Array<{ type: "human" | "agent"; id: string }>;
+              owners: Array<{ type: "human" | "agent"; id: string }>;
               sessions: Array<{ key: string }>;
             }
           | undefined;
@@ -442,7 +442,7 @@ describe("session sharing handlers", () => {
         totalCount: 0,
         nextOffset: null,
         hasMore: false,
-        creators: [],
+        owners: [],
       });
       // A member also loses a draft (owner+admin only).
       expect(
@@ -506,7 +506,7 @@ describe("session sharing handlers", () => {
         limitApplied: 1,
         nextOffset: null,
         hasMore: false,
-        creators: [],
+        owners: [],
         sessions: [{ key: visibleKey }],
       });
     });

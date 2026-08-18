@@ -54,7 +54,7 @@ type SessionCatalogGroupsParams = {
   onStartSectionDrag: (sectionId: string) => void;
   onFinishSectionDrag: () => void;
   viewMenuOpenCatalogId: string | null;
-  creatorFilterActive: boolean;
+  ownerFilterActive: boolean;
   onOpenViewMenu: (
     catalogId: string,
     trigger: HTMLElement,
@@ -234,7 +234,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             </button>
             <button
               type="button"
-              class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.creatorFilterActive
+              class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.ownerFilterActive
                 ? "sidebar-session-sort--filtered"
                 : ""}"
               data-session-catalog-view-menu=${catalog.id}

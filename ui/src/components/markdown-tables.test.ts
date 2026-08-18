@@ -8,11 +8,8 @@ import {
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
-const { copyToClipboard } = vi.hoisted(() => ({
-  copyToClipboard: vi.fn(async () => true),
-}));
-
-vi.mock("../lib/clipboard.ts", () => ({ copyToClipboard }));
+const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+const writeText = vi.fn(async (_text: string) => undefined);
 
 const markdown = `Open agent:main:dashboard:table
 
@@ -74,8 +71,11 @@ describe("Markdown table interactions", () => {
     TestResizeObserver.instances = [];
     vi.stubGlobal("MutationObserver", TestMutationObserver);
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
-    copyToClipboard.mockClear();
-    copyToClipboard.mockResolvedValue(true);
+    writeText.mockClear();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
       configurable: true,
       value: vi.fn(function (this: HTMLDialogElement) {
@@ -94,6 +94,11 @@ describe("Markdown table interactions", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    if (clipboardDescriptor) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    } else {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
     document.body.replaceChildren();
   });
 
@@ -136,7 +141,7 @@ describe("Markdown table interactions", () => {
     const { owner } = interactiveOwner();
     const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
     copy.click();
-    expect(copyToClipboard).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
+    expect(writeText).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
     await vi.advanceTimersByTimeAsync(0);
     expect(copy.getAttribute("aria-label")).toBe("Copied!");
 

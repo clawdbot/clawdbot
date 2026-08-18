@@ -2,12 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
-  listStoredDraftScopes,
   listStoredChatOutboxes,
+  listStoredDraftScopes,
+  summarizeStoredChatOutboxes,
+} from "./outbox-store-projection.ts";
+import {
   resolveStoredChatOutboxScope,
+  retireStoredComposerDrafts,
   storedChatOutboxScopeKey,
   subscribeStoredChatOutboxChanges,
-  summarizeStoredChatOutboxes,
 } from "./outbox-store.ts";
 
 beforeEach(() => {
@@ -20,6 +23,95 @@ afterEach(() => {
 });
 
 describe("stored outbox summaries", () => {
+  it("keeps the exact aliased scope when sessionStorage retirement fails", () => {
+    const gatewayUrl = "ws://gateway.test/control";
+    const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        mainAlias: { key: "workspace", agentId: "work" },
+        sessions: {
+          "global\u0000agent:work": {
+            draft: "retire me",
+            draftRevision: 10,
+            queue: [{ id: "queued", text: "queued", createdAt: 1 }],
+            updatedAt: 10,
+          },
+        },
+      }),
+    );
+    const before = sessionStorage.getItem(storageKey);
+    vi.spyOn(sessionStorage, "setItem").mockImplementationOnce(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+    const retired = retireStoredComposerDrafts({ settings: { gatewayUrl } }, [
+      { key: "workspace", retireBeforeRevision: 20 },
+    ]);
+    expect(retired).toEqual({
+      gatewayOwner: gatewayUrl,
+      retirements: [
+        {
+          scope: { sessionKey: "global", agentId: "work" },
+          minimumRevision: expect.any(Number),
+          retireBeforeRevision: 20,
+        },
+      ],
+      storageFailed: true,
+    });
+    expect(sessionStorage.getItem(storageKey)).toBe(before);
+  });
+
+  it("retires a batch with one write and notification while preserving newer replacements", () => {
+    const gatewayUrl = "ws://gateway.test/control";
+    const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: {
+          "older\u0000agent:main": {
+            draft: "retire me",
+            draftRevision: 10,
+            queue: [{ id: "queued", text: "queued", createdAt: 1 }],
+            updatedAt: 10,
+          },
+          "newer\u0000agent:main": {
+            draft: "replacement",
+            draftRevision: 1_000,
+            updatedAt: 1_000,
+          },
+        },
+      }),
+    );
+    const write = vi.spyOn(sessionStorage, "setItem");
+    const listener = vi.fn();
+    const unsubscribe = subscribeStoredChatOutboxChanges(listener);
+
+    const result = retireStoredComposerDrafts({ settings: { gatewayUrl } }, [
+      { key: "older", agentId: "main", retireBeforeRevision: 100 },
+      { key: "newer", agentId: "main", retireBeforeRevision: 100 },
+    ]);
+    const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
+      sessions: Record<string, { draft?: string; draftRevision?: number; queue?: unknown[] }>;
+    };
+
+    expect(result.storageFailed).toBe(false);
+    expect(write).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(stored.sessions["older\u0000agent:main"]).toEqual({
+      draftRevision: expect.any(Number),
+      updatedAt: expect.any(Number),
+    });
+    expect(stored.sessions["newer\u0000agent:main"]).toMatchObject({
+      draft: "replacement",
+      draftRevision: 1_000,
+    });
+    unsubscribe();
+  });
+
   it("lists only non-empty drafts under the same scope used by sidebar sessions", () => {
     const gatewayUrl = "ws://gateway.test/control";
     sessionStorage.setItem(

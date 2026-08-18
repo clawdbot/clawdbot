@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -9,7 +10,122 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+type TestDraftScope = { gatewayOwner: string; recoveryScope: string; scopeKey: string };
+
+async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], expire = false) {
+  return page.evaluate(
+    async ({ draftScopes, markExpired }) => {
+      const requestResult = <T>(request: IDBRequest<T>, message: string) =>
+        new Promise<T>((resolve, reject) => {
+          request.addEventListener("success", () => resolve(request.result), { once: true });
+          request.addEventListener("error", () => reject(request.error ?? new Error(message)), {
+            once: true,
+          });
+        });
+      const database = await requestResult(
+        indexedDB.open("openclaw-control-ui", 1),
+        "IndexedDB open failed",
+      );
+      const transaction = database.transaction(
+        "composerDrafts",
+        markExpired ? "readwrite" : "readonly",
+      );
+      const store = transaction.objectStore("composerDrafts");
+      const records = (await requestResult(store.getAll(), "IndexedDB read failed")) as Array<
+        Record<string, unknown>
+      >;
+      const result: Record<string, { text: unknown; attachments: number | null } | null> = {};
+      for (const scope of draftScopes) {
+        const key = JSON.stringify([scope.gatewayOwner, scope.recoveryScope, scope.scopeKey]);
+        const record = records.find((candidate) => candidate.key === key);
+        result[scope.scopeKey] = record
+          ? {
+              text: record.text,
+              attachments: Array.isArray(record.attachments) ? record.attachments.length : null,
+            }
+          : null;
+        if (record && markExpired) {
+          store.put({ ...record, updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1_000 });
+        }
+      }
+      await new Promise<void>((resolve, reject) => {
+        transaction.addEventListener("complete", () => resolve(), { once: true });
+        transaction.addEventListener(
+          "error",
+          () => reject(transaction.error ?? new Error("IndexedDB transaction failed")),
+          { once: true },
+        );
+      });
+      database.close();
+      return result;
+    },
+    { draftScopes: scopes, markExpired: expire },
+  );
+}
+
 suite.define(() => {
+  it("expires drafts across abandoned credential owners on the next database open", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block" },
+      async ({ context, page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}settings`);
+        const seedStoreHandle = await page.evaluateHandle<
+          typeof import("../lib/chat/composer-draft-store.runtime.ts")
+        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+        const scopes = await page.evaluate(async (draftStore) => {
+          const owner = {
+            gatewayOwner: "abandoned-gateway",
+            recoveryScope: "abandoned-credential",
+          };
+          const activeScope = { ...owner, scopeKey: "active-with-blob" };
+          const tombstoneScope = { ...owner, scopeKey: "old-tombstone" };
+          await draftStore.writeDurableComposerDraft(
+            activeScope,
+            {
+              revision: 10,
+              text: "expired abandoned draft",
+              attachments: [
+                {
+                  blob: new Blob(["expired attachment"], { type: "text/plain" }),
+                  mimeType: "text/plain",
+                  fileName: "expired.txt",
+                },
+              ],
+            },
+            { expectedRevision: 0, writeId: "abandoned-active" },
+          );
+          await draftStore.retireDurableComposerDraft(tombstoneScope, 20);
+          return [activeScope, tombstoneScope];
+        }, seedStoreHandle);
+        await rawDraftRecords(page, scopes, true);
+
+        await page.close();
+        const reopened = await context.newPage();
+        await installMockGateway(reopened);
+        await reopened.goto(`${suite.server.baseUrl}settings`);
+        const reopenedStoreHandle = await reopened.evaluateHandle<
+          typeof import("../lib/chat/composer-draft-store.runtime.ts")
+        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+        await reopened.evaluate(
+          (draftStore) =>
+            draftStore.readDurableComposerDraft({
+              gatewayOwner: "current-gateway",
+              recoveryScope: "current-credential",
+              scopeKey: "current-draft",
+            }),
+          reopenedStoreHandle,
+        );
+        const inspected = await rawDraftRecords(reopened, scopes);
+
+        expect(inspected).toEqual({
+          "active-with-blob": { text: "", attachments: 0 },
+          "old-tombstone": null,
+        });
+      },
+    );
+  });
+
   it("keeps existing-session Incognito drafts memory-only across restart", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       await installMockGateway(page);
@@ -139,6 +255,7 @@ suite.define(() => {
             { revision: 10, text: "newer draft", attachments: [] },
             { expectedRevision: 0, writeId: "initial" },
           );
+          const fenced = await draftStore.retireDurableComposerDraft(staleScope, 0, 10);
           const retired = await draftStore.retireDurableComposerDraft(staleScope, 20);
           const stale = await draftStore.writeDurableComposerDraft(
             staleScope,
@@ -482,6 +599,7 @@ suite.define(() => {
           Date.now = originalNow;
           return {
             initial: initial.status,
+            fenced: fenced.status,
             retired: retired.status,
             stale: stale.status,
             retiredRead: retiredRead.status,
@@ -530,6 +648,7 @@ suite.define(() => {
 
       expect(result).toEqual({
         initial: "persisted",
+        fenced: "conflict",
         retired: "persisted",
         stale: "conflict",
         retiredRead: "not-found",

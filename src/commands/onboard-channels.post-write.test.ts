@@ -1,11 +1,11 @@
 // Onboard channel post-write tests cover plugin post-write hooks after channel setup.
 import { describe, expect, it, vi } from "vitest";
+import { createExitThrowingRuntime } from "../../test/helpers/auth-wizard.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   createChannelOnboardingPostWriteHook,
   createChannelSetupTransaction,
 } from "./onboard-channels.js";
-import { createExitThrowingRuntime } from "./test-wizard-helpers.js";
 
 describe("setupChannels post-write hooks", () => {
   it("collects onboarding post-write hooks and runs them against the final config", async () => {
