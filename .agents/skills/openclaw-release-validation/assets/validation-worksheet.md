@@ -18,6 +18,9 @@
 
 [Release notes]({{RELEASE_NOTES_URL}})
 
+Themes summarize the complete release notes; linked issues are representative
+examples.
+
 {{RELEASE_PRIORITIES}}
 
 ## How to use this worksheet

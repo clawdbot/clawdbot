@@ -34,15 +34,20 @@ When the issue does not exist, become the campaign creator:
 
 1. Read the GitHub release notes for the exact tag. If they are empty or
    incomplete, also read that tag's section of `CHANGELOG.md`.
-2. Map the user-visible and upgrade-sensitive changes to the subsystem headings
-   in `assets/validation-worksheet.md`. Select the three to five subsystems with
-   the largest changed surface or regression risk.
-3. Build a compact `Subsystem | What changed | Try` table with one short phrase
-   or sentence per cell. Put `[Release notes](<release-url>)` immediately above
-   it. Hyperlink every issue or PR reference, using only references cited by the
-   release notes or verified live. When a row has no issue or PR, link its
-   subsystem name to the release notes. Synthesize related notes instead of
-   copying the changelog.
+2. Read the complete release notes and group every user-visible or
+   upgrade-sensitive item under the subsystem headings in
+   `assets/validation-worksheet.md`; one item may support multiple subsystems.
+   Select the three to five subsystems with the broadest changed surface or
+   highest regression risk.
+3. Build a compact `Subsystem | What changed | Try` table. In **What changed**,
+   synthesize the dominant themes across the subsystem's complete group instead
+   of listing a few fixes. Use one concise theme statement per cell. Issue or PR
+   links are optional supporting examples: label them `Examples`, limit them to
+   one or two representative links, and never use them as the organizing
+   content. Hyperlink every reference, using only items cited by the release
+   notes or verified live. When a row has no example link, link its subsystem
+   name to the release notes. Put `[Release notes](<release-url>)` immediately
+   above the table.
 4. Make a working copy of the worksheet asset and fill it with the exact
    candidate identity, release-notes URL, and priority table. Ensure no
    template placeholder remains.
