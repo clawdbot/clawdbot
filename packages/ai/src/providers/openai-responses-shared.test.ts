@@ -433,6 +433,23 @@ describe("Responses reasoning effort", () => {
     expect(params).not.toHaveProperty("include");
   });
 
+  it("maps default-off Responses reasoning through compat metadata", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["provider-off"],
+        reasoningEffortMap: { off: "provider-off" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] });
+
+    expect(params).toMatchObject({ reasoning: { effort: "provider-off" } });
+    expect(params).not.toHaveProperty("include");
+  });
+
   it("honors a thinkingLevelMap null opt-out over compat mapping", () => {
     const params = {} as ResponseCreateParamsStreaming;
     const compatModel = {

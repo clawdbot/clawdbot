@@ -183,6 +183,7 @@ function isModelThinkingLevel(value: string): value is ModelThinkingLevel {
 function resolveResponsesApiReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: string,
+  fallback = reasoning,
 ): OpenAIApiReasoningEffort | undefined {
   if (isResponsesReasoningEffortDisabled(model)) {
     return undefined;
@@ -205,7 +206,7 @@ function resolveResponsesApiReasoningEffort<TApi extends Api>(
       fallbackMap: compatReasoningEffortMap,
     });
   }
-  return isCanonicalReasoning ? (model.thinkingLevelMap?.[reasoning] ?? reasoning) : reasoning;
+  return isCanonicalReasoning ? (model.thinkingLevelMap?.[reasoning] ?? fallback) : reasoning;
 }
 
 export function resolveResponsesReasoningEffort(
@@ -282,10 +283,12 @@ export function applyCommonResponsesParams<TApi extends Api>(
     };
     params.include = ["reasoning.encrypted_content"];
   } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {
+    const effort = resolveResponsesApiReasoningEffort(model, "off", "none");
+    if (effort === undefined) {
+      return;
+    }
     params.reasoning = {
-      effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<
-        typeof params.reasoning
-      >["effort"],
+      effort: effort as NonNullable<typeof params.reasoning>["effort"],
     };
   }
 }
