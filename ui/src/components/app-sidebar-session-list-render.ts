@@ -401,7 +401,7 @@ function renderSessionListBody(params: {
 
 function renderSessionListToolbar(host: SidebarSessionListHost) {
   const newSessionAccess = host.readNewSessionAccess();
-  const filtered = host.sessionCreatorFilterActive || host.sessionsStatusFilter !== "active";
+  const filtered = host.sessionOwnerFilterActive || host.sessionsStatusFilter !== "active";
   return html`
     <div class="sidebar-session-toolbar">
       <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
