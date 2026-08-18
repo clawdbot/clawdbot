@@ -1,8 +1,10 @@
 // Smoke Common helper supports OpenClaw script workflows.
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
+import { parseTcpPort } from "./env-limits.ts";
 import { extractLastOpenClawVersionFromLog } from "./filesystem.ts";
-import { run, say } from "./host-command.ts";
+import { run, say, die } from "./host-command.ts";
 import { resolveHostIp, resolveHostPort, startHostServer } from "./host-server.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import {
@@ -10,15 +12,16 @@ import {
   packageVersionFromTgz,
   packOpenClaw,
 } from "./package-artifact.ts";
+import { ensureValue, parseMode, parseProvider } from "./provider-auth.ts";
 import type { HostServer, Mode, PackageArtifact, Provider, SnapshotInfo } from "./types.ts";
 
-export interface SmokeHostOptions {
+interface SmokeHostOptions {
   hostIp?: string;
   hostPort: number;
   hostPortExplicit: boolean;
 }
 
-export interface SmokeRunOptions {
+interface SmokeRunOptions {
   installVersion?: string;
   json: boolean;
   keepServer: boolean;
@@ -27,6 +30,84 @@ export interface SmokeRunOptions {
   provider: Provider;
   snapshotHint: string;
   targetPackageSpec?: string;
+}
+
+export interface SmokeCliOptions extends SmokeHostOptions, SmokeRunOptions {
+  apiKeyEnv?: string;
+  installUrl: string;
+  latestVersion?: string;
+  modelId?: string;
+  vmName: string;
+}
+
+type SmokeCliParserConfig<TOptions extends SmokeCliOptions> = {
+  flagHandlers?: Record<string, (options: TOptions) => void>;
+  usage: () => string;
+  valueHandlers?: Record<string, (options: TOptions, value: string) => void>;
+};
+
+export function parseSmokeCliArgs<TOptions extends SmokeCliOptions>(
+  argv: string[],
+  options: TOptions,
+  config: SmokeCliParserConfig<TOptions>,
+): TOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
+  const valueHandlers: Record<string, (value: string) => void> = {
+    "--api-key-env": (value) => (options.apiKeyEnv = value),
+    "--host-ip": (value) => (options.hostIp = value),
+    "--host-port": (value) => {
+      options.hostPort = parseTcpPort(value, "--host-port");
+      options.hostPortExplicit = true;
+    },
+    "--install-url": (value) => (options.installUrl = value),
+    "--install-version": (value) => (options.installVersion = value),
+    "--latest-version": (value) => (options.latestVersion = value),
+    "--mode": (value) => (options.mode = parseMode(value)),
+    "--model": (value) => (options.modelId = value),
+    "--npm-registry": (value) => (options.npmRegistry = value),
+    "--openai-api-key-env": (value) => (options.apiKeyEnv = value),
+    "--provider": (value) => (options.provider = parseProvider(value)),
+    "--snapshot-hint": (value) => (options.snapshotHint = value),
+    "--target-package-spec": (value) => (options.targetPackageSpec = value),
+    "--vm": (value) => (options.vmName = value),
+  };
+  for (const [flag, handler] of Object.entries(config.valueHandlers ?? {})) {
+    valueHandlers[flag] = (value) => handler(options, value);
+  }
+  const flagHandlers: Record<string, () => void> = {
+    "--json": () => (options.json = true),
+    "--keep-server": () => (options.keepServer = true),
+  };
+  for (const [flag, handler] of Object.entries(config.flagHandlers ?? {})) {
+    flagHandlers[flag] = () => handler(options);
+  }
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      die(`missing argument at index ${index}`);
+    }
+    if (arg === "--") {
+      break;
+    }
+    const valueHandler = valueHandlers[arg];
+    if (valueHandler) {
+      valueHandler(ensureValue(args, index, arg));
+      index += 1;
+      continue;
+    }
+    const flagHandler = flagHandlers[arg];
+    if (flagHandler) {
+      flagHandler();
+      continue;
+    }
+    if (arg === "-h" || arg === "--help") {
+      process.stdout.write(config.usage());
+      process.exit(0);
+    }
+    die(`unknown arg: ${arg}`);
+  }
+  return options;
 }
 
 interface SmokeLaneStatuses {
