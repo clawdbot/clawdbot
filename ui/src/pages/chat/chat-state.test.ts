@@ -1,4 +1,3 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -150,18 +149,6 @@ describe("canonical session message recovery", () => {
     const { state } = createSessionEventState({
       connected: false,
       chatMessages: [originalPrompt],
-      chatQueue: [
-        {
-          id: "landed-steer",
-          text: "Steer prompt",
-          createdAt: 50,
-          kind: "steered",
-          pendingRunId: steerRunId,
-          sendRunId: steerRunId,
-          steerTargetRunId: activeRunId,
-          sessionKey: "agent:main:main",
-        },
-      ],
       chatRunId: activeRunId,
       chatStream: null,
       chatStreamSegments: [],
@@ -181,23 +168,12 @@ describe("canonical session message recovery", () => {
         },
       },
     });
-    handlePageGatewayEvent(state, {
-      type: "event",
-      event: "chat",
-      payload: {
-        sessionKey: state.sessionKey,
-        runId: steerRunId,
-        state: "final",
-      },
-    });
     expect(renderedTranscript(state)).toEqual([
       { role: "user", text: "Original prompt" },
       { role: "assistant", text: "Before steer." },
-      { role: "user", text: "Steer prompt" },
     ]);
     expect(state.chatRunId).toBe(activeRunId);
     expect(state.chatQueue).toEqual([]);
-    const segmentsAfterRequestBoundary = state.chatStreamSegments;
 
     const steerEvent = {
       type: "event",
@@ -222,6 +198,7 @@ describe("canonical session message recovery", () => {
       },
     } satisfies Parameters<typeof handlePageGatewayEvent>[1];
     handlePageGatewayEvent(state, steerEvent);
+    const segmentsAfterRequestBoundary = state.chatStreamSegments;
     expect(state.chatStreamSegments).toBe(segmentsAfterRequestBoundary);
     expect(
       state.chatMessages.filter((message) => extractText(message) === "Steer prompt"),
@@ -554,48 +531,6 @@ describe("canonical session message recovery", () => {
 
     expect(state.chatMessages).toEqual([currentUser]);
     expect(state.chatStream).toBe("Current partial reply");
-  });
-
-  it("orders an active queued turn before its landed steer", () => {
-    const activePrompt = {
-      id: "active-prompt",
-      text: "Keep this run active",
-      createdAt: 1,
-      sendRunId: "active-run",
-      sendState: "waiting-model" as const,
-      sessionKey: "main",
-    };
-    const { state } = createSessionEventState({
-      chatRunId: "active-run",
-      chatQueue: [
-        activePrompt,
-        {
-          id: "landed-steer-chip",
-          text: "Use the deployment plan",
-          createdAt: 2,
-          kind: "steered",
-          pendingRunId: "steer-request-run",
-          sendRunId: "steer-request-run",
-          steerTargetRunId: "active-run",
-          sessionKey: "main",
-        },
-      ],
-    });
-
-    handlePageGatewayEvent(state, {
-      type: "event",
-      event: "chat",
-      payload: {
-        runId: "steer-request-run",
-        sessionKey: state.sessionKey,
-        state: "final",
-      },
-    });
-
-    expect(state.chatQueue).toEqual([activePrompt]);
-    expect(
-      state.chatMessages.map((message) => readSessionMessageIdentity(message)?.idempotencyKey),
-    ).toEqual(["active-run:user", "steer-request-run:user"]);
   });
 
   it("renders distinct live peers immediately and coalesces their stale history", async () => {

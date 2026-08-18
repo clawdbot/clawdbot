@@ -9,7 +9,6 @@ import {
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
-import { isInflightSteer, isSteeredQueueItem } from "../steered-chip.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 type ChatQueueProps = {
@@ -102,9 +101,9 @@ function renderChatQueueItem(
 ) {
   const stateLabel = sendStateLabel(item);
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
-  const steered = isSteeredQueueItem(item) && !failed;
+  const steerMode = item.queueMode === "steer";
   const reconnecting = item.sendState === "waiting-reconnect";
-  const busy = item.sendState === "executing-command" || isInflightSteer(item);
+  const busy = item.sendState === "executing-command";
   const editing = props.editingId === item.id;
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) && isSteerableQueuedMessage(item) && !editing;
@@ -126,11 +125,9 @@ function renderChatQueueItem(
     (item.attachments?.length
       ? t("chat.queue.imageCount", { count: String(item.attachments.length) })
       : "");
-  const itemClass = `chat-queue__item${steered ? " chat-queue__item--steered" : ""}${
-    failed ? " chat-queue__item--failed" : ""
-  }${reconnecting ? " chat-queue__item--reconnect" : ""}${
-    editing ? " chat-queue__item--editing" : ""
-  }`;
+  const itemClass = `chat-queue__item${failed ? " chat-queue__item--failed" : ""}${
+    reconnecting ? " chat-queue__item--reconnect" : ""
+  }${editing ? " chat-queue__item--editing" : ""}`;
   // Row order keeps the actions on the first flex line; the error wraps below
   // them via flex-basis so failed rows grow by one line instead of a card.
   return html`
@@ -200,14 +197,10 @@ function renderChatQueueItem(
       ${reconnecting
         ? html`<span class="chat-queue__dot" aria-hidden="true"></span>`
         : html`<span class="chat-queue__icon" aria-hidden="true">
-            ${failed ? icons.alertTriangle : steered ? icons.cornerDownRight : icons.outbox}
+            ${failed ? icons.alertTriangle : icons.outbox}
           </span>`}
       ${renderChatAuthorAvatar(item.sender)}
-      ${steered
-        ? html`<span class="chat-queue__badge chat-queue__badge--steered"
-            >${t("chat.queue.states.steering")}</span
-          >`
-        : nothing}
+      ${steerMode ? html`<span class="chat-queue__badge">${t("chat.queue.steer")}</span>` : nothing}
       ${editing
         ? html`<span class="chat-queue__badge">${t("chat.queue.states.editing")}</span>`
         : stateLabel
@@ -245,7 +238,7 @@ function renderChatQueueItem(
         ${failed && !editing && props.onQueueRetry
           ? html`
               <button
-                class="chat-queue__retry"
+                class="chat-queue__action chat-queue__retry"
                 type="button"
                 aria-label=${t("chat.queue.retryQueuedMessage")}
                 @click=${() => props.onQueueRetry?.(item.id)}
@@ -258,7 +251,7 @@ function renderChatQueueItem(
         ${canSteer
           ? html`
               <button
-                class="chat-queue__steer"
+                class="chat-queue__action"
                 type="button"
                 aria-label=${t("chat.queue.steerQueuedMessage")}
                 @click=${() => props.onQueueSteer?.(item.id)}

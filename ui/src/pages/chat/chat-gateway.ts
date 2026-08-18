@@ -26,10 +26,6 @@ import {
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
 import {
-  retireSteeredChipsForRequestRun,
-  retireSteeredChipsForTerminalRun,
-} from "./steer-lifecycle.ts";
-import {
   latestStreamBoundaryRunId,
   reconcileTerminalStreamBoundary,
 } from "./stream-causal-boundary.ts";
@@ -64,17 +60,6 @@ function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): b
 
 function isPendingLocalChatRun(state: ChatState, runId: string): boolean {
   return state.chatQueue.some((item) => item.sendRunId === runId && item.sendState === "sending");
-}
-
-function isTerminalChatState(value: unknown): boolean {
-  return value === "final" || value === "aborted" || value === "error";
-}
-
-function isEventForDifferentActiveRun(
-  payload: ChatEventPayload | undefined,
-  activeRunId: string | null,
-): boolean {
-  return Boolean(activeRunId && payload && payload.runId !== activeRunId);
 }
 
 function resolveDeltaChatStreamText(
@@ -530,25 +515,5 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
-  const activeRunIdBeforeEvent = state.chatRunId;
-  const terminalEventMatchesChat =
-    isTerminalChatState(payload?.state) &&
-    payload !== undefined &&
-    // Unkeyed events must also carry a real run id: with no active run,
-    // `undefined === undefined` would let sessionless internal-run terminals
-    // (e.g. companion answers) materialize into the open main thread.
-    (chatEventSessionMatches(state, payload) ||
-      (typeof payload.runId === "string" && payload.runId === activeRunIdBeforeEvent));
-  const terminalOwnsActiveRun =
-    terminalEventMatchesChat && !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent);
-  // An accepted steer terminal is keyed by the steer request while the chip
-  // also tracks the active target run. Reconcile either identity before the
-  // generic different-run path ignores the terminal and leaves stale status.
-  if (terminalOwnsActiveRun) {
-    retireSteeredChipsForTerminalRun(state, payload?.runId);
-  }
-  if (terminalEventMatchesChat) {
-    retireSteeredChipsForRequestRun(state, payload?.runId);
-  }
   return handleChatEvent(state, payload);
 }

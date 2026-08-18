@@ -27,6 +27,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import {
   coalesceToolActivityMessages,
   groupMessages,
@@ -56,7 +57,6 @@ import {
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import {

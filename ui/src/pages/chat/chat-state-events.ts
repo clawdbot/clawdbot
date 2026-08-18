@@ -27,10 +27,12 @@ import {
   shouldHideAssistantChatMessage,
 } from "./chat-history.ts";
 import {
+  clearPendingQueueItemsForRun,
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
 } from "./chat-queue.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { preserveQueuedUserTurn } from "./chat-send-support.ts";
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -45,12 +47,6 @@ import {
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
-import {
-  preserveQueuedUserTurn,
-  retirePersistedSteeredChips,
-  retireSteeredChipsForTerminalRun,
-} from "./steer-lifecycle.ts";
-import { isAckedSteeredChip } from "./steered-chip.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
@@ -108,7 +104,7 @@ function finishSessionMessageRunReconcile(
   if (!cleared) {
     return false;
   }
-  retireSteeredChipsForTerminalRun(state, runId ?? undefined);
+  clearPendingQueueItemsForRun(state, runId ?? undefined);
   void loadChatHistory(state)
     .finally(() => {
       if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
@@ -135,7 +131,6 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
       kind: "live",
       activeRunId: state.chatRunId,
     });
-    retirePersistedSteeredChips(state);
   }
   if (matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
@@ -426,6 +421,9 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state, payload);
+    if (terminal) {
+      clearPendingQueueItemsForRun(state, payload?.runId);
+    }
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
     }
@@ -514,9 +512,6 @@ function rememberDeliveredQueuedUserTurn(
     turns = new Map();
     deliveredQueueTurnsByClient.set(owner, turns);
   }
-  const pending = state.chatQueue.find(
-    (item) => isAckedSteeredChip(item) && item.pendingRunId === runId,
-  );
   const stored = readDeliveredQueuedChatSendForRun(state, runId)?.item;
   if (stored) {
     turns.delete(runId);
@@ -529,9 +524,5 @@ function rememberDeliveredQueuedUserTurn(
       turns.delete(oldestRunId);
     }
   }
-  // Original-turn copies first: a run can own both its queued turn (stored, or
-  // its remembered fallback in `turns`) and a steered follow-up chip; the chip
-  // is preserved separately by retireSteeredChipsForTerminalRun and must not
-  // mask the original copy here.
-  return stored ?? turns.get(runId) ?? pending ?? null;
+  return stored ?? turns.get(runId) ?? null;
 }

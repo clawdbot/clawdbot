@@ -4178,7 +4178,6 @@ ui/src/pages/chat/chat-progress.ts	2
 ui/src/pages/chat/chat-queue.ts	1
 ui/src/pages/chat/chat-realtime.ts	1
 ui/src/pages/chat/chat-send-ack.ts	2
-ui/src/pages/chat/chat-send-actions.ts	2
 ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-send-request.ts	1
 ui/src/pages/chat/chat-send-timing.ts	6

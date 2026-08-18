@@ -4914,8 +4914,6 @@ export const en: TranslationMap = {
     },
     sendErrors: {
       activeLeafChanged: "The session switched branches — review and resend.",
-      steerRunNoLongerActive:
-        "This steer still targets the previous run, but that run is no longer active.",
     },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
@@ -5020,7 +5018,6 @@ export const en: TranslationMap = {
         timeout: "The active run ended before the steer message was accepted.",
         failed: "Steer failed before it reached the run; try again.",
         usage: "Usage: `/steer <message>`",
-        noActiveRun: "No active run. Use the chat input or `/redirect` instead.",
         succeeded: "Steered.",
         requestFailed: "Failed to steer: {error}",
       },
@@ -5403,7 +5400,6 @@ export const en: TranslationMap = {
       editing: "Editing a queued message",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
-        steering: "Steering",
         applyingSettings: "Applying chat settings",
         waitingForRun: "Waiting for current run",
         runningCommand: "Running command",
