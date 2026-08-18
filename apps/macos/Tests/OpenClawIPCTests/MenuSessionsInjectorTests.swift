@@ -206,6 +206,41 @@ struct MenuSessionsInjectorTests {
         #expect(injector.testingUsageCacheUpdatedAt == nil)
     }
 
+    @Test func `rejected usage retries preserve a visible stalled section`() async {
+        let injector = MenuSessionsInjector()
+        injector.setTestingControlChannelConnected(true)
+        injector.setTestingUsageRetryInterval(0)
+        let events = UsageLoadEvents()
+        injector.setTestingUsageLoadDidFinish { events.finished() }
+        injector.setTestingUsageRetryDidExhaust { events.exhausted() }
+
+        injector.setTestingUsageSummary(
+            GatewayUsageSummary(updatedAt: 0, providers: [], refreshing: false))
+        let quiet = Self.makeMenuShell()
+        injector.injectForTesting(into: quiet)
+        let quietItems = quiet.items.count(where: { $0.tag == 9_415_557 })
+
+        var calls = 0
+        injector.setTestingUsageLoader {
+            calls += 1
+            if calls == 1 {
+                return GatewayUsageSummary(updatedAt: 1, providers: [], refreshing: true)
+            }
+            throw UsageLoadTestError.unavailable
+        }
+
+        await injector.refreshUsageCacheForTesting(force: true)
+        #expect(await events.waitFor(count: 4))
+        #expect(await events.waitForExhaustion())
+        #expect(calls == 4)
+        #expect(injector.testingCachedUsageSummary?.refreshing == true)
+        #expect(injector.testingUsageCacheUpdatedAt == nil)
+
+        let stalled = Self.makeMenuShell()
+        injector.injectForTesting(into: stalled)
+        #expect(stalled.items.count(where: { $0.tag == 9_415_557 }) == quietItems + 3)
+    }
+
     @Test func `stalled usage keeps a visible menu section`() async {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
@@ -347,6 +382,10 @@ struct MenuSessionsInjectorTests {
             paired: paired,
             connected: connected)
     }
+}
+
+private enum UsageLoadTestError: Error {
+    case unavailable
 }
 
 @MainActor

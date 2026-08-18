@@ -26,6 +26,11 @@ import "./usage/usage-page.ts";
 // Mirrors the module-private default usage TTL asserted below.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
+const settledEmptyProviderUsage = {
+  state: "settled",
+  result: { ok: true, value: { updatedAt: 1, providers: [] } },
+} satisfies UsageRouteData["providerUsage"];
+
 type TestPage = HTMLElement & {
   context: ApplicationContext;
   render: () => unknown;
@@ -229,7 +234,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result,
       costSummary: null,
-      providerUsage: null,
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     } satisfies UsageRouteData;
@@ -273,7 +278,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result: staleResult,
       costSummary: null,
-      providerUsage: null,
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -312,7 +317,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result,
       costSummary: null,
-      providerUsage: { ok: true, value: { updatedAt: 1, providers: [] } },
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -362,7 +367,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result: { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"],
       costSummary: null,
-      providerUsage: null,
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -419,7 +424,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result,
       costSummary: null,
-      providerUsage: { ok: true, value: { updatedAt: 1, providers: [] } },
+      providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
       error: null,
     };

@@ -836,6 +836,13 @@ extension MenuSessionsInjector {
             }
         } catch {
             guard generation == self.usageLoadGeneration else { return }
+            if self.cachedUsageSummary?.refreshing == true {
+                // A rejected retry is still unresolved. Preserve the marker and spend
+                // the same bounded budget, or the menu silently drops its Usage section.
+                self.usageCacheUpdatedAt = nil
+                self.scheduleUsageRetry(generation: generation)
+                return
+            }
             self.cachedUsageSummary = nil
         }
         self.usageCacheUpdatedAt = Date()

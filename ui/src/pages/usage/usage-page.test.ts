@@ -21,6 +21,7 @@ type TestUsagePage = HTMLElement & {
   usageSessionLogsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
   providerUsageStalled: boolean;
   routeData?: unknown;
+  loadUsage: () => Promise<void>;
   loadSessionTimeSeries: (sessionKey: string) => Promise<void>;
   loadSessionLogs: (sessionKey: string) => Promise<void>;
   render: () => unknown;
@@ -80,6 +81,7 @@ async function createPage(client: GatewayBrowserClient): Promise<TestUsagePage> 
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -280,6 +282,7 @@ describe("UsagePage detail requests", () => {
       result: null,
       costSummary: null,
       providerUsageSummary: { updatedAt: 1, providers: [], refreshing: true },
+      providerUsageFailed: false,
       loadedAtMs,
       error: null,
     });
@@ -297,6 +300,51 @@ describe("UsagePage detail requests", () => {
 
     page.routeData = { ...routeDataAt(4), providerUsageSummary: { updatedAt: 2, providers: [] } };
     await page.updateComplete;
+    expect(page.providerUsageStalled).toBe(false);
+  });
+
+  it("keeps rejected provider usage retries unresolved until the page reports a stall", async () => {
+    vi.useFakeTimers();
+    let rejectProviderUsage = true;
+    const request = vi.fn(async (method: string) => {
+      if (method === "usage.status") {
+        if (rejectProviderUsage) {
+          throw new Error("provider usage unavailable");
+        }
+        return { updatedAt: 2, providers: [] };
+      }
+      return {};
+    });
+    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+    const gateway = page.context.gateway;
+    page.routeData = {
+      gateway,
+      gatewaySnapshot: gateway.snapshot,
+      query: {
+        startDate: "2026-05-14",
+        endDate: "2026-05-14",
+        scope: "family",
+        timeZone: "local",
+        agentId: null,
+      },
+      result: null,
+      costSummary: null,
+      providerUsageSummary: { updatedAt: 1, providers: [], refreshing: true },
+      providerUsageFailed: false,
+      loadedAtMs: 1,
+      error: null,
+    } satisfies UsageRouteData;
+    await page.updateComplete;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await page.loadUsage();
+    }
+
+    expect(request.mock.calls.filter(([method]) => method === "usage.status")).toHaveLength(3);
+    expect(page.providerUsageStalled).toBe(true);
+
+    rejectProviderUsage = false;
+    await page.loadUsage();
     expect(page.providerUsageStalled).toBe(false);
   });
 
