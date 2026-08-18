@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
 import {
@@ -395,6 +396,19 @@ function requireApprovalFollowupInput(
   return call[0];
 }
 
+function captureProcessUnhandledRejections() {
+  const reasons: unknown[] = [];
+  const originalProcessEmit = process.emit.bind(process);
+  const processEmit = vi.spyOn(process, "emit").mockImplementation((event, ...args) => {
+    if (event === "unhandledRejection") {
+      reasons.push(args[0]);
+      return true;
+    }
+    return originalProcessEmit(event, ...args);
+  });
+  return { reasons, restore: () => processEmit.mockRestore() };
+}
+
 function captureSecurityEvents(): {
   events: DiagnosticSecurityEvent[];
   stop: () => void;
@@ -522,11 +536,15 @@ describe("processGatewayAllowlist", () => {
     outcome: ExecApprovalFollowupOutcome;
     sessionId?: string;
   }) {
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: true,
-      deniedReason: null,
+    resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce({
+      kind: "resolved",
+      decision: "allow-once",
+      state: {
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+        timeoutContext: undefined,
+      },
     });
     runExecProcessMock.mockResolvedValue({
       session: { id: params.sessionId ?? "sess-1" },
@@ -2199,6 +2217,94 @@ EOF`,
     });
     expect(requireSentFollowupTarget(0)?.direct).toBe(false);
     expect(requireSentFollowupText(0)).toContain("done");
+  });
+
+  it("keeps a completed detached outcome terminal when agent follow-up registration fails", async () => {
+    const unhandledRejections = captureProcessUnhandledRejections();
+    const completedOutcome = {
+      status: "completed" as const,
+      exitCode: 0,
+      timedOut: false,
+      aggregated: "completed output",
+    };
+    const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(() => undefined);
+    mockApprovedDetachedExec({ outcome: completedOutcome });
+    sendExecApprovalFollowupResultMock.mockRejectedValueOnce(
+      new Error("synchronous runtime-handoff registration failure"),
+    );
+
+    try {
+      const result = await runGatewayAllowlist({
+        command: "side-effecting-command",
+        approvalFollowupMode: "agent",
+        approvalFollowup,
+        turnSourceChannel: "webchat",
+      });
+
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+      await vi.waitFor(() => expect(approvalFollowup).toHaveBeenCalledOnce());
+      await setImmediate();
+
+      expect(requireApprovalFollowupInput(approvalFollowup, 0).outcome).toEqual(completedOutcome);
+      expect(unhandledRejections.reasons).toEqual([]);
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
+      expect(requireSentFollowupText(0)).toContain("completed output");
+      expect(requireSentFollowupText(0)).not.toContain("Exec denied");
+    } finally {
+      unhandledRejections.restore();
+    }
+  });
+
+  it.each([
+    {
+      name: "request failure",
+      outcome: { kind: "request-failed" as const },
+      firstFollowupReason: "approval-request-failed",
+    },
+    {
+      name: "denial",
+      outcome: {
+        kind: "resolved" as const,
+        decision: "deny",
+        state: {
+          baseDecision: { timedOut: false },
+          approvedByAsk: false,
+          deniedReason: "user-denied",
+          timeoutContext: undefined,
+        },
+      },
+      firstFollowupReason: "user-denied",
+    },
+  ])("consumes rejected detached pre-dispatch $name and fallback follow-ups", async (scenario) => {
+    const unhandledRejections = captureProcessUnhandledRejections();
+    resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce(scenario.outcome);
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    sendExecApprovalFollowupResultMock.mockRejectedValue(
+      new Error("pre-dispatch denial follow-up failed"),
+    );
+
+    try {
+      const result = await runGatewayAllowlist({
+        command: "side-effecting-command",
+        approvalFollowupMode: "agent",
+        turnSourceChannel: "webchat",
+      });
+
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+      await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(2));
+      await setImmediate();
+
+      expect(unhandledRejections.reasons).toEqual([]);
+      expect(requireSentFollowupText(0)).toBe(
+        `Exec denied (gateway id=req-1, ${scenario.firstFollowupReason}): side-effecting-command`,
+      );
+      expect(requireSentFollowupText(1)).toBe(
+        "Exec denied (gateway id=req-1, approval-request-failed): side-effecting-command",
+      );
+      expect(runExecProcessMock).not.toHaveBeenCalled();
+    } finally {
+      unhandledRejections.restore();
+    }
   });
 
   it("keeps multiline gateway approval follow-up output intact", async () => {

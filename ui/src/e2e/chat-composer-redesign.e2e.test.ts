@@ -517,8 +517,8 @@ suite.define(() => {
       await expect.poll(() => camera.count()).toBe(0);
       expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(false);
       await expect
-        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
-        .toBe(0);
+        .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
+        .toBe("0");
       // Resize re-layout is async; wait for the header controls to adopt the
       // mobile width before sampling one-shot bounding boxes below.
       await expect
@@ -611,18 +611,31 @@ suite.define(() => {
       await expect.poll(() => voice.isDisabled()).toBe(true);
       await page.mouse.move(0, 0);
       await expect.poll(() => page.locator("wa-tooltip[open]").count()).toBe(0);
+      // The picker reserves its width while hidden; only opacity reveals it, so
+      // hovering never shifts the right-aligned mic/send cluster sideways.
       await expect
         .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
-        .toBe(0);
+        .toBe(22);
+      await expect
+        .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
+        .toBe("0");
       await expect.poll(() => voice.evaluate((node) => getComputedStyle(node).opacity)).toBe("0.4");
+      const idleVoiceBox = await voice.boundingBox();
+      expect(idleVoiceBox).not.toBeNull();
 
       await voice.hover();
       await expect
-        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
-        .toBe(20);
-      await expect
         .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
         .toBe("1");
+      await expect
+        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
+        .toBe(22);
+      const hoveredVoiceBox = await voice.boundingBox();
+      expect(hoveredVoiceBox).not.toBeNull();
+      if (!idleVoiceBox || !hoveredVoiceBox) {
+        throw new Error("expected voice button layout boxes around hover");
+      }
+      expect(hoveredVoiceBox.x).toBe(idleVoiceBox.x);
       await microphonePicker.click();
       await expect.poll(() => microphonePicker.getAttribute("aria-expanded")).toBe("true");
       await expect.poll(() => page.locator(".chat-talk-input-picker[open]").count()).toBe(1);

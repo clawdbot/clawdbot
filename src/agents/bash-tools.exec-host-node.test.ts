@@ -937,12 +937,13 @@ describe("executeNodeHostCommand", () => {
     }
   });
 
-  it("reports unexpected detached node approval failures without an unhandled rejection", async () => {
+  it("consumes rejected detached node approval recovery and fallback follow-ups", async () => {
     const unhandledRejections = captureProcessUnhandledRejections();
 
     try {
-      resolveApprovalDecisionOrUndefinedMock.mockRejectedValueOnce(
-        new Error("approval wait unavailable"),
+      resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce({ kind: "request-failed" });
+      sendExecApprovalFollowupResultMock.mockRejectedValue(
+        new Error("approval failure follow-up unavailable"),
       );
       resolveExecHostApprovalContextMock.mockReturnValue({
         approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -954,14 +955,19 @@ describe("executeNodeHostCommand", () => {
       const result = await executeNodeHostCommand(createNodeHostRequest({}));
 
       expect(result.details?.status).toBe("approval-pending");
-      await vi.waitFor(() => {
-        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-          expect.objectContaining({ approvalId: "approval-1" }),
-          "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
-        );
-      });
+      await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(2));
       await setImmediate();
       expect(unhandledRejections.reasons).toEqual([]);
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ approvalId: "approval-1" }),
+        "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
+      );
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ approvalId: "approval-1" }),
+        "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
+      );
       expect(
         callGatewayToolMock.mock.calls.some(
           ([method, , params]) =>

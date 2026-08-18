@@ -606,17 +606,19 @@ export async function executeNodeHostCommand(
               `Exec denied (node=${target.nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
             );
           }
-        })().catch(async (error: unknown): Promise<void> => {
-          // Once dispatch starts, a delivery failure cannot mean execution was denied.
-          if (
-            nodeInvocationStarted ||
-            params.signal?.aborted ||
-            isExecApprovalRunAbortedError(error)
-          ) {
-            return;
-          }
-          await sendApprovalRequestFailedFollowup();
-        });
+        })()
+          .catch(async (error: unknown): Promise<void> => {
+            // Once dispatch starts, a delivery failure cannot mean execution was denied.
+            if (
+              nodeInvocationStarted ||
+              params.signal?.aborted ||
+              isExecApprovalRunAbortedError(error)
+            ) {
+              return;
+            }
+            await sendApprovalRequestFailedFollowup();
+          })
+          .catch(() => undefined);
 
         return execHostShared.buildExecApprovalPendingToolResult({
           host: "node",

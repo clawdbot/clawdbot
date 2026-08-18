@@ -2696,6 +2696,45 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("resolveGatewaySessionStoreTarget finds a retired agent's row under another configured agent's template root", async () => {
+    await withStateDirEnv("session-utils-retired-cross-root-", async ({ tempRoot }) => {
+      const storesRoot = path.join(tempRoot, "stores");
+      const retiredStorePath = path.join(
+        storesRoot,
+        "work",
+        "agents",
+        "old",
+        "sessions",
+        "sessions.json",
+      );
+      await seedSessionEntries(retiredStorePath, {
+        "agent:old:main": { sessionId: "sess-retired-cross-root", updatedAt: 1 },
+      });
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(
+            storesRoot,
+            "{agentId}",
+            "agents",
+            "{agentId}",
+            "sessions",
+            "sessions.json",
+          ),
+        },
+        agents: { list: [{ id: "ops", default: true }, { id: "work" }] },
+      } as OpenClawConfig;
+
+      const target = resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: "agent:old:main",
+      });
+
+      expect(target.storePath).toBe(path.resolve(retiredStorePath));
+      expect(target.store["agent:old:main"]?.sessionId).toBe("sess-retired-cross-root");
+    });
+  });
+
   test("resolveGatewaySessionStoreTarget ignores a retired legacy store without provisioning SQLite", async () => {
     await withStateDirEnv("session-utils-retired-legacy-", async ({ stateDir }) => {
       const retiredSessionsDir = path.join(stateDir, "agents", "retired", "sessions");

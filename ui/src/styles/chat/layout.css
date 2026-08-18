@@ -3503,17 +3503,21 @@ button.chat-pr__diff {
   stroke-linejoin: round;
 }
 
+/* Theme overrides adjust the hover fill via this variable instead of their own
+   :hover rules: a :root[data-theme] selector outranks every variant's hover
+   (--voice, --stop), which painted the idle mic with the send button's loud
+   accent hover in dark themes. */
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--chat-send-hover-background, var(--accent-hover));
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
-:root[data-theme="dark"] .chat-send-btn:hover:not(:disabled) {
-  background: var(--primary-hover);
+:root[data-theme="dark"] .chat-send-btn {
+  --chat-send-hover-background: var(--primary-hover);
 }
 
-:root[data-theme="openknot"] .chat-send-btn:hover:not(:disabled) {
-  background: var(--primary-hover);
+:root[data-theme="openknot"] .chat-send-btn {
+  --chat-send-hover-background: var(--primary-hover);
 }
 
 /* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
@@ -3561,11 +3565,11 @@ button.chat-pr__diff {
   --chat-voice-hover-color: var(--text);
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
 }
 
 .chat-talk-control--active {
-  --chat-picker-border: color-mix(in srgb, var(--accent) 24%, transparent);
   --chat-picker-background: color-mix(in srgb, var(--accent) 14%, transparent);
   --chat-picker-color: var(--accent);
   --chat-picker-hover-background: color-mix(in srgb, var(--accent) 20%, transparent);
@@ -3576,24 +3580,20 @@ button.chat-pr__diff {
   display: inline-flex;
 }
 
-.chat-talk-control .chat-send-btn {
-  border-radius: var(--radius-full) 0 0 var(--radius-full);
-}
-
+/* The device picker is a detached round ghost button beside the mic — the mic
+   itself never changes shape. It reserves its width at all times and hover
+   only fades it in; collapsing the width instead shifts the whole
+   right-aligned mic/send cluster sideways under the cursor on mouse-over. */
 .chat-talk-input-picker {
   display: inline-flex;
-  align-self: stretch;
-  width: 20px;
-  transition:
-    width 120ms ease,
-    opacity 100ms ease;
+  align-self: center;
+  width: 22px;
+  transition: opacity var(--duration-fast) ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .chat-talk-control:not(.chat-talk-control--active, :hover, :focus-within)
     .chat-talk-input-picker:not([open]) {
-    width: 0;
-    min-width: 0;
     opacity: 0;
   }
 }
@@ -3602,12 +3602,11 @@ button.chat-pr__diff {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
-  height: 100%;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 0;
-  border-left: 1px solid var(--chat-picker-border, var(--border));
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  border-radius: var(--radius-full);
   background: var(--chat-picker-background, transparent);
   color: var(--chat-picker-color, var(--muted));
   transition: background var(--duration-fast) ease;
