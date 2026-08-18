@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -13,10 +12,7 @@ import {
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
 import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
-import {
-  isGatewayCapabilityAdvertised,
-  isGatewayMethodAdvertised,
-} from "../../lib/gateway-methods.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
@@ -449,11 +445,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       composerControls: composerControls?.composerControls ?? nothing,
       permissionPicker: composerControls?.permissionPicker,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
-      taskSuggestions: this.taskSuggestions,
-      activeTaskSuggestionId: this.activeTaskSuggestionId,
-      taskSuggestionSwapDirection: this.taskSuggestionSwapDirection,
-      taskSuggestionSwapGeneration: this.taskSuggestionSwapGeneration,
-      onNavigateTaskSuggestion: this.navigateTaskSuggestion,
+      ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
       ),
@@ -470,38 +462,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         this.requestUpdate();
       },
       onDismissPullRequest: this.dismissSessionPullRequest,
-      taskSuggestionBusyIds: this.taskSuggestionBusyIds,
-      sessionSuggestions: multiIdentity ? this.sessionSuggestions : [],
-      sessionSuggestionRole: this.sessionSuggestionRole,
-      sessionSuggestionBusyIds: this.sessionSuggestionBusyIds,
-      sessionSuggestionsArchived: selectedSessionArchived,
-      canResolveSessionSuggestions:
-        state.connected &&
-        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
-        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.resolve") ===
-          true,
-      onResolveSessionSuggestion: (suggestion, resolution) =>
-        void this.resolveCurrentSessionSuggestion(suggestion, resolution),
-      canAcceptTaskSuggestions:
-        state.connected &&
-        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
-        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.accept") === true,
-      canAcceptTaskSuggestionModes:
-        isGatewayCapabilityAdvertised(
-          this.context.gateway.snapshot,
-          GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
-        ) === true,
-      canDismissTaskSuggestions:
-        state.connected &&
-        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
-        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.dismiss") ===
-          true,
-      taskSuggestionCloudProfiles: this.taskSuggestionCloudProfiles,
-      taskSuggestionCopiedIds: this.taskSuggestionCopiedIds,
-      onCopyTaskSuggestionPrompt: (suggestion) => void this.copyTaskSuggestionPrompt(suggestion),
-      onAcceptTaskSuggestion: (suggestion, mode, cloudProfileId) =>
-        void this.acceptTaskSuggestion(suggestion, mode, cloudProfileId),
-      onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
