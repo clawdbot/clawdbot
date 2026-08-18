@@ -1701,7 +1701,7 @@ button.chat-reply-preview--message:disabled {
   top: 10px;
   right: 14px;
   display: grid;
-  width: min(470px, calc(100% - 28px));
+  width: min(450px, calc(100% - 28px));
   overflow: visible;
   overscroll-behavior: contain;
 }
