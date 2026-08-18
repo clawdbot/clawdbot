@@ -93,9 +93,6 @@ function collectPackageRuntimeClosure(repoRoot, seeds, options = {}) {
 
   while (stack.length > 0) {
     const entry = stack.pop();
-    if (!entry) {
-      continue;
-    }
     const packageDir = resolveNodeModulePackageDir(entry.importerDir, entry.packageName);
     if (!packageDir) {
       continue;
