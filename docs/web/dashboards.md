@@ -71,6 +71,9 @@ never needs the agent.
   tabs, switch the visible tab, and move or hide the chat dock. Ask "put the
   chat on the left and show the finance tab" and watch it happen.
 
+  Switching the visible tab or chat dock requires a connected Control UI. If
+  none is connected, the command returns `UNAVAILABLE`; open the Control UI and retry.
+
 ## What widgets are allowed to do
 
 A widget that only renders needs no approval — it appears instantly, exactly

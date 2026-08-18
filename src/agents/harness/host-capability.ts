@@ -2,6 +2,7 @@ import path from "node:path";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import {
   getAdmittedRunDelegatedAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
@@ -14,6 +15,7 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
@@ -31,6 +33,9 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
+type AgentHarnessHostApprovalResult = NonNullable<
+  Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
+>;
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
 
@@ -184,6 +189,11 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
+  const preparedRunEnvironment = prepareGitHubToolEnvironment({
+    config: config ?? {},
+    sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
+    agentId: attempt.agentId ?? "main",
+  });
   const skillUsagePaths = attempt.sandbox?.skillUsagePaths
     ? cloneSnapshot(attempt.sandbox.skillUsagePaths)
     : undefined;
@@ -282,6 +292,14 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    preparedEnvironment: () => {
+      assertActive();
+      return Object.freeze({
+        credentialScrubEnv: Object.freeze({ ...preparedRunEnvironment.credentialScrubEnv }),
+        localIdentityEnv: Object.freeze({ ...preparedRunEnvironment.localIdentityEnv }),
+        managedLocalIdentity: preparedRunEnvironment.managedLocalIdentity,
+      });
+    },
     bindToolSurface: (tools, options) => {
       assertActive();
       const boundAbortSignal = attempt.abortSignal
@@ -363,7 +381,7 @@ export function createAgentHarnessHostCapabilities(params: {
       assertActive();
       const result = await withCaller(
         async () =>
-          await callGatewayTool<{ id?: string; decision?: string | null }>(
+          await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
             "plugin.approval.waitDecision",
             { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
             { id: request.approvalId },
@@ -373,9 +391,13 @@ export function createAgentHarnessHostCapabilities(params: {
       // An allowed decision is useful only while this exact admitted owner is
       // still live; fail closed if closure raced the awaited Gateway result.
       assertActive();
-      return result?.id === request.approvalId
-        ? (result.decision as "allow-once" | "allow-always" | "deny" | null | undefined)
-        : undefined;
+      if (result?.id !== request.approvalId) {
+        return undefined;
+      }
+      return {
+        decision: result.decision,
+        terminalReason: result.terminalReason,
+      };
     },
   });
   return {

@@ -671,14 +671,14 @@ async function requestPluginApprovalOutcome(params: {
       return "unavailable";
     }
 
-    const decision = approvalRequestExplicitlyUnavailable(requestResult)
-      ? null
+    const approvalResult = approvalRequestExplicitlyUnavailable(requestResult)
+      ? undefined
       : await waitForPluginApprovalDecision({
           hostCapabilities: params.paramsForRun.hostCapabilities,
           approvalId,
           signal: params.signal,
         });
-    return mapExecDecisionToOutcome(decision);
+    return mapExecDecisionToOutcome(approvalResult?.decision);
   } catch {
     return params.signal?.aborted ? "cancelled" : "denied";
   }

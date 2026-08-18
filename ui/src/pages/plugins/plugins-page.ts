@@ -4,7 +4,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { serializeSidebarEntry, subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForPluginsHubTab, pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -700,18 +700,6 @@ class PluginsPage extends OpenClawLightDomElement {
     this.replaceResult(withPlugin(this.result, result.plugin), true);
   }
 
-  private pinEnabledPluginRoute(pluginId: string) {
-    const navigation = this.context.navigation;
-    if (pluginId !== "workboard" || !navigation) {
-      return;
-    }
-    const entry = serializeSidebarEntry({ type: "route", route: "workboard" });
-    const current = navigation.snapshot.sidebarEntries;
-    if (!current.includes(entry)) {
-      navigation.update({ sidebarEntries: [...current, entry] });
-    }
-  }
-
   /** Plugin changes can affect both catalog state and route visibility (for example Workboard). */
   private async refreshCatalogAfterMutation(client: GatewayBrowserClient): Promise<void> {
     this.error = null;
@@ -843,9 +831,6 @@ class PluginsPage extends OpenClawLightDomElement {
             refreshError,
           ),
         );
-        if (enabled) {
-          this.pinEnabledPluginRoute(pluginId);
-        }
         await this.refreshCatalogAfterMutation(client);
         if (isCurrent() && !result.restartRequired) {
           // Plugin tabs come from hello; reconnect after the registry refresh.

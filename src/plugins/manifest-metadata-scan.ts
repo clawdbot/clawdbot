@@ -6,6 +6,7 @@ import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/nor
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { hasNodeErrorCode, isNotFoundPathError } from "../infra/path-guards.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -71,21 +72,42 @@ function listChildPluginDirs(
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | undefined {
+  let raw: string;
   try {
     const { buffer } = readRegularFileSync({
       filePath,
       maxBytes: PLUGIN_MANIFEST_METADATA_MAX_BYTES,
     });
-    const parsed = parseJsonWithJson5Fallback(buffer.toString("utf-8"));
-    return isRecord(parsed) ? parsed : undefined;
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("exceeds")) {
+    raw = buffer.toString("utf-8");
+  } catch (error) {
+    if (isNotFoundPathError(error)) {
+      return undefined;
+    }
+    if (hasNodeErrorCode(error, "too-large")) {
       log.warn(
         `Ignoring oversized plugin manifest at ${filePath}: file exceeds the ${PLUGIN_MANIFEST_METADATA_MAX_BYTES}-byte limit`,
       );
+    } else {
+      log.warn(`Ignoring unreadable plugin manifest at ${filePath}: ${String(error)}`);
     }
     return undefined;
   }
+
+  let parsed: unknown;
+  try {
+    parsed = parseJsonWithJson5Fallback(raw);
+  } catch (error) {
+    log.warn(
+      `Ignoring invalid plugin manifest at ${filePath}: failed to parse plugin manifest: ${String(error)}`,
+    );
+    return undefined;
+  }
+
+  if (!isRecord(parsed)) {
+    log.warn(`Ignoring invalid plugin manifest at ${filePath}: plugin manifest must be an object`);
+    return undefined;
+  }
+  return parsed;
 }
 
 function readManifestObject(pluginDir: string): Record<string, unknown> | undefined {

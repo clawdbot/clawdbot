@@ -153,8 +153,11 @@ type NodesRequestState = {
   requestGeneration: number;
 };
 
+type QueuedRefresh = "none" | "quiet" | "visible";
+
 type NodesState = NodesRequestState & {
   nodesLoading: boolean;
+  nodesQueuedRefresh: QueuedRefresh;
   nodes: Array<Record<string, unknown>>;
   lastError: string | null;
   chatError?: string | null;
@@ -162,6 +165,7 @@ type NodesState = NodesRequestState & {
 
 type DevicesState = NodesRequestState & {
   devicesLoading: boolean;
+  devicesQueuedRefresh: QueuedRefresh;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
 };
@@ -205,9 +209,11 @@ export function createInitialDevicesState(
     connected: snapshot.connected ?? false,
     requestGeneration: 0,
     nodesLoading: false,
+    nodesQueuedRefresh: "none",
     nodes: [],
     lastError: null,
     devicesLoading: false,
+    devicesQueuedRefresh: "none",
     devicesError: null,
     devicesList: null,
     execApprovalsLoading: false,
@@ -227,9 +233,17 @@ function isCurrentNodesRequest(
   return state.connected && state.client === client && state.requestGeneration === generation;
 }
 
+function queueRefresh(current: QueuedRefresh, quiet: boolean | undefined): QueuedRefresh {
+  return current === "visible" || quiet !== true ? "visible" : "quiet";
+}
+
 export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   const client = state.client;
-  if (!client || !state.connected || state.nodesLoading) {
+  if (!client || !state.connected) {
+    return;
+  }
+  if (state.nodesLoading) {
+    state.nodesQueuedRefresh = queueRefresh(state.nodesQueuedRefresh, opts?.quiet);
     return;
   }
   state.nodesLoading = true;
@@ -250,13 +264,22 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.nodesLoading = false;
+      const queued = state.nodesQueuedRefresh;
+      state.nodesQueuedRefresh = "none";
+      if (queued !== "none") {
+        await loadNodes(state, { quiet: queued === "quiet" });
+      }
     }
   }
 }
 
 export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean }) {
   const client = state.client;
-  if (!client || !state.connected || state.devicesLoading) {
+  if (!client || !state.connected) {
+    return;
+  }
+  if (state.devicesLoading) {
+    state.devicesQueuedRefresh = queueRefresh(state.devicesQueuedRefresh, opts?.quiet);
     return;
   }
   state.devicesLoading = true;
@@ -282,6 +305,11 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesLoading = false;
+      const queued = state.devicesQueuedRefresh;
+      state.devicesQueuedRefresh = "none";
+      if (queued !== "none") {
+        await loadDevices(state, { quiet: queued === "quiet" });
+      }
     }
   }
 }

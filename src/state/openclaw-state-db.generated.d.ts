@@ -1562,6 +1562,8 @@ export interface WorkerEnvironments {
   idle_since_at_ms: number | null;
   last_error: string | null;
   lease_id: string | null;
+  node_device_id: string | null;
+  node_setup_id: string | null;
   owner_epoch: Generated<number>;
   profile_id: string;
   profile_snapshot_json: string;
@@ -1602,6 +1604,7 @@ export interface WorkerSessionPlacementMoves {
   source_owner_epoch: number;
   target_id: string | null;
   target_kind: string;
+  target_machine_class: string | null;
   updated_at_ms: number;
 }
 

@@ -81,8 +81,10 @@ export function createApplicationOverlays(
     updateSchedule: null,
     heldUpdateCampaignId: null,
     updateRunning: false,
+    updateStatusRefreshing: false,
     updateReconciliationPending: false,
     updateStatusBanner: null,
+    recordedUpdateAttempt: null,
     controlUiRefreshRequired: false,
     approvalQueue: [],
     approvalBusy: false,
@@ -177,6 +179,12 @@ export function createApplicationOverlays(
     snapshot = { ...snapshot, updateStatusBanner };
     publish();
   };
+  const publishRecordedUpdateAttempt = (
+    recordedUpdateAttempt: ApplicationOverlaySnapshot["recordedUpdateAttempt"],
+  ) => {
+    snapshot = { ...snapshot, recordedUpdateAttempt };
+    publish();
+  };
   const heldCampaignId = (schedule: UpdateScheduleState | null) =>
     schedule?.campaign?.holdUntilMs !== undefined
       ? schedule.campaign.id
@@ -190,6 +198,13 @@ export function createApplicationOverlays(
     getHello: () => gateway.snapshot.hello,
     publish,
     publishBanner: publishUpdateBanner,
+    publishRecordedAttempt: publishRecordedUpdateAttempt,
+    publishRecordedFailure: ({ attempt, banner }) => {
+      // Both facts terminate the same reconciliation. Publishing either first
+      // exposes a false success or a failure without its recorded cause.
+      snapshot = { ...snapshot, recordedUpdateAttempt: attempt, updateStatusBanner: banner };
+      publish();
+    },
     onVerifiedInstall: announceVerifiedUpdateInstall,
   });
   const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
@@ -197,6 +212,7 @@ export function createApplicationOverlays(
       ...snapshot,
       ...projectUpdateStatusResponse(response, {
         updateStatusBanner: snapshot.updateStatusBanner,
+        recordedUpdateAttempt: snapshot.recordedUpdateAttempt,
         heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
       }),
     };
@@ -215,7 +231,17 @@ export function createApplicationOverlays(
     getEpoch: () => connectedEpoch,
     canRefresh: () => operatorAccess.canAdmin,
     isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
+    onRefreshing: (updateStatusRefreshing) => {
+      snapshot = { ...snapshot, updateStatusRefreshing };
+      publish();
+    },
     onStatus: applyUpdateStatusResponse,
+    onError: (error) => {
+      publishUpdateBanner({
+        tone: "danger",
+        text: t("updates.error", { error: formatUiError(error) }),
+      });
+    },
   });
 
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
@@ -250,7 +276,12 @@ export function createApplicationOverlays(
           ? resolveUnknownUpdateOutcomeBanner()
           : snapshot.updateStatusBanner;
         pendingUpdate = null;
-        snapshot = { ...snapshot, updateRunning: false, updateStatusBanner };
+        snapshot = {
+          ...snapshot,
+          updateRunning: false,
+          updateStatusRefreshing: false,
+          updateStatusBanner,
+        };
       }
     }
     if (accessTransition.pairingChanged) {
@@ -289,6 +320,7 @@ export function createApplicationOverlays(
         updateAvailable: null,
         updateSchedule: null,
         updateRunning: false,
+        updateStatusRefreshing: false,
       };
       updateCampaignPoller.stop();
       if (next.phase === "reload-required") {
@@ -438,7 +470,12 @@ export function createApplicationOverlays(
         return;
       }
       const generation = ++updateRunGeneration;
-      snapshot = { ...snapshot, updateRunning: true, updateStatusBanner: null };
+      snapshot = {
+        ...snapshot,
+        updateRunning: true,
+        updateStatusBanner: null,
+        recordedUpdateAttempt: null,
+      };
       publish();
       try {
         // updateRunning above suspends NEW config writes (bootstrap syncs it

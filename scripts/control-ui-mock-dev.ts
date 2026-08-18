@@ -75,6 +75,7 @@ const OBSERVER_DEMO_SESSION_KEY = "agent:main:session-observer-demo";
 const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 const PLAN_DEMO_RUN_ID = "mock-plan-run";
 const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
+const CHAT_SEND_REPLY_DELAY_MS = 200;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
@@ -956,6 +957,18 @@ function buildWorkboardMocks(baseTime: number) {
         tabs: [{ tabId: "main", title: "Workboard", position: 0, chatDock: "hidden" }],
         widgets: [
           {
+            name: "session-progress",
+            tabId: "main",
+            title: "Session progress",
+            contentKind: "plugin",
+            pluginKind: "session:progress",
+            sizeW: 6,
+            sizeH: 5,
+            position: 0,
+            grantState: "none",
+            revision: 1,
+          },
+          {
             name: "workboard-product-operations",
             tabId: "main",
             title: "Product Operations",
@@ -965,7 +978,7 @@ function buildWorkboardMocks(baseTime: number) {
             heightMode: "fixed",
             sizeW: 12,
             sizeH: 16,
-            position: 0,
+            position: 1,
             grantState: "none",
             revision: 1,
           },
@@ -975,6 +988,19 @@ function buildWorkboardMocks(baseTime: number) {
       "workboard.cards.list": { boards: [board], cards, statuses },
       "workboard.cards.stats": { ...board, byAgent: {} },
       "workboard.cards.move": { card: cards[0] },
+      "progressCard.get": {
+        card: {
+          sessionKey,
+          revision: 2,
+          updatedAt: baseTime,
+          markdown: "**Product launch** is moving through final checks.",
+          steps: [
+            { step: "Confirm release scope", status: "completed" },
+            { step: "Validate onboarding flow", status: "in_progress" },
+            { step: "Publish support handoff", status: "pending" },
+          ],
+        },
+      },
     },
   };
 }
@@ -1515,6 +1541,33 @@ async function createChatPickerScenario(
     swarmEnabled: fixture === "swarm",
     workboardEnabled: fixture === "workboard",
   });
+  const historyMessages = buildScrollableChatHistory(baseTime);
+  const planSessionInfo = {
+    activeRunIds: [PLAN_DEMO_RUN_ID],
+    hasActiveRun: true,
+    key: "agent:main:main",
+  };
+  const planInFlightRun = {
+    runId: PLAN_DEMO_RUN_ID,
+    text: "",
+    plan: {
+      explanation: "Keep the Control UI change focused",
+      steps: [
+        { step: "Inspect the transcript renderer", status: "completed" },
+        { step: "Confirm the plan event contract", status: "completed" },
+        { step: "Remove the duplicate card summary", status: "in_progress" },
+        { step: "Run focused UI tests", status: "pending" },
+        { step: "Capture browser proof", status: "pending" },
+      ],
+    },
+  };
+  const planChatHistory = {
+    messages: historyMessages,
+    sessionId: "control-ui-e2e-session",
+    sessionInfo: planSessionInfo,
+    inFlightRun: planInFlightRun,
+    thinkingLevel: null,
+  };
   const custodianHistory = {
     turns: [
       {
@@ -1580,6 +1633,7 @@ async function createChatPickerScenario(
       "openclaw.changes.list",
       "openclaw.chat",
       "openclaw.chat.history",
+      "progressCard.get",
       "sessions.delete",
       "sessions.diff",
       "sessions.files.set",
@@ -1605,33 +1659,33 @@ async function createChatPickerScenario(
           ]
         : []),
     ],
-    ...(fixture === "workboard"
-      ? {
-          controlUiWidgetKinds: [
+    controlUiTabs:
+      fixture === "workboard"
+        ? [
+            {
+              group: "control",
+              icon: "kanban",
+              id: "workboard",
+              label: "Workboard",
+              placement: "route:workboard",
+              pluginId: "workboard",
+            },
+          ]
+        : [],
+    controlUiWidgetKinds: [
+      { pluginId: "session", kind: "session:progress", label: "Session progress" },
+      ...(fixture === "workboard"
+        ? [
             { pluginId: "workboard", kind: "workboard:board", label: "Workboard board" },
             { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
             { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
-          ],
-        }
-      : {}),
+          ]
+        : []),
+    ],
     // Terminal has a second gate beyond the advertised method (see
     // ui/src/lib/terminal-availability.ts).
     terminalEnabled: true,
-    historyMessages: buildScrollableChatHistory(baseTime),
-    inFlightRun: {
-      runId: PLAN_DEMO_RUN_ID,
-      text: "",
-      plan: {
-        explanation: "Keep the Control UI change focused",
-        steps: [
-          { step: "Inspect the transcript renderer", status: "completed" },
-          { step: "Confirm the plan event contract", status: "completed" },
-          { step: "Remove the duplicate card summary", status: "in_progress" },
-          { step: "Run focused UI tests", status: "pending" },
-          { step: "Capture browser proof", status: "pending" },
-        ],
-      },
-    },
+    historyMessages,
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
     presenceUsers: [
@@ -1647,6 +1701,35 @@ async function createChatPickerScenario(
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
       ...cronMocks,
+      "chat.history": {
+        cases: [{ match: { sessionKey: "agent:main:main" }, response: planChatHistory }],
+      },
+      "chat.startup": {
+        cases: [
+          {
+            match: { sessionKey: "agent:main:main" },
+            response: {
+              ...planChatHistory,
+              agentsList: {
+                agents: [
+                  {
+                    id: "main",
+                    identity: { name: "Molty" },
+                    name: "Molty",
+                    workspace: "/Users/peter/Projects/openclaw",
+                    workspaceGit: true,
+                  },
+                ],
+                defaultId: "main",
+                mainKey: "main",
+                scope: "agent",
+              },
+              metadata: { models: modelProviders.models },
+            },
+          },
+        ],
+      },
+      "progressCard.get": { card: null },
       "users.self": { profile: selfProfile },
       // Talk settings page pickers: realtime catalog with the model/voice
       // suggestion lists the gateway emits for provider entries.
@@ -2359,6 +2442,82 @@ async function createChatPickerScenario(
           },
         ],
       },
+      // Saturated-main fixture so the debug page and overlay render queued and
+      // group-budget states, not just idle lanes.
+      "diagnostics.lanes": {
+        ts: baseTime,
+        lanes: [
+          {
+            lane: "cron",
+            queuedCount: 0,
+            activeCount: 1,
+            maxConcurrent: 4,
+            draining: false,
+            generation: 1,
+          },
+          {
+            lane: "cron-nested",
+            queuedCount: 0,
+            activeCount: 1,
+            maxConcurrent: 4,
+            draining: false,
+            generation: 1,
+            group: "cron-hooks",
+            groupActive: 2,
+            groupBudget: 4,
+          },
+          {
+            lane: "hook-dispatch",
+            queuedCount: 2,
+            activeCount: 1,
+            maxConcurrent: 4,
+            draining: false,
+            generation: 1,
+            group: "cron-hooks",
+            groupActive: 2,
+            groupBudget: 4,
+            reservedForLane: 1,
+            blockedBy: "group-budget",
+          },
+          {
+            lane: "main",
+            queuedCount: 3,
+            activeCount: 16,
+            maxConcurrent: 16,
+            draining: false,
+            generation: 7,
+            blockedBy: "lane",
+          },
+          {
+            lane: "nested",
+            queuedCount: 0,
+            activeCount: 0,
+            maxConcurrent: 1,
+            draining: false,
+            generation: 1,
+          },
+          {
+            lane: "subagent",
+            queuedCount: 5,
+            activeCount: 8,
+            maxConcurrent: 8,
+            draining: false,
+            generation: 4,
+            blockedBy: "lane",
+          },
+        ],
+        dynamic: {
+          laneCount: 23,
+          activeCount: 9,
+          queuedCount: 4,
+          queuedLaneCount: 3,
+        },
+      },
+      status: {
+        eventLoop: { utilization: 0.42, delayP99Ms: 12, delayMaxMs: 87 },
+        uptimeMs: 5_412_000,
+      },
+      "last-heartbeat": { ts: baseTime },
       "sessions.list": {
         cases: [
           // Child fetches must precede the catch-all page case (subset match).
@@ -2446,11 +2605,6 @@ async function createChatPickerScenario(
       ],
     },
     sessionArchiveFiltering: true,
-    sessionInfo: {
-      activeRunIds: [PLAN_DEMO_RUN_ID],
-      hasActiveRun: true,
-      key: "agent:main:main",
-    },
     sessionKey: fixture === "workboard" ? workboardMocks.sessionKey : "agent:main:main",
     workspace: "/Users/peter/Projects/openclaw",
     workspaceGit: true,
@@ -2461,10 +2615,14 @@ function escapeScriptContent(script: string): string {
   return script.replaceAll("</script", "<\\/script");
 }
 
-/** Adds the one stateful mock surface the generic scenario fixture cannot express. */
-function installControlUiCustodianMock(replyDelayMs: number): void {
+/** Adds the stateful mock surfaces the generic scenario fixture cannot express. */
+function installControlUiStatefulMocks(
+  custodianReplyDelayMs: number,
+  chatReplyDelayMs: number,
+): void {
   type MockGatewayControls = {
     deferNext: (method: string) => void;
+    emit: (event: string, payload: unknown) => void;
     resolveDeferred: (method: string, payload: unknown) => void;
   };
   type MockWindow = Window & {
@@ -2494,7 +2652,53 @@ function installControlUiCustodianMock(replyDelayMs: number): void {
         frame = null;
       }
     }
-    if (frame?.type !== "req" || frame.method !== "openclaw.chat") {
+    if (frame?.type !== "req") {
+      sendOriginal(this, data);
+      return;
+    }
+
+    if (frame.method === "chat.send") {
+      const params =
+        frame.params && typeof frame.params === "object"
+          ? (frame.params as {
+              idempotencyKey?: unknown;
+              message?: unknown;
+              sessionKey?: unknown;
+            })
+          : {};
+      const runId =
+        typeof params.idempotencyKey === "string" && params.idempotencyKey.trim()
+          ? params.idempotencyKey
+          : "control-ui-mock-run";
+      const sessionKey =
+        typeof params.sessionKey === "string" && params.sessionKey.trim()
+          ? params.sessionKey
+          : "agent:main:main";
+      const message = typeof params.message === "string" ? params.message.trim() : "";
+      gateway.deferNext("chat.send");
+      sendOriginal(this, data);
+      window.setTimeout(() => {
+        gateway.resolveDeferred("chat.send", { runId, status: "started" });
+        window.setTimeout(
+          () =>
+            gateway.emit("chat", {
+              message: {
+                content: [{ text: `Mock reply: ${message || "message received"}`, type: "text" }],
+                role: "assistant",
+                timestamp: Date.now(),
+              },
+              runId,
+              seq: 1,
+              sessionKey,
+              state: "final",
+            }),
+          0,
+        );
+      }, chatReplyDelayMs);
+      return;
+    }
+
+    if (frame.method !== "openclaw.chat") {
       sendOriginal(this, data);
       return;
     }
@@ -2560,18 +2764,18 @@ function installControlUiCustodianMock(replyDelayMs: number): void {
     sendOriginal(this, data);
     window.setTimeout(
       () => gateway.resolveDeferred("openclaw.chat", response),
-      message === undefined ? 0 : replyDelayMs,
+      message === undefined ? 0 : custodianReplyDelayMs,
     );
   };
 }
 
-function createCustodianMockInitScript(): string {
-  return `(() => { const __name = (target) => target; (${installControlUiCustodianMock.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}); })();`;
+function createStatefulMockInitScript(): string {
+  return `(() => { const __name = (target) => target; (${installControlUiStatefulMocks.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}, ${CHAT_SEND_REPLY_DELAY_MS}); })();`;
 }
 
 function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
-  const custodianInitScript = escapeScriptContent(createCustodianMockInitScript());
+  const statefulInitScript = escapeScriptContent(createStatefulMockInitScript());
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
   return {
     configureServer(server) {
@@ -2589,7 +2793,7 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${custodianInitScript}\n    </script>\n  </head>`,
+        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };

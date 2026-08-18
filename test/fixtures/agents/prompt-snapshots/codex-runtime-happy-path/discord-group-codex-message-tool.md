@@ -70,6 +70,7 @@
     "features.code_mode_only": false,
     "features.goals": false,
     "features.standalone_web_search": false,
+    "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
@@ -112,6 +113,7 @@
     "features.code_mode_only": false,
     "features.goals": false,
     "features.standalone_web_search": false,
+    "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -227,8 +229,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 56020,
-    "roughTokens": 14005
+    "chars": 56089,
+    "roughTokens": 14023
   },
   "openClawDeveloperInstructions": {
     "chars": 4479,
@@ -239,8 +241,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7216
   },
   "totalWithDynamicToolsJson": {
-    "chars": 84884,
-    "roughTokens": 21221
+    "chars": 84953,
+    "roughTokens": 21239
   },
   "userInputText": {
     "chars": 1300,

@@ -219,6 +219,13 @@ extension OnboardingAISetupModel {
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
     }
 
+    /// True when setup live-verified an already-configured route instead of
+    /// activating a new one. The custodian first-run handoff belongs only to
+    /// fresh activations; verified reopens land on the normal dashboard.
+    var verifiedExistingInference: Bool {
+        self.connected && self.selectedKind == "existing-model"
+    }
+
     /// Once setup starts changing inference, its successful result belongs to
     /// OpenClaw rather than the existing-Gateway onboarding bypass.
     var ownsInferenceTransition: Bool {

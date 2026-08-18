@@ -194,6 +194,67 @@ export async function pastePng(target: Locator, count = 1) {
   );
 }
 
+export async function waitForPersistedNewSessionDraft(
+  page: Page,
+  expectedText: string | null,
+  expectedAttachmentCount: number,
+): Promise<void> {
+  // Filling only proves DOM state. The durable read waits for the IndexedDB
+  // transaction so reload or navigation cannot beat the snapshot write.
+  await page.waitForFunction(
+    async ({ text, attachmentCount }) => {
+      try {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            context: {
+              gateway: {
+                connection: { gatewayUrl: string };
+                snapshot: { client: { recoveryScope?: string } | null };
+              };
+            };
+          };
+        };
+        const gateway = app.runtime?.context.gateway;
+        const recoveryScope = gateway?.snapshot.client?.recoveryScope;
+        if (!gateway || !recoveryScope) {
+          return false;
+        }
+        const storeUrl = performance
+          .getEntriesByType("resource")
+          .map((entry) => entry.name)
+          .find((name) => /\/composer-draft-store\.runtime-[^/]+\.js$/u.test(name));
+        if (!storeUrl) {
+          return false;
+        }
+        const draftStore = (await import(
+          /* @vite-ignore */ storeUrl
+        )) as typeof import("../lib/chat/composer-draft-store.runtime.ts");
+        const params = new URLSearchParams(window.location.search);
+        const result = await draftStore.readDurableComposerDraft({
+          gatewayOwner: gateway.connection.gatewayUrl.trim() || "default",
+          recoveryScope,
+          scopeKey: JSON.stringify([
+            params.get("agent")?.trim() ?? "",
+            params.get("catalog")?.trim() ?? "",
+            params.get("group")?.trim() ?? "",
+          ]),
+        });
+        if (text === null) {
+          return result.status === "not-found" && result.revision !== undefined;
+        }
+        return (
+          result.status === "found" &&
+          result.draft.text === text &&
+          result.draft.attachments.length === attachmentCount
+        );
+      } catch {
+        return false;
+      }
+    },
+    { text: expectedText, attachmentCount: expectedAttachmentCount },
+  );
+}
+
 export async function replaceGatewayClient(page: Page) {
   await page.evaluate(() => {
     const app = document.querySelector("openclaw-app") as HTMLElement & {

@@ -65,7 +65,7 @@ with the current memory provider.
 }
 ```
 
-Restart the Gateway after changing plugin config, then verify it loaded:
+Restart the Gateway after installation, then verify it loaded:
 
 ```bash
 openclaw gateway restart
@@ -81,8 +81,8 @@ defaults to `openai`; `model` defaults to `text-embedding-3-small`.
 | ---------------------- | ------------- | ------------------------------------------------------------------------ |
 | `embedding.provider`   | string        | Adapter id, e.g. `openai`, `github-copilot`, `ollama`. Default `openai`. |
 | `embedding.model`      | string        | Default `text-embedding-3-small`.                                        |
-| `embedding.apiKey`     | string        | Optional; supports `${ENV_VAR}` expansion.                               |
-| `embedding.baseUrl`    | string        | Optional; supports `${ENV_VAR}` expansion.                               |
+| `embedding.apiKey`     | string        | Optional; supports `${ENV_VAR}` expansion and live credential rotation.  |
+| `embedding.baseUrl`    | string        | Optional; supports `${ENV_VAR}` expansion and live endpoint rotation.    |
 | `embedding.dimensions` | integer (>=1) | Required for models not in the built-in table (see below).               |
 
 Two request paths exist:
@@ -97,6 +97,18 @@ Two request paths exist:
   (or `"openai"`) and set `embedding.apiKey` plus `embedding.baseUrl`. Use this
   for a raw OpenAI-compatible embeddings endpoint that has no bundled provider
   adapter.
+
+`embedding.apiKey` and `embedding.baseUrl` are re-read from live plugin config
+for the next memory operation, as long as `provider`, `model`, and `dimensions`
+remain unchanged.
+
+<Warning>
+`embedding.provider`, `embedding.model`, and `embedding.dimensions` define the
+persisted LanceDB index identity and do not change live. Before restarting with
+a new identity, plan a LanceDB re-embedding or rebuild so every stored row uses
+the new vector space and dimensions. The plugin does not re-embed existing rows
+automatically.
+</Warning>
 
 OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
 For OpenAI embeddings use an OpenAI API key auth profile, `OPENAI_API_KEY`, or
@@ -191,21 +203,23 @@ local server returns context-length errors.
 
 ## Recall and capture limits
 
-| Setting           | Default | Range                       | Applies to                                                 |
-| ----------------- | ------- | --------------------------- | ---------------------------------------------------------- |
-| `recallMaxChars`  | `1000`  | 100-10000                   | Text sent to the embedding API for recall.                 |
-| `captureMaxChars` | `500`   | 100-10000                   | Message length eligible for auto-capture.                  |
-| `customTriggers`  | `[]`    | 0-50 items, each ≤100 chars | Literal phrases that make auto-capture consider a message. |
+| Setting           | Default | Range                       | Applies to                                                        |
+| ----------------- | ------- | --------------------------- | ----------------------------------------------------------------- |
+| `recallMaxChars`  | `1000`  | 100-10000                   | Recall query length and each escaped model-visible recalled item. |
+| `captureMaxChars` | `500`   | 100-10000                   | `memory_store` input limit and auto-capture eligibility.          |
+| `customTriggers`  | `[]`    | 0-50 items, each ≤100 chars | Literal phrases that make auto-capture consider a message.        |
 
 `recallMaxChars` bounds the `before_prompt_build` auto-recall query, the
 `memory_recall` tool, the `memory_forget` query path, and `openclaw ltm search`.
 Auto-recall embeds the latest user message from the turn and falls back to the
 full prompt only when no user message is present, keeping channel metadata and
-large prompt blocks out of the embedding request.
+large prompt blocks out of the embedding request. It also bounds each recalled
+item after prompt escaping before that text reaches the model.
 
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
-event is short enough to be considered for auto-capture; it does not affect
-recall queries.
+event is short enough to be considered for auto-capture. `memory_store` rejects
+longer text before embedding or storage; the setting does not affect recall
+queries.
 
 `customTriggers` adds literal auto-capture phrases without regex. Built-in
 triggers cover common English, Czech, Chinese, Japanese, and Korean memory
@@ -341,7 +355,7 @@ The embedding model rejected the recall query:
 memory-lancedb: recall failed: Error: 400 the input length exceeds the context length
 ```
 
-Lower `recallMaxChars`, then restart the Gateway:
+Lower `recallMaxChars`; the new limit applies to the next memory operation:
 
 ```json5
 {

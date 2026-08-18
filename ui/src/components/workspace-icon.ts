@@ -30,7 +30,7 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
         this.requestUpdate();
       }
     },
-    { cacheNotFound: true },
+    { cacheNotFound: true, retryUnavailable: true },
   );
 
   override disconnectedCallback() {

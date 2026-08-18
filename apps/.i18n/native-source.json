@@ -3676,8 +3676,8 @@
       ]
     },
     {
-      "id": "native.android.4a28face60d58157",
-      "source": "Collapse plan checklist",
+      "id": "native.android.21dc666555b12fc1",
+      "source": "Collapse progress card",
       "surface": "android",
       "sites": [
         {
@@ -6432,8 +6432,8 @@
       ]
     },
     {
-      "id": "native.android.ea6215eb594513da",
-      "source": "Expand plan checklist",
+      "id": "native.android.9670906a534e5a6a",
+      "source": "Expand progress card",
       "surface": "android",
       "sites": [
         {
@@ -12591,6 +12591,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.44b8d8ffa2ef3c89",
+      "source": "Progress note",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
         }
       ]
     },
@@ -24455,7 +24466,7 @@
       "sites": [
         {
           "kind": "conditional-branch",
-          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatPlanPill.swift"
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatProgressCard.swift"
         }
       ]
     },
@@ -29103,7 +29114,7 @@
       "sites": [
         {
           "kind": "conditional-branch",
-          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatPlanPill.swift"
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatProgressCard.swift"
         }
       ]
     },

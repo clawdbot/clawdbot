@@ -26,6 +26,7 @@ import type {
 import { resolveMemoryFlushPlan } from "../plugins/memory-state.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
@@ -61,6 +62,7 @@ import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
+import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 import {
@@ -77,6 +79,7 @@ import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
+import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
 import {
   createCodingTools,
   createEditTool,
@@ -84,7 +87,7 @@ import {
   createWriteTool,
 } from "./sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
-import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
+import { resolveToolFsConfig } from "./tool-fs-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
@@ -252,6 +255,7 @@ type OpenClawCodingToolsOptions = {
   modelCompat?: ModelCompatConfig;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
   suppressManagedWebSearch?: boolean;
+  webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
   /**
    * Auth mode for the current provider. We only need this for Anthropic OAuth
@@ -501,21 +505,27 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
+  const execRuntimeConfig = options?.exec?.config ?? options?.config;
+  const preparedRunEnvironment =
+    execRuntimeConfig && agentId
+      ? prepareGitHubToolEnvironment({
+          config: execRuntimeConfig,
+          sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
+          agentId,
+        })
+      : undefined;
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const sessionPermissionPolicy = options?.sessionPermissionPolicy;
-  const fsPolicy = createToolFsPolicy({
-    workspaceOnly:
-      isMemoryFlushRun ||
-      (sessionPermissionPolicy ? sessionPermissionPolicy.mode !== "full" : fsConfig.workspaceOnly),
-    root: sessionPermissionPolicy?.root,
-  });
+  const sessionCoreToolPolicy = sessionPermissionPolicy
+    ? resolveSessionPermissionCoreToolPolicy(sessionPermissionPolicy)
+    : undefined;
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = capabilityProfile.workspace.workspaceRoot;
   const runtimeRoot = capabilityProfile.workspace.runtimeRoot;
   const codingRoot = sandboxRoot ?? runtimeRoot;
-  const containmentRoot = sandboxRoot ?? fsPolicy.root ?? codingRoot;
+  const containmentRoot = sandboxRoot ?? sessionPermissionPolicy?.root ?? codingRoot;
   const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
   // Flush exposes one append-only target; its fallback records inherited taint after success.
   const memoryWriteProvenance = isMemoryFlushRun
@@ -542,14 +552,19 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const includeOpenClawTools = includeCoreTools && toolConstructionPlan.includeOpenClawTools;
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
-  const workspaceOnly = fsPolicy.workspaceOnly;
-  const readOnly = sessionPermissionPolicy?.mode === "read-only";
+  const workspaceOnly =
+    isMemoryFlushRun || (sessionCoreToolPolicy?.workspaceOnly ?? fsConfig.workspaceOnly === true);
+  const fsPolicy = {
+    workspaceOnly,
+    ...(sessionPermissionPolicy ? { root: sessionPermissionPolicy.root } : {}),
+  };
+  const readOnly = sessionCoreToolPolicy?.readOnly ?? false;
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
-  const applyPatchWorkspaceOnly = sessionPermissionPolicy
-    ? sessionPermissionPolicy.mode !== "full"
-    : workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
+  const applyPatchWorkspaceOnly =
+    sessionCoreToolPolicy?.applyPatchWorkspaceOnly ??
+    (workspaceOnly || applyPatchConfig?.workspaceOnly !== false);
   const applyPatchEnabled =
     !readOnly &&
     applyPatchConfig?.enabled !== false &&
@@ -591,7 +606,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       mode: effectiveExecPolicy.mode,
       security: effectiveExecPolicy.security,
       ask: effectiveExecPolicy.ask,
-      config: options?.exec?.config ?? options?.config,
+      config: execRuntimeConfig,
+      preparedRunEnvironment,
       reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
       trigger: options?.trigger,
       node: options?.exec?.node ?? execConfig.node,
@@ -796,6 +812,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               : runtimeRoot,
             sandboxed: Boolean(sandbox),
             config: options?.config,
+            webFetchHostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
             webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,
             toolBindings: options?.toolBindings,

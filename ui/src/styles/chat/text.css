@@ -26,31 +26,54 @@
   word-break: break-word;
 }
 
+.chat-message-disclosure {
+  position: relative;
+}
+
+.chat-message-disclosure:not(.is-expanded) .chat-message-disclosure__content {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+}
+
 .chat-message-disclosure__toggle {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  margin-top: 8px;
-  padding: 4px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--secondary) 78%, transparent);
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
   color: var(--muted);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-  font-weight: 500;
-  line-height: 1.2;
   cursor: var(--cursor-action);
 }
 
+.chat-message-disclosure__toggle[hidden] {
+  display: none;
+}
+
 .chat-message-disclosure__toggle:hover {
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, currentColor 8%, transparent);
   color: var(--text);
 }
 
 .chat-message-disclosure__toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.chat-message-disclosure__toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-message-disclosure.has-overflow .chat-message-disclosure__content {
+  padding-right: 30px;
 }
 
 /* Exhausted full-message load: quiet inline error + manual retry. */
@@ -86,16 +109,23 @@
   outline-offset: 2px;
 }
 
-.chat-text :where(p, ul, ol, pre, blockquote, table, details) {
+.chat-text :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
   margin: 0;
 }
 
 /* Keep every adjacent top-level Markdown block on the same rhythm, including
    special blocks that otherwise read as part of the preceding block. */
 .chat-text
-  :where(p, ul, ol, pre, blockquote, table, details)
-  + :where(p, ul, ol, pre, blockquote, table, details) {
-  margin-top: 0.75em;
+  > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
+  + :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
+  margin-top: 1em;
+}
+
+.chat-text
+  :where(blockquote, details, li)
+  > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
+  + :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
+  margin-top: 0.5em;
 }
 
 /* Tables retain top margin even when first; the adjacent-block rule above gives
@@ -113,6 +143,126 @@
   font-size: 13px;
   display: block;
   overflow-x: auto;
+}
+
+.markdown-table {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 0.75em;
+  padding-top: 40px;
+}
+
+.markdown-table :where(table) {
+  margin-top: 0;
+  max-width: none;
+  overflow: visible;
+}
+
+.markdown-table :where(th, td) {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.markdown-table__viewport {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.markdown-table--can-scroll-right .markdown-table__viewport {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+}
+
+.markdown-table--can-scroll-left .markdown-table__viewport {
+  -webkit-mask-image: linear-gradient(to right, transparent, black 28px);
+  mask-image: linear-gradient(to right, transparent, black 28px);
+}
+
+.markdown-table--can-scroll-left.markdown-table--can-scroll-right .markdown-table__viewport {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 28px,
+    black calc(100% - 28px),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 28px,
+    black calc(100% - 28px),
+    transparent
+  );
+}
+
+.markdown-table__actions {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  display: flex;
+}
+
+.markdown-table__actions button,
+.markdown-table-dialog__close {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  place-items: center;
+}
+
+.markdown-table__actions button:hover,
+.markdown-table-dialog__close:hover {
+  color: var(--text);
+}
+
+.markdown-table__actions button:focus-visible,
+.markdown-table-dialog__close:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.markdown-table__actions svg,
+.markdown-table-dialog__close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.markdown-table-dialog {
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  padding: 48px 28px 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  overflow: auto;
+}
+
+.markdown-table-dialog::backdrop {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+}
+
+.markdown-table-dialog > table {
+  width: max-content;
+  min-width: max-content;
+  margin: 0;
+  max-width: none;
+  overflow: visible;
+}
+
+.markdown-table-dialog__close {
+  position: fixed;
+  top: 8px;
+  right: 8px;
 }
 
 .chat-text :where(th, td) {
@@ -166,8 +316,50 @@
   font-weight: 500;
 }
 
+.chat-thread .chat-bubble .chat-text :where(table) {
+  display: table;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border: 0;
+  border-collapse: collapse;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.chat-thread .chat-bubble .chat-text :where(table, thead, tbody, tr, th, td) {
+  background: transparent;
+}
+
+.chat-thread .chat-bubble .chat-text :where(th, td) {
+  padding-block: 12px;
+  border-right: 0;
+  border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
+  overflow-wrap: break-word;
+  white-space: normal;
+  word-break: normal;
+}
+
+.chat-thread .chat-bubble .chat-text :where(th:first-child, td:first-child) {
+  padding-inline-start: 0;
+}
+
+.chat-thread .chat-bubble .chat-text :where(th) {
+  border-bottom-color: var(--border-strong);
+  background: transparent;
+}
+
+.chat-thread .chat-bubble .chat-text :where(tbody tr) {
+  transition: none;
+}
+
+.chat-thread .chat-bubble .chat-text :where(tbody tr:nth-child(even), tbody tr:hover) {
+  background: transparent;
+}
+
 :is(.chat-text, .chat-thinking) {
-  --chat-markdown-indent: var(--space-7);
+  --chat-markdown-indent: var(--space-6);
   --chat-markdown-marker-gap: var(--space-2);
 }
 
@@ -175,13 +367,12 @@
   padding-inline-start: var(--chat-markdown-indent);
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)) {
-  margin-inline-start: var(--space-3);
-  padding-inline-start: calc(var(--chat-markdown-indent) - var(--space-3));
-}
-
 .chat-text :where(li + li) {
   margin-top: 0.4em;
+}
+
+.chat-text :where(li > ul, li > ol) {
+  margin-top: 0.2em;
 }
 
 /* Keep bullets, checkboxes, and numbers in one marker column while their text
@@ -192,6 +383,8 @@
 
 :is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
   list-style: none;
+  margin-inline-start: calc(-1 * var(--chat-markdown-indent));
+  padding-inline-start: calc(var(--space-4) + var(--chat-markdown-marker-gap));
 }
 
 :is(.chat-text, .chat-thinking) :where(ol > li)::marker {
@@ -204,18 +397,36 @@
 
 :is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item))::before {
   position: absolute;
-  inset-inline-end: calc(100% + var(--chat-markdown-marker-gap));
+  inset-inline-start: calc(-1 * var(--chat-markdown-indent));
   content: "•";
   inset-block-start: 0;
   inline-size: calc(var(--chat-markdown-indent) - var(--chat-markdown-marker-gap));
   text-align: end;
+  color: var(--muted);
+  font-size: calc(1em + 1px);
 }
 
-/* Authored disclosures align with list text but place their affordance at the
-   row edge; JSON code blocks retain their separate compact presentation. */
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)) {
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) details:not(.json-collapse)) {
+  width: calc(100% - var(--space-3));
+  margin-top: var(--space-3);
+  margin-inline-start: var(--space-3);
+}
+
+/* Authored disclosures are complete content surfaces; JSON code blocks retain
+   their separate compact presentation. */
 :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary) {
   position: relative;
-  padding-inline-end: var(--space-7);
+  min-height: var(--space-5);
+  padding-inline-start: var(--space-6);
   list-style: none;
   cursor: var(--cursor-action);
 }
@@ -225,11 +436,11 @@
   display: none;
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::after {
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::before {
   position: absolute;
   content: "";
   inset-block-start: calc((1lh - var(--space-4)) / 2);
-  inset-inline-end: 0;
+  inset-inline-start: 0;
   inline-size: var(--space-4);
   block-size: var(--space-4);
   background: var(--select-chevron) center / var(--space-4) no-repeat;
@@ -237,22 +448,29 @@
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary)::after {
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary)::before {
   transform: rotate(0deg);
 }
 
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
+  appearance: none;
   position: absolute;
   inset-block-start: calc((1lh - var(--space-4)) / 2);
-  inset-inline-end: calc(100% + var(--chat-markdown-marker-gap));
+  inset-inline-start: 0;
   inline-size: var(--space-4);
   block-size: var(--space-4);
   margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  opacity: 1;
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open]) {
-  padding-inline-start: calc(var(--chat-markdown-indent) - var(--space-3) - 1px);
-  border-inline-start: 1px solid var(--border);
+:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked) {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  background: color-mix(in srgb, var(--accent) 72%, var(--bg))
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
+    center / 13px no-repeat;
 }
 
 :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary) {
@@ -260,7 +478,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::after {
+  :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::before {
     transition: none;
   }
 }
@@ -273,6 +491,7 @@
 .chat-text :where(a) {
   color: var(--link);
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
 
@@ -493,17 +712,38 @@
 
 :is(.chat-text, .sidebar-markdown) .markdown-external-image {
   display: flex;
+  box-sizing: border-box;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.35em 0.75em;
-  width: fit-content;
+  width: 100%;
   max-width: 100%;
   margin-top: 0.75em;
-  padding: 0.5em 0.65em;
-  border: 1px dashed var(--border-strong);
+  padding: 0.7em 0.8em;
+  border: 0;
   border-radius: var(--radius-md);
   background: var(--bg-muted);
   color: var(--muted);
+}
+
+:is(.chat-text, .sidebar-markdown) .markdown-external-image > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--link);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+:is(.chat-text, .sidebar-markdown) .markdown-external-image > a:hover {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+  color: var(--link-hover);
+  text-decoration: none;
 }
 
 /* Code surfaces must lift off the host bubble in every theme. --secondary equals
@@ -540,6 +780,32 @@
   overflow: auto;
 }
 
+.chat-text :where(.code-block-wrapper pre) {
+  border: 0;
+  background: transparent;
+}
+
+.chat-group.assistant .chat-bubble:has(.code-block-wrapper),
+.chat-group.assistant .chat-text:has(.code-block-wrapper) {
+  width: 100%;
+}
+
+.chat-group.user .chat-text :where(pre) {
+  margin-block: 1em;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+  white-space: pre-wrap;
+}
+
+.chat-group.user .chat-text :where(pre code) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .chat-text :where(pre code) {
   background: none;
   padding: 0;
@@ -547,7 +813,8 @@
   white-space: pre;
 }
 
-.chat-text :where(pre code.markdown-block-art) {
+.chat-text :where(pre code.markdown-block-art),
+.chat-group.user .chat-text :where(pre code.markdown-block-art) {
   display: block;
   min-width: 100%;
   width: max-content;
@@ -563,33 +830,26 @@
 }
 
 .chat-text :where(blockquote) {
-  border-left: 2px solid var(--border-strong);
+  position: relative;
+  border-inline-start: 0;
   margin-left: 0;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.02);
+  background: transparent;
   padding: 8px 12px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.chat-text :where(blockquote)::before {
+  position: absolute;
+  content: "";
+  inset-block: 4px;
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
 }
 
 .chat-text :where(blockquote blockquote) {
   margin-top: 8px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.chat-text :where(blockquote blockquote blockquote) {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-:root[data-theme-mode="light"] .chat-text :where(blockquote) {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote) {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote blockquote) {
-  background: rgba(0, 0, 0, 0.04);
 }
 
 .chat-text :where(hr) {
@@ -607,8 +867,6 @@
 }
 
 .chat-text[dir="rtl"] :where(blockquote) {
-  border-left: none;
-  border-right: 3px solid var(--border);
   padding-left: 0;
   padding-right: 1em;
 }

@@ -20,7 +20,10 @@ import {
 } from "./dispatcher-workspace.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
 import { cardBoardId } from "./store-card-helpers.js";
-import { isWorkboardClaimReclaimable } from "./store-constants.js";
+import {
+  DEFAULT_WORKBOARD_DISPATCH_OWNER,
+  isWorkboardClaimReclaimable,
+} from "./store-constants.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -30,7 +33,6 @@ import {
 } from "./workspace-access.js";
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
-const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
 
 export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
 export type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
@@ -224,7 +226,7 @@ function resolveDispatchOwner(card: WorkboardCard, now: number, ownerOverride?: 
     ownerOverride ||
     (cardHasActiveClaim(card, now) ? card.metadata?.claim?.ownerId : undefined) ||
     card.agentId ||
-    DEFAULT_DISPATCH_OWNER
+    DEFAULT_WORKBOARD_DISPATCH_OWNER
   );
 }
 

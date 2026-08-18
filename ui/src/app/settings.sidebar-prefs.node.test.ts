@@ -97,12 +97,16 @@ describe("sidebar preference persistence", () => {
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
     const legacy = makeSettings(gwUrl) as unknown as Record<string, unknown>;
     delete legacy.sidebarEntries;
-    legacy.sidebarPinnedRoutes = ["usage", "tasks", "usage", "worktrees", 7];
+    legacy.sidebarPinnedRoutes = ["workboard", "usage", "tasks", "usage", "worktrees", 7];
     localStorage.setItem(scopedKey, JSON.stringify(legacy));
 
-    expect(loadSettings().sidebarEntries).toEqual(["route:usage", "route:tasks"]);
+    expect(loadSettings().sidebarEntries).toEqual([
+      "route:workboard",
+      "route:usage",
+      "route:tasks",
+    ]);
     const migrated = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>;
-    expect(migrated.sidebarEntries).toEqual(["route:usage", "route:tasks"]);
+    expect(migrated.sidebarEntries).toEqual(["route:workboard", "route:usage", "route:tasks"]);
     expect(migrated).not.toHaveProperty("sidebarPinnedRoutes");
   });
 });

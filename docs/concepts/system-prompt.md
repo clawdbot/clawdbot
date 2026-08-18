@@ -30,7 +30,7 @@ The built-in GPT-5-family prompt contribution (`resolveGpt5SystemPromptContribut
 
 The prompt is compact, with fixed sections:
 
-- **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance. When the `update_plan` tool is enabled (`tools.updatePlan`, on by default), its own tool description adds: use it only for non-trivial multi-step work, keep at most one step `in_progress`, and skip it for simple one-step work.
+- **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance. When `progress_card` is enabled (`tools.updatePlan`, on by default), its own description explains how to maintain one durable plan and status note, keep at most one step `in_progress`, and skip routine updates that do not change the picture.
 - **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing.
 - **Promised Work**: promising future, background, delegated, or continued work creates follow-through ownership: arrange a push-based completion or watch path before ending the turn, proactively return with the result or a concrete blocker, and never treat progress (like `running`) as completion.
 - **Safety**: short guardrail reminder against power-seeking behavior or bypassing oversight.

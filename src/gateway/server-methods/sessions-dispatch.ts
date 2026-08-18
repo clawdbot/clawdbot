@@ -191,15 +191,6 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       respondInvalidWorkerSession(respond, "cannot dispatch an archived session");
       return;
     }
-    // Worker-authority doctrine fences facts the current execution-context dialect cannot carry.
-    // Follow-up: worker execution-context versioning requires an owner decision.
-    if (entry.permissionMode !== undefined) {
-      respondInvalidWorkerSession(
-        respond,
-        "cloud worker dispatch cannot preserve permissionMode/sessionRoot; run this session locally, or use operator.admin sessions.patch to clear permissionMode",
-      );
-      return;
-    }
     const sessionRuntime = resolveWorkerPlacementSessionRuntime({
       cfg,
       entry,
@@ -211,6 +202,20 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       respondInvalidWorkerSession(
         respond,
         `runtime ${sessionRuntime} lacks cloud placement support`,
+      );
+      return;
+    }
+    if (
+      executionMode === "remote-exec" &&
+      (dispatchTarget.deviceId !== undefined ||
+        context.workerEnvironmentService?.supportsExecutionMode?.(
+          dispatchTarget.profileId,
+          executionMode,
+        ) !== true)
+    ) {
+      respondInvalidWorkerSession(
+        respond,
+        `runtime ${sessionRuntime} requires an SSH-backed cloud worker provider`,
       );
       return;
     }

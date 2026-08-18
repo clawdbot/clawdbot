@@ -16,7 +16,7 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   getReplyPayloadMetadata,
-  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -245,9 +245,7 @@ export function resolveFollowupDeliveryDecision(params: {
       }));
   const hasTerminalPayload = payloads.some(
     (payload) =>
-      payload.isReasoning !== true &&
-      payload.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(payload) &&
+      isReplyPayloadTerminalContent(payload) &&
       (sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
@@ -336,8 +334,14 @@ async function sendFollowupPayloads(params: {
     mode: defaults.typingMode,
     isHeartbeat: defaults.opts?.isHeartbeat === true,
   });
-  let crossChannelFailure = false;
+  const crossChannelFailures: ReplyPayload[] = [];
   let deliveredCrossChannelOrigin = false;
+  const provider = resolveOriginMessageProvider({
+    provider: turn.queued.run.messageProvider,
+  });
+  const origin = resolveOriginMessageProvider({ originatingChannel });
+  const sameChannelOrigin = Boolean(origin && origin === provider);
+  const crossChannelOrigin = Boolean(origin && provider && origin !== provider);
   for (const payload of payloads) {
     const providerRoute = deliveryPlan.resolveFollowupRoute({
       payload,
@@ -385,14 +389,10 @@ async function sendFollowupPayloads(params: {
       if (!result.delivered && !result.suppressed) {
         const routeError = result.error ?? "no visible delivery";
         logVerbose(`followup queue: route-reply failed: ${routeError}`);
-        const provider = resolveOriginMessageProvider({
-          provider: turn.queued.run.messageProvider,
-        });
-        const origin = resolveOriginMessageProvider({ originatingChannel });
-        if (origin && origin === provider && defaults.opts?.onBlockReply) {
+        if (sameChannelOrigin && defaults.opts?.onBlockReply) {
           await defaults.opts.onBlockReply(payload);
         } else if (defaults.opts?.onBlockReply) {
-          crossChannelFailure = true;
+          crossChannelFailures.push(payload);
         } else {
           defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
         }
@@ -404,15 +404,17 @@ async function sendFollowupPayloads(params: {
             }`,
           );
         }
-        const provider = resolveOriginMessageProvider({
-          provider: turn.queued.run.messageProvider,
-        });
-        const origin = resolveOriginMessageProvider({ originatingChannel });
-        deliveredCrossChannelOrigin ||= Boolean(origin && provider && origin !== provider);
+        deliveredCrossChannelOrigin ||= crossChannelOrigin;
       }
     }
   }
-  if (crossChannelFailure && !deliveredCrossChannelOrigin && defaults.opts?.onBlockReply) {
+  // A delivered supplement cannot settle missing terminal content, while a
+  // delivered terminal reply does settle failures of later supplements.
+  const terminalFailure = crossChannelFailures.some(isReplyPayloadTerminalContent);
+  if (
+    (terminalFailure || (crossChannelFailures.length > 0 && !deliveredCrossChannelOrigin)) &&
+    defaults.opts?.onBlockReply
+  ) {
     await defaults.opts.onBlockReply({
       text:
         "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +

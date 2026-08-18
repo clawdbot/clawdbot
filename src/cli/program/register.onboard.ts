@@ -244,7 +244,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
-    .option("--suppress-gateway-token-output", "Suppress token-bearing Gateway/UI output")
+    .option("--suppress-gateway-token-output", "Disable the guided Control UI handoff")
     .option("--skip-hooks", "Skip hook setup")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--import-from <provider>", "Migration provider to run during onboarding")

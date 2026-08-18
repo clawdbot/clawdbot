@@ -12,12 +12,17 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
 import {
+  buildAgentRunTerminalOutcome,
+  classifyAgentRunTerminalOutcome,
+} from "../agents/agent-run-terminal-outcome.js";
+import {
   AgentSelectionRequiredError,
   listAgentIds,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
 import { measureAgentStartup } from "../agents/startup-timing.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
+import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -924,18 +929,28 @@ function isInFlightGatewayAgentResponse(response: GatewayAgentResponse): boolean
   return response.status === "in_flight";
 }
 
-function markFailedGatewayAgentResponse(
-  response: GatewayAgentResponse,
+function markAgentRunExitCode(
+  status: unknown,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ): void {
-  if (
-    response.status === "timeout" ||
-    response.status === "error" ||
-    response.status === "cancelled"
-  ) {
-    // Let Node drain structured or text stdout before the process exits.
-    signalBridge.setExitCode(1);
+  // Gateway responses carry an open `status` string, so an unrecognized value must
+  // not read as success: only the known success words map to exit 0, and any other
+  // reported status fails closed. An absent status stays unmapped because callers
+  // that never observed a terminal state have nothing to report.
+  const waitStatus =
+    status === "ok" || status === "completed"
+      ? "ok"
+      : status === "timeout"
+        ? "timeout"
+        : status === undefined || status === null || status === ""
+          ? undefined
+          : "error";
+  if (!waitStatus) {
+    return;
   }
+  const outcome = buildAgentRunTerminalOutcome({ status: waitStatus });
+  // Let Node drain structured or text stdout before the process exits.
+  signalBridge.setExitCode(classifyAgentRunTerminalOutcome(outcome) === "success" ? 0 : 1);
 }
 
 function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): string {
@@ -1158,7 +1173,7 @@ async function agentViaGatewayCommand(
 
   if (opts.json) {
     writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
-    markFailedGatewayAgentResponse(response, signalBridge);
+    markAgentRunExitCode(response.status, signalBridge);
     return response;
   }
 
@@ -1174,7 +1189,7 @@ async function agentViaGatewayCommand(
     if (response?.status !== "ok") {
       runtime.log(response?.summary ? response.summary : "No reply from agent.");
     }
-    markFailedGatewayAgentResponse(response, signalBridge);
+    markAgentRunExitCode(response.status, signalBridge);
     return response;
   }
 
@@ -1185,7 +1200,7 @@ async function agentViaGatewayCommand(
     }
   }
 
-  markFailedGatewayAgentResponse(response, signalBridge);
+  markAgentRunExitCode(response.status, signalBridge);
 
   return response;
 }
@@ -1268,6 +1283,7 @@ export async function agentCliCommand(
       } finally {
         await stateLock?.release();
       }
+      markAgentRunExitCode(readAgentRunTerminalOutcome(result), signalBridge);
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     }
 

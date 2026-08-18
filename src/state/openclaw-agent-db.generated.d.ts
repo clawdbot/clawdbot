@@ -279,6 +279,15 @@ export interface SessionParticipants {
   session_key: string;
 }
 
+export interface SessionProgressCards {
+  created_at: number;
+  markdown: string | null;
+  revision: number;
+  session_key: string;
+  steps_json: string | null;
+  updated_at: number;
+}
+
 export interface SessionSuggestions {
   author_id: string;
   author_label: string | null;
@@ -492,6 +501,7 @@ export interface DB {
   session_members: SessionMembers;
   session_nodes: SessionNodes;
   session_participants: SessionParticipants;
+  session_progress_cards: SessionProgressCards;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_archives: SessionTranscriptArchives;

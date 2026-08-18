@@ -167,6 +167,64 @@ describe("chat pane placement", () => {
     expect(refreshReplacement).toHaveBeenCalledWith("main");
   });
 
+  it("moves an active placement to a selected profile machine", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return {
+          profiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              machines: [
+                { id: "standard", label: "Standard", default: true },
+                { id: "beast", label: "Beast" },
+              ],
+            },
+          ],
+          environments: [],
+        };
+      }
+      if (method === "node.list") {
+        return { nodes: [] };
+      }
+      return { ok: true };
+    });
+    const refreshReplacement = vi.fn(async () => undefined);
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { refreshReplacement } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as never;
+    const session = activePlacementSession();
+
+    const moving = pane.moveHeaderPlacement(session);
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
+    });
+    document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')?.click();
+    document.body.querySelector<HTMLButtonElement>('[data-value="machine:beast"]')?.click();
+    const moveButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Move session",
+    );
+    moveButton?.click();
+    await moving;
+
+    expect(request).toHaveBeenCalledWith("sessions.move", {
+      key: session.key,
+      agentId: "main",
+      expected: {
+        generation: 1,
+        environmentId: "worker:one",
+        ownerEpoch: 1,
+      },
+      target: { kind: "profile", profileId: "aws", machineClass: "beast" },
+    });
+    expect(refreshReplacement).toHaveBeenCalledWith("main");
+  });
+
   it("does not reclaim when the operator cancels", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane } = createTestChatPane({

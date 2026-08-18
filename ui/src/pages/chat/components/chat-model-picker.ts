@@ -15,8 +15,7 @@ import { syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
-  onRetry?: () => void;
-  status: "idle" | "loading" | "refreshing" | "ready" | "error";
+  status: "idle" | "loading" | "refreshing" | "ready" | "error" | "offline";
 };
 
 type ChatModelPickerParams = {
@@ -104,6 +103,7 @@ function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElemen
 
 function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
   const model = row.dataset.chatModelName ?? "";
+  const keywords = row.dataset.chatModelKeywords ?? "";
   const provider = row.dataset.chatModelProviderLabel ?? "";
   if (model.startsWith(query)) {
     return 0;
@@ -111,10 +111,13 @@ function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
   if (model.includes(query)) {
     return 1;
   }
-  if (provider.startsWith(query)) {
+  if (keywords.includes(query)) {
     return 2;
   }
-  return provider.includes(query) ? 3 : null;
+  if (provider.startsWith(query)) {
+    return 3;
+  }
+  return provider.includes(query) ? 4 : null;
 }
 
 function updateModelSearch(input: HTMLInputElement): void {
@@ -230,16 +233,21 @@ function renderCatalogState(
   if (!state || (state.status === "ready" && hasSelectableOptions)) {
     return nothing;
   }
+  if (state.status === "error" && hasOptions) {
+    return nothing;
+  }
   const label =
-    state.status === "refreshing"
-      ? t("chat.modelControls.refreshingModels")
-      : state.status === "error"
-        ? state.hasSnapshot
-          ? t("chat.modelControls.modelsRefreshFailed")
-          : t("chat.modelControls.modelsUnavailable")
-        : state.status === "ready"
-          ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-          : t("chat.modelControls.loadingModels");
+    state.status === "offline"
+      ? t("common.offline")
+      : state.status === "refreshing"
+        ? t("chat.modelControls.refreshingModels")
+        : state.status === "error"
+          ? t("chat.modelControls.modelsUnavailable")
+          : state.status === "ready"
+            ? hasOptions
+              ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+              : t("chat.modelControls.noModelsAvailable")
+            : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${hasOptions
@@ -252,26 +260,10 @@ function renderCatalogState(
         ${state.status === "error" ? icons.alertTriangle : nothing}
         <span>${label}</span>
       </span>
-      ${state.status === "error" && state.onRetry
-        ? html`
-            <button
-              class="chat-controls__model-catalog-retry"
-              data-chat-model-catalog-retry="true"
-              type="button"
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                state.onRetry?.();
-              }}
-            >
-              ${icons.refresh}
-              <span>${t("common.retry")}</span>
-            </button>
-          `
-        : nothing}
       ${state.status === "ready" && !hasSelectableOptions && onModelSetup
         ? html`
             <button
-              class="chat-controls__model-catalog-retry"
+              class="chat-controls__model-catalog-action"
               data-chat-model-setup="true"
               type="button"
               @click=${(event: MouseEvent) => {
@@ -548,44 +540,38 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       >
                         ${t("chat.modelControls.noMatchingModels")}
                       </div>
-                      ${params.modelOptions.length > 0
+                      ${params.modelOptions.length > 0 && params.selectedModelValue !== ""
                         ? html`<footer class="chat-controls__model-provenance">
-                            ${params.selectedModelValue === ""
-                              ? html`<span class="chat-controls__model-provenance-value--inherit">
-                                  ${t("chat.modelControls.usingDefault")}
-                                </span>`
-                              : html`
-                                  <span>${t("chat.modelControls.sessionOverride")}</span>
-                                  <openclaw-tooltip
-                                    .content=${t("chat.modelControls.resetToDefault", {
-                                      model: params.defaultModelLabel,
-                                    })}
-                                  >
-                                    <button
-                                      class="chat-controls__model-reset"
-                                      data-chat-model-reset="true"
-                                      type="button"
-                                      ?disabled=${params.disabled}
-                                      @click=${(event: MouseEvent) => {
-                                        event.stopPropagation();
-                                        if (params.disabled) {
-                                          event.preventDefault();
-                                          return;
-                                        }
-                                        commitModel("");
-                                        const details = (
-                                          event.currentTarget as HTMLElement
-                                        ).closest<HTMLDetailsElement>("details");
-                                        if (details) {
-                                          details.open = false;
-                                          details.querySelector<HTMLElement>("summary")?.focus();
-                                        }
-                                      }}
-                                    >
-                                      ${t("chat.modelControls.useDefault")}
-                                    </button>
-                                  </openclaw-tooltip>
-                                `}
+                            <span>${t("chat.modelControls.sessionOverride")}</span>
+                            <openclaw-tooltip
+                              .content=${t("chat.modelControls.resetToDefault", {
+                                model: params.defaultModelLabel,
+                              })}
+                            >
+                              <button
+                                class="chat-controls__model-reset"
+                                data-chat-model-reset="true"
+                                type="button"
+                                ?disabled=${params.disabled}
+                                @click=${(event: MouseEvent) => {
+                                  event.stopPropagation();
+                                  if (params.disabled) {
+                                    event.preventDefault();
+                                    return;
+                                  }
+                                  commitModel("");
+                                  const details = (
+                                    event.currentTarget as HTMLElement
+                                  ).closest<HTMLDetailsElement>("details");
+                                  if (details) {
+                                    details.open = false;
+                                    details.querySelector<HTMLElement>("summary")?.focus();
+                                  }
+                                }}
+                              >
+                                ${t("chat.modelControls.useDefault")}
+                              </button>
+                            </openclaw-tooltip>
                           </footer>`
                         : nothing}
                     `

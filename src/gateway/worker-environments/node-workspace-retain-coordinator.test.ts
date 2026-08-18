@@ -41,6 +41,8 @@ function environment(overrides: Record<string, unknown> = {}) {
     profileId: "device:node-1",
     profileSnapshot: { install: "bundle", settings: { device: "node-1" } },
     provisionOperationId: "provision-1",
+    nodeSetupId: null,
+    nodeDeviceId: "node-1",
     sharedHost: true,
     desktop: null,
     bootstrapReceipt: null,
@@ -156,6 +158,7 @@ describe("node workspace retain coordinator", () => {
         environment(),
         environment({
           environmentId: "environment-other",
+          nodeDeviceId: "node-other",
           profileSnapshot: { settings: { device: "node-other" } },
         }),
         environment({ environmentId: "environment-terminal", state: "orphaned" }),

@@ -207,7 +207,7 @@ describe("cron show pagination guard (regression for #83856)", () => {
     );
   });
 
-  it("returns empty result when pagination terminates without a match", async () => {
+  it("uses the canonical lookup miss when pagination terminates without a match", async () => {
     mockCronShowPages(() => ({
       jobs: [],
       snapshotRevision: "test-empty-cron-inventory",
@@ -219,7 +219,9 @@ describe("cron show pagination guard (regression for #83856)", () => {
     }));
     await expect(runCronShow("missing")).rejects.toThrow("exit 1");
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("automation not found: missing"),
+      expect.stringContaining(
+        "Automation not found: missing. Run `openclaw cron list` to see recent automation ids.",
+      ),
     );
   });
 });

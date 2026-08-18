@@ -1157,12 +1157,10 @@ function runConcurrentSchemaProbe(params: {
     const coordinatorContracts =
       mode === "fresh"
         ? await Promise.all([
-            import(new URL("../config/paths.ts", moduleUrl).href),
             import(new URL("../infra/boundary-path.ts", moduleUrl).href),
             import(new URL("../infra/crypto-digest.ts", moduleUrl).href),
             import(new URL("../infra/sqlite-coordinator.ts", moduleUrl).href),
             import(new URL("./openclaw-state-db-contract.ts", moduleUrl).href),
-            import(new URL("./openclaw-state-db.paths.ts", moduleUrl).href),
           ])
         : undefined;
 
@@ -1226,18 +1224,20 @@ function runConcurrentSchemaProbe(params: {
         throw new Error("fresh initialization coordinator contracts are unavailable");
       }
       const [
-        { resolveGatewayLockDir },
         { resolvePathViaExistingAncestorSync },
         { sha256HexPrefixCore },
         { ensurePrivateSqliteCoordinatorDirectory },
         { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
-        { resolveOpenClawStateDirForDatabasePath },
       ] = coordinatorContracts;
       const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-      const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
+      const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync("/tmp");
+      const suffix = typeof process.getuid === "function"
+        ? \`openclaw-state-locks-\${process.getuid()}\`
+        : "openclaw-state-locks";
       const coordinatorPath = path.join(
-        resolveGatewayLockDir(stateDir),
-        \`state-ownership.\${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite\`,
+        canonicalRuntimeDirectory,
+        suffix,
+        \`state-lifecycle.\${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite\`,
       );
       ensurePrivateSqliteCoordinatorDirectory(
         path.dirname(coordinatorPath),
@@ -4442,6 +4442,48 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       "terminal_reason",
       "terminal_at_ms",
     ]);
+  });
+
+  it("keeps placement-owned target machine class absent during generic repair and open", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      "  -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the\n" +
+        "  -- same shape as fresh databases; placement-move code validates its value.\n" +
+        "  target_machine_class TEXT,\n",
+      "",
+    );
+    const tableStart = previousSchema.indexOf(
+      "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
+    );
+    const tableEnd = previousSchema.indexOf("\n) STRICT;", tableStart);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP TABLE worker_session_placement_moves;
+      ${previousSchema.slice(tableStart, tableEnd + "\n) STRICT;".length)}
+    `);
+    legacyDb.close();
+
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
+    const repairedDb = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const repairedColumns = repairedDb
+        .prepare("PRAGMA table_info(worker_session_placement_moves)")
+        .all() as Array<{ name?: string }>;
+      expect(repairedColumns.map((column) => column.name)).not.toContain("target_machine_class");
+    } finally {
+      repairedDb.close();
+    }
+
+    const reopened = openOpenClawStateDatabase(options);
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(worker_session_placement_moves)")
+      .all() as Array<{ name?: string }>;
+
+    expect(columns.map((column) => column.name)).not.toContain("target_machine_class");
   });
 
   it("adds staged worker-result refs during the v5 state migration", () => {

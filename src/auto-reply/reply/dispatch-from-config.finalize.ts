@@ -7,7 +7,7 @@ import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
-  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -123,11 +123,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-    const shouldAttachDeferredText =
-      deferFinalTtsText &&
-      reply.isReasoning !== true &&
-      reply.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(reply);
+    const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
     const finalReply = await state.sendFinalPayload(reply, {
       deliveryId: String(replyIndex),
       ...(shouldAttachDeferredText

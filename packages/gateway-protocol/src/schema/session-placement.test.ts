@@ -364,7 +364,7 @@ describe("session dispatch protocol schemas", () => {
 
   it.each([
     { kind: "gateway" },
-    { kind: "profile", profileId: "development" },
+    { kind: "profile", profileId: "development", machineClass: "beast" },
     { kind: "device", deviceId: "device-1" },
   ] as const)("accepts the closed $kind move target", (target) => {
     expect(
@@ -384,9 +384,18 @@ describe("session dispatch protocol schemas", () => {
       validateSessionsMoveParams({
         key: "agent:main:dispatch",
         expected: { generation: 4, environmentId: accepted, ownerEpoch: 7 },
-        target: { kind: "profile", profileId: accepted },
+        target: { kind: "profile", profileId: accepted, machineClass: "x".repeat(128) },
       }),
     ).toBe(true);
+    for (const machineClass of ["", "x".repeat(129)]) {
+      expect(
+        validateSessionsMoveParams({
+          key: "agent:main:dispatch",
+          expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+          target: { kind: "profile", profileId: "development", machineClass },
+        }),
+      ).toBe(false);
+    }
     for (const value of [rejected, " leading", "trailing "]) {
       expect(
         validateSessionsMoveParams({
@@ -407,9 +416,11 @@ describe("session dispatch protocol schemas", () => {
 
   it.each([
     { kind: "gateway", profileId: "development" },
+    { kind: "gateway", machineClass: "beast" },
     { kind: "profile" },
     { kind: "profile", profileId: "development", deviceId: "device-1" },
     { kind: "device" },
+    { kind: "device", deviceId: "device-1", machineClass: "beast" },
     { kind: "other" },
   ])("rejects an invalid or mixed move target %#", (target) => {
     expect(

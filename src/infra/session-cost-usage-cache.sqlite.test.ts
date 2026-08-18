@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -31,12 +31,46 @@ function countRegisteredAgentDatabases(): number {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
 });
 
 describe("session cost usage SQLite cache", () => {
+  it("removes a persisted refresh lock owned by a Linux zombie", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-zombie-lock-");
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const agentId = "worker-1";
+      const zombiePid = 4242;
+      const database = openOpenClawAgentDatabase({ agentId });
+      database.db
+        .prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
+        )
+        .run(
+          "session-cost-usage",
+          "refresh-lock",
+          JSON.stringify({ pid: zombiePid, startedAt: 1, ownerNonce: "zombie-owner" }),
+          1,
+        );
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(fs, "readFileSync").mockImplementation((filePath) => {
+        expect(String(filePath)).toBe(`/proc/${zombiePid}/status`);
+        return `Name:\tworker\nState:\tZ (zombie)\nPid:\t${zombiePid}\n`;
+      });
+
+      expect(isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
+      expect(
+        database.db
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+          .get("session-cost-usage", "refresh-lock"),
+      ).toBeUndefined();
+    });
+  });
+
   it("returns empty values without creating a missing agent database", () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-missing-");
 

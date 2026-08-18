@@ -428,7 +428,7 @@ describe("session sharing handlers", () => {
               totalCount: number;
               nextOffset: number | null;
               hasMore: boolean;
-              creators: Array<{ id: string }>;
+              creators: Array<{ type: "human" | "agent"; id: string }>;
               sessions: Array<{ key: string }>;
             }
           | undefined;
@@ -506,7 +506,7 @@ describe("session sharing handlers", () => {
         limitApplied: 1,
         nextOffset: null,
         hasMore: false,
-        creators: [{ id: "visible-owner@example.com" }],
+        creators: [],
         sessions: [{ key: visibleKey }],
       });
     });

@@ -19,6 +19,11 @@ import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/ex
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import {
+  redeemAgentRuntimeExecutionLineageHandoff,
+  withAgentRuntimeExecutionLineageRedemption,
+} from "./agent-runtime-execution-lineage.js";
+import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
@@ -63,14 +68,7 @@ export type AgentRuntimeDelegatedAuthority = AgentRunDelegatedAuthority &
       }
   );
 
-export type AgentRuntimeSessionSpawnContext = {
-  completionOwnerSessionKey?: string;
-  inheritedToolPolicy: {
-    version: 1;
-    allow: string[];
-    deny: string[];
-  };
-};
+export type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 
 type AgentRuntimeIdentityTokenPayload = {
   kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND;
@@ -90,6 +88,7 @@ type AgentRuntimeIdentityTokenPayload = {
   cronToolsAllowCapture?: "final-executable-surface";
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  executionLineageHandoffId?: string;
 };
 
 const normalizedRequiredStringSchema = z
@@ -223,6 +222,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
   cronToolsAllowCapture: z.literal("final-executable-surface").optional(),
   cronCreatorAuthorityGrant: cronCreatorAuthorityGrantSchema.optional(),
   sessionSpawnContext: sessionSpawnContextSchema.optional(),
+  executionLineageHandoffId: normalizedRequiredStringSchema.optional(),
 });
 
 function decodeDelegatedAuthority(
@@ -359,6 +359,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       return undefined;
     }
     const sessionSpawnContext = raw.sessionSpawnContext;
+    const executionLineageHandoffId = raw.executionLineageHandoffId;
     const cronToolsAllowCapture = raw.cronToolsAllowCapture;
     const cronCreatorAuthorityGrant = raw.cronCreatorAuthorityGrant;
     if (cronCreatorAuthorityGrant && !cronToolsAllowCapture) {
@@ -390,6 +391,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(messageActionContext ? { messageActionContext } : {}),
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+      ...(executionLineageHandoffId ? { executionLineageHandoffId } : {}),
       ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
       ...(executionIdentity ? { executionIdentity } : {}),
@@ -415,6 +417,7 @@ export type AgentRuntimeIdentityTokenParams = {
   cronToolsAllowCapture?: "final-executable-surface";
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  executionLineageHandoffId?: string;
   workerTurnClaim?: WorkerSessionTurnClaim;
 };
 
@@ -423,6 +426,17 @@ function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTok
   const operationalRunId = normalizeOptionalString(params.operationalRunInstance.runId);
   if (!operationalInstanceId || !operationalRunId) {
     throw new Error("agent runtime identity requires an operational run instance");
+  }
+  const parsedSessionSpawnContext = params.sessionSpawnContext
+    ? sessionSpawnContextSchema.safeParse(params.sessionSpawnContext)
+    : undefined;
+  if (parsedSessionSpawnContext && !parsedSessionSpawnContext.success) {
+    throw new Error("agent runtime session spawn context violates its bounded contract");
+  }
+  const sessionSpawnContext = parsedSessionSpawnContext?.data;
+  const executionLineageHandoffId = normalizeOptionalString(params.executionLineageHandoffId);
+  if (executionLineageHandoffId && (sessionSpawnContext || params.executionIdentityToken)) {
+    throw new Error("execution lineage handoff cannot duplicate private spawn facts");
   }
   const activeAuthority = getActiveAgentRunDelegatedAuthority({
     instanceId: operationalInstanceId,
@@ -506,7 +520,8 @@ function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTok
     ...(params.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: params.cronCreatorAuthorityGrant }
       : {}),
-    ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
+    ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+    ...(executionLineageHandoffId ? { executionLineageHandoffId } : {}),
     ...(params.executionIdentityToken?.runId === operationalRunId
       ? { executionIdentity: params.executionIdentityToken }
       : {}),
@@ -551,7 +566,19 @@ export async function verifyAgentRuntimeIdentityToken(
   if (!payload) {
     return undefined;
   }
-  return {
+  const handoff = payload.executionLineageHandoffId
+    ? redeemAgentRuntimeExecutionLineageHandoff({
+        id: payload.executionLineageHandoffId,
+        agentId: payload.agentId,
+        sessionKey: payload.sessionKey,
+        operationalRunInstance: payload.operationalRunInstance,
+        delegatedAuthority: payload.delegatedAuthority,
+      })
+    : undefined;
+  if (payload.executionLineageHandoffId && !handoff) {
+    return undefined;
+  }
+  const identity: AgentRuntimeIdentity = {
     kind: "agentRuntime",
     agentId: payload.agentId,
     sessionKey: payload.sessionKey,
@@ -560,7 +587,11 @@ export async function verifyAgentRuntimeIdentityToken(
     ...(payload.approvalOwnerPluginId
       ? { approvalOwnerPluginId: payload.approvalOwnerPluginId }
       : {}),
-    ...(payload.executionIdentity ? { executionIdentity: payload.executionIdentity } : {}),
+    ...(handoff?.executionIdentity
+      ? { executionIdentity: handoff.executionIdentity }
+      : payload.executionIdentity
+        ? { executionIdentity: payload.executionIdentity }
+        : {}),
     ...(payload.turnSourceChannel ? { turnSourceChannel: payload.turnSourceChannel } : {}),
     ...(payload.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
     ...(payload.turnSourceTo ? { turnSourceTo: payload.turnSourceTo } : {}),
@@ -578,8 +609,15 @@ export async function verifyAgentRuntimeIdentityToken(
     ...(payload.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
       : {}),
-    ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
+    ...(handoff?.sessionSpawnContext
+      ? { sessionSpawnContext: handoff.sessionSpawnContext }
+      : payload.sessionSpawnContext
+        ? { sessionSpawnContext: payload.sessionSpawnContext }
+        : {}),
   };
+  return handoff
+    ? withAgentRuntimeExecutionLineageRedemption(identity, handoff.redemption)
+    : identity;
 }
 
 export type AgentRuntimeApprovalAuthorityValidator = (identity: AgentRuntimeIdentity) => boolean;

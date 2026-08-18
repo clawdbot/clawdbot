@@ -6,7 +6,10 @@ export class NewSessionAttachmentDraft {
   attachments: ChatAttachment[] = [];
   private readonly reads: ChatAttachmentReadLifecycle;
 
-  constructor(private readonly notify: () => void) {
+  constructor(
+    private readonly notify: () => void,
+    private readonly onUserChange: () => void,
+  ) {
     this.reads = new ChatAttachmentReadLifecycle(notify);
   }
 
@@ -19,6 +22,12 @@ export class NewSessionAttachmentDraft {
   }
 
   replace(attachments: ChatAttachment[]) {
+    this.attachments = attachments;
+    this.onUserChange();
+    this.notify();
+  }
+
+  restore(attachments: ChatAttachment[]) {
     this.attachments = attachments;
     this.notify();
   }

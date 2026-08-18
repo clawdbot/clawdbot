@@ -3,17 +3,29 @@ import type {
   WorkboardExecutionStatus,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import {
   workboardCardMatchesLifecycleLink,
   workboardCardSessionLookupKey,
 } from "./session-link.js";
+import { cardSessionKey } from "./store-card-helpers.js";
+import { DEFAULT_WORKBOARD_DISPATCH_OWNER } from "./store-constants.js";
 import type { WorkboardStore } from "./store.js";
 
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
+// Keep readiness across plugin-only reloads, while the singleton lifecycle
+// clears it before an in-process Gateway restart starts replacement services.
+const workboardLifecycleGatewayState = resolveGlobalSingleton(
+  Symbol.for("openclaw.workboard.lifecycleGatewayState"),
+  () => ({ ready: false }),
+  (state) => {
+    state.ready = false;
+  },
+);
 
 type WorkboardLifecycleState = "running" | "succeeded" | "failed" | "idle" | "missing" | "stale";
 
@@ -40,10 +52,35 @@ type WorkboardLifecycleSessionSnapshot = {
   complete: boolean;
 };
 
+type WorkboardLifecycleSessionReadOptions = {
+  includeUnknown: boolean;
+};
+
 type WorkboardLifecycleMatchHandler = (input: {
   cards: readonly WorkboardCard[];
   sessionKey?: string;
 }) => Promise<void>;
+
+type WorkboardLifecycleService = OpenClawPluginService & {
+  onGatewayStart: () => void;
+  onGatewayStop: () => void;
+};
+
+function needsWorkboardLifecycleReconciliation(card: WorkboardCard): boolean {
+  if (card.metadata?.archivedAt) {
+    return false;
+  }
+  // A running claim can own an accepted session even when persisting its link failed.
+  // Keep those cards, and stale cleanup, in the missed-event recovery sweep.
+  return Boolean(
+    card.sessionKey ||
+    card.runId ||
+    card.execution ||
+    card.status === "running" ||
+    card.metadata?.claim ||
+    card.metadata?.stale,
+  );
+}
 
 const LIFECYCLE_TARGETS = {
   running: { card: "running", execution: "running" },
@@ -189,11 +226,20 @@ async function syncWorkboardLifecycleSessions(params: {
 }): Promise<number> {
   const now = params.now ?? Date.now();
   const sessionsByKey = new Map<string, WorkboardLifecycleSession>();
+  const sessionsByWorkboardSuffix = new Map<string, WorkboardLifecycleSession>();
+  const ambiguousWorkboardSuffixes = new Set<string>();
   for (const session of params.sessions) {
     sessionsByKey.set(session.key, session);
     const suffixIndex = session.key.lastIndexOf(":subagent:workboard-");
     if (suffixIndex >= 0) {
-      sessionsByKey.set(session.key.slice(suffixIndex + 1), session);
+      const suffix = session.key.slice(suffixIndex + 1);
+      const existing = sessionsByWorkboardSuffix.get(suffix);
+      if (existing && existing.key !== session.key) {
+        sessionsByWorkboardSuffix.delete(suffix);
+        ambiguousWorkboardSuffixes.add(suffix);
+      } else if (!ambiguousWorkboardSuffixes.has(suffix)) {
+        sessionsByWorkboardSuffix.set(suffix, session);
+      }
     }
   }
   let count = 0;
@@ -201,7 +247,22 @@ async function syncWorkboardLifecycleSessions(params: {
     if (card.metadata?.archivedAt) {
       continue;
     }
-    const session = sessionsByKey.get(workboardCardSessionLookupKey(card));
+    const lookupKey = workboardCardSessionLookupKey(card);
+    const suffixIndex = lookupKey.lastIndexOf("subagent:workboard-");
+    const linkedSessionKey = cardSessionKey(card);
+    const canUseAgentlessFallback =
+      linkedSessionKey?.startsWith("subagent:workboard-") === true ||
+      (!linkedSessionKey &&
+        (!card.agentId ||
+          (card.agentId === DEFAULT_WORKBOARD_DISPATCH_OWNER &&
+            card.metadata?.claim?.ownerId === DEFAULT_WORKBOARD_DISPATCH_OWNER)));
+    // Persisted links and explicit agent targets stay authoritative. The unique
+    // suffix fallback recovers a run accepted before its link could be persisted.
+    const session =
+      sessionsByKey.get(lookupKey) ??
+      (canUseAgentlessFallback && suffixIndex >= 0
+        ? sessionsByWorkboardSuffix.get(lookupKey.slice(suffixIndex))
+        : undefined);
     const observation = session
       ? lifecycleFromSession(session, now)
       : params.complete
@@ -242,16 +303,28 @@ function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined
 
 export async function readWorkboardLifecycleSessions(
   gateway: Pick<OpenClawPluginApi["runtime"]["gateway"], "isAvailable" | "request">,
+  options: WorkboardLifecycleSessionReadOptions = { includeUnknown: false },
 ): Promise<WorkboardLifecycleSessionSnapshot> {
   if (!(await gateway.isAvailable())) {
     return { sessions: [], complete: false };
+  }
+  let includeUnknown = false;
+  if (options.includeUnknown) {
+    const agentsPayload = await gateway.request("agents.list", {}, { scopes: ["operator.read"] });
+    if (!isRecord(agentsPayload) || typeof agentsPayload.selectionRequired !== "boolean") {
+      throw new Error("agents.list returned an invalid ownership snapshot");
+    }
+    // The unknown key is a legacy ownerless sentinel. Preserve an existing
+    // captured link only while the Gateway proves that its owner is unambiguous.
+    includeUnknown = !agentsPayload.selectionRequired;
   }
   const payload = await gateway.request(
     "sessions.list",
     {
       limit: WORKBOARD_SESSION_SWEEP_LIMIT,
-      includeGlobal: true,
-      includeUnknown: true,
+      configuredAgentsOnly: true,
+      includeGlobal: false,
+      includeUnknown,
     },
     { scopes: ["operator.read"] },
   );
@@ -263,27 +336,49 @@ export async function readWorkboardLifecycleSessions(
       const session = normalizeSession(value);
       return session ? [session] : [];
     }),
-    // sessions.list has no hasMore/cursor field; it honors `limit` unclamped, so a
-    // short page proves the snapshot is complete. A full page may be truncated —
-    // treat it as incomplete so absent sessions are never inferred as "missing".
+    // A short page proves the snapshot is complete. Keep full pages conservative
+    // so absent sessions are never inferred as "missing" when the page is truncated.
     complete: payload.sessions.length < WORKBOARD_SESSION_SWEEP_LIMIT,
   };
 }
 
 export function createWorkboardLifecycleService(params: {
   store: WorkboardStore;
-  readSessions: () => Promise<WorkboardLifecycleSessionSnapshot>;
+  readSessions: (
+    options: WorkboardLifecycleSessionReadOptions,
+  ) => Promise<WorkboardLifecycleSessionSnapshot>;
   now?: () => number;
-}): OpenClawPluginService {
+}): WorkboardLifecycleService {
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let begin: (() => void) | undefined;
+  const stop = () => {
+    generation += 1;
+    begin = undefined;
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
   return {
     id: "workboard-lifecycle-sync",
     start(ctx) {
       const owner = ++generation;
+      let begun = false;
       const reconcile = async () => {
         try {
-          const snapshot = await params.readSessions();
+          const cards = await params.store.list();
+          if (
+            generation !== owner ||
+            !cards.some((card) => needsWorkboardLifecycleReconciliation(card))
+          ) {
+            return;
+          }
+          const snapshot = await params.readSessions({
+            includeUnknown: cards.some(
+              (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
+            ),
+          });
           if (generation === owner) {
             await syncWorkboardLifecycleSessions({
               store: params.store,
@@ -300,15 +395,27 @@ export function createWorkboardLifecycleService(params: {
           }
         }
       };
-      // This service owns one bounded session sweep; terminal hooks keep end-state writes immediate.
-      void reconcile();
-    },
-    stop() {
-      generation += 1;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
+      begin = () => {
+        if (generation !== owner || begun) {
+          return;
+        }
+        begun = true;
+        // The Gateway lifecycle signal owns the first bounded sweep; terminal
+        // hooks keep end-state writes immediate between 60-second sweeps.
+        void reconcile();
+      };
+      if (workboardLifecycleGatewayState.ready) {
+        begin();
       }
+    },
+    stop,
+    onGatewayStart() {
+      workboardLifecycleGatewayState.ready = true;
+      begin?.();
+    },
+    onGatewayStop() {
+      workboardLifecycleGatewayState.ready = false;
+      stop();
     },
   };
 }

@@ -8,7 +8,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatState } from "./chat-history.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
-import { readChatMessagesFromCache } from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   authoritativeHistoryAppliedForRun,
   reconcileAuthoritativeTerminalHistory,
@@ -85,6 +85,20 @@ function createAssistantHistory(text: string, overrides: Omit<HistoryResult, "me
     messages: [{ role: "assistant", content: [{ type: "text", text }] }],
     ...overrides,
   };
+}
+
+function seedChatSnapshot(
+  state: ChatState,
+  target: { sessionKey: string; agentId?: string },
+): void {
+  if (!state.chatMessagesBySession) {
+    throw new Error("expected chat message cache");
+  }
+  cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+    messages: [],
+    pagination: { hasMore: false, completeSnapshot: true },
+    sessionId: "cached-session",
+  });
 }
 
 type SessionTestState = ChatState & {
@@ -352,7 +366,7 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
   });
 
-  it("caches final messages for a switched-away session", () => {
+  it("appends final messages to a switched-away session snapshot", () => {
     const visibleMessage = createTextChatMessage("assistant", "main visible");
     const state = createState({
       sessionKey: "main",
@@ -365,6 +379,7 @@ describe("handleChatGatewayEvent", () => {
       state: "final",
       message: createTextChatMessage("assistant", "other final"),
     };
+    seedChatSnapshot(state, { sessionKey: "other" });
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
     expect(state.chatMessages).toEqual([visibleMessage]);
@@ -375,7 +390,7 @@ describe("handleChatGatewayEvent", () => {
     ).toEqual([payload.message]);
   });
 
-  it("caches one background final when three retained panes receive the same event", () => {
+  it("appends one background final when three retained panes receive the same event", () => {
     const cache = new Map();
     const states = ["one", "two", "three"].map((sessionKey) =>
       createState({ chatMessagesBySession: cache, sessionKey }),
@@ -386,6 +401,7 @@ describe("handleChatGatewayEvent", () => {
       state: "final",
       message: createTextChatMessage("assistant", "background final"),
     };
+    seedChatSnapshot(states[0]!, { sessionKey: "background" });
 
     for (const state of states) {
       expect(handleChatGatewayEvent(state, payload)).toBeNull();
@@ -415,7 +431,7 @@ describe("handleChatGatewayEvent", () => {
       payloadSessionKey: "agent:main:project",
       withConfiguredDefaults: false,
     },
-  ])("caches $name", ({ activeSessionKey, payloadSessionKey, withConfiguredDefaults }) => {
+  ])("appends $name", ({ activeSessionKey, payloadSessionKey, withConfiguredDefaults }) => {
     const state = createState({ sessionKey: activeSessionKey, chatMessagesBySession: new Map() });
     const payload: ChatEventPayload = {
       runId: "run-1",
@@ -434,6 +450,7 @@ describe("handleChatGatewayEvent", () => {
         },
       };
     }
+    seedChatSnapshot(state, { sessionKey: payloadSessionKey });
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
     expect(
@@ -444,7 +461,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessagesBySession?.size).toBe(1);
   });
 
-  it("caches inactive global finals under the payload agent only", () => {
+  it("appends inactive global finals under the payload agent only", () => {
     const visibleMessage = createTextChatMessage("assistant", "work visible");
     const state = createState({
       sessionKey: "global",
@@ -460,6 +477,7 @@ describe("handleChatGatewayEvent", () => {
       state: "final",
       message: createTextChatMessage("assistant", "main final"),
     };
+    seedChatSnapshot(state, { sessionKey: "global", agentId: "main" });
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
     expect(state.chatMessages).toEqual([visibleMessage]);

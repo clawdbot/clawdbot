@@ -207,9 +207,9 @@ the repository root does not prepare bundled plugin dependencies.
 
 For the global npm row, use
 `npm install -g openclaw --allow-scripts=openclaw` on npm 12 or npm 11.16+.
-On npm 11.12 and earlier, omit `--allow-scripts=openclaw`; upgrade npm
-11.13–11.15 first. Plugin dependency convergence remains intentionally
-script-disabled and continues to use the `--ignore-scripts` commands above.
+On npm 11.15 and earlier, omit `--allow-scripts=openclaw`. Plugin dependency
+convergence remains intentionally script-disabled and continues to use the
+`--ignore-scripts` commands above.
 
 ## Legacy cleanup
 

@@ -107,7 +107,7 @@ export async function modelsAuthLogoutCommand(
     );
   }
 
-  await refreshRunningGatewayAuthState();
+  await refreshRunningGatewayAuthState(agentId);
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Removed auth profile: ${description}`);

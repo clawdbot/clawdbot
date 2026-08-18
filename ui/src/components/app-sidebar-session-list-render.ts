@@ -45,7 +45,7 @@ type SessionCatalogRenderSnapshot = {
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
   toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
-  creatorId: string | null;
+  ownerId: string | null;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
 };
@@ -330,7 +330,7 @@ function renderSessionCatalog(params: {
       loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
       projectGrouping: snapshot.projectGrouping,
       liveRows: snapshot.liveRows,
-      creatorId: snapshot.creatorId,
+      ownerId: snapshot.ownerId,
       renderLiveRow: (row, display) =>
         renderRecentSession({
           host,

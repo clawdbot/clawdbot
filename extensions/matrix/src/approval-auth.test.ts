@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { matrixApprovalAuth } from "./approval-auth.js";
 
 describe("matrixApprovalAuth", () => {
-  it("normalizes Matrix user ids before authorizing", () => {
+  it("authorizes exact Matrix user ids without case folding", () => {
     const cfg = {
       channels: {
         matrix: {
-          dm: { allowFrom: ["matrix:@Owner:Example.org"] },
+          dm: { allowFrom: ["matrix:@\u212A:example.org"] },
         },
       },
     };
@@ -15,10 +15,21 @@ describe("matrixApprovalAuth", () => {
     expect(
       matrixApprovalAuth.authorizeActorAction({
         cfg,
-        senderId: "@owner:example.org",
+        senderId: "@\u212A:example.org",
         action: "approve",
         approvalKind: "plugin",
       }),
     ).toEqual({ authorized: true });
+    expect(
+      matrixApprovalAuth.authorizeActorAction({
+        cfg,
+        senderId: "@k:example.org",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({
+      authorized: false,
+      reason: "\u274c You are not authorized to approve plugin requests on Matrix.",
+    });
   });
 });

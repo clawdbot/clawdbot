@@ -4,6 +4,7 @@ import type {
   SessionCreatedActor,
   SessionOwner,
 } from "../../packages/gateway-protocol/src/index.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -36,6 +37,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
+import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { buildControlUiAvatarUrl, normalizeControlUiBasePath } from "./control-ui-shared.js";
@@ -117,21 +119,54 @@ export function projectSessionActor(
   return { type: actor.type, id, ...identity };
 }
 
+/** Projects an identity only when it can own a session durably. */
+export function projectAssignableSessionOwner(
+  actor: SessionEntry["createdActor"],
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>,
+  cfg: OpenClawConfig,
+  configuredAgentIds?: ReadonlySet<string>,
+): SessionOwnerFacetIdentity | undefined {
+  if (!actor || (actor.type !== "human" && actor.type !== "agent")) {
+    return undefined;
+  }
+  const rawId = normalizeOptionalString(actor.id);
+  if (!rawId) {
+    return undefined;
+  }
+  const id = actor.type === "agent" ? normalizeAgentId(rawId) : rawId;
+  if (actor.type === "agent" && !(configuredAgentIds ?? new Set(listAgentIds(cfg))).has(id)) {
+    return undefined;
+  }
+  const projected = projectSessionActor({ type: actor.type, id }, userProfileIdentityById, cfg);
+  if (!projected?.id || (actor.type === "human" && userProfileIdentityById.get(id) === undefined)) {
+    return undefined;
+  }
+  return {
+    type: actor.type,
+    id,
+    ...(projected.label ? { label: projected.label } : {}),
+    ...(projected.avatarUrl ? { avatarUrl: projected.avatarUrl } : {}),
+  };
+}
+
 function projectSessionOwner(
   entry: SessionEntry | undefined,
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined,
   cfg: OpenClawConfig,
+  configuredAgentIds?: ReadonlySet<string>,
 ): SessionOwner | undefined {
   const persisted = entry?.owner;
-  const actor = projectSessionActor(
+  const identities = userProfileIdentityById ?? new Map();
+  const actor = projectAssignableSessionOwner(
     persisted?.actor ?? entry?.createdActor,
-    userProfileIdentityById,
+    identities,
     cfg,
+    configuredAgentIds,
   );
   if (!actor) {
     return undefined;
   }
-  const assignedBy = projectSessionActor(persisted?.assignedBy, userProfileIdentityById, cfg);
+  const assignedBy = projectSessionActor(persisted?.assignedBy, identities, cfg);
   return {
     actor,
     ...(assignedBy ? { assignedBy } : {}),
@@ -164,6 +199,7 @@ export function buildGatewaySessionRow(params: {
   transcriptUsageMaxBytes?: number;
   storeChildSessionsByKey?: Map<string, string[]>;
   rowContext?: SessionListRowContext;
+  configuredAgentIds?: ReadonlySet<string>;
   agentId?: string;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
@@ -476,7 +512,12 @@ export function buildGatewaySessionRow(params: {
       rowContext?.userProfileIdentityById,
       cfg,
     ),
-    owner: projectSessionOwner(entry, rowContext?.userProfileIdentityById, cfg),
+    owner: projectSessionOwner(
+      entry,
+      rowContext?.userProfileIdentityById,
+      cfg,
+      params.configuredAgentIds,
+    ),
     participants: projectSessionParticipants(entry, rowContext?.userProfileIdentityById, cfg),
     participantCount: entry?.participantCount,
     createdAt: entry?.createdAt,

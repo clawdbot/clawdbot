@@ -1471,7 +1471,7 @@ jobs:
           if [[ "${1:-}" != "--root-run" ]]; then
             present=()
             for key in "${transport_keys[@]}" "${control_keys[@]}"; do
-              if [[ -v "$key" ]]; then
+              if declare -p "$key" >/dev/null 2>&1; then
                 present+=("$key")
               fi
             done
@@ -1492,7 +1492,7 @@ jobs:
             keep_env["$key"]=1
           done
           while IFS= read -r key; do
-            if [[ ! -v "keep_env[$key]" ]]; then
+            if [[ -z "${keep_env[$key]+x}" ]]; then
               unset "$key"
             fi
           done < <(compgen -e)
@@ -1557,7 +1557,7 @@ jobs:
 
           boundary_mode=false
           for key in "${control_keys[@]}"; do
-            if [[ -v "$key" ]]; then
+            if declare -p "$key" >/dev/null 2>&1; then
               boundary_mode=true
             fi
           done
@@ -1565,7 +1565,7 @@ jobs:
           sandbox_payload_b64=""
           if [[ "$boundary_mode" == "true" ]]; then
             for key in "${control_keys[@]}"; do
-              [[ -v "$key" ]]
+              declare -p "$key" >/dev/null 2>&1
             done
             command_file="$(realpath -e "$OPENCLAW_QA_SUT_BOUNDARY_COMMAND_FILE")"
             identity_file="$(realpath -m "$OPENCLAW_QA_SUT_BOUNDARY_IDENTITY_FILE")"

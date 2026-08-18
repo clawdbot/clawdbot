@@ -194,7 +194,7 @@ describe("qa scenario catalog", () => {
 
   it("keeps the audited parallel script allowlist exact", () => {
     const expected =
-      "active-talk-agent-run-status agent-run-identity-inspection cached-health-snapshot-boundaries channel-health-monitor-lifecycle diagnostic-events-boundary gateway-loopback-lan-access gateway-rpc-account-health gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing tui-command-surfaces-pty tui-editor-input-pty tui-entrypoints-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-local-shell-pty tui-pty-evidence-producer-contract tui-session-management-pty tui-streaming-tool-cards-pty tui-terminal-safety-pty voice-call-cli-rpc-agent-tool webchat-auto-tts".split(
+      "active-talk-agent-run-status agent-run-identity-inspection cached-health-snapshot-boundaries channel-health-monitor-lifecycle diagnostic-events-boundary gateway-loopback-lan-access gateway-rpc-account-health gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-entrypoints-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-local-shell-pty tui-pty-evidence-producer-contract tui-session-management-pty tui-streaming-tool-cards-pty tui-terminal-safety-pty voice-call-cli-rpc-agent-tool webchat-auto-tts".split(
         " ",
       );
     const marked = readQaScenarioPack().scenarios.filter(
@@ -385,7 +385,7 @@ describe("qa scenario catalog", () => {
 
     for (const scenario of [
       readQaScenarioById("control-ui-chat-flow-playwright"),
-      readQaScenarioById("control-ui-plan-replay-reconnect"),
+      readQaScenarioById("control-ui-progress-card-live-placement"),
     ]) {
       expect(scenario.execution.kind, scenario.id).toBe("playwright");
       expect(scenario.coverage?.primary, scenario.id).not.toContain(coverageId);

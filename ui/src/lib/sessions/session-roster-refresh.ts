@@ -79,6 +79,7 @@ function isPrimarySessionListQuery(options: SessionListScope): boolean {
     !query.activeMinutes &&
     !query.search &&
     !query.creatorId &&
+    !query.ownerId &&
     query.involvingMe !== true &&
     query.includeGlobal === true &&
     query.includeUnknown === true &&
@@ -536,7 +537,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     setCreatorFilter(creatorId: string | null) {
       const options = {
         ...lastListOptions,
-        creatorId: creatorId?.trim() || undefined,
+        creatorId: undefined,
+        ownerId: creatorId?.trim() || undefined,
         involvingMe: undefined,
       };
       delete options.offset;
@@ -546,6 +548,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const options = {
         ...lastListOptions,
         creatorId: undefined,
+        ownerId: undefined,
         involvingMe: enabled || undefined,
       };
       delete options.offset;

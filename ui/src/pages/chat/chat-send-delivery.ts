@@ -61,7 +61,7 @@ import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
-import { hasAbortableSessionRun, isChatBusy, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import { hasDirectSessionRun, isChatBusy, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { resetChatScroll, scheduleChatScroll } from "./scroll.ts";
 import {
   formatTerminalChatSendAckError,
@@ -614,7 +614,7 @@ export async function deliverChatQueueItem(
     if (
       drainResult === undefined &&
       routeVisible &&
-      (isChatBusy(host) || hasAbortableSessionRun(host))
+      (isChatBusy(host) || hasDirectSessionRun(host))
     ) {
       const parked = finishChatDeliveryAdmission(
         host,

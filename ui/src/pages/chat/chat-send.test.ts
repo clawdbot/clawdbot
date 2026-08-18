@@ -20,6 +20,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -32,6 +33,7 @@ import { refreshChatAvatar } from "./chat-avatar.ts";
 import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-outbox-drain.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
@@ -87,6 +89,19 @@ function cacheChatMessages(
     pagination: { hasMore: false },
     sessionId: null,
   });
+}
+
+function cacheEmptyChatSnapshot(host: ChatHost, sessionKey: string): void {
+  cacheChatSessionSnapshot(
+    requireChatMessageCache(host),
+    host,
+    { sessionKey },
+    {
+      messages: [],
+      pagination: { hasMore: false, completeSnapshot: true },
+      sessionId: "cached-session",
+    },
+  );
 }
 
 function createQueuedLocalCommand(
@@ -149,6 +164,7 @@ let loadChatHistory: typeof import("./chat-history.ts").loadChatHistory;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
 let admitQueuedMessageForSession: typeof import("./chat-queue.ts").admitQueuedMessageForSession;
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
+let setTransientQueuedMessageProjection: typeof import("./chat-queue.ts").setTransientQueuedMessageProjection;
 let removeDeliveredQueuedChatSendForRun: typeof import("./chat-queue.ts").removeDeliveredQueuedChatSendForRun;
 let removeVisibleOrScopedQueuedMessageWithoutReleasing: typeof import("./chat-queue.ts").removeVisibleOrScopedQueuedMessageWithoutReleasing;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
@@ -182,6 +198,7 @@ async function loadChatHelpers(): Promise<void> {
     clearPendingQueueItemsForRun,
     removeDeliveredQueuedChatSendForRun,
     removeQueuedMessage,
+    setTransientQueuedMessageProjection,
     markQueuedChatSendsWaitingForReconnect,
     removeVisibleOrScopedQueuedMessageWithoutReleasing,
     readChatQueueForScope,
@@ -380,9 +397,7 @@ describe("refreshChat", () => {
   it("uses prepared models delivered with startup metadata", async () => {
     const startup = createDeferred<unknown>();
     const host = makeChatHost({
-      hello: {
-        features: { methods: ["chat.metadata", "chat.startup"] },
-      } as TestChatHost["hello"],
+      hello: gatewayHelloForMethods(["chat.metadata", "chat.startup"], []),
       requestHandlers: {
         "chat.startup": () => startup.promise,
       },
@@ -431,9 +446,7 @@ describe("refreshChat", () => {
     const startup = createDeferred<unknown>();
     const host = makeChatHost({
       chatModelSwitchPromises: {},
-      hello: {
-        features: { methods: ["chat.metadata", "chat.startup"] },
-      } as TestChatHost["hello"],
+      hello: gatewayHelloForMethods(["chat.metadata", "chat.startup"], []),
       requestHandlers: {
         "chat.startup": () => startup.promise,
       },
@@ -458,19 +471,17 @@ describe("refreshChat", () => {
     expect(host.chatModelCatalog).toEqual([cachedModel]);
     expect(asChatPageHost(host).chatModelsLoading).toBe(true);
     const container = document.createElement("div");
-    render(
-      renderChatPaneComposerControls({
-        state: asChatPageHost(host),
-        selectedSession: undefined,
-        agentDefaultModel: undefined,
-        modelAccess: { allowed: true, requiredScope: "operator.write" },
-        effortAccess: { allowed: true, requiredScope: "operator.write" },
-        permissionAccess: { allowed: true, requiredScope: "operator.write" },
-        canSelectFull: true,
-        onModelSetup: vi.fn(),
-      }),
-      container,
-    );
+    const controls = renderChatPaneComposerControls({
+      state: asChatPageHost(host),
+      selectedSession: undefined,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      onModelSetup: vi.fn(),
+    });
+    render(controls.composerControls, container);
     expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
     expect(container.textContent).toContain("Refreshing models…");
     expect(container.textContent).not.toContain("Loading models…");
@@ -514,9 +525,7 @@ describe("refreshChat", () => {
       {
         sessionKey: "global",
         hello: {
-          type: "hello-ok" as const,
-          protocol: 4,
-          auth: { role: "operator" as const, scopes: [] },
+          ...gatewayHelloForMethods([], []),
           snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
         },
       },
@@ -783,6 +792,8 @@ describe("refreshChatAvatar", () => {
     await loadChatHelpers();
   });
 
+  const pairedDeviceHello = gatewayHelloForMethods([], []);
+
   it.each([
     {
       name: "uses a route-relative avatar endpoint before basePath bootstrap finishes",
@@ -799,7 +810,10 @@ describe("refreshChatAvatar", () => {
       overrides: {
         settings: { token: "session-token" },
         password: "shared-password",
-        hello: { auth: { deviceToken: "device-token" } } as ChatHost["hello"],
+        hello: {
+          ...pairedDeviceHello,
+          auth: { ...pairedDeviceHello.auth, deviceToken: "device-token" },
+        },
       },
     },
     {
@@ -2219,9 +2233,7 @@ describe("handleSendChat", () => {
       assistantAgentId: "work",
       chatMessage: "send to the agent main session",
       hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
+        ...gatewayHelloForMethods([], []),
         snapshot: {
           sessionDefaults: {
             defaultAgentId: "main",
@@ -3874,6 +3886,34 @@ describe("handleSendChat", () => {
     );
   });
 
+  it("sends normally when only a descendant run is active", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { status: "started", runId: "new-parent-run" },
+      },
+      chatMessage: "start another parent turn",
+      chatRunId: null,
+      sessionKey: "agent:main:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main:main", {
+          hasActiveRun: false,
+          hasActiveSubagentRun: true,
+          status: "done",
+        }),
+      ]),
+      settings: { chatFollowUpMode: "steer" },
+    });
+
+    await handleSendChat(host);
+
+    await waitForFast(() => expect(host.request).toHaveBeenCalled());
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
+    expect(payload.message).toBe("start another parent turn");
+    expect(payload).not.toHaveProperty("queueMode");
+    expect(payload).not.toHaveProperty("expectedRunId");
+    expect(host.chatError).toBeNull();
+  });
+
   it("keeps a steered message visible when only the session row reports an active run", async () => {
     let wireRunId: unknown;
 
@@ -4608,12 +4648,7 @@ describe("handleSendChat", () => {
       chatQueue: [item],
       connectionEpoch: 1,
       confirmConversationReset: vi.fn(async () => await confirmation.promise),
-      hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["chat.send"] },
-      },
+      hello: gatewayHelloForMethods(["chat.send"]),
     });
     admitHostQueueItems(host);
 
@@ -4647,12 +4682,7 @@ describe("handleSendChat", () => {
       chatQueue: [item],
       connectionEpoch: 1,
       confirmConversationReset: vi.fn(async () => true),
-      hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["chat.send"] },
-      },
+      hello: gatewayHelloForMethods(["chat.send"]),
     });
     const refreshSessions = vi.spyOn(host.sessions, "refresh");
     admitHostQueueItems(host);
@@ -4721,12 +4751,7 @@ describe("handleSendChat", () => {
       },
       chatQueue: [item],
       confirmConversationReset: vi.fn(async () => true),
-      hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["chat.send"] },
-      },
+      hello: gatewayHelloForMethods(["chat.send"]),
     });
     admitHostQueueItems(host);
 
@@ -4985,6 +5010,7 @@ describe("handleSendChat", () => {
         requestUpdate: vi.fn(),
       });
     }
+    cacheEmptyChatSnapshot(inactive, item.sessionKey);
     expect(admitQueuedMessageForSession(visible, item.sessionKey, item)).toBe(true);
     const event = {
       event: "chat",
@@ -5082,6 +5108,7 @@ describe("handleSendChat", () => {
         requestUpdate: vi.fn(),
       });
     }
+    cacheEmptyChatSnapshot(inactive, item.sessionKey);
     expect(admitQueuedMessageForSession(visible, item.sessionKey, item)).toBe(true);
     const event = {
       event: "chat",
@@ -5606,6 +5633,120 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toStrictEqual([]);
   });
 
+  it("keeps an acknowledged live send pending while durable history is briefly stale", async () => {
+    let historyRequests = 0;
+    let runId: string | undefined;
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => {
+          historyRequests += 1;
+          return Promise.resolve({
+            messages:
+              historyRequests > 2
+                ? [{ role: "user", __openclaw: { idempotencyKey: `${runId}:user` } }]
+                : [],
+            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+          });
+        },
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "live send payload");
+          runId = String(payload.idempotencyKey);
+          return Promise.resolve({ runId, status: "started" });
+        },
+      },
+    });
+
+    await handleSendChat(host, "history will catch up");
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({ sendState: "sending", text: "history will catch up" }),
+    ]);
+    expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue).toEqual([
+      expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
+    ]);
+
+    host.chatRunId = null;
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue[0]?.sendState).toBe("sending");
+    expect(host.lastError).toBeNull();
+    await waitForFast(() => expect(listStoredChatOutboxes(host)).toStrictEqual([]), {
+      timeout: 1_000,
+    });
+    expect(historyRequests).toBeGreaterThanOrEqual(3);
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.lastError).toBeNull();
+  });
+
+  it("marks an acknowledged live send unconfirmed after history stays missing", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "live send payload");
+          const runId = String(payload.idempotencyKey);
+          return Promise.resolve({ runId, status: "started" });
+        },
+      },
+    });
+
+    await handleSendChat(host, "history never catches up");
+    host.chatRunId = null;
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue[0]?.sendState).toBe("sending");
+    expect(host.lastError).toBeNull();
+
+    now += 5_001;
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue[0]).toMatchObject({
+      sendError: UNCONFIRMED_CHAT_SEND_ERROR,
+      sendState: "unconfirmed",
+      text: "history never catches up",
+    });
+    expect(host.lastError).toBe(UNCONFIRMED_CHAT_SEND_ERROR);
+  });
+
+  it("starts a fresh confirmation grace after the prior outbox scope is removed", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "live send payload");
+          const runId = String(payload.idempotencyKey);
+          return Promise.resolve({ runId, status: "started" });
+        },
+      },
+    });
+
+    await handleSendChat(host, "reuse this delivery version");
+    host.chatRunId = null;
+    await flushChatQueueForEvent(host);
+
+    const item = expectDefined(host.chatQueue[0], "queued live send");
+    const sessionKey = expectDefined(item.sessionKey, "queued session key");
+    expect(removeQueuedMessage(host, item.id)).toBe("removed");
+
+    now = 5_500;
+    expect(admitQueuedMessageForSession(host, sessionKey, item)).toBe(true);
+    expect(setTransientQueuedMessageProjection(host, sessionKey, item)).toBe(true);
+    await flushChatQueueForEvent(host);
+
+    now = 6_001;
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue[0]).toMatchObject({
+      id: item.id,
+      sendState: "sending",
+      text: "reuse this delivery version",
+    });
+    expect(host.lastError).toBeNull();
+  });
+
   it("coalesces duplicate queued local commands while the first command is running", async () => {
     const command = createDeferred<{ content: string }>();
     executeSlashCommandMock.mockImplementation(() => command.promise);
@@ -5809,6 +5950,7 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "skills.proposals.requestRevision": () => sent.promise,
       },
+      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
       chatMessage: "keep my draft",
     });
     (host as ChatHost & { currentSessionId?: string }).currentSessionId = "session-current";
@@ -5858,6 +6000,7 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "skills.proposals.requestRevision": () => sent.promise,
       },
+      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
     });
 
     const send = handleSendChat(host, "Keep the source connection", {
@@ -5890,6 +6033,7 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "skills.proposals.requestRevision": () => sent.promise,
       },
+      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
     });
 
     const send = handleSendChat(host, "Keep the rejected request visible", {
@@ -5917,10 +6061,7 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "skills.proposals.requestRevision": {},
       },
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["skills.proposals.requestRevision"] },
-      } as ChatHost["hello"],
+      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"], ["operator.read"]),
     });
 
     await handleSendChat(host, "Revise this proposal", {
@@ -5940,6 +6081,7 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "skills.proposals.requestRevision": () => sent.promise,
       },
+      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
     });
 
     const send = handleSendChat(host, "/reset examples", {
@@ -7071,6 +7213,7 @@ describe("handleSendChat", () => {
         "chat.history": () => idleChatHistory(),
         "skills.proposals.requestRevision": { runId: "revision-retry", status: "started" },
       },
+      hello: gatewayHelloForMethods(["skills.proposals.requestRevision"]),
       chatMessage: "keep my draft",
       pendingSettingsPatches: { "agent:main": settingsPatch.promise },
     });
@@ -9807,12 +9950,7 @@ describe("handleAbortChat", () => {
       requestHandlers: {},
       chatRunId: "run-main",
       chatMessage: "/stop",
-      hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["chat.abort"] },
-      },
+      hello: gatewayHelloForMethods(["chat.abort"], ["operator.read"]),
       sessionKey: "agent:main",
       chatRunError: { summary: "Previous run failed" },
     });

@@ -42,6 +42,12 @@ public enum AuthProbeStatus: String, Codable, Sendable {
     case noModel = "no_model"
 }
 
+public enum ProgressCardStepStatus: String, Codable, Sendable {
+    case pending = "pending"
+    case inProgress = "in_progress"
+    case completed = "completed"
+}
+
 public enum EnvironmentStatus: String, Codable, Sendable {
     case available = "available"
     case unavailable = "unavailable"
@@ -1142,6 +1148,136 @@ public struct BoardCommandEvent: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case command
+    }
+}
+
+public struct ProgressCardStep: Codable, Sendable {
+    public let step: String
+    public let status: ProgressCardStepStatus
+
+    public init(
+        step: String,
+        status: ProgressCardStepStatus)
+    {
+        self.step = step
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case step
+        case status
+    }
+}
+
+public struct ProgressCard: Codable, Sendable {
+    public let sessionkey: String
+    public let revision: Int
+    public let updatedat: Int
+    public let markdown: String?
+    public let steps: [ProgressCardStep]?
+
+    public init(
+        sessionkey: String,
+        revision: Int,
+        updatedat: Int,
+        markdown: String? = nil,
+        steps: [ProgressCardStep]? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.revision = revision
+        self.updatedat = updatedat
+        self.markdown = markdown
+        self.steps = steps
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case revision
+        case updatedat = "updatedAt"
+        case markdown
+        case steps
+    }
+}
+
+public struct ProgressCardGetParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct ProgressCardGetResult: Codable, Sendable {
+    public let card: AnyCodable
+
+    public init(
+        card: AnyCodable)
+    {
+        self.card = card
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case card
+    }
+}
+
+public struct ProgressCardPutParams: Codable, Sendable {
+    public let sessionkey: String
+    public let markdown: String?
+    public let plan: [ProgressCardStep]?
+
+    public init(
+        sessionkey: String,
+        markdown: String? = nil,
+        plan: [ProgressCardStep]? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.markdown = markdown
+        self.plan = plan
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case markdown
+        case plan
+    }
+}
+
+public struct ProgressCardPutResult: Codable, Sendable {
+    public let card: AnyCodable
+
+    public init(
+        card: AnyCodable)
+    {
+        self.card = card
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case card
+    }
+}
+
+public struct ProgressCardChangedEvent: Codable, Sendable {
+    public let sessionkey: String
+    public let revision: AnyCodable
+
+    public init(
+        sessionkey: String,
+        revision: AnyCodable)
+    {
+        self.sessionkey = sessionkey
+        self.revision = revision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case revision
     }
 }
 
@@ -5065,6 +5201,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let label: String?
     public let boardface: AnyCodable?
     public let creatorid: String?
+    public let ownerid: String?
     public let involvingme: Bool?
     public let spawnedby: String?
     public let agentid: String?
@@ -5085,6 +5222,7 @@ public struct SessionsListParams: Codable, Sendable {
         label: String? = nil,
         boardface: AnyCodable? = nil,
         creatorid: String? = nil,
+        ownerid: String? = nil,
         involvingme: Bool? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
@@ -5104,6 +5242,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.label = label
         self.boardface = boardface
         self.creatorid = creatorid
+        self.ownerid = ownerid
         self.involvingme = involvingme
         self.spawnedby = spawnedby
         self.agentid = agentid
@@ -5125,6 +5264,7 @@ public struct SessionsListParams: Codable, Sendable {
         case label
         case boardface = "boardFace"
         case creatorid = "creatorId"
+        case ownerid = "ownerId"
         case involvingme = "involvingMe"
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
@@ -7741,25 +7881,29 @@ public struct SessionMoveGatewayTarget: Codable, Sendable {
 public struct SessionMoveProfileTarget: Codable, Sendable {
     public let kind: String
     public let profileid: String
+    public let machineclass: String?
 
     public init(
-        profileid: String
+        profileid: String,
+        machineclass: String? = nil
     )
     {
         self.kind = "profile"
         self.profileid = profileid
+        self.machineclass = machineclass
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case profileid = "profileId"
+        case machineclass = "machineClass"
     }
 
     public init(from decoder: Decoder) throws {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["kind", "profileId"]).contains($0) }
+            .filter { !Set(["kind", "profileId", "machineClass"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -7779,12 +7923,14 @@ public struct SessionMoveProfileTarget: Codable, Sendable {
         }
         self.kind = "profile"
         self.profileid = try container.decode(String.self, forKey: .profileid)
+        self.machineclass = try container.decodeIfPresent(String.self, forKey: .machineclass)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("profile", forKey: .kind)
         try container.encode(profileid, forKey: .profileid)
+        try container.encodeIfPresent(machineclass, forKey: .machineclass)
     }
 }
 
@@ -14540,6 +14686,106 @@ public struct ToolsCatalogParams: Codable, Sendable {
     }
 }
 
+public struct ToolsGitHubStatusParams: Codable, Sendable {
+    public let agentid: String
+
+    public init(
+        agentid: String)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct ToolsGitHubStatusResult: Codable, Sendable {
+    public let agentid: String
+    public let source: AnyCodable
+    public let credentialstate: AnyCodable
+    public let account: AnyCodable
+    public let gitauthor: [String: AnyCodable]
+    public let evidence: AnyCodable
+
+    public init(
+        agentid: String,
+        source: AnyCodable,
+        credentialstate: AnyCodable,
+        account: AnyCodable,
+        gitauthor: [String: AnyCodable],
+        evidence: AnyCodable)
+    {
+        self.agentid = agentid
+        self.source = source
+        self.credentialstate = credentialstate
+        self.account = account
+        self.gitauthor = gitauthor
+        self.evidence = evidence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case source
+        case credentialstate = "credentialState"
+        case account
+        case gitauthor = "gitAuthor"
+        case evidence
+    }
+}
+
+public struct ToolsGitHubManagedConfigureParams: Codable, Sendable {
+    public let scope: AnyCodable
+    public let agentid: String
+    public let mode: String
+    public let secretname: String
+    public let gitauthor: [String: AnyCodable]?
+
+    public init(
+        scope: AnyCodable,
+        agentid: String,
+        mode: String,
+        secretname: String,
+        gitauthor: [String: AnyCodable]? = nil)
+    {
+        self.scope = scope
+        self.agentid = agentid
+        self.mode = mode
+        self.secretname = secretname
+        self.gitauthor = gitauthor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case agentid = "agentId"
+        case mode
+        case secretname = "secretName"
+        case gitauthor = "gitAuthor"
+    }
+}
+
+public struct ToolsGitHubInheritConfigureParams: Codable, Sendable {
+    public let scope: AnyCodable
+    public let agentid: String
+    public let mode: String
+
+    public init(
+        scope: AnyCodable,
+        agentid: String,
+        mode: String)
+    {
+        self.scope = scope
+        self.agentid = agentid
+        self.mode = mode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case agentid = "agentId"
+        case mode
+    }
+}
+
 public struct ToolCatalogProfile: Codable, Sendable {
     public let id: AnyCodable
     public let label: String
@@ -19323,6 +19569,7 @@ public struct DevicePairSetupDeliveryUncertainEvent: Codable, Sendable {
 public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let cursor: String?
     public let limit: Int?
     public let offset: Int?
     public let messageid: String?
@@ -19332,6 +19579,7 @@ public struct ChatHistoryParams: Codable, Sendable {
     public init(
         sessionkey: String,
         agentid: String? = nil,
+        cursor: String? = nil,
         limit: Int? = nil,
         offset: Int? = nil,
         messageid: String? = nil,
@@ -19340,6 +19588,7 @@ public struct ChatHistoryParams: Codable, Sendable {
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.cursor = cursor
         self.limit = limit
         self.offset = offset
         self.messageid = messageid
@@ -19350,11 +19599,60 @@ public struct ChatHistoryParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case cursor
         case limit
         case offset
         case messageid = "messageId"
         case sessionid = "sessionId"
         case maxchars = "maxChars"
+    }
+}
+
+public struct ChatHistoryDeltaResult: Codable, Sendable {
+    public let kind: String
+    public let messages: [AnyCodable]
+    public let deltacursor: String
+    public let sessioninfo: AnyCodable
+    public let agentslist: AnyCodable?
+    public let metadata: AnyCodable?
+
+    public init(
+        kind: String,
+        messages: [AnyCodable],
+        deltacursor: String,
+        sessioninfo: AnyCodable,
+        agentslist: AnyCodable? = nil,
+        metadata: AnyCodable? = nil)
+    {
+        self.kind = kind
+        self.messages = messages
+        self.deltacursor = deltacursor
+        self.sessioninfo = sessioninfo
+        self.agentslist = agentslist
+        self.metadata = metadata
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case messages
+        case deltacursor = "deltaCursor"
+        case sessioninfo = "sessionInfo"
+        case agentslist = "agentsList"
+        case metadata
+    }
+}
+
+public struct ChatHistoryResetResult: Codable, Sendable {
+    public let kind: String
+
+    public init(
+        kind: String)
+    {
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
     }
 }
 
@@ -20878,6 +21176,37 @@ public enum AuditRunIdentityV1: Codable, Sendable {
     }
 }
 
+public enum ToolsGitHubConfigureParams: Codable, Sendable {
+    case managed(ToolsGitHubManagedConfigureParams)
+    case inherit(ToolsGitHubInheritConfigureParams)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "mode"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "managed": self = try .managed(ToolsGitHubManagedConfigureParams(from: decoder))
+        case "inherit": self = try .inherit(ToolsGitHubInheritConfigureParams(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown ToolsGitHubConfigureParams discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .managed(let value): try value.encode(to: encoder)
+        case .inherit(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
 public enum ApprovalPresentation: Codable, Sendable {
     case exec(ExecApprovalPresentation)
     case plugin(PluginApprovalPresentation)
@@ -21106,6 +21435,37 @@ public enum ScopeUpgradeResult: Codable, Sendable {
         case .approved(let value): try value.encode(to: encoder)
         case .rejected(let value): try value.encode(to: encoder)
         case .expired(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum ChatHistoryCursorResult: Codable, Sendable {
+    case delta(ChatHistoryDeltaResult)
+    case reset(ChatHistoryResetResult)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "delta": self = try .delta(ChatHistoryDeltaResult(from: decoder))
+        case "reset": self = try .reset(ChatHistoryResetResult(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown ChatHistoryCursorResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .delta(let value): try value.encode(to: encoder)
+        case .reset(let value): try value.encode(to: encoder)
         }
     }
 }

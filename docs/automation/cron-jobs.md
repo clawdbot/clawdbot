@@ -575,7 +575,10 @@ Query-string tokens are rejected.
       `now` or `next-heartbeat`.
     </ParamField>
     <ParamField path="agentId" type="string">
-      Target agent. Required when the configured agent fleet has no implicit or retained legacy owner.
+      Target agent. When supplied, it must name a configured agent. It is required when the configured agent fleet has no implicit or retained legacy owner.
+    </ParamField>
+    <ParamField path="sessionKey" type="string">
+      Target session. Requires `hooks.allowRequestSessionKey: true` and must match `hooks.allowedSessionKeyPrefixes` when configured. Both wake modes can target an explicit session.
     </ParamField>
 
   </Accordion>
@@ -589,7 +592,7 @@ Query-string tokens are rejected.
       -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.6-sol"}'
     ```
 
-    Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `sessionMode` (`isolated` or `persistent`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `accountId`, `model`, `thinking`, `timeoutSeconds`.
+    Fields: `message` (required), `name`, `agentId` (must name a configured agent when supplied), `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `sessionMode` (`isolated` or `persistent`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `accountId`, `model`, `thinking`, `timeoutSeconds`.
 
     Set `sessionMode: "persistent"` only when repeated deliveries should reuse prior context. Direct persistent hooks require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and a non-empty `hooks.allowedSessionKeyPrefixes` allowlist. Omit `sessionMode` or use `"isolated"` for a fresh run session.
 

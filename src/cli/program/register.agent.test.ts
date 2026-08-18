@@ -182,7 +182,7 @@ describe("agent command registration", () => {
 
     expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
     expect(agentExecCommandMock).not.toHaveBeenCalled();
-    expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime);
+    expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime, 0);
   });
 
   it("keeps an exec-valued parent message on the existing parent action", async () => {

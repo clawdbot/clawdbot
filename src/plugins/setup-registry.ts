@@ -61,7 +61,6 @@ type SetupAutoEnableProbeEntry = {
 
 type PluginSetupRegistryDiagnosticCode =
   | "setup-descriptor-runtime-disabled"
-  | "setup-descriptor-provider-missing-runtime"
   | "setup-descriptor-provider-runtime-undeclared"
   | "setup-descriptor-cli-backend-missing-runtime"
   | "setup-descriptor-cli-backend-runtime-undeclared"
@@ -553,16 +552,6 @@ function pushSetupDescriptorDriftDiagnostics(params: {
 }): void {
   const declaredProviderIds = params.record.setup?.providers?.map((entry) => entry.id);
   if (declaredProviderIds) {
-    for (const declaredId of declaredProviderIds) {
-      if (!params.providers.some((provider) => matchesProvider(provider, declaredId))) {
-        params.diagnostics.push({
-          pluginId: params.record.id,
-          code: "setup-descriptor-provider-missing-runtime",
-          declaredId,
-          message: `setup.providers declares "${declaredId}" but setup runtime did not register a matching provider.`,
-        });
-      }
-    }
     for (const provider of params.providers) {
       if (!declaredProviderIds.some((declaredId) => matchesProvider(provider, declaredId))) {
         params.diagnostics.push({

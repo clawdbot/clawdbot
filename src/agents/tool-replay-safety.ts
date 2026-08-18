@@ -20,7 +20,6 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "agents_list",
   "conversations_list",
   "get_goal",
-  "update_plan",
   "tool_search",
   "tool_describe",
   "view_image",

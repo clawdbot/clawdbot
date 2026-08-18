@@ -3846,7 +3846,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
-  it("forces a new draft message on assistant boundaries in partial mode", async () => {
+  it("clears interrupted partial previews when the turn finishes silently", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "partial";
@@ -3861,8 +3861,28 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    // Detached-message cleanup is card-only: a rotated partial preview still
-    // holds streamed assistant text and must survive dispatch closeout.
+    expect(draftStream.clear).toHaveBeenCalledOnce();
+    expect(draftStream.dropDetachedMessages).toHaveBeenCalledOnce();
+    expect(draftStream.dropDetachedMessages.mock.invocationCallOrder[0]).toBeGreaterThan(
+      draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("preserves interrupted partial previews when a final reply is delivered", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedReplyOptionEvents = [
+      { kind: "partial", text: "first chunk" },
+      { kind: "assistant_start" },
+      { kind: "partial", text: "second chunk" },
+    ];
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.dropDetachedMessages).not.toHaveBeenCalled();
   });
 

@@ -118,8 +118,7 @@ export type ChatItem =
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
   | { kind: "reading-indicator"; key: string; startedAt: number }
-  | { kind: "question"; key: string; questionId: string; startedAt: number }
-  | { kind: "plan"; key: string };
+  | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
   text: string;
@@ -244,6 +243,8 @@ export type ToolCard = {
   details?: unknown;
   /** Monotonic edit counts while a live tool call is still receiving input. */
   liveDiffStat?: { added: number; removed: number };
+  /** Producer-reported process exit code, when the result supplies one. */
+  exitCode?: number;
   isError?: boolean;
   /** True when the card comes from the live tool stream of the current run. */
   live?: boolean;

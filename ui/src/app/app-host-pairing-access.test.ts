@@ -67,6 +67,7 @@ function createPairingShell(params: {
     updateAvailable: null,
     updateRunning: false,
     updateStatusBanner: null,
+    recordedUpdateAttempt: null,
     controlUiRefreshRequired: false,
   };
   const context = {

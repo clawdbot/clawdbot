@@ -1568,6 +1568,10 @@
     "target": "故障排查"
   },
   {
+    "source": "Update troubleshooting",
+    "target": "更新故障排查"
+  },
+  {
     "source": "Webhooks",
     "target": "Webhooks"
   },
@@ -1706,6 +1710,10 @@
   {
     "source": "Session management",
     "target": "会话管理"
+  },
+  {
+    "source": "Session tools",
+    "target": "会话工具"
   },
   {
     "source": "Presence",

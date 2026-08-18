@@ -35,6 +35,7 @@ export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
   leaseId: string | null;
+  nodeDeviceId?: string | null;
   sharedHost: boolean | null;
   state: WorkerEnvironmentState;
   ownerEpoch: number;
@@ -64,11 +65,13 @@ export type WorkerDesktopLaunchResult = {
 export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
+  supportsExecutionMode?(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
   create(
     profileId: string,
     idempotencyKey: string,
     machineClass?: string,
+    executionMode?: WorkerPlacementExecutionMode,
   ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   destroyUnattached(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
@@ -101,7 +104,7 @@ export type WorkerPlacementDispatchRequest = {
 
 export type WorkerPlacementMoveDestination = Pick<
   WorkerPlacementDispatchRequest,
-  "profileId" | "executionMode" | "deviceId" | "inheritedProfile"
+  "profileId" | "executionMode" | "deviceId" | "machineClass" | "inheritedProfile"
 >;
 
 export type WorkerPlacementReclaimRequest = {

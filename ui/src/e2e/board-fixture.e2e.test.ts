@@ -260,4 +260,41 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       await page.close();
     }
   });
+
+  it("opens an idle generic session for ordinary sends", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await page.getByText("OpenClaw work checkout", { exact: true }).click();
+
+      await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+      expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("renders a deterministic reply after generic chat.send", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await page.getByText("OpenClaw work checkout", { exact: true }).click();
+      await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+
+      const prompt = "generic mock send probe";
+      const composer = page.locator(
+        ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+      );
+      await composer.fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await page
+        .locator(".chat-thread-inner")
+        .getByText(`Mock reply: ${prompt}`, { exact: true })
+        .waitFor();
+      expect(await composer.inputValue()).toBe("");
+    } finally {
+      await page.close();
+    }
+  });
 });

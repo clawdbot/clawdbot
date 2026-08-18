@@ -806,6 +806,31 @@ openclaw-session-link-hovercard-provider {
   display: contents;
 }
 
+openclaw-session-progress-hovercard-provider {
+  display: contents;
+}
+
+.session-progress-hovercard {
+  position: fixed;
+  z-index: 1990;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 24px));
+  padding: 14px 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  pointer-events: none;
+}
+
+@media (hover: hover) {
+  .session-progress-hovercard {
+    pointer-events: auto;
+  }
+}
+
 .github-link-hovercard {
   position: fixed;
   z-index: 1990;
@@ -1077,6 +1102,11 @@ openclaw-session-link-hovercard-provider {
 .session-link-hovercard[data-side="bottom"] {
   transform: translateY(5px) scale(0.99);
   transform-origin: top left;
+}
+
+.session-link-hovercard[data-side="right"] {
+  transform: translateX(-5px) scale(0.99);
+  transform-origin: left center;
 }
 
 .session-link-hovercard[data-open="true"] {
@@ -1916,7 +1946,6 @@ openclaw-chat-session-rail {
 .chat-session-rail__status-row,
 .chat-session-rail__status,
 .chat-session-rail__actions,
-.chat-session-rail__plan-heading,
 .chat-session-rail__prs,
 .chat-session-rail__pr {
   display: flex;
@@ -2053,47 +2082,6 @@ openclaw-chat-session-rail {
   color: var(--text);
   font-size: 12.5px;
   line-height: 1.45;
-}
-
-.chat-session-rail__plan {
-  margin-top: 11px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.chat-session-rail__plan-heading {
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.chat-session-rail__plan-list {
-  display: grid;
-  gap: 5px;
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.chat-session-rail__plan-item {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  gap: 5px;
-  color: var(--text);
-  font-size: 11.5px;
-}
-
-.chat-session-rail__plan-item[data-status="completed"] {
-  color: var(--muted);
-}
-
-.chat-session-rail__plan-icon {
-  color: var(--accent);
-  text-align: center;
 }
 
 .chat-session-rail__prs {
@@ -2308,7 +2296,7 @@ openclaw-chat-session-rail {
 
   /* No pane can hold a column at this width, so the companion takes the whole
      surface rather than hovering over part of it. */
-  .chat-session-rail--expanded {
+  .chat-session-rail--expanded:not(.chat-session-rail--embedded) {
     position: fixed;
     z-index: 35;
     inset: 0;
@@ -2440,19 +2428,22 @@ openclaw-chat-session-rail {
 
 .code-block-wrapper {
   position: relative;
-  border-radius: var(--radius-sm);
-  overflow: visible;
-  margin-top: 0.75em;
+  box-sizing: border-box;
+  width: 100%;
+  margin-block: 1em;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: var(--radius-md);
+  background: transparent;
 }
 
 .code-block-wrapper pre {
-  margin: 0;
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  margin: 0 6px 6px;
+  padding: 4px 8px 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow-x: auto;
-}
-
-.code-block-wrapper pre:has(> code.markdown-block-art) {
-  background: var(--bg);
 }
 
 .code-block-wrapper :where(pre code.markdown-block-art) {
@@ -2475,20 +2466,25 @@ openclaw-chat-session-rail {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px 4px 12px;
-  background: rgba(0, 0, 0, 0.25);
-  font-size: 12px;
+  min-height: 36px;
+  padding: 8px 8px 4px 14px;
+  background: transparent;
+  font-size: 11px;
   line-height: 1;
 }
 
-:root[data-theme-mode="light"] .code-block-header {
-  background: rgba(0, 0, 0, 0.08);
+.code-block-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 32px;
+  min-height: 32px;
 }
 
 .code-block-lang {
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 12px; /* was 11px */
+  font-size: 11px;
   text-transform: lowercase;
   user-select: none;
 }
@@ -2498,13 +2494,32 @@ openclaw-chat-session-rail {
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
-  font-family: var(--font-body);
-  padding: 2px 6px;
+  width: 32px;
+  height: 32px;
+  padding: 7px;
   border-radius: var(--radius-sm);
   transition:
     color 150ms ease,
     background 150ms ease;
+}
+
+.code-block-copy__idle {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.code-block-copy__done {
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
 }
 
 .code-block-copy:hover {
@@ -2516,17 +2531,30 @@ openclaw-chat-session-rail {
   background: rgba(0, 0, 0, 0.08);
 }
 
-.code-block-copy__done {
+.code-block-copy__done,
+.code-block-copy__failed {
   display: none;
 }
 
-.code-block-copy.copied .code-block-copy__idle {
+.code-block-copy:is(.copied, .copy-failed) .code-block-copy__idle {
   display: none;
+}
+
+.code-block-copy.copied .code-block-copy__done,
+.code-block-copy.copy-failed .code-block-copy__failed {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  font-size: 13px;
 }
 
 .code-block-copy.copied .code-block-copy__done {
-  display: inline;
-  color: var(--ok);
+  color: inherit;
+}
+
+.code-block-copy.copy-failed .code-block-copy__failed {
+  color: var(--danger);
 }
 
 .json-collapse {
@@ -2535,10 +2563,9 @@ openclaw-chat-session-rail {
 
 .json-collapse summary {
   display: list-item;
+  padding: 4px 8px;
   font-size: 12px;
   color: var(--muted);
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
   user-select: none;
 }
 
@@ -3226,6 +3253,27 @@ td.data-table-key-col {
   line-height: 1.4;
 }
 
+.chat-queue__edit-input {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 26px;
+  margin: -1px 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--info) 42%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--chat-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.chat-queue__edit-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
 /* Wraps onto its own flex line below the row (see renderChatQueueItem). */
 .chat-queue__error {
   flex-basis: 100%;
@@ -3280,7 +3328,9 @@ td.data-table-key-col {
 }
 
 .chat-queue__edit,
-.chat-queue__remove {
+.chat-queue__remove,
+.chat-queue__edit-submit,
+.chat-queue__edit-cancel {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3297,19 +3347,25 @@ td.data-table-key-col {
 /* Inert instead of removed: an open edit keeps every action slot in place so the
    rows below it never shift while the operator retypes. */
 .chat-queue__edit:disabled,
-.chat-queue__remove:disabled {
+.chat-queue__remove:disabled,
+.chat-queue__edit-submit:disabled,
+.chat-queue__edit-cancel:disabled {
   color: color-mix(in srgb, var(--muted) 34%, transparent);
   cursor: default;
 }
 
 .chat-queue__edit:hover:not(:disabled),
-.chat-queue__remove:hover:not(:disabled) {
+.chat-queue__remove:hover:not(:disabled),
+.chat-queue__edit-submit:hover:not(:disabled),
+.chat-queue__edit-cancel:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .chat-queue__edit svg,
-.chat-queue__remove svg {
+.chat-queue__remove svg,
+.chat-queue__edit-submit svg,
+.chat-queue__edit-cancel svg {
   width: 13px;
   height: 13px;
   fill: none;
@@ -3351,8 +3407,9 @@ td.data-table-key-col {
 }
 
 :root[data-theme-mode="light"] .chat-line.user .chat-bubble {
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: transparent;
   background: var(--accent-subtle);
+  box-shadow: none;
 }
 
 .chat-line.assistant .chat-bubble {

@@ -9,6 +9,7 @@ import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/con
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
@@ -46,6 +47,8 @@ type NodeHostRunOptions = {
   preferGatewayBootstrapToken?: boolean;
   /** Stop cleanly after the first authenticated hello (used before service install). */
   stopAfterFirstConnect?: boolean;
+  /** Host worker sessions for this process even when durable node config is disabled. */
+  forceWorkerRuns?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -214,6 +217,10 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
     return config;
   }
   const nextConfig = structuredClone(config);
+  copyConfigResolutionFactsExcept(config, nextConfig, [
+    "gateway.remote.token",
+    "gateway.remote.password",
+  ]);
   if (nextConfig.gateway?.remote) {
     // Local node-host must not inherit gateway.remote.* auth material, which can
     // suppress GatewayClient device-token fallback and cause local token mismatches.
@@ -284,9 +291,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     env: process.env,
     enableAgentRuns: true,
     enableWorkerRuns: true,
+    forceWorkerRuns: opts.forceWorkerRuns,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  const { token, password } = opts.preferGatewayBootstrapToken
+  const { token, password } = opts.gatewayBootstrapToken
     ? {}
     : await resolveNodeHostGatewayCredentials({
         config: cfg,

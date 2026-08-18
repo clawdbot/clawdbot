@@ -453,6 +453,12 @@ function renderListView(props: CronProps) {
     hasAdvancedJobsFilters ||
     props.jobsQuery.trim().length > 0 ||
     props.jobsEnabledFilter !== "all";
+  const showStarterAutomations =
+    !props.loading &&
+    !props.error &&
+    props.jobsTotal === 0 &&
+    !hasAnyJobsFilters &&
+    props.canManage;
   const children = [
     renderSettingsSection({}, renderCronStats(props)),
     renderAdminRequired(props),
@@ -479,7 +485,7 @@ function renderListView(props: CronProps) {
             )
           : [
               renderSettingsSection({}, renderJobsTable(props, hasAnyJobsFilters)),
-              hasAnyJobsFilters || !props.canManage ? nothing : renderSuggestions(props),
+              showStarterAutomations ? renderSuggestions(props) : nothing,
             ]}
       </div>
     `,

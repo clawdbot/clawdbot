@@ -48,6 +48,11 @@ export type OffloadedRef = {
   height?: number;
 };
 
+/** Deletes prepared inbound files that never reached a durable owner. */
+export async function discardPreparedInboundMedia(refs: readonly OffloadedRef[]): Promise<void> {
+  await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+}
+
 type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];

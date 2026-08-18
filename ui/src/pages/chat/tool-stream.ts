@@ -57,6 +57,7 @@ export type ToolStreamEntry = {
   /** Monotonic edit counts received while the tool arguments stream. */
   liveDiffStat?: DiffStat;
   isError?: boolean;
+  exitCode?: number;
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
   startedAt: number;
@@ -81,7 +82,6 @@ export type ToolStreamHost = {
   chatToolMessages: Record<string, unknown>[];
   guardianNotices?: ChatGuardianNotice[];
   toolStreamSyncTimer: number | null;
-  planStatus?: PlanStatus | null;
   knownAgentRunIds?: Set<string>;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
@@ -281,6 +281,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
       text: entry.output ?? "",
       ...(entry.details !== undefined ? { details: entry.details } : {}),
       ...(entry.isError !== undefined ? { isError: entry.isError } : {}),
+      ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : {}),
     });
   }
   return {
@@ -352,7 +353,6 @@ export function resetToolStream(host: ToolStreamHost) {
   host.activityEventSeqById?.clear();
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
-  host.planStatus = null;
   host.knownAgentRunIds?.clear();
   host.waitingApprovalStatuses?.clear();
   // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
@@ -402,16 +402,6 @@ export type FallbackStatus = {
   reason?: string;
   attempts: string[];
   occurredAt: number;
-};
-
-export type PlanStatus = {
-  /** Owning run: run-scoped terminal cleanup must not clear another run's plan. */
-  runId?: string;
-  explanation?: string;
-  steps: Array<{
-    step: string;
-    status: "pending" | "in_progress" | "completed";
-  }>;
 };
 
 export type WaitingApprovalStatus = {
@@ -904,68 +894,6 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   return true;
 }
 
-function parsePlanSteps(value: unknown): PlanStatus["steps"] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const steps: PlanStatus["steps"] = [];
-  // Plan contract allows at most one in_progress step; demote extras so the
-  // collapsed summary has one unambiguous current step (matches iOS/Android).
-  let hasActiveStep = false;
-  for (const entry of value) {
-    if (typeof entry === "string") {
-      const step = toTrimmedString(entry);
-      if (step) {
-        steps.push({ step, status: "pending" });
-      }
-      continue;
-    }
-    const item = readRecord(entry);
-    const step = toTrimmedString(item?.step);
-    const status = item?.status;
-    if (!step || (status !== "pending" && status !== "in_progress" && status !== "completed")) {
-      continue;
-    }
-    const normalizedStatus = status === "in_progress" && hasActiveStep ? "pending" : status;
-    hasActiveStep ||= status === "in_progress";
-    steps.push({ step, status: normalizedStatus });
-  }
-  return steps;
-}
-
-export function normalizePlanSnapshot(
-  snapshot: { steps?: unknown; explanation?: unknown },
-  runIdValue?: unknown,
-): PlanStatus | null {
-  const steps = parsePlanSteps(snapshot.steps);
-  if (steps.length === 0) {
-    return null;
-  }
-  const explanation = toTrimmedString(snapshot.explanation);
-  const runId = toTrimmedString(runIdValue);
-  return {
-    ...(runId ? { runId } : {}),
-    ...(explanation ? { explanation } : {}),
-    steps,
-  };
-}
-
-function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
-  // Plan snapshots are run-owned: a stale or spawned-run event in the same
-  // session must not overwrite (or clear) the active run's checklist. Mirrors
-  // the compaction/fallback acceptance policy (session-scoped when idle).
-  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
-    return false;
-  }
-  const data = payload.data ?? {};
-  if (data.phase !== "update") {
-    return false;
-  }
-  host.planStatus = normalizePlanSnapshot(data, payload.runId);
-  host.requestUpdate?.();
-  return false;
-}
-
 function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
   if (payload.stream !== "codex_app_server.guardian") {
     return false;
@@ -1072,10 +1000,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return true;
   }
 
-  if (payload.stream === "plan") {
-    return handlePlanEvent(host, payload);
-  }
-
   if (payload.stream !== "tool") {
     return false;
   }
@@ -1107,6 +1031,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const resultDetails = phase === "result" ? readRecord(data.result)?.details : undefined;
   const resultIsError =
     phase === "result" && typeof data.isError === "boolean" ? data.isError : undefined;
+  const resultRecord = phase === "result" ? readRecord(data.result) : undefined;
+  const resultExitCode = resultRecord?.exitCode;
+  const exitCode =
+    typeof resultExitCode === "number" && Number.isInteger(resultExitCode)
+      ? resultExitCode
+      : undefined;
   const liveDiffStat = phase === "input_delta" ? readLiveDiffStat(data.diff) : undefined;
   if (name === "session_status" && phase === "result") {
     syncSessionStatusModelOverride(host, data);
@@ -1125,6 +1055,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       output: output || undefined,
       ...(resultDetails !== undefined ? { details: resultDetails } : {}),
       ...(resultIsError !== undefined ? { isError: resultIsError } : {}),
+      ...(exitCode !== undefined ? { exitCode } : {}),
       ...(liveDiffStat ? { liveDiffStat } : {}),
       ...(phase === "result" ? { resultReceived: true } : {}),
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
@@ -1146,6 +1077,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
     if (resultIsError !== undefined) {
       entry.isError = resultIsError;
+    }
+    if (exitCode !== undefined) {
+      entry.exitCode = exitCode;
     }
     if (liveDiffStat) {
       entry.liveDiffStat = liveDiffStat;

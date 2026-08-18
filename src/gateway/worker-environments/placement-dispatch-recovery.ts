@@ -1,5 +1,4 @@
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
 import {
   isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
@@ -112,7 +111,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       // Paired nodes are persistent runners, not one-shot SSH children. Their
       // dormant lease remains authoritative while offline; validate and create
       // the reconnect-scoped tunnel lazily when the next turn actually launches.
-      if (environment.providerId !== DEVICE_WORKER_PROVIDER_ID) {
+      if (!environment.nodeDeviceId) {
         await environments.startTunnel({
           environmentId: environment.environmentId,
           ownerEpoch: environment.ownerEpoch,

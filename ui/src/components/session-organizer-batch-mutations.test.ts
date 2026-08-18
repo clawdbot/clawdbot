@@ -12,6 +12,7 @@ import { t } from "../i18n/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
+import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -90,7 +91,9 @@ function createHarness(
     phase: params.phase ?? "connected",
     hello: {
       features:
-        params.methods === null ? {} : { methods: params.methods ?? ["sessions.patchMany"] },
+        params.methods === null
+          ? {}
+          : { methods: params.methods ?? [...SESSION_MUTATION_TEST_METHODS] },
       auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] },
     },
   } as ApplicationGatewaySnapshot;
@@ -276,15 +279,10 @@ describe("patchSessionRows", () => {
   });
 
   it.each([true, false])(
-    "uses the supplied fallback for a metadata-less legacy rejection with archived=%s",
+    "uses the supplied fallback when patchMany is not advertised with archived=%s",
     async (archived) => {
-      const rejection = new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "unknown method: sessions.patchMany",
-      });
       const harness = createHarness({
-        methods: null,
-        requestFailure: { at: 1, error: rejection },
+        methods: ["sessions.patch"],
       });
       const rows = [sessionRow(0)];
       const fallbackRows = [sessionRow(1)];
@@ -294,23 +292,7 @@ describe("patchSessionRows", () => {
         patchSessionRows(harness.host, rows, { archived }, harness.scope, { fallback }),
       ).resolves.toBe(fallbackRows);
 
-      expect(harness.request).toHaveBeenCalledOnce();
-      const requestCall = harness.request.mock.calls[0]!;
-      expect(requestCall.slice(0, 2)).toEqual([
-        "sessions.patchMany",
-        {
-          targets: [
-            {
-              key: rows[0]!.key,
-              agentId: "main",
-              expectedSessionId: rows[0]!.sessionId,
-            },
-          ],
-          patch: { archived },
-        },
-      ]);
-      expect(requestCall).toHaveLength(archived ? 3 : 2);
-      expect(requestCall[2]).toEqual(archived ? { timeoutMs: 10 * 60_000 } : undefined);
+      expect(harness.request).not.toHaveBeenCalled();
       expect(fallback).toHaveBeenCalledOnce();
       expect(harness.refreshReplacement).not.toHaveBeenCalled();
       expect(harness.publishSessionMutationError).not.toHaveBeenCalled();
@@ -323,7 +305,6 @@ describe("patchSessionRows", () => {
       message: "invalid archive request",
     });
     const harness = createHarness({
-      methods: null,
       requestFailure: { at: 1, error: rejection },
     });
     const fallback = vi.fn(async () => [sessionRow(1)]);
@@ -343,7 +324,6 @@ describe("patchSessionRows", () => {
   it("does not fallback for transport unavailability", async () => {
     const rejection = new GatewayRequestError({ code: "UNAVAILABLE", message: "disconnected" });
     const harness = createHarness({
-      methods: null,
       requestFailure: { at: 1, error: rejection },
     });
     const fallback = vi.fn(async () => [sessionRow(1)]);
@@ -374,6 +354,21 @@ describe("patchSessionRows", () => {
       harness.scope,
       "Connect to the Gateway to change sessions.",
     );
+  });
+
+  it("does not fallback when method metadata is missing", async () => {
+    const harness = createHarness({ methods: null });
+    const fallback = vi.fn(async () => [sessionRow(1)]);
+
+    await expect(
+      patchSessionRows(harness.host, [sessionRow(0)], { archived: true }, harness.scope, {
+        fallback,
+      }),
+    ).resolves.toBeNull();
+
+    expect(fallback).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledOnce();
   });
 
   it("does not fallback after an earlier chunk succeeds", async () => {

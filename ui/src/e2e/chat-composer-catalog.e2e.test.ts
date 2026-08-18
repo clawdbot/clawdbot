@@ -305,7 +305,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps startup models visible and retries failed picker discovery", async () => {
+  it("keeps startup models visible and retries discovery when the picker reopens", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const startupModel = {
         id: "startup-model",
@@ -343,14 +343,13 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-model-select="true"]').click();
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
-      await expect
-        .poll(() => composer.locator('[data-chat-model-catalog-state="error"]').isVisible())
-        .toBe(true);
+      await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/startup-model"]').isVisible())
         .toBe(true);
 
-      await composer.locator('[data-chat-model-catalog-retry="true"]').click();
+      await composer.locator('[data-chat-model-select="true"]').click();
+      await composer.locator('[data-chat-model-select="true"]').click();
 
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
       await expect
@@ -358,7 +357,7 @@ suite.define(() => {
           composer.locator('[data-chat-model-option="anthropic/discovered-model"]').isVisible(),
         )
         .toBe(true);
-      expect(await composer.locator('[data-chat-model-catalog-state="error"]').count()).toBe(0);
+      expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       for (const request of await gateway.getRequests("models.list")) {
         expect(request.params).toEqual(expect.objectContaining({ view: "configured" }));
         expect(request.params).not.toEqual(expect.objectContaining({ preparedOnly: true }));

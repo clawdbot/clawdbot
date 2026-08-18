@@ -367,7 +367,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         const destination = resolveWorkerPlacementDestination({
           cfg: config,
           ...(moveTarget.kind === "profile"
-            ? { profileId: moveTarget.profileId }
+            ? { profileId: moveTarget.profileId, machineClass: moveTarget.machineClass }
             : { deviceId: moveTarget.deviceId }),
         });
         if (!destination.ok || !destination.value) {

@@ -339,9 +339,6 @@ vi.mock("./subagents-tool.js", () => ({
 vi.mock("./tts-tool.js", () => ({
   createTtsTool: () => openClawToolsFactoryMocks.tool("tts"),
 }));
-vi.mock("./update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => openClawToolsFactoryMocks.tool("update_plan"),
-}));
 vi.mock("./video-generate-tool.js", () => ({
   createVideoGenerateTool: () => null,
 }));
@@ -548,6 +545,56 @@ describe("message tool gateway timeout", () => {
       ],
       details: { ok: true },
     });
+  });
+
+  it("carries core send settlement in private result details", async () => {
+    const sendResult = {
+      channel: "telegram",
+      to: "telegram:123",
+      via: "direct" as const,
+      mediaUrl: null,
+      deliveryStatus: "partial_failed" as const,
+      sentBeforeError: true as const,
+      result: {
+        channel: "telegram",
+        messageId: "message-1",
+        receipt: {
+          primaryPlatformMessageId: "message-1",
+          platformMessageIds: ["message-1"],
+          parts: [{ platformMessageId: "message-1", kind: "text" as const, index: 0 }],
+          threadId: "thread-1",
+          sentAt: 1,
+        },
+      },
+    };
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "telegram",
+      to: "telegram:123",
+      handledBy: "core",
+      payload: sendResult,
+      sendResult,
+      dryRun: false,
+    } satisfies MessageActionResult);
+
+    const { result } = await executeSendWithResult({
+      action: { channel: "telegram", target: "telegram:123", message: "hello" },
+    });
+
+    expect(result.details).toMatchObject({
+      messageDelivery: {
+        status: "settled",
+        primaryPlatformMessageId: "message-1",
+        partialDelivery: true,
+        createdThreadIds: ["thread-1"],
+      },
+    });
+    expect(result.content).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("messageDelivery") }),
+      ]),
+    );
   });
 
   it("does not advertise source-reply finality on ordinary message tools", () => {

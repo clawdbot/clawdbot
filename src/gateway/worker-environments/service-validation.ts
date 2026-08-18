@@ -1,14 +1,32 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { WorkerMachineOptionsSchema } from "../../../packages/gateway-protocol/src/schema/environments.js";
-import type {
-  WorkerDesktopEndpoint,
-  WorkerLease,
-  WorkerLeaseStatus,
-  WorkerMachineOption,
-  WorkerSshEndpoint,
+import {
+  WorkerProviderError,
+  type WorkerDesktopEndpoint,
+  type WorkerExecutionMode,
+  type WorkerLease,
+  type WorkerLeaseStatus,
+  type WorkerProvider,
+  type WorkerMachineOption,
+  type WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+
+export function requireProviderProvisionTimeoutMs(
+  timeoutMs: number | undefined,
+): number | undefined {
+  if (timeoutMs === undefined) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_TIMEOUT_MS) {
+    throw new WorkerProviderError(
+      `Worker provider provision timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
+    );
+  }
+  return timeoutMs;
+}
 
 function isWorkerMachineOptions(value: unknown): value is readonly WorkerMachineOption[] {
   return Value.Check(WorkerMachineOptionsSchema, value);
@@ -66,6 +84,26 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
     throw new Error("Worker provider returned an invalid inspection result");
   }
   return { status };
+}
+
+export function resolveWorkerTransportModeError(
+  provider: WorkerProvider,
+  transportMode: WorkerExecutionMode,
+): WorkerProviderError | undefined {
+  const modes = provider.supportedExecutionModes;
+  const executionMode: WorkerExecutionMode | undefined = modes?.length === 1 ? modes[0] : undefined;
+  return !executionMode || executionMode === transportMode
+    ? undefined
+    : new WorkerProviderError(
+        `${executionMode} providers must return a ${executionMode === "worker-turn" ? "node" : "SSH"} lease`,
+      );
+}
+
+export function resolveWorkerLeaseModeError(
+  provider: WorkerProvider,
+  lease: WorkerLease,
+): WorkerProviderError | undefined {
+  return resolveWorkerTransportModeError(provider, lease.node ? "worker-turn" : "remote-exec");
 }
 
 export function requireWorkerLease(value: unknown): WorkerLease {

@@ -345,7 +345,9 @@ describe("outbound message progress companion", () => {
         limit: 10,
       }).events.map((event) => event.outcome),
     ).toEqual(["queued", "platform_started", "sent"]);
-  });
+    // A pinned-SHA worktree plus a cold tsx compile of the audit/state modules costs
+    // minutes on a contended runner; the 120s default makes this fail by construction.
+  }, 300_000);
 
   it("pages large offsets across bounded owner-stream chunks", () => {
     const database = databaseOptions();

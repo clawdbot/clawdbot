@@ -5,8 +5,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
+  isPersistedSidebarRoute,
   normalizeSidebarEntries,
-  SIDEBAR_NAV_ROUTES,
   serializeSidebarEntry,
 } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -480,11 +480,11 @@ export function loadSettings(): UiSettings {
       : Array.isArray(parsedRecord.sidebarPinnedRoutes)
         ? normalizeSidebarEntries(
             parsedRecord.sidebarPinnedRoutes.flatMap((value) =>
-              typeof value === "string" && SIDEBAR_NAV_ROUTES.some((route) => route === value)
+              isPersistedSidebarRoute(value)
                 ? [
                     serializeSidebarEntry({
                       type: "route",
-                      route: value as (typeof SIDEBAR_NAV_ROUTES)[number],
+                      route: value,
                     }),
                   ]
                 : [],

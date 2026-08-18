@@ -685,6 +685,60 @@ async function prepareMainHistoryHarness(params: {
 
 describe("gateway server chat", () => {
   test.each(["chat.history", "chat.startup"] as const)(
+    "%s projects the session's durable worker placement",
+    async (method) => {
+      openDirectChatSession();
+      try {
+        await writeMainSessionStore();
+        const placement = {
+          sessionId: "sess-main",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          executionMode: "worker-turn",
+          state: "active",
+          environmentId: "env-placement",
+          generation: 7,
+          activeOwnerEpoch: 12,
+          workspaceBaseManifestRef: "manifest-base",
+          remoteWorkspaceDir: "/workspace/main",
+          workerBundleHash: "ab".repeat(32),
+          recoveryError: null,
+          terminalReason: null,
+          terminalAtMs: null,
+          turnClaim: null,
+          createdAtMs: 100,
+          updatedAtMs: 300,
+          stateChangedAtMs: 200,
+        };
+        const context = createDirectChatContext({
+          workerSessionPlacementService: {
+            getMany: () => new Map([[placement.sessionId, placement]]),
+            getPlacementMoves: () => new Map(),
+          },
+        } as unknown as Partial<GatewayRequestContext>);
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await callDirectChat(method, {
+          id: method,
+          params: makeMainSessionParams(),
+          respond: captureChatResult(responses),
+          context,
+        });
+
+        expect(responses[0]?.ok).toBe(true);
+        // Clients merge this row into the same store sessions.list fills, so a
+        // missing placement here silently erases a live worker placement.
+        expect(
+          (responses[0]?.payload as { sessionInfo?: { placement?: { state?: string } } })
+            ?.sessionInfo?.placement,
+        ).toMatchObject({ state: "active", environmentId: "env-placement" });
+      } finally {
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+      }
+    },
+  );
+
+  test.each(["chat.history", "chat.startup"] as const)(
     "%s replays the active plan snapshot in inFlightRun",
     async (method) => {
       openDirectChatSession();

@@ -7,10 +7,11 @@ import type {
   SidebarWorkboardSnapshot,
 } from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -86,6 +87,7 @@ export interface ShellViewHost {
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly commandPaletteElement: OptionalCustomElement;
+  readonly debugOverlayElement: OptionalCustomElement;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
@@ -271,7 +273,8 @@ export function renderApplicationShell(host: ShellViewHost) {
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =
-    gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
+    // Scope-aware to match the store: admin-only, never advertisement alone.
+    canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
   const activeRoute = host.routeState.routeId ?? "chat";
   // Chat has an offline outbox, New Session keeps a local draft, and Appearance
   // persists local preference intent for replay. Their server actions are
@@ -395,6 +398,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
       onRefresh: () => host.refreshControlUi(),
       onHoldUpdate: () => context.overlays.holdUpdate(),
+      onReviewUpdate: () => host.navigate("updates"),
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
@@ -431,6 +435,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
         onRefresh: () => host.refreshControlUi(),
         onHoldUpdate: () => context.overlays.holdUpdate(),
+        onReviewUpdate: () => host.navigate("updates"),
         searchQuery: host.settingsSearchQuery,
         searchBlockMatches: settingsSearchBlocks,
         onExit: () => host.exitSettings(),
@@ -467,6 +472,9 @@ export function renderApplicationShell(host: ShellViewHost) {
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
           .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
         ></openclaw-command-palette>`
+      : nothing}
+    ${isOptionalElementDefined(host.debugOverlayElement)
+      ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
       : nothing}
     <div
       class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
@@ -547,6 +555,19 @@ export function renderApplicationShell(host: ShellViewHost) {
                   ${icons.search}
                 </button>
               </openclaw-tooltip>
+              ${navCollapsed && custodianPanelAvailable
+                ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
+                    <button
+                      type="button"
+                      class="shell-chrome-controls__button shell-chrome-controls__custodian"
+                      aria-label=${t("nav.askOpenClaw")}
+                      @click=${() =>
+                        window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
+                    >
+                      ${icons.lobster}
+                    </button>
+                  </openclaw-tooltip>`
+                : nothing}
             </div>
           `
         : nothing}
@@ -602,6 +623,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           refreshRequired: overlaySnapshot.controlUiRefreshRequired,
           onRefresh: () => host.refreshControlUi(),
           onHoldUpdate: () => context.overlays.holdUpdate(),
+          onReviewUpdate: () => host.navigate("updates"),
         })}
         ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
           ? html`<div class="connection-action-block" role="status" aria-live="polite">

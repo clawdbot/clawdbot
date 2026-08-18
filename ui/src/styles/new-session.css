@@ -258,6 +258,162 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   height: 12px;
 }
 
+.session-group-defaults .exec-approval-header {
+  margin-bottom: 18px;
+}
+
+.session-group-defaults__fields {
+  display: grid;
+  gap: 16px;
+}
+
+.session-group-defaults__folder {
+  width: 100%;
+  height: auto;
+  min-height: 56px;
+  justify-content: flex-start;
+  padding: 9px 12px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
+}
+
+@media (hover: hover) {
+  .session-group-defaults__folder:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
+    background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
+  }
+}
+
+.session-group-defaults__folder:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+}
+
+.session-group-defaults__folder-copy,
+.session-group-defaults__resolved-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.session-group-defaults__folder-copy {
+  flex: 1 1 auto;
+}
+
+.session-group-defaults__folder-copy strong,
+.session-group-defaults__resolved-copy strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.session-group-defaults__folder-copy small,
+.session-group-defaults__resolved-copy small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.session-group-defaults__folder-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-group-defaults__folder .new-session-page__trigger-chevron {
+  margin-left: auto;
+}
+
+.session-group-defaults__resolved-mode {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 82%, var(--bg) 18%);
+}
+
+.session-group-defaults__resolved-mode > .new-session-page__target-icon,
+.session-group-defaults__mode-option-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.session-group-defaults__mode-dropdown {
+  display: block;
+  width: 100%;
+  container-type: inline-size;
+}
+
+.session-group-defaults__mode-dropdown::part(menu) {
+  width: min(100cqw, calc(100vw - 48px));
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+}
+
+.session-group-defaults__mode-trigger {
+  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  width: 100%;
+  min-height: 56px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor-action);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
+}
+
+@media (hover: hover) {
+  .session-group-defaults__mode-trigger:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
+    background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
+  }
+}
+
+.session-group-defaults__mode-trigger:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+}
+
+.session-group-defaults__mode-trigger:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.session-group-defaults__mode-trigger .new-session-page__trigger-chevron {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.session-group-defaults__mode-option {
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.session-group-defaults__mode-option::part(label) {
+  width: 100%;
+  min-width: 0;
+}
+
+.session-group-defaults__mode-option .session-group-defaults__resolved-copy {
+  padding: 3px 0;
+}
+
 /* Menu panel anchored under its trigger; item rows reuse the shared
    .session-menu__* geometry so its panel and hover pills stay concentric. */
 wa-popover.new-session-page__select {

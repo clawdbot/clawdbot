@@ -432,7 +432,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var nodeTerminationCleanup: @MainActor () async -> Void = {
         // CUA shutdown drains the worker before closing the daemon socket; run it
         // first so other cleanup cannot consume the app termination deadline.
-        await CuaDriverHostCoordinator.shared.shutdown()
+        if AppLaunchRuntimePlan.current.allowsCuaComputerControl {
+            await CuaDriverHostCoordinator.shared.shutdown()
+        }
         await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
     }
@@ -619,7 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
             if !shouldWaitForConnection, launchPlan.allowsAutomaticPresentation {
                 Task { @MainActor in
-                    await self.scheduleFirstRunOnboardingIfNeeded(gatewayConnected: false)
+                    await self.scheduleFirstRunOnboardingIfNeeded()
                 }
             }
             Task { @MainActor in
@@ -632,8 +634,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     mode: state.connectionMode,
                     paused: state.isPaused)
                 guard shouldWaitForConnection, launchPlan.allowsAutomaticPresentation else { return }
-                await self.scheduleFirstRunOnboardingIfNeeded(
-                    gatewayConnected: ControlChannel.shared.state == .connected)
+                await self.scheduleFirstRunOnboardingIfNeeded()
             }
         }
         TerminationSignalWatcher.shared.start()
@@ -745,36 +746,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.applicationTerminationReply(sender, true)
     }
 
-    @MainActor
-    static func shouldOpenDashboardInsteadOfOnboarding(
-        connectionMode: AppState.ConnectionMode,
-        onboardingSeen: Bool,
-        systemAgentResumePending: Bool,
-        gatewayConnected: Bool,
-        configuredInferenceModel: String?) -> Bool
-    {
-        let model = configuredInferenceModel?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return connectionMode != .unconfigured &&
-            !onboardingSeen &&
-            !systemAgentResumePending &&
-            gatewayConnected &&
-            model?.isEmpty == false
-    }
-
-    static func isCurrentFirstRunInferenceProbe(
-        expectedConnectionMode: AppState.ConnectionMode,
-        currentConnectionMode: AppState.ConnectionMode,
-        expectedRouteIdentity: String?,
-        currentRouteIdentity: String?,
-        gatewayRouteIsCurrent: Bool) -> Bool
-    {
-        expectedConnectionMode != .unconfigured &&
-            expectedConnectionMode == currentConnectionMode &&
-            expectedRouteIdentity != nil &&
-            expectedRouteIdentity == currentRouteIdentity &&
-            gatewayRouteIsCurrent
-    }
-
     static func shouldPresentScheduledFirstRunOnboarding(
         expectedConnectionMode: AppState.ConnectionMode,
         currentConnectionMode: AppState.ConnectionMode,
@@ -787,67 +758,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             expectedRouteIdentity == currentRouteIdentity
     }
 
-    private func scheduleFirstRunOnboardingIfNeeded(gatewayConnected: Bool) async {
+    private func scheduleFirstRunOnboardingIfNeeded() async {
         let connectionMode = AppStateStore.shared.connectionMode
         let expectedRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
-        var configuredInferenceModel: String?
-        if connectionMode != .unconfigured,
-           !AppStateStore.shared.onboardingSeen,
-           gatewayConnected
-        {
-            guard let route = await GatewayConnection.shared.captureRoute() else {
-                self.scheduleFirstRunOnboardingRecovery()
-                return
-            }
-            // Bind inference discovery to the connected route. A socket without a
-            // default-agent model cannot run OpenClaw and must stay in onboarding.
-            do {
-                configuredInferenceModel = try await GatewayConnection.shared.configuredInferenceModel(
-                    ifCurrentRoute: route)
-            } catch {
-                // A transient read failure is not evidence that inference is absent.
-                // Onboarding retries the same read without mutating on failure.
-                self.scheduleFirstRunOnboardingRecovery()
-                return
-            }
-            let gatewayRouteIsCurrent = await GatewayConnection.shared.isCurrentRoute(route)
-            let currentRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
-            guard Self.isCurrentFirstRunInferenceProbe(
-                expectedConnectionMode: connectionMode,
-                currentConnectionMode: AppStateStore.shared.connectionMode,
-                expectedRouteIdentity: expectedRouteIdentity,
-                currentRouteIdentity: currentRouteIdentity,
-                gatewayRouteIsCurrent: gatewayRouteIsCurrent)
-            else {
-                self.scheduleFirstRunOnboardingRecovery()
-                return
-            }
-        }
         let onboardingSeen = AppStateStore.shared.onboardingSeen
-        let systemAgentResumePending = OnboardingSystemAgentResumeStore.isPending(for: expectedRouteIdentity)
-        let shouldOpenDashboard = Self.shouldOpenDashboardInsteadOfOnboarding(
-            connectionMode: connectionMode,
-            onboardingSeen: onboardingSeen,
-            systemAgentResumePending: systemAgentResumePending,
-            gatewayConnected: gatewayConnected,
-            configuredInferenceModel: configuredInferenceModel)
-        if connectionMode != .unconfigured, onboardingSeen || shouldOpenDashboard {
-            // Completion flags do not own any route's activation receipt.
+        if connectionMode != .unconfigured, onboardingSeen {
             OnboardingController.markComplete()
-            if shouldOpenDashboard {
-                self.openDashboardAction()
-            }
             return
         }
         self.scheduleFirstRunOnboardingPresentation(
             expectedConnectionMode: connectionMode,
             expectedRouteIdentity: expectedRouteIdentity)
-    }
-
-    private func scheduleFirstRunOnboardingRecovery() {
-        self.scheduleFirstRunOnboardingPresentation(
-            expectedConnectionMode: AppStateStore.shared.connectionMode,
-            expectedRouteIdentity: OnboardingSystemAgentResumeStore.selectedRouteIdentity())
     }
 
     private func scheduleFirstRunOnboardingPresentation(

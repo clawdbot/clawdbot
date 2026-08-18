@@ -30,6 +30,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
+import { formatHookErrorForLog } from "../../fire-and-forget.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { isSessionAutoResetReason } from "../../session-auto-reset.js";
@@ -106,25 +107,21 @@ async function getRecentSqliteSessionContent(
   messageCount: number,
   capturedEvents?: TranscriptEvent[],
 ): Promise<string | null> {
-  try {
-    const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
-    const latestResetIndex = capturedEvents
-      ? -1
-      : events.findLastIndex(
-          (event) =>
-            Boolean(event) &&
-            typeof event === "object" &&
-            !Array.isArray(event) &&
-            (event as { type?: unknown }).type === "reset",
-        );
-    const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
-    return getRecentSessionContentFromEvents(
-      selectVisibleTranscriptEvents(retiredEvents),
-      messageCount,
-    );
-  } catch {
-    return null;
-  }
+  const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
+  const latestResetIndex = capturedEvents
+    ? -1
+    : events.findLastIndex(
+        (event) =>
+          Boolean(event) &&
+          typeof event === "object" &&
+          !Array.isArray(event) &&
+          (event as { type?: unknown }).type === "reset",
+      );
+  const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
+  return getRecentSessionContentFromEvents(
+    selectVisibleTranscriptEvents(retiredEvents),
+    messageCount,
+  );
 }
 
 // The bounded reader already projects the active branch, but message pages
@@ -278,19 +275,28 @@ async function saveSessionMemoryNow(
 
     let slug: string | null = null;
     let sessionContent: string | null = null;
+    let transcriptUnavailableReason: string | null = null;
 
     if (currentSessionId) {
-      sessionContent = await getRecentSqliteSessionContent(
-        {
-          agentId,
-          sessionId: currentSessionId,
+      try {
+        sessionContent = await getRecentSqliteSessionContent(
+          {
+            agentId,
+            sessionId: currentSessionId,
+            sessionKey: event.sessionKey,
+            storePath:
+              contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+          },
+          messageCount,
+          capturedEvents,
+        );
+      } catch (error) {
+        transcriptUnavailableReason = formatHookErrorForLog(error);
+        log.warn("Session transcript unavailable for memory capture", {
           sessionKey: event.sessionKey,
-          storePath:
-            contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
-        },
-        messageCount,
-        capturedEvents,
-      );
+          error: transcriptUnavailableReason,
+        });
+      }
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,
@@ -345,6 +351,13 @@ async function saveSessionMemoryNow(
     // Include conversation content if available
     if (sessionContent) {
       entryParts.push("## Conversation Summary", "", sessionContent, "");
+    } else if (transcriptUnavailableReason) {
+      entryParts.push(
+        "## Conversation Summary",
+        "",
+        `> Transcript content was unavailable: ${JSON.stringify(transcriptUnavailableReason)}`,
+        "",
+      );
     }
 
     const entry = entryParts.join("\n");

@@ -247,11 +247,29 @@ describe("cron view list pane", () => {
     expect(editing.querySelector('[data-test-id="cron-submit-run"]')).toBeNull();
   });
 
-  it("hides suggestions while any list filter is active", () => {
-    expect(renderView({ jobsQuery: "x" }).querySelector(".cron-suggestion")).toBeNull();
-    const filtered = renderView({ jobsEnabledFilter: "enabled" });
-    expect(filtered.querySelector(".cron-suggestion")).toBeNull();
-    expect(renderView().querySelector(".cron-suggestion")).not.toBeNull();
+  it("shows starter automations only for a loaded empty inventory", () => {
+    const findStarterSection = (container: Element) =>
+      Array.from(container.querySelectorAll(".settings-section")).find(
+        (section) =>
+          section.querySelector(".settings-section__heading")?.textContent?.trim() ===
+          "Starter automations",
+      ) ?? null;
+
+    expect(findStarterSection(renderView({ jobs: [], jobsTotal: 0 }))).not.toBeNull();
+
+    const configuredJobs = [
+      createJob("active"),
+      createJob("paused", { enabled: false }),
+      createJob("failing", { state: { lastRunStatus: "error" } }),
+    ];
+    for (const job of configuredJobs) {
+      expect(findStarterSection(renderView({ jobs: [job], jobsTotal: 1 }))).toBeNull();
+    }
+
+    expect(findStarterSection(renderView({ loading: true }))).toBeNull();
+    expect(findStarterSection(renderView({ error: "Unable to load automations." }))).toBeNull();
+    expect(findStarterSection(renderView({ jobsQuery: "x" }))).toBeNull();
+    expect(findStarterSection(renderView({ jobsEnabledFilter: "enabled" }))).toBeNull();
   });
 
   it("shows a scheduler banner only while the scheduler is off", () => {

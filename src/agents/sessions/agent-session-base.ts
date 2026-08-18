@@ -1,4 +1,5 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -197,8 +198,8 @@ export abstract class AgentSessionBase {
     headers?: Record<string, string>;
   }> {
     if (
-      this.agent.streamFn ===
-      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+      getStreamLlmRuntime(this.agent.streamFn) ===
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime
     ) {
       return this.getRequiredRequestAuth(model);
     }

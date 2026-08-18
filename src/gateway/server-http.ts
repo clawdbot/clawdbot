@@ -398,6 +398,8 @@ export function createGatewayHttpServer(opts: {
           Boolean(opts.handleMcpOAuthCallbackRequest),
         () => opts.handleMcpOAuthCallbackRequest?.(req, res) ?? false,
       );
+      // The hook owner claims only its configured base path before entering HTTP admission;
+      // this unconditional dispatcher must stay plain so unrelated routes can fall through.
       addRequestStage(true, () => handleHooksRequest(req, res));
       addAdmittedStage(
         Boolean(opts.handleWatchNodeRequest) && scopedRequestPath.startsWith("/api/nodes/watch/"),
@@ -643,7 +645,4 @@ export function createGatewayHttpServer(opts: {
   return httpServer;
 }
 
-export {
-  attachGatewayUpgradeHandler,
-  attachWorkerGatewayUpgradeHandler,
-} from "./server-http-upgrades.js";
+export { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
