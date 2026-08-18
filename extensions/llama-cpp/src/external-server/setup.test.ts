@@ -270,6 +270,63 @@ describe("llama-server setup", () => {
     expect(provider?.headers).toBeUndefined();
   });
 
+  it("prompts for a new API key when a replacement endpoint needs auth", async () => {
+    discoverMock.mockResolvedValue(successfulDiscovery());
+    const prompter = {
+      text: vi
+        .fn()
+        .mockResolvedValueOnce("http://replacement.example:8080")
+        .mockResolvedValueOnce("replacement-key"),
+      confirm: vi.fn(async () => true),
+    };
+
+    const result = await runLlamaServerSetup({
+      config: {
+        models: {
+          providers: {
+            "llama-server": {
+              baseUrl: "http://localhost:8080/v1",
+              apiKey: "old-config-key",
+              headers: { Authorization: "Bearer old-header-key" },
+              models: [],
+            },
+          },
+        },
+        auth: {
+          profiles: {
+            "llama-server:default": { provider: "llama-server", mode: "api_key" },
+          },
+          order: { "llama-server": ["llama-server:default"] },
+        },
+      },
+      env: { LLAMA_SERVER_API_KEY: "old-endpoint-key" },
+      prompter,
+      runtime: runtime(),
+      secretInputMode: "plaintext",
+      isRemote: false,
+      openUrl: vi.fn(),
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    } as unknown as ProviderAuthContext);
+
+    expect(prompter.text).toHaveBeenCalledTimes(2);
+    expect(discoverMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://replacement.example:8080/v1",
+        apiKey: "replacement-key",
+      }),
+    );
+    expect(result.profiles).toEqual([
+      {
+        profileId: "llama-server:default",
+        credential: {
+          type: "api_key",
+          provider: "llama-server",
+          key: "replacement-key",
+        },
+      },
+    ]);
+  });
+
   it("returns an API-key profile when the operator enables auth", async () => {
     discoverMock.mockResolvedValue(successfulDiscovery());
     const prompter = {

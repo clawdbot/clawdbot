@@ -129,6 +129,25 @@ function removeLlamaServerAuthProfileConfig(config: OpenClawConfig): OpenClawCon
   };
 }
 
+function stripLlamaServerEndpointAuth(config: OpenClawConfig): OpenClawConfig {
+  const withoutProfile = removeLlamaServerAuthProfileConfig(config);
+  const provider = withoutProfile.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const endpointSafeProvider = stripEndpointCredentials(provider);
+  if (!endpointSafeProvider) {
+    return withoutProfile;
+  }
+  return {
+    ...withoutProfile,
+    models: {
+      ...withoutProfile.models,
+      providers: {
+        ...withoutProfile.models?.providers,
+        [LLAMA_SERVER_PROVIDER_ID]: endpointSafeProvider,
+      },
+    },
+  };
+}
+
 function buildAuthProfileRemovalPatch(config: OpenClawConfig): Partial<OpenClawConfig> {
   const profiles = config.auth?.profiles;
   const order = config.auth?.order;
@@ -374,8 +393,8 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     }));
   if (usesApiKey && !apiKey) {
     apiKey = await ensureApiKeyFromEnvOrPrompt({
-      config: ctx.config,
-      env: ctx.env,
+      config: endpointChanged ? stripLlamaServerEndpointAuth(ctx.config) : ctx.config,
+      env: endpointChanged ? {} : ctx.env,
       provider: LLAMA_SERVER_PROVIDER_ID,
       envLabel: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
       promptMessage: "Enter the llama-server API key",
