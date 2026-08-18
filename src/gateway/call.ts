@@ -87,7 +87,11 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
-import { GatewayTransportError, isGatewayTransportError } from "./transport-error.js";
+import {
+  GatewayTransportError,
+  type GatewayTransportErrorKind,
+  isGatewayTransportError,
+} from "./transport-error.js";
 export type { GatewayConnectionDetails };
 export {
   GatewayTransportError,
