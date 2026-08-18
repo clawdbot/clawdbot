@@ -650,8 +650,9 @@ extension OpenClawChatViewModel {
         case "plan":
             // Released Gateways through v2026.8.x lack progressCard.get and only emit stream:"plan".
             // Rendering these only when the store is known-absent keeps a dual-emitting Gateway from
-            // fighting the durable card. Remove with the Gateway's legacy dual-emit once the minimum
-            // supported Gateway ships the store.
+            // fighting the durable card. SUNSET 2026-10-18: this fallback is a fixed cutover window,
+            // not a permanent contract. On that date delete it together with the Gateway's legacy
+            // stream:"plan" dual-emit and the Android twin in ChatController.kt. Tracked: #125639.
             guard self.progressCardStoreAvailable == false else { return }
             guard evt.data["phase"]?.value as? String == "update" else { return }
             let steps = Self.parseLegacyProgressCardSteps(evt.data["steps"])
