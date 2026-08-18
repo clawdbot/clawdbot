@@ -66,6 +66,10 @@ export type TerminalOpenOutcome =
   | { ok: true; sessionId: string; agentId: string; cwd: string; shell: string }
   | { ok: false; code: "limit" | "spawn_failed" | "closed"; message: string };
 
+export type TerminalAgentActionOutcome =
+  | { ok: true }
+  | { ok: false; code: "session_unavailable" | "backend_failed" };
+
 /** Abort state shared between a pending open and lifecycle/policy teardown. */
 export type TerminalPendingOpen = {
   agentId: string;
