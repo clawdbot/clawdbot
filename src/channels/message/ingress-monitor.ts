@@ -455,14 +455,12 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   };
 
   const pruneIfDue = async (owner: "admission" | "pump"): Promise<void> => {
-    const admissionOwned = pruneIntervalMs <= 0;
-    // Zero preserves admission-owned channel compatibility: prune once per external
-    // admission operation, never from idle, timer, or requested drain pumps.
-    if ((owner === "admission") !== admissionOwned) {
+    // Zero preserves admission-owned compatibility: prune once per admission, never from a pump.
+    if ((owner === "admission") !== pruneIntervalMs <= 0) {
       return;
     }
     const currentTime = now();
-    if (!admissionOwned && currentTime - lastPrunedAt < pruneIntervalMs) {
+    if (owner === "pump" && currentTime - lastPrunedAt < pruneIntervalMs) {
       return;
     }
     await getQueue().prune({ ...pruneOptions, now: currentTime });
