@@ -8,7 +8,10 @@ import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
+import {
+  filterSkillWorkshopProposals,
+  type SkillWorkshopAppliedDiffMode,
+} from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs } from "../plugins/plugins-hub.ts";
@@ -145,6 +148,7 @@ function renderSkillWorkshopPage(
               inspectingKey: state.skillWorkshopInspectingKey,
               proposals: state.skillWorkshopProposals,
               selectedKey: state.skillWorkshopSelectedKey,
+              appliedDiffMode: state.skillWorkshopAppliedDiffMode,
               statusFilter: state.skillWorkshopStatusFilter,
               query: state.skillWorkshopQuery,
               filePreviewKey: state.skillWorkshopFilePreviewKey,
@@ -195,6 +199,10 @@ function renderSkillWorkshopPage(
               },
               onModeChange: (mode) => setSkillWorkshopMode(state, mode, requestUpdate),
               onSelect: selectProposal,
+              onAppliedDiffModeChange: (mode: SkillWorkshopAppliedDiffMode) => {
+                state.skillWorkshopAppliedDiffMode = mode;
+                requestUpdate();
+              },
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
               onApply: (key) => {

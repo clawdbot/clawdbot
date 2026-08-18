@@ -4,8 +4,8 @@ import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
-import type { ApplicationNavigationOptions } from "../app/context.ts";
-import type { AuthenticatedUser } from "../app/user-profile.ts";
+import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
@@ -45,11 +45,7 @@ import "./elapsed-time.ts";
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 export interface SessionListHost {
-  readonly sessionDataContext:
-    | {
-        gateway: { snapshot: { selfUser?: AuthenticatedUser | null } };
-      }
-    | undefined;
+  readonly sessionDataContext: Pick<ApplicationContext, "gateway"> | undefined;
   readonly sidebarLiveActivity: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
@@ -193,6 +189,22 @@ export function renderRecentSession(params: {
         host.sessionData.presenceInstanceId,
       ).users.some((user) => user.id === ownerId && user.watchedSessions.includes(session.key))
     : undefined;
+  const gateway = host.sessionDataContext?.gateway;
+  const channelAvatarAuth = {
+    authTokens: gateway
+      ? resolveControlUiAuthCandidates({
+          hello: gateway.snapshot.hello,
+          settings: { token: gateway.connection.token },
+          password: gateway.connection.password,
+        })
+      : [],
+    authReady: Boolean(
+      gateway &&
+      (gateway.snapshot.hello ||
+        gateway.connection.token.trim() ||
+        gateway.connection.password.trim()),
+    ),
+  };
   const { running, leadingIndicator, trailingIndicator, renderedOwnerId } =
     renderSessionLeadingState(
       session,
@@ -202,6 +214,7 @@ export function renderRecentSession(params: {
       ownerViewing,
       session.participants,
       session.participantCount,
+      channelAvatarAuth,
     );
   const trailingDescription = session.isChild
     ? ""

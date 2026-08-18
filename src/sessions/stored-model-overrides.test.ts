@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import { resolveStoredModelOverride } from "./stored-model-overrides.js";
 
 describe("resolveStoredModelOverride", () => {
   it("recovers resolved provenance for legacy auto-fallback overrides", () => {

@@ -106,6 +106,35 @@ describe("computeLineDiff", () => {
       { kind: "skip", text: "" },
     ]);
   });
+
+  it("collapses unchanged runs to three context lines when asked", () => {
+    const oldLines = Array.from({ length: 40 }, (_, index) => `line ${index}`);
+    const newLines = [...oldLines];
+    newLines[20] = "changed";
+
+    const full = computeLineDiff(oldLines.join("\n"), newLines.join("\n"));
+    const compact = computeLineDiff(oldLines.join("\n"), newLines.join("\n"), {
+      compactUnchanged: true,
+    });
+
+    expect(full).toHaveLength(41);
+    expect(compact.filter((line) => line.kind === "ctx").map((line) => line.text)).toEqual([
+      "line 17",
+      "line 18",
+      "line 19",
+      "line 21",
+      "line 22",
+      "line 23",
+    ]);
+    expect(compact.filter((line) => line.kind === "skip")).toHaveLength(2);
+  });
+
+  it("compacts an identical pair to nothing so callers can say unchanged", () => {
+    const text = "alpha\nbeta\ngamma";
+
+    expect(computeLineDiff(text, text, { compactUnchanged: true })).toEqual([]);
+    expect(computeLineDiff(text, text)).toHaveLength(3);
+  });
 });
 
 describe("buildWriteDiffLines", () => {

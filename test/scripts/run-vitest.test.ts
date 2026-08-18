@@ -643,6 +643,29 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("keeps mapped configs at their measured silence floor when env is smaller", () => {
+    expect(
+      resolveRunVitestSpawnEnv(
+        { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000", PATH: "/usr/bin" },
+        ["run", "--config", "test/vitest/vitest.extension-codex.config.ts"],
+      ),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2400000",
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveRunVitestSpawnEnv(
+        { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000", PATH: "/usr/bin" },
+        ["run", "--config", "test/vitest/vitest.unit.config.ts"],
+      ),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+      PATH: "/usr/bin",
+    });
+  });
+
   it("disables an inherited Node compile cache for every Vitest child", () => {
     expect(
       resolveRunVitestSpawnEnv(

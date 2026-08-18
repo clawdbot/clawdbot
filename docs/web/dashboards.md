@@ -109,6 +109,20 @@ board with fresh sessions; by default they are display-only, and granting the
 widget its declared server tools makes it fully interactive — with the same
 one-tap, revision-bound approval as everything else.
 
+## A2UI widgets
+
+When the Canvas plugin is enabled, agents can render A2UI JSONL as a dashboard
+widget. A2UI widgets use the same stable name, tab, size, pinning, sandbox, and
+update-in-place behavior as HTML widgets. The renderer is loaded from the
+Gateway's capability-scoped A2UI asset route; the renderer bundle is not copied
+into each widget, and the Canvas file host does not need to be enabled.
+
+A2UI actions use the normal widget bridge. By default, clicks become quiet
+session notices that the agent sees on its next turn. If the widget declares
+and receives the `prompt` grant, its actions can instead send a visible prompt
+into the thread. Disabling the Canvas plugin removes the A2UI kind and leaves
+stored widgets visibly unavailable until the plugin is enabled again.
+
 ## Good to know
 
 - Resetting a thread that has a board asks for confirmation and keeps the

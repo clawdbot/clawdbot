@@ -100,12 +100,19 @@ function splitDiffLines(text: string): string[] {
   return lines;
 }
 
-function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[] {
-  if (lines.length <= MAX_DIFF_RENDER_LINES && !inputTruncated) {
+function compactLineDiff(
+  lines: DiffLine[],
+  inputTruncated: boolean,
+  compactUnchanged: boolean,
+): DiffLine[] {
+  if (!compactUnchanged && lines.length <= MAX_DIFF_RENDER_LINES && !inputTruncated) {
     return lines;
   }
   const hasChange = lines.some((line) => line.kind === "add" || line.kind === "del");
   if (!hasChange) {
+    if (compactUnchanged && !inputTruncated) {
+      return [];
+    }
     return inputTruncated
       ? [{ kind: "skip", text: "" }]
       : [...lines.slice(0, MAX_DIFF_RENDER_LINES), { kind: "skip", text: "" }];
@@ -151,8 +158,14 @@ function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[]
 /**
  * Compute a line diff between two snippets (no file line numbers available).
  * Standard LCS table; inputs are bounded so the quadratic cost stays small.
+ *
+ * `compactUnchanged` collapses unchanged runs to three lines of context.
  */
-export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
+export function computeLineDiff(
+  oldText: string,
+  newText: string,
+  options?: { compactUnchanged?: boolean },
+): DiffLine[] {
   const allOldLines = splitDiffLines(oldText);
   const allNewLines = splitDiffLines(newText);
   const inputTruncated =
@@ -213,7 +226,7 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
     }
     j++;
   }
-  return compactLineDiff(lines, inputTruncated);
+  return compactLineDiff(lines, inputTruncated, options?.compactUnchanged === true);
 }
 
 /** All-added preview for freshly written files, numbered from line 1. */

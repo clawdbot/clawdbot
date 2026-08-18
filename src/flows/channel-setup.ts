@@ -72,7 +72,7 @@ export function createChannelSetupTransaction(params: {
     hooks.clear();
   };
   return {
-    onPostWriteHook(hook: ChannelOnboardingPostWriteHook) {
+    onPostWriteHook: (hook: ChannelOnboardingPostWriteHook) => {
       hooks.set(`${hook.channel}:${hook.accountId}`, hook);
     },
     async commit(
@@ -471,7 +471,12 @@ export async function setupChannels(
         previousCfg,
       });
       if (postWriteHook) {
-        options?.onPostWriteHook?.(postWriteHook);
+        if (!options?.onPostWriteHook) {
+          throw new Error(
+            `Channel setup internal error: ${channel} produced a post-write hook without a transaction sink.`,
+          );
+        }
+        options.onPostWriteHook(postWriteHook);
       }
     }
     addSelection(channel);

@@ -194,6 +194,21 @@ describe("TerminalConnection", () => {
     },
   );
 
+  it("closes a session-scoped open when its response is unusable", async () => {
+    const { client, conn } = makeHarness();
+    const { shell: _dropped, ...incomplete } = sessionResult();
+    client.nextResponse = incomplete;
+
+    await expect(openSession(conn, {}, { sessionKey: "agent:main:chat" })).rejects.toBeInstanceOf(
+      TerminalOpenUnusableSessionError,
+    );
+
+    expect(client.requests.at(-1)).toMatchObject({
+      method: "terminal.close",
+      params: { sessionId: "s1" },
+    });
+  });
+
   it("opens a session and routes its data to the registered sink", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
@@ -543,6 +558,7 @@ describe("TerminalConnection", () => {
       "terminal.resize",
       "terminal.close",
     ]);
+    expect(client.requests.at(-1)?.params).toEqual({ sessionId: "s1" });
   });
 
   it.each([

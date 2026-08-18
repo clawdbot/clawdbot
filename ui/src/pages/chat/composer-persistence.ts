@@ -46,7 +46,6 @@ import {
   durableComposerScopeIdentity,
   type DurableChatComposerSnapshot,
 } from "./durable-composer-persistence.ts";
-import { isInflightSteer } from "./steered-chip.ts";
 
 const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
 export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
@@ -140,7 +139,7 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   const sendState =
     item.sendState === "sending"
       ? "waiting-reconnect"
-      : item.sendState === "executing-command" || isInflightSteer(item)
+      : item.sendState === "executing-command"
         ? "unconfirmed"
         : item.sendState === "waiting-model"
           ? "failed"

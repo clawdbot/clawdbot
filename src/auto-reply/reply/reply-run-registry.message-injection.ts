@@ -28,7 +28,6 @@ type ReplyMessageInjectionRejectionReason =
   | "no_active_run"
   | "not_running"
   | "stale_run"
-  | "leaf_mismatch"
   | "run_mismatch"
   | "injection_unavailable"
   | ReplyBackendQueueMessageMismatch
@@ -101,11 +100,14 @@ function resolveReplyBackendMessageInjection(
 
 export function resolveReplyMessageInjectionRejection(params: {
   operation: ReplyOperation | undefined;
-  originatingLeafEntryId: string | null | undefined;
   expectedRunId?: string;
   options?: ReplyBackendQueueMessageOptions;
 }):
-  | { reason: ReplyMessageInjectionRejectionReason; errorMessage?: string }
+  | {
+      reason: ReplyMessageInjectionRejectionReason;
+      errorMessage?: string;
+      backend?: ReplyBackendHandle;
+    }
   | { backend: ReplyBackendHandle; injection: ReplyBackendMessageInjection } {
   const { operation } = params;
   if (!operation || replyRunState.activeRunsByKey.get(operation.key) !== operation) {
@@ -117,9 +119,6 @@ export function resolveReplyMessageInjectionRejection(params: {
   const expectedRunId = normalizeOptionalString(params.expectedRunId);
   // Exact run identity supersedes the operation's immutable origin leaf. The
   // same run advances its transcript leaf during ordinary tool/output progress.
-  if (!expectedRunId && operation.originatingLeafEntryId !== params.originatingLeafEntryId) {
-    return { reason: "leaf_mismatch" };
-  }
   if (isReplyRunEvidenceStale(operation)) {
     return { reason: "stale_run" };
   }
@@ -139,16 +138,31 @@ export function resolveReplyMessageInjectionRejection(params: {
     return { reason: "injection_unavailable", errorMessage: String(error) };
   }
   const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options, operation);
-  return mismatch ? { reason: mismatch } : { backend, injection };
-}
-
-function isLeafOwnershipRejection(reason: ReplyMessageInjectionRejectionReason): boolean {
-  return (
-    reason === "no_active_run" ||
-    reason === "not_running" ||
-    reason === "stale_run" ||
-    reason === "leaf_mismatch"
+  const activeFingerprint = normalizeOptionalString(
+    backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint,
   );
+  const pendingInputAuthorityProven =
+    activeFingerprint !== undefined &&
+    normalizeOptionalString(params.options?.pendingInputAuthorityFingerprint) === activeFingerprint;
+  if (
+    mismatch === "tool_authority_mismatch" &&
+    pendingInputAuthorityProven &&
+    !params.options?.images?.length &&
+    backend.claimPendingUserInputAnswer
+  ) {
+    return {
+      backend,
+      injection: {
+        isAvailable: () => true,
+        queueMessage: async (text, options) => {
+          if (!(await backend.claimPendingUserInputAnswer?.(text, options))) {
+            throw new Error("pending user input was not accepted");
+          }
+        },
+      },
+    };
+  }
+  return mismatch ? { reason: mismatch, backend } : { backend, injection };
 }
 
 export function beginReplyMessageInjectionTarget(
@@ -171,19 +185,28 @@ export function beginReplyMessageInjectionTarget(
     : undefined;
   const resolved = resolveReplyMessageInjectionRejection({
     operation,
-    originatingLeafEntryId: target.originatingLeafEntryId,
     expectedRunId: target.identity === "run" ? target.runId : undefined,
     options: queueOptions,
   });
   if (!("injection" in resolved)) {
-    const immediateRejection = { status: "rejected" as const, ...resolved };
+    const immediateRejection = {
+      status: "rejected" as const,
+      reason: resolved.reason,
+      ...(resolved.errorMessage ? { errorMessage: resolved.errorMessage } : {}),
+    };
+    const cancelPendingImage =
+      options?.isInboundUserMessage === true &&
+      Boolean(options.images?.length) &&
+      (resolved.reason === "tool_authority_mismatch" ||
+        resolved.reason === "image_input_unsupported")
+        ? resolved.backend?.cancelPendingUserInput
+        : undefined;
     return {
       targetRunId: target.runId,
-      ...(target.identity === "leaf" && isLeafOwnershipRejection(resolved.reason)
-        ? { rejectBeforeAck: true as const }
-        : {}),
       acceptance: Promise.resolve(false),
-      outcome: Promise.resolve(immediateRejection),
+      outcome: cancelPendingImage
+        ? Promise.resolve(cancelPendingImage("image-reply")).then(() => immediateRejection)
+        : Promise.resolve(immediateRejection),
     };
   }
   const targetRunId = normalizeOptionalString(resolved.backend.runId);
@@ -256,13 +279,53 @@ export function beginReplyMessageInjectionTarget(
   };
 }
 
+/** Finalize adoption and cleanup on the captured operation without rediscovery. */
+export async function finalizeReplyMessageInjectionAttempt(params: {
+  attempt: ReplyMessageInjectionAttempt;
+  target: ReplyMessageInjectionTarget;
+  inboundAudio?: boolean;
+  onAccepted?: () => void;
+  onAdopted?: () => void | Promise<void>;
+  shouldAbortOnAdoptionError?: (error: unknown) => boolean;
+}) {
+  const outcome = await params.attempt.outcome;
+  if (outcome.status === "rejected") {
+    return { status: "rejected" as const, outcome, targetRunId: params.attempt.targetRunId };
+  }
+  recordAcceptedReplyMessageInjectionTarget(params.target, {
+    inboundAudio: params.inboundAudio,
+  });
+  params.onAccepted?.();
+  let aborted = outcome.result?.transcriptCommit === "unconfirmed";
+  if (aborted) {
+    abortReplyMessageInjectionTarget(params.target);
+  }
+  let adoptionError: unknown;
+  try {
+    await params.onAdopted?.();
+  } catch (error) {
+    adoptionError = error;
+    if (params.shouldAbortOnAdoptionError?.(error)) {
+      abortReplyMessageInjectionTarget(params.target);
+      aborted = true;
+    }
+  }
+  return {
+    status: "accepted" as const,
+    outcome,
+    targetRunId: params.attempt.targetRunId,
+    aborted,
+    ...(adoptionError === undefined ? {} : { adoptionError }),
+  };
+}
+
 /** Abort only the operation captured by this target; never a same-key successor. */
-export function abortReplyMessageInjectionTarget(target: ReplyMessageInjectionTarget): boolean {
+function abortReplyMessageInjectionTarget(target: ReplyMessageInjectionTarget): boolean {
   return target[replyMessageInjectionTargetOperation].abortByUser();
 }
 
 /** Record accepted input on the exact operation without rediscovering its session slot. */
-export function recordAcceptedReplyMessageInjectionTarget(
+function recordAcceptedReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   options?: { inboundAudio?: boolean },
 ): void {

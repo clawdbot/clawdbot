@@ -402,6 +402,9 @@ describe("Control UI service-worker production update E2E", () => {
       await rename(outDir, previousOutDir);
       await rename(nextOutDir, outDir);
       await rm(previousOutDir, { force: true, recursive: true });
+      // Assets and Gateway identity advance together in a deployment. Publish
+      // build B before a stale lazy chunk can reload and reconnect the document.
+      await gateway.setServerBuildId(buildB);
       // The production preview serves static files directly instead of applying
       // the Gateway's deep-link canonicalization before returning index.html.
       await page.evaluate(() => window.history.replaceState(window.history.state, "", "/"));
@@ -436,8 +439,15 @@ describe("Control UI service-worker production update E2E", () => {
         .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
         .toContain("thread-during-worker-refresh");
       await page.waitForTimeout(300);
-      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
-      await gateway.setServerBuildId(buildB);
+      const catalogOpensBeforeWorkerActivation = (
+        await gateway.getRequests("terminal.open")
+      ).filter(
+        (request) =>
+          typeof request.params === "object" &&
+          request.params !== null &&
+          "catalog" in request.params,
+      );
+      expect(catalogOpensBeforeWorkerActivation.length).toBeLessThanOrEqual(1);
       installGate.release();
       await reloaded;
       await ensureControlledPage(page, pageErrors, buildB);
@@ -461,8 +471,15 @@ describe("Control UI service-worker production update E2E", () => {
           }),
         )
         .toEqual({ agentId: "research", available: true, open: true });
-      const terminalOpen = await gateway.waitForRequest("terminal.open");
-      expect(terminalOpen.params).toMatchObject({
+      const catalogOpens = (await gateway.getRequests("terminal.open")).filter(
+        (request) =>
+          typeof request.params === "object" &&
+          request.params !== null &&
+          "catalog" in request.params,
+      );
+      expect(catalogOpens).toHaveLength(1);
+      const [terminalOpen] = catalogOpens;
+      expect(terminalOpen?.params).toMatchObject({
         agentId: "research",
         cols: expect.any(Number),
         rows: expect.any(Number),
@@ -472,7 +489,6 @@ describe("Control UI service-worker production update E2E", () => {
           threadId: "thread-during-worker-refresh",
         },
       });
-      expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
 
       await expect
         .poll(() => page.evaluate(() => caches.keys()))

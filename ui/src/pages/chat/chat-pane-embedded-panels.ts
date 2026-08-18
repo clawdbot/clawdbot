@@ -88,6 +88,7 @@ export function sidebarPanelDefinitions(
           .client=${state.connected ? state.client : null}
           .available=${state.terminalAvailable}
           .agentId=${params?.agentId ?? null}
+          .sessionKey=${state.sessionKey}
           .themeMode=${document.documentElement.dataset.theme === "light" ? "light" : "dark"}
           .basePath=${state.basePath}
         ></openclaw-terminal-panel>`

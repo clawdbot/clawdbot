@@ -127,6 +127,7 @@ function createProposal(overrides: Partial<SkillWorkshopProposal>): SkillWorksho
     recencyGroup: "today",
     ageLabel: "now",
     supportFiles: [],
+    bodyLoaded: true,
     isNew: false,
     ...overrides,
   };

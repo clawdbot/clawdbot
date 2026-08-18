@@ -8,6 +8,10 @@ import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.
 import { createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
+import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
@@ -23,6 +27,7 @@ afterEach(async () => {
   vi.useRealTimers();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  resetPluginRuntimeStateForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -30,6 +35,56 @@ async function createStateDir(): Promise<string> {
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-widget-tool-"));
   tempDirs.push(stateDir);
   return stateDir;
+}
+
+function registerDiagramContentKind(): void {
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({
+    id: "diagram",
+    source: "diagram-fixture",
+    origin: "bundled",
+    enabled: true,
+    configSchema: false,
+  });
+  createPluginBoardWidgetContentKindRegistrar(registry)(record, {
+    kind: "diagram",
+    label: "Diagram",
+    resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
+    validateSource(source) {
+      if (!source.startsWith("diagram:")) {
+        throw new Error("diagram prefix required");
+      }
+    },
+    composeDocument: ({ source }) => `<main>${source}</main>`,
+  });
+  setActivePluginRegistry(registry);
+}
+
+function createBoardPutCaller() {
+  const mock = vi.fn(async (_method: string, params: Record<string, unknown>) => ({
+    sessionKey: params.sessionKey,
+    revision: 1,
+    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+    widgets: [
+      {
+        name: params.name,
+        tabId: "main",
+        contentKind: "plugin",
+        pluginKind: "diagram:diagram",
+        sizeW: 6,
+        sizeH: 4,
+        position: 0,
+        grantState: "none",
+        revision: 1,
+      },
+    ],
+    resolvedWidgetName: params.name,
+  }));
+  const callGateway: InProcessGatewayCaller = async <T>(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> => (await mock(method, params)) as T;
+  return { mock, callGateway };
 }
 
 function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
@@ -50,6 +105,7 @@ async function executeWidget(params: {
   presentation?: "card" | "full-bleed" | "frameless";
   after?: string;
   capabilities?: { netOrigins?: string[]; tools?: string[] };
+  kind?: string;
 }) {
   const tool = createShowWidgetTool({
     stateDir: params.stateDir,
@@ -68,6 +124,7 @@ async function executeWidget(params: {
     ...(params.presentation ? { presentation: params.presentation } : {}),
     ...(params.after ? { after: params.after } : {}),
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+    ...(params.kind ? { kind: params.kind } : {}),
   });
   const text = result.content.find((item) => item.type === "text")?.text;
   if (!text) {
@@ -95,6 +152,89 @@ async function executeWidget(params: {
 }
 
 describe("show_widget", () => {
+  it("builds a sorted kind enum and routes registered source through board put", async () => {
+    registerDiagramContentKind();
+    const stateDir = await createStateDir();
+    const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
+    const tool = createShowWidgetTool({
+      stateDir,
+      sessionId: "registered",
+      agentSessionKey: "agent:main:registered",
+      callGateway,
+    });
+    const kindSchema = (tool.parameters as { properties?: { kind?: { enum?: string[] } } })
+      .properties?.kind;
+
+    expect(kindSchema?.enum).toEqual(["html", "diagram"]);
+    await tool.execute("registered", {
+      title: "Diagram",
+      widget_code: "diagram:ready",
+      kind: "diagram",
+      pin: true,
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      "board.widget.put",
+      expect.objectContaining({
+        content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
+      }),
+    );
+
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    await expect(
+      tool.execute("stale", {
+        title: "Diagram",
+        widget_code: "diagram:ready",
+        kind: "diagram",
+      }),
+    ).rejects.toThrow(
+      'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
+    );
+  });
+
+  it("uses board-only delivery when inline hosting is disabled", async () => {
+    registerDiagramContentKind();
+    const stateDir = await createStateDir();
+    const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
+    const tool = createShowWidgetTool({
+      stateDir,
+      sessionId: "board-only",
+      agentSessionKey: "agent:main:board-only",
+      inlineHostEnabled: false,
+      callGateway,
+    });
+
+    await expect(
+      tool.execute("unpinned", {
+        title: "Diagram",
+        widget_code: "diagram:ready",
+        kind: "diagram",
+      }),
+    ).rejects.toThrow(
+      "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
+    );
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+
+    const result = await tool.execute("pinned", {
+      title: "Diagram",
+      widget_code: "diagram:ready",
+      kind: "diagram",
+      pin: true,
+    });
+    const text = result.content.find((item) => item.type === "text")?.text;
+    expect(JSON.parse(text ?? "null")).toEqual({
+      status: "pinned",
+      boardWidgetName: "diagram",
+      text: "Widget pinned to dashboard tab main as diagram",
+    });
+    expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
+      "board.widget.put",
+      expect.objectContaining({
+        content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
+      }),
+    );
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+
   it("tells the agent to use widgets proactively", () => {
     expect(createShowWidgetTool().description).toMatch(
       /^Visual helps\? Make widget\. Do not wait for ask\./,

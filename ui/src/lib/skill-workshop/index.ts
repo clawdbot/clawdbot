@@ -57,6 +57,12 @@ export type SkillWorkshopProposal = {
   name: string;
   oneLine: string;
   body: string;
+  /**
+   * A proposal inspected through the gateway may legitimately have an empty
+   * body, so emptiness alone cannot mean "not fetched yet". Cold entries from
+   * the manifest carry `false`.
+   */
+  bodyLoaded: boolean;
   status: SkillWorkshopProposalStatus;
   origin?: {
     agentId?: string;
@@ -78,6 +84,7 @@ export type SkillWorkshopProposal = {
 export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
 export type SkillWorkshopAction = "apply" | "evaluate" | "revise" | "reject";
 export type SkillWorkshopMode = "board" | "today";
+export type SkillWorkshopAppliedDiffMode = "changes" | "full";
 
 export type SkillWorkshopActionBusy = {
   key: string;
@@ -94,6 +101,7 @@ type SkillWorkshopAppliedRevision = {
   proposal: SkillWorkshopProposal;
   version: number;
   operation: SkillWorkshopProposal["kind"];
+  previous: SkillWorkshopProposal | null;
 };
 
 export type SkillWorkshopAppliedSkill = {
@@ -140,9 +148,27 @@ function groupSkillWorkshopAppliedSkills(
     latest: proposalsForSkill[0],
     revisions: proposalsForSkill.map((proposal, index) => {
       const version = proposalsForSkill.length - index;
-      return { proposal, version, operation: proposal.kind };
+      return {
+        proposal,
+        version,
+        operation: proposal.kind,
+        previous: proposalsForSkill[index + 1] ?? null,
+      };
     }),
   }));
+}
+
+export function findSkillWorkshopAppliedPredecessor(
+  proposals: SkillWorkshopProposal[],
+  key: string,
+): SkillWorkshopProposal | null {
+  for (const skill of groupSkillWorkshopAppliedSkills(proposals)) {
+    const revision = skill.revisions.find(({ proposal }) => proposal.key === key);
+    if (revision) {
+      return revision.previous;
+    }
+  }
+  return null;
 }
 
 export function filterSkillWorkshopAppliedSkills(

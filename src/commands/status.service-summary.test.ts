@@ -86,7 +86,7 @@ describe("readServiceStatusSummary", () => {
       expect(summary).toMatchObject({
         label: "systemd",
         installed: true,
-        loaded: true,
+        loadState: { status: "loaded" },
         managedByOpenClaw: true,
         externallyManaged: false,
         loadedText: "enabled",
@@ -104,10 +104,13 @@ describe("readServiceStatusSummary", () => {
 
       expect(summary.label).toBe("Gateway service");
       expect(summary.installed).toBe(false);
-      expect(summary.loaded).toBe(false);
+      expect(summary.loadState).toEqual({
+        status: "unknown",
+        detail: "Error: Gateway service install not supported on aix",
+      });
       expect(summary.managedByOpenClaw).toBe(false);
       expect(summary.externallyManaged).toBe(false);
-      expect(summary.loadedText).toBe("not installed");
+      expect(summary.loadedText).toBe("unknown");
       expect(summary.runtime).toEqual({
         status: "unknown",
         detail: "Gateway service install not supported on aix",
@@ -140,7 +143,7 @@ describe("readServiceStatusSummary", () => {
     const runtimeEnv = requireMockArg(readRuntime, "readRuntime") as NodeJS.ProcessEnv;
     expect(runtimeEnv?.OPENCLAW_GATEWAY_PORT).toBe("18789");
     expect(summary.installed).toBe(true);
-    expect(summary.loaded).toBe(true);
+    expect(summary.loadState).toEqual({ status: "loaded" });
     expect(summary.runtime?.status).toBe("running");
   });
 

@@ -388,6 +388,17 @@ plugins.
 | `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
 | `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
+| `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
+
+`registerBoardWidgetContentKind(...)` is for plugins that own a declarative
+widget source format. The registration supplies a globally unique lowercase
+`kind`, a short label, one capability-scoped plugin surface plus its renderer
+resource paths, a synchronous `validateSource(source)` callback, and a
+synchronous `composeDocument(...)` callback. Core adds the document shell,
+sandbox, theme, and ticket-bound action bridge. Registrations exist only while
+their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
+Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
+not for renderer registration.
 
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway

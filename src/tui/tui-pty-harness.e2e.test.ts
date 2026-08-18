@@ -15,6 +15,7 @@ import {
   waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
+import { exerciseTuiReconnectOutcomes } from "./tui-pty-reconnect-test-support.js";
 import {
   exerciseStreamingRendering,
   exerciseToolCardRendering,
@@ -235,6 +236,12 @@ describe.sequential("TUI PTY harness", () => {
       expect(output.indexOf("starting up")).toBeGreaterThanOrEqual(0);
       expect(output.indexOf("starting up")).toBeLessThan(output.indexOf("local ready | idle"));
     },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "reconciles active and terminal runs after reconnect history",
+    () => exerciseTuiReconnectOutcomes(STARTUP_TIMEOUT_MS),
     STARTUP_TEST_TIMEOUT_MS,
   );
 

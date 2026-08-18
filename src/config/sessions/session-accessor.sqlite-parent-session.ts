@@ -70,6 +70,7 @@ export async function forkSessionTranscriptFromParent(
     return await runExclusiveSqliteSessionWrite(resolved, async () => {
       let result: ForkSessionFromParentTranscriptResult = { status: "failed" };
       runOpenClawAgentWriteTransaction((database) => {
+        params.commitGuard?.();
         result = forkSqliteParentTranscriptInTransaction(database, resolved, {
           enforceTokenLimit: params.enforceTokenLimit,
           parentEntry: params.parentEntry,
@@ -116,6 +117,7 @@ export async function forkSessionTranscriptFromParent(
     };
     const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
     runOpenClawAgentWriteTransaction((database) => {
+      params.commitGuard?.();
       writeSqliteForkedChildTranscriptInTransaction(database, targetScope, {
         parentSessionFile,
         source,

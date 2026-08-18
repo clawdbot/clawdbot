@@ -248,17 +248,18 @@ export const NEW_SESSION_CREATE_FAILED_MESSAGE =
 
 export function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],
+  previous?: SessionCatalogPullRequestSummary,
 ): SessionCatalogPullRequestSummary | undefined {
   const current = pullRequests[0];
   if (!current) {
     return undefined;
   }
-  return {
-    numbers: [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
-      .slice(0, 20)
-      .toSorted((left, right) => left - right),
-    state: current.state,
-  };
+  const numbers = [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
+    .slice(0, 20)
+    .toSorted((left, right) => left - right);
+  return previous?.state === current.state && previous.numbers.join(",") === numbers.join(",")
+    ? previous
+    : { numbers, state: current.state };
 }
 
 export function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {

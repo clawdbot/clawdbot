@@ -29,6 +29,8 @@ let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
 type ConfigSnapshotStub = {
   exists: boolean;
   hash?: string;
+  issues?: Array<{ message: string; path: string }>;
+  legacyIssues?: Array<{ message: string; path: string }>;
   path?: string;
   raw?: string | null;
   valid: boolean;
@@ -1101,6 +1103,8 @@ describe("runCli exit behavior", () => {
   it("ignores service mode declared by an invalid selected config", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
+      issues: [{ message: "invalid", path: "gateway" }],
+      legacyIssues: [],
       valid: false,
       sourceConfig: {
         env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
@@ -1696,6 +1700,8 @@ describe("runCli exit behavior", () => {
     await withEnvAsync({ OPENCLAW_INCLUDE_ROOTS: undefined }, async () => {
       readConfigFileSnapshotMock.mockResolvedValue({
         exists: true,
+        issues: [{ message: "invalid", path: "gateway" }],
+        legacyIssues: [],
         valid: false,
         sourceConfig: {
           env: { vars: { OPENCLAW_INCLUDE_ROOTS: "/tmp/openclaw-includes" } },

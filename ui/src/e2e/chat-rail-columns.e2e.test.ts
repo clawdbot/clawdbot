@@ -422,7 +422,8 @@ suite.define(() => {
           await captureRichPanel(page, `rails-tabs-review-${themeMode}`);
 
           await openFromPlus(page, "Terminal");
-          await gateway.waitForRequest("terminal.open");
+          const terminalOpen = await gateway.waitForRequest("terminal.open");
+          expect(terminalOpen.params).toMatchObject({ agentId: "main", sessionKey });
           await sidePanel(page).locator('[data-panel-slot="terminal"]:not([hidden])').waitFor();
           await openFromPlus(page, "Tasks");
           await expect.poll(() => sidePanel(page).textContent()).toContain("Verify tab navigation");

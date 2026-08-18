@@ -65,6 +65,8 @@ export function renderDeviceInventory(props: DevicesProps) {
       ? html`
           <button
             class="btn btn--sm danger"
+            title=${props.canManagePairing ? "" : t("devices.readOnly.pairingRequired")}
+            ?disabled=${!props.canManagePairing}
             @click=${() => props.onInventoryCleanup(stale.map(toRemovalRequest))}
           >
             ${icons.trash} ${t("devices.inventory.cleanupStale", { count: String(stale.length) })}
@@ -327,10 +329,18 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
         ${connectionStatus} ${entryWarnStatuses(entry, props.gatewayVersion)}
         ${pendingRequestId
           ? html`
-              <button class="btn btn--sm" @click=${() => props.onNodeApprove(pendingRequestId)}>
+              <button
+                class="btn btn--sm"
+                ?disabled=${!props.canManagePairing}
+                @click=${() => props.onNodeApprove(pendingRequestId)}
+              >
                 ${t("devices.inventory.approve")}
               </button>
-              <button class="btn btn--sm" @click=${() => props.onNodeReject(pendingRequestId)}>
+              <button
+                class="btn btn--sm"
+                ?disabled=${!props.canManagePairing}
+                @click=${() => props.onNodeReject(pendingRequestId)}
+              >
                 ${t("devices.inventory.reject")}
               </button>
             `
@@ -339,6 +349,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
           class="btn btn--sm danger"
           aria-label=${t("devices.inventory.removeName", { name: entry.name })}
           title=${t("devices.inventory.remove")}
+          ?disabled=${!props.canManagePairing}
           @click=${() => props.onInventoryRemove(toRemovalRequest(entry))}
         >
           ${icons.x}
@@ -416,6 +427,7 @@ function renderTokenRow(
       <span class="device-entry__token-actions">
         <button
           class="btn btn--sm"
+          ?disabled=${!props.canManagePairing}
           @click=${() => props.onDeviceRotate(device, tokenSummary.role, tokenSummary.scopes)}
         >
           ${t("devices.inventory.rotate")}
@@ -425,6 +437,7 @@ function renderTokenRow(
           : html`
               <button
                 class="btn btn--sm danger"
+                ?disabled=${!props.canManagePairing}
                 @click=${() => props.onDeviceRevoke(device.id, tokenSummary.role)}
               >
                 ${t("devices.inventory.revoke")}

@@ -10,6 +10,7 @@ import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
+import type { DiscordAvatarResolver } from "./message-avatar.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import type { DiscordChannelInfo, DiscordMediaInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
@@ -76,6 +77,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   // fall back to Discord's expiring attachment URLs.
   preparedMedia: DiscordMediaInfo[];
   wasMentioned: boolean;
+  conversationAvatar?: string;
 
   route: ReturnType<typeof resolveAgentRoute>;
   threadBinding?: SessionBindingRecord;
@@ -127,6 +129,7 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   groupPolicy: DiscordMessagePreflightContext["groupPolicy"];
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
+  avatarResolver?: DiscordAvatarResolver;
   data: DiscordMessageEvent;
   client: Client;
 };

@@ -19,6 +19,7 @@ import {
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import {
   beginQueuedMessageEdit,
@@ -30,7 +31,6 @@ import {
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
 
 const SESSION_KEY = "agent:main";
 
@@ -471,7 +471,6 @@ describe("queued message edit round-trip", () => {
   });
 
   it.each([
-    { label: "a steer chip", overrides: { kind: "steered" as const } },
     { label: "a local command", overrides: { localCommandName: "compact" } },
     { label: "a delivery-uncertain row", overrides: { sendState: "unconfirmed" as const } },
   ])("refuses to edit $label", ({ overrides }) => {

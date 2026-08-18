@@ -2,6 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
@@ -360,6 +364,25 @@ describe("openclaw-tools progress_card gating", () => {
     expect(includeProgressCard).toBe(true);
   });
 
+  it.each([
+    {
+      name: "a configured profile",
+      options: { config: { tools: { profile: "messaging" as const } } },
+    },
+    {
+      name: "the runtime allowlist",
+      options: { runtimeToolAllowlist: ["read"] },
+    },
+  ])("omits progress_card when $name excludes it", ({ options }) => {
+    expect(
+      createFastToolNames({
+        ...options,
+        modelProvider: "openai",
+        modelId: "gpt-5.6-sol",
+      }),
+    ).not.toContain("progress_card");
+  });
+
   it("leaves normal deny policy enforcement to the assembled tool set", () => {
     const tools = createFastToolNames({
       config: {} as OpenClawConfig,
@@ -683,6 +706,44 @@ describe("gateway client capability tool filtering", () => {
         "show_widget",
       ),
     ).toBe(false);
+  });
+
+  it("keeps registered board widgets available without promising inline delivery", () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "diagram",
+      source: "diagram-fixture",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    createPluginBoardWidgetContentKindRegistrar(registry)(record, {
+      kind: "diagram",
+      label: "Diagram",
+      resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
+      validateSource() {},
+      composeDocument: ({ source }) => source,
+    });
+    setActivePluginRegistry(registry);
+
+    try {
+      const tool = expectToolNamed(
+        createOpenClawTools({
+          agentSessionKey: "agent:main:main",
+          clientCaps: ["inline-widgets"],
+          config: {
+            plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
+          },
+        }),
+        "show_widget",
+      );
+
+      expect(tool.description).toContain(
+        "Inline hosting is disabled; set pin=true to place it on this session's dashboard",
+      );
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("keeps the core widget tool out when OPENCLAW_SKIP_CANVAS_HOST is set", () => {

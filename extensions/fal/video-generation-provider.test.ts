@@ -15,9 +15,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   fetchWithSsrFGuard: fetchGuardMock,
 }));
 
-function createMockRequestConfig() {
-  return {} as ReturnType<typeof providerHttp.resolveProviderHttpRequestConfig>["requestConfig"];
-}
 describe("fal video generation provider", () => {
   function mockFalProviderRuntime() {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
@@ -33,7 +30,6 @@ describe("fal video generation provider", () => {
         "Content-Type": "application/json",
       }),
       dispatcherPolicy: undefined,
-      requestConfig: createMockRequestConfig(),
     });
     vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
   }

@@ -1385,7 +1385,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(preferPrompt).toContain("Stay responsive: incoming messages wait on your current turn");
     expect(preferPrompt).toContain("Multi-step or slow work");
     expect(preferPrompt).toContain("objective, output, write scope, verification");
-    expect(preferPrompt).toContain("spawn `visible=true`");
+    expect(preferPrompt).toContain("spawn `sessions_spawn` with `visible=true`");
+    expect(preferPrompt).toContain("Hidden children are invisible to the user");
     expect(preferPrompt).toContain("Child output is evidence");
     expect(preferPrompt).toContain("`subagents(action=list)` only for requested status");
     expect(preferPrompt).not.toContain("- Subagents: `sessions_spawn`");

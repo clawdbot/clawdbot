@@ -203,6 +203,7 @@ export const defaultControlUiFeatureMethods = [
   "chat.startup",
   "config.apply",
   "config.patch",
+  "config.schema",
   "config.set",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",

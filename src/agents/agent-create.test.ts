@@ -319,11 +319,15 @@ describe("createAgent", () => {
     });
 
     expect(result).toMatchObject({ status: "created", agentId: "researcher" });
+    if (result.status === "error") {
+      throw new Error(result.message);
+    }
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
     expect(mocks.persisted).toMatchObject({
       agents: { entries: { main: expect.any(Object), researcher: expect.any(Object) } },
       channels: { telegram: { enabled: true } },
     });
+    expect(result.config).toEqual(mocks.persisted);
   });
 
   it("requires a config revision for guided staging", async () => {

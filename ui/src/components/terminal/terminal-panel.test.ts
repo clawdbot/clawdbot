@@ -19,7 +19,7 @@ const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
-async function startPanelWithPendingOpen() {
+async function startPanelWithPendingOpen(sessionKey?: string) {
   let createOptions: CreateOptions | undefined;
   createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {
     createOptions = options;
@@ -37,13 +37,14 @@ async function startPanelWithPendingOpen() {
   };
   const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
   panel.client = client;
+  panel.sessionKey = sessionKey ?? null;
   panel.available = true;
   document.body.append(panel);
   panel.toggle();
   await waitForFast(() =>
     expect(requests.some(({ method }) => method === "terminal.open")).toBe(true),
   );
-  return { createOptions: createOptions!, open, requests };
+  return { createOptions: createOptions!, open, panel, requests };
 }
 
 describe("OpenClawTerminalPanel", () => {
@@ -379,6 +380,21 @@ describe("OpenClawTerminalPanel", () => {
       );
     });
     expect(requests.some(({ method }) => method === "terminal.input")).toBe(false);
+  });
+
+  it("closes a session-scoped terminal cancelled after its open response", async () => {
+    const { open, panel, requests } = await startPanelWithPendingOpen("agent:main:chat");
+    await panel.updateComplete;
+    panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
+
+    open.resolve(terminalOpenResult("session-1"));
+
+    await waitForFast(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.close",
+        params: { sessionId: "session-1" },
+      });
+    });
   });
 
   it("reattaches persisted sessions before opening a catalog tab", async () => {

@@ -90,6 +90,7 @@ export type SidebarRecentSession = {
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
+  channelAvatarUrl?: string;
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;

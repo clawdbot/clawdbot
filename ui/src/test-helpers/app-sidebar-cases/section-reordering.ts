@@ -165,9 +165,9 @@ describe("AppSidebar section reordering", () => {
   });
 
   it("does not start a section drag from a header action button", async () => {
-    const { sidebar } = await mountWithGroups([]);
+    const { sidebar } = await mountWithGroups(["Alpha"]);
     const dataTransfer = createDataTransferStub();
-    const newSessionButton = groupHeader(sidebar, "ungrouped").querySelector(
+    const newSessionButton = groupHeader(sidebar, "category:Alpha").querySelector(
       ".sidebar-new-session",
     );
     if (!newSessionButton) {
@@ -175,7 +175,7 @@ describe("AppSidebar section reordering", () => {
     }
 
     newSessionButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    dispatchDragEvent(groupHeader(sidebar, "ungrouped"), "dragstart", dataTransfer);
+    dispatchDragEvent(groupHeader(sidebar, "category:Alpha"), "dragstart", dataTransfer);
 
     expect(dataTransfer.types).toEqual([]);
     expect(sidebar.sessionOrganizer.draggingSidebarSection).toBeNull();

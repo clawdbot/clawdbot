@@ -61,6 +61,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: TerminalGatewayClient | null = null;
   /** Agent whose workspace and sandbox policy own newly opened sessions. */
   @property({ attribute: false }) agentId: string | null = null;
+  /** Conversation that owns newly opened session-scoped terminals. */
+  @property({ attribute: false }) sessionKey: string | null = null;
   /** Whether the connected gateway advertises the terminal surface. */
   @property({ type: Boolean }) available = false;
   /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
@@ -76,8 +78,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ type: Boolean }) fullscreen = false;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
-  /** Shell instance reserved for a terminal explicitly moved below a chat session. */
-  @property({ type: Boolean }) sessionBottomOnly = false;
 
   @state() terminalPanelErrorText: string | null = null;
   @state() private sessionPickerOpen = false;
@@ -126,6 +126,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private readonly onDocumentPointerDown = (event: PointerEvent) =>
     this.handleDocumentPointerDown(event);
 
+  private get sessionBottomOnly(): boolean {
+    return !this.embedded && this.sessionKey !== null;
+  }
+
   override connectedCallback(): void {
     super.connectedCallback();
     this.terminalSessions.connectHost();
@@ -155,7 +159,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   override updated(changed: Map<string, unknown>): void {
-    if ((changed.has("embedded") || changed.has("sessionBottomOnly")) && !this.fullscreen) {
+    if ((changed.has("embedded") || changed.has("sessionKey")) && !this.fullscreen) {
       if (this.embedded || this.sessionBottomOnly) {
         window.removeEventListener("keydown", this.onGlobalKeyDown);
         window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);

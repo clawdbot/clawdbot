@@ -67,7 +67,7 @@ extensions/browser/src/browser/chrome-mcp-tabs.ts	1
 extensions/browser/src/browser/chrome.diagnostics.ts	2
 extensions/browser/src/browser/chrome.executables.ts	1
 extensions/browser/src/browser/chrome.profile-decoration.ts	1
-extensions/browser/src/browser/chrome.ts	5
+extensions/browser/src/browser/chrome.ts	4
 extensions/browser/src/browser/client-fetch.ts	2
 extensions/browser/src/browser/config-mutations.ts	1
 extensions/browser/src/browser/config.ts	1
@@ -2292,8 +2292,8 @@ src/auto-reply/tokens.ts	1
 src/auto-reply/usage-bar/template.ts	1
 src/auto-reply/usage-bar/translator.ts	4
 src/boards/board-store.ts	1
-src/boards/sqlite-board-codec.ts	9
-src/boards/sqlite-board-store.ts	5
+src/boards/sqlite-board-codec.ts	7
+src/boards/sqlite-board-store.ts	3
 src/bootstrap/node-extra-ca-certs.ts	2
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	2
@@ -4178,7 +4178,6 @@ ui/src/pages/chat/chat-progress.ts	2
 ui/src/pages/chat/chat-queue.ts	1
 ui/src/pages/chat/chat-realtime.ts	1
 ui/src/pages/chat/chat-send-ack.ts	2
-ui/src/pages/chat/chat-send-actions.ts	2
 ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-send-request.ts	1
 ui/src/pages/chat/chat-send-timing.ts	6

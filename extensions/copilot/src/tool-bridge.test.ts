@@ -22,6 +22,10 @@ import {
   type MemoryFlushPlan,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  loadPluginManifestRegistryCore,
+  resetPluginRuntimeStateForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
@@ -271,6 +275,172 @@ describe("createCopilotToolBridge", () => {
         workspaceDir: "/workspace",
       }),
     );
+  });
+
+  it("preserves prepared manifest-profile grants across direct and cataloged surfaces", async () => {
+    await withTempDir("openclaw-copilot-profile-tools-", async (pluginRoot) => {
+      const pluginId = "profile-probe-plugin";
+      const profiledToolName = "profile_probe";
+      const siblingToolName = "profile_sibling";
+      const declaredToolNames = [profiledToolName, siblingToolName];
+      const config = {
+        plugins: {
+          allow: [pluginId],
+          entries: { [pluginId]: { enabled: true } },
+          load: { paths: [pluginRoot] },
+        },
+      };
+      await fs.writeFile(
+        path.join(pluginRoot, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: pluginId,
+          configSchema: { type: "object", additionalProperties: false },
+          contracts: { tools: declaredToolNames },
+        }),
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, "index.cjs"),
+        `module.exports = {
+          id: ${JSON.stringify(pluginId)},
+          register(api) {
+            for (const name of ${JSON.stringify(declaredToolNames)}) {
+              api.registerTool({
+                name,
+                label: name,
+                description: name,
+                parameters: { type: "object", properties: {} },
+                execute() {
+                  return { content: [{ type: "text", text: "ok" }], details: {} };
+                },
+              });
+            }
+          },
+        };\n`,
+      );
+      const manifestRegistry = loadPluginManifestRegistryCore({ config });
+      const manifest = expectDefined(
+        manifestRegistry.plugins.find((candidate) => candidate.id === pluginId),
+        "profile probe manifest",
+      );
+      const preparedModelRuntime = {
+        metadataSnapshot: {
+          index: { plugins: [] },
+          plugins: [
+            {
+              ...manifest,
+              toolMetadata: {
+                [profiledToolName]: { profiles: ["coding", "messaging"] },
+              },
+            },
+          ],
+        },
+      } as never;
+      try {
+        const sharedFullControl = createRealOpenClawCodingTools({
+          config: { ...config, tools: { profile: "full" } },
+          includeCoreTools: false,
+          toolConstructionPlan: {
+            includeBaseCodingTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: false,
+            includePluginTools: true,
+            includeShellTools: false,
+          },
+        });
+        expect({
+          names: sharedFullControl.map((tool) => tool.name),
+        }).toEqual({ names: declaredToolNames });
+
+        for (const profile of ["coding", "messaging"] as const) {
+          const sharedTools = createRealOpenClawCodingTools({
+            config: { ...config, tools: { profile } },
+            includeCoreTools: false,
+            preparedModelRuntime,
+            toolConstructionPlan: {
+              includeBaseCodingTools: false,
+              includeChannelTools: false,
+              includeOpenClawTools: false,
+              includePluginTools: true,
+              includeShellTools: false,
+            },
+          });
+          expect(sharedTools.map((tool) => tool.name)).toEqual([profiledToolName]);
+        }
+
+        const cases = [
+          { profile: "coding", surface: "direct" },
+          { profile: "messaging", surface: "direct" },
+          { profile: "coding", surface: "tool-search" },
+          { profile: "messaging", surface: "code-mode" },
+        ] as const;
+        const observedSurfaces: Array<{
+          profile: (typeof cases)[number]["profile"];
+          surface: (typeof cases)[number]["surface"];
+          profiledTool: boolean;
+          undeclaredSibling: boolean;
+        }> = [];
+        for (const { profile, surface } of cases) {
+          let catalogRef: { current?: { entries?: Array<{ name: string }> } } | undefined;
+          const result = await createCopilotToolBridge({
+            agentId: "agent-1",
+            attemptParams: {
+              config: {
+                ...config,
+                tools: {
+                  profile,
+                  ...(surface === "tool-search" ? { toolSearch: true } : {}),
+                  ...(surface === "code-mode" ? { codeMode: true } : {}),
+                },
+              },
+              preparedModelRuntime,
+              runId: `profile-${profile}-${surface}`,
+              sessionKey: `agent:agent-1:${profile}-${surface}`,
+            } as never,
+            createOpenClawCodingTools: (options) => {
+              catalogRef = options?.toolSearchCatalogRef as typeof catalogRef;
+              return createRealOpenClawCodingTools(options);
+            },
+            modelId: "gpt-4o",
+            modelProvider: "github-copilot",
+            sessionId: `${profile}-${surface}`,
+          });
+          const surfacedNames =
+            surface === "direct"
+              ? result.sourceTools.map((tool) => tool.name)
+              : (catalogRef?.current?.entries?.map((entry) => entry.name) ?? []);
+          observedSurfaces.push({
+            profile,
+            surface,
+            profiledTool: surfacedNames.includes(profiledToolName),
+            undeclaredSibling: surfacedNames.includes(siblingToolName),
+          });
+        }
+        expect(observedSurfaces).toEqual(
+          cases.map(({ profile, surface }) => ({
+            profile,
+            surface,
+            profiledTool: true,
+            undeclaredSibling: false,
+          })),
+        );
+
+        const fullWithoutPrepared = await createCopilotToolBridge({
+          agentId: "agent-1",
+          attemptParams: { config: { ...config, tools: { profile: "full" } } } as never,
+          createOpenClawCodingTools: createRealOpenClawCodingTools,
+          modelId: "gpt-4o",
+          modelProvider: "github-copilot",
+          sessionId: "full-without-prepared",
+        });
+        expect(
+          fullWithoutPrepared.sourceTools
+            .map((tool) => tool.name)
+            .filter((name) => declaredToolNames.includes(name)),
+        ).toEqual(declaredToolNames);
+      } finally {
+        resetPluginRuntimeStateForTest();
+      }
+    });
   });
 
   it("returns sdkTools and sourceTools with matching lengths", async () => {

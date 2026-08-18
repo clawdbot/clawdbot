@@ -39,6 +39,7 @@ const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
 const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 10_000;
+const AGENT_HARNESS_CLOSE_GRACE_MS = 5_000;
 
 vi.mock("../channels/plugins/index.js", async () => ({
   ...(await vi.importActual<typeof import("../channels/plugins/index.js")>(
@@ -1686,6 +1687,44 @@ describe("createGatewayCloseHandler", () => {
       "tailscale",
       "embedding-providers",
     ]);
+  });
+
+  it("continues listener teardown when agent harness disposal never settles", async () => {
+    vi.useFakeTimers();
+    let releaseHarnessDisposal: (() => void) | undefined;
+    const harnessDisposal = new Promise<undefined>((resolve) => {
+      releaseHarnessDisposal = () => resolve(undefined);
+    });
+    mocks.disposeAgentHarnesses.mockReturnValue(harnessDisposal);
+    const httpClose = vi.fn((callback: (err?: Error | null) => void) => callback(null));
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        httpServer: {
+          close: httpClose,
+          closeIdleConnections: vi.fn(),
+        } as never,
+      }),
+    );
+    const closePromise = close({ reason: "test shutdown" });
+
+    try {
+      await vi.waitFor(() => expect(mocks.disposeAgentHarnesses).toHaveBeenCalledOnce());
+      expect(httpClose).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(AGENT_HARNESS_CLOSE_GRACE_MS);
+      const result = await closePromise;
+
+      expect(result.warnings).toContain("agent-harnesses");
+      expect(httpClose).toHaveBeenCalledOnce();
+      expect(
+        mocks.logWarn.mock.calls.some(([message]) =>
+          String(message).includes("agent-harnesses runtime disposal exceeded 5000ms"),
+        ),
+      ).toBe(true);
+    } finally {
+      releaseHarnessDisposal?.();
+      await closePromise;
+    }
   });
 
   it("starts bundle MCP and LSP runtime disposal concurrently", async () => {

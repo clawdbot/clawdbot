@@ -4,15 +4,16 @@ import { html, nothing } from "lit";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
   cancelRoutePreload,
+  isSettingsNavigationRouteVisible,
   navigationIconForRoute,
   scheduleRoutePreload,
-  SETTINGS_NAVIGATION_GROUPS,
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
   settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
+  visibleSettingsNavigationGroups,
   type SettingsSearchBlock,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
@@ -61,6 +62,7 @@ type SettingsSidebarProps = {
   onSearchQueryChange: (query: string) => void;
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   saveIndicator: SettingsSaveIndicatorProps;
+  canAdmin?: boolean;
 };
 
 type SettingsNavigationGroupView = {
@@ -86,20 +88,27 @@ function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): bo
 function filterSettingsNavigationGroups(
   searchQuery: string,
   blockMatches: readonly SettingsSearchBlock[],
+  canAdmin: boolean,
 ): readonly SettingsNavigationGroupView[] {
+  const navigationGroups = visibleSettingsNavigationGroups(canAdmin);
+  const visibleBlockMatches = blockMatches.filter((block) =>
+    isSettingsNavigationRouteVisible(block.routeId, canAdmin),
+  );
   const query = normalizeLowercaseStringOrEmpty(searchQuery);
   if (!query) {
-    return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    return navigationGroups.map((group) => ({
       labelKey: group.labelKey,
       items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
     }));
   }
-  const sidebarRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+  const sidebarRoutes = navigationGroups.flatMap((group) => group.routes);
   const searchableRoutes = [
     ...new Set([
       ...sidebarRoutes,
-      ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
-      ...blockMatches.map((block) => block.routeId),
+      ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES.filter((routeId) =>
+        isSettingsNavigationRouteVisible(routeId, canAdmin),
+      ),
+      ...visibleBlockMatches.map((block) => block.routeId),
     ]),
   ];
   const directRoutes = searchableRoutes.filter((routeId) =>
@@ -110,7 +119,7 @@ function filterSettingsNavigationGroups(
     ].some((value) => settingsSearchTextMatches(value, query)),
   );
   const includedRoutes = new Set<RouteId>(directRoutes);
-  const groupRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => {
+  const groupRoutes = navigationGroups.flatMap((group) => {
     const groupMatches = group.labelKey && settingsSearchTextMatches(t(group.labelKey), query);
     if (!groupMatches) {
       return [];
@@ -125,7 +134,7 @@ function filterSettingsNavigationGroups(
   });
   const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
   const seenBlocks = new Set<string>();
-  for (const block of blockMatches) {
+  for (const block of visibleBlockMatches) {
     const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
     if (seenBlocks.has(blockKey)) {
       continue;
@@ -237,6 +246,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
     props.searchBlockMatches ?? [],
+    props.canAdmin !== false,
   );
   return html`
     <aside class="settings-sidebar">

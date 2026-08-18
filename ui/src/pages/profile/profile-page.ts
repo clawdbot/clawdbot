@@ -17,6 +17,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
@@ -60,6 +61,7 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
+  private canWrite = false;
   private heroAvatarAuthCandidates: string[] = [];
   private heroAvatarAuthReady = false;
   private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(() => {
@@ -91,6 +93,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.heroAvatarAuthReady = false;
     this.client = null;
     this.connected = false;
+    this.canWrite = false;
     super.disconnectedCallback();
   }
 
@@ -114,14 +117,18 @@ export class ProfilePage extends OpenClawLightDomElement {
     );
     const clientChanged = snapshot.client !== this.client;
     const nextConnected = snapshot.phase === "connected";
+    const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
+    const writeAccessChanged = nextCanWrite !== this.canWrite;
     const connectionChanged = nextConnected !== this.connected;
     const nextSelfUser = nextConnected
       ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
       : null;
     const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
-    const identitySourceChanged = clientChanged || connectionChanged || selfProfileChanged;
+    const identitySourceChanged =
+      clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
     this.client = snapshot.client;
     this.connected = nextConnected;
+    this.canWrite = nextCanWrite;
     this.selfUser = nextSelfUser;
     // connected/client are plain fields; an unidentified (token-auth) connect or
     // disconnect changes no @state, so the render branch must be invalidated
@@ -139,7 +146,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!nextConnected || !snapshot.client) {
       return;
     }
-    if (nextSelfUser && identitySourceChanged) {
+    if (nextSelfUser && nextCanWrite && identitySourceChanged) {
       void this.loadIdentity();
     }
     void this.context.agents.ensureList().then((list) => {
@@ -153,7 +160,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     const client = this.client;
     // One active request owns the generation; reconnects clear loading before
     // starting their replacement so stale responses cannot win out of order.
-    if (!client || !this.connected || this.identityLoading) {
+    if (!client || !this.connected || !this.canWrite || this.identityLoading) {
       return;
     }
     const requestId = ++this.identityRequestId;
@@ -201,7 +208,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private async saveDisplayName() {
     const client = this.client;
     const profile = this.ownProfile;
-    if (!client || !profile || this.identityBusy || this.identityLoading) {
+    if (!client || !profile || !this.canWrite || this.identityBusy || this.identityLoading) {
       return;
     }
     this.identityBusy = "display-name";
@@ -237,7 +244,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private async saveAvatar(file: File) {
     const client = this.client;
     const profile = this.ownProfile;
-    if (!client || !profile || this.identityBusy || this.identityLoading) {
+    if (!client || !profile || !this.canWrite || this.identityBusy || this.identityLoading) {
       return;
     }
     this.identityBusy = "avatar";
@@ -363,6 +370,14 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!this.selfUser) {
       return nothing;
     }
+    if (!this.canWrite) {
+      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
+        ${renderSettingsSection(
+          { title: t("profilePage.identity.title") },
+          renderSettingsEmpty(t("profilePage.identity.writeRequired")),
+        )}
+      </div>`;
+    }
     if (!this.ownProfile) {
       // users.self is the idempotent gateway-owned profile ensure path. Retrying
       // keeps profile ids and authenticated email linkage authoritative server-side.
@@ -414,7 +429,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private refreshManually() {
-    if (this.selfUser && !this.identityBusy && !this.identityLoading) {
+    if (this.selfUser && this.canWrite && !this.identityBusy && !this.identityLoading) {
       void this.loadIdentity();
     }
   }

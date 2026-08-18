@@ -8,7 +8,10 @@ import type {
 } from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
-import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
+import {
+  renderLazySettingsSidebar,
+  type SettingsSidebarModule,
+} from "../components/settings-sidebar-lazy.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -25,7 +28,10 @@ import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gate
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { readScopeUpgradeAvailability } from "./device-scope-upgrade.ts";
+import {
+  hasDismissedScopeUpgradeBanner,
+  readScopeUpgradeAvailability,
+} from "./device-scope-upgrade.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   ensureOptionalElementForHost,
@@ -62,7 +68,10 @@ function renderScopeUpgradeBanner(
   snapshot: ApplicationContext["gateway"]["snapshot"],
 ) {
   const state = readScopeUpgradeAvailability(snapshot);
-  if (state.phase === "hidden") {
+  if (
+    state.phase === "hidden" ||
+    (state.phase === "guidance" && hasDismissedScopeUpgradeBanner())
+  ) {
     return nothing;
   }
   void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
@@ -98,13 +107,17 @@ export interface ShellViewHost {
   readonly outboxStoreRuntime: OutboxStoreRuntime | null;
   readonly routeState: ShellRouteState;
   readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
+  readonly settingsSidebarRenderer: SettingsSidebarModule["renderSettingsSidebar"] | null;
+  readonly settingsSidebarLoadFailed: boolean;
   readonly settingsSearchQuery: string;
   readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
   readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
   readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
   readonly devicePairSetupLoadFailed: boolean;
   loadDevicePairSetupRenderer(): void;
+  loadSettingsSidebarRenderer(): void;
   retryDevicePairSetupRenderer(): void;
+  retrySettingsSidebarRenderer(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
@@ -302,6 +315,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     uiHints: runtimeConfig.configUiHints,
     identityAvailable: Boolean(gatewaySnapshot.selfUser),
     basePath: context.basePath,
+    canAdmin: operatorAccess.canAdmin,
   });
   const onboarding = host.onboardingMode;
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
@@ -355,7 +369,8 @@ export function renderApplicationShell(host: ShellViewHost) {
   const uiSettings = loadSettings();
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
-  const chatLikeRoute = isSessionRouteId(activeRoute) || activeRoute === "new-session";
+  const sessionRoute = isSessionRouteId(activeRoute);
+  const chatLikeRoute = sessionRoute || activeRoute === "new-session";
   const custodianRoute = activeRoute === "custodian";
   if (!settingsTakeover) {
     Object.assign(host.navigationSidebar, {
@@ -412,7 +427,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     });
   }
   const navigationContent = settingsTakeover
-    ? renderSettingsSidebar({
+    ? renderLazySettingsSidebar(host, {
         basePath: context.basePath,
         activeRouteId: activeRoute,
         activePathname: host.routeState.location?.pathname ?? "",
@@ -461,6 +476,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
         },
+        canAdmin: operatorAccess.canAdmin,
       })
     : host.navigationSidebar;
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
@@ -506,9 +522,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         : nothing}
       <openclaw-app-topbar
         .basePath=${context.basePath}
-        .searchDisabled=${false}
         .navDrawerOpen=${navDrawerOpen}
-        .onboarding=${onboarding}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
@@ -643,12 +657,12 @@ export function renderApplicationShell(host: ShellViewHost) {
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
         .agentId=${selectedAgentId}
+        .sessionKey=${sessionRoute ? host.activeSessionKey : null}
         .suppressed=${settingsTakeover}
-        .sessionBottomOnly=${isSessionRouteId(activeRoute)}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
-      ${isSessionRouteId(activeRoute)
+      ${sessionRoute
         ? nothing
         : html`
             <openclaw-browser-panel

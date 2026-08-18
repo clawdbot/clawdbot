@@ -84,6 +84,7 @@ const proposal: SkillWorkshopProposal = {
   recencyGroup: "today",
   ageLabel: "now",
   supportFiles: [],
+  bodyLoaded: true,
   isNew: false,
 };
 
@@ -101,6 +102,7 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     inspectingKey: null,
     proposals: [proposal],
     selectedKey: proposal.key,
+    appliedDiffMode: "changes",
     statusFilter: "pending",
     query: "",
     filePreviewKey: null,
@@ -123,6 +125,7 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     onQueueWidthChange: vi.fn(),
     onModeChange: vi.fn(),
     onSelect: vi.fn(),
+    onAppliedDiffModeChange: vi.fn(),
     onPrev: vi.fn(),
     onNext: vi.fn(),
     onApply: vi.fn(),

@@ -27,6 +27,7 @@ import {
 } from "./device-pairing-tokens.js";
 import {
   getPairedDevice,
+  hasPairedCardRenderer,
   hasEffectivePairedDeviceRole,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
@@ -2209,6 +2210,50 @@ describe("device pairing tokens", () => {
     await expect(loadApnsRegistration("device-1", baseDir)).resolves.toBeNull();
 
     await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
+  test.each([
+    { clientId: "openclaw-control-ui", platform: undefined, expected: true },
+    { clientId: "webchat-ui", platform: undefined, expected: true },
+    { clientId: "openclaw-ios", platform: undefined, expected: true },
+    { clientId: "openclaw-android", platform: undefined, expected: true },
+    { clientId: "openclaw-macos", platform: undefined, expected: true },
+    { clientId: "cli", platform: "web", expected: true },
+    { clientId: "cli", platform: "ios", expected: true },
+    { clientId: "cli", platform: "android", expected: true },
+    { clientId: "cli", platform: "macos", expected: true },
+    { clientId: "cli", platform: "darwin", expected: true },
+    { clientId: "cli", platform: "linux", expected: false },
+  ])(
+    "detects paired card renderer client=$clientId platform=$platform",
+    async ({ clientId, platform, expected }) => {
+      const baseDir = await suiteRootTracker.make("renderer-case");
+      await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
+      const request = await requestDevicePairing(
+        {
+          deviceId: "renderer-device",
+          publicKey: "renderer-public-key",
+          clientId,
+          platform,
+          role: "operator",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+
+      await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(expected);
+    },
+  );
+
+  test("invalidates the card renderer cache when removing a paired device", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedBrowserOperatorDevice(baseDir);
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(true);
+
+    await removePairedDevice("browser-device-1", baseDir);
+
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
   });
 
   test("clears APNs only when a node reapproval changes installation identity", async () => {

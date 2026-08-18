@@ -5,6 +5,7 @@ import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { resolveSandboxContext } from "../../sandbox/context.js";
@@ -250,6 +251,22 @@ export async function dispatchEmbeddedRunAttempt(input: {
         mode: resolveSessionPermissionExecMode({ mode: params.permissionMode }),
       }
     : params.execOverrides;
+  const incognitoSystemPrompt = appendIncognitoSystemPrompt({
+    agentId: runtime.agentId,
+    extraSystemPrompt: params.extraSystemPrompt,
+    sessionKey: params.sessionKey,
+    storePath: params.sessionTarget?.storePath,
+  });
+  const extraSystemPrompt = await appendProgressCardSystemPrompt({
+    agentId: runtime.agentId,
+    authProfileId: runtime.authProfileId,
+    config: params.config,
+    extraSystemPrompt: incognitoSystemPrompt,
+    modelId: runtime.modelId,
+    provider: runtime.provider,
+    sessionKey: params.sessionKey,
+    toolsAllow: params.toolsAllow,
+  });
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
     contextEngineAgentId: runtime.contextEngineAgentId,
@@ -441,12 +458,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt: appendIncognitoSystemPrompt({
-      agentId: runtime.agentId,
-      extraSystemPrompt: params.extraSystemPrompt,
-      sessionKey: params.sessionKey,
-      storePath: params.sessionTarget?.storePath,
-    }),
+    extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,

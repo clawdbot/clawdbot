@@ -164,33 +164,6 @@ export const en: TranslationMap = {
     issue: "issue",
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, by {author}",
   },
-  sessionPreview: {
-    loading: "Loading session details…",
-    unavailable: "Session preview unavailable",
-    archived: "Archived",
-    ariaLabel: "Session: {title}",
-  },
-  sessionHovercard: {
-    ariaLabel: "Session information",
-    created: "created {time}",
-    updated: "updated {time}",
-    noPrYet: "No PR yet",
-    more: "+{count} more",
-    changedFile: "{count} file",
-    changedFiles: "{count} files",
-    pullRequestLabel: "Pull request #{number}, {state}",
-    states: {
-      open: "Open",
-      draft: "Draft",
-      merged: "Merged",
-      closed: "Closed",
-    },
-    checks: {
-      passing: "CI checks passing",
-      failing: "CI checks failing",
-      pending: "CI checks running",
-    },
-  },
   sessionProgressCard: {
     ariaLabel: "Session progress",
     title: "Progress",
@@ -236,6 +209,7 @@ export const en: TranslationMap = {
       browseAllTitle: "More channels…",
       browseAllSubtitle: "Browse every available channel, including installable plugins.",
       runSetup: "Run setup",
+      adminRequired: "Browsing only. Channel setup requires operator.admin access.",
       saveBeforeSetup:
         "You have unsaved channel config changes. Save or reload them before running guided setup.",
     },
@@ -579,6 +553,13 @@ export const en: TranslationMap = {
     succeeded: "Gateway updated and restarted.",
   },
   devices: {
+    readOnly: {
+      pairingRequired: "Browsing only. Device changes require operator.pairing access.",
+      adminRequired:
+        "Browsing only. Exec approvals and node bindings require operator.admin access.",
+      pairingAndAdminRequired:
+        "Browsing only. Device changes require operator.pairing; exec approvals and node bindings require operator.admin.",
+    },
     pairing: {
       button: "Pair device",
       adminRequired: "Administrator access is required to create setup codes.",
@@ -779,6 +760,7 @@ export const en: TranslationMap = {
     },
   },
   worktrees: {
+    adminRequired: "Browsing only. Worktree changes require operator.admin access.",
     newWorktree: "New worktree",
     ownerManual: "Manual",
     ownerSession: "Session",
@@ -1659,6 +1641,7 @@ export const en: TranslationMap = {
     themeRemoved: "Custom theme removed.",
   },
   configView: {
+    adminRequired: "Configuration changes require operator.admin access.",
     categories: {
       core: "Core",
       ai: "Agent Defaults",
@@ -2131,6 +2114,7 @@ export const en: TranslationMap = {
     settingsSearchPlaceholder: "Search settings…",
     settingsSearchNoResults: "No matching settings.",
     settingsSearchClear: "Clear settings search",
+    settingsLoadFailed: "Settings navigation could not load.",
     exitSettings: "Back to app",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
@@ -2640,6 +2624,7 @@ export const en: TranslationMap = {
     confirmBackup: "OpenClaw creates a verified pre-import backup before copying memory.",
     confirmImport: "Import memory",
     disconnected: "Connect to the gateway to import memory.",
+    adminRequired: "Memory import requires operator.admin access.",
     title: "Import assistant memory",
     subtitle:
       "Review Codex consolidated memory and Claude Code auto-memory before copying it into OpenClaw.",
@@ -3407,6 +3392,7 @@ export const en: TranslationMap = {
       description: "Your profile on this gateway.",
       loading: "Loading your identity…",
       profileUnavailable: "Your identity profile could not be loaded.",
+      writeRequired: "Profile editing requires operator.write access.",
       notSet: "Identity is not set.",
       setIdentity: "Set identity",
       avatar: "Avatar",
@@ -3505,6 +3491,15 @@ export const en: TranslationMap = {
       today: "Today",
       yesterday: "Yesterday",
       earlier: "Earlier this week",
+    },
+    diff: {
+      changes: "Changes",
+      fullBody: "Full body",
+      viewLabel: "Revision view",
+      unchanged: "This revision left the skill body unchanged.",
+      loadingPrevious: "Loading the previous revision\u2026",
+      previousUnavailable: "The previous revision is unavailable, so this is the full body.",
+      tooLarge: "This comparison is too large to show here. Switch to Full body to read it.",
     },
     applied: {
       history: "History",
@@ -4914,8 +4909,6 @@ export const en: TranslationMap = {
     },
     sendErrors: {
       activeLeafChanged: "The session switched branches — review and resend.",
-      steerRunNoLongerActive:
-        "This steer still targets the previous run, but that run is no longer active.",
     },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
@@ -5020,7 +5013,6 @@ export const en: TranslationMap = {
         timeout: "The active run ended before the steer message was accepted.",
         failed: "Steer failed before it reached the run; try again.",
         usage: "Usage: `/steer <message>`",
-        noActiveRun: "No active run. Use the chat input or `/redirect` instead.",
         succeeded: "Steered.",
         requestFailed: "Failed to steer: {error}",
       },
@@ -5345,6 +5337,7 @@ export const en: TranslationMap = {
       serverUpdatedTitle: "Server updated",
       serverUpdatedRefresh: "Refresh for full capabilities",
       threads: "Sessions",
+      otherSessions: "Other",
       groups: "Groups",
       coding: "Coding",
       noSessionsForAgent: "No sessions found for this agent",
@@ -5359,7 +5352,7 @@ export const en: TranslationMap = {
       openSessionMenu: "Open session menu",
       sortBy: "Sort by",
       sortCreated: "Created",
-      sortSessions: "Sort sessions",
+      sortSessions: "Filter & sort",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} sessions",
@@ -5403,7 +5396,6 @@ export const en: TranslationMap = {
       editing: "Editing a queued message",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
-        steering: "Steering",
         applyingSettings: "Applying chat settings",
         waitingForRun: "Waiting for current run",
         runningCommand: "Running command",

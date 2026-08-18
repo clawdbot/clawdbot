@@ -236,6 +236,30 @@ it("renders identity before a Usage statistics link without requesting usage dat
   expect(harness.context.navigate).toHaveBeenCalledWith("usage");
 });
 
+it("renders a write-access note without calling users.self for read-only viewers", async () => {
+  const request = vi.fn();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: "profile-1",
+    email: "ada@example.test",
+    name: "Ada",
+  });
+  harness.context.gateway.snapshot.hello = {
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: ["operator.read"] },
+    features: { methods: ["users.self"] },
+  } as ApplicationGatewaySnapshot["hello"];
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  expect(request).not.toHaveBeenCalled();
+  expect(page.textContent).toContain("Profile editing requires operator.write access.");
+  expect(page.querySelector(".identity-name-control")).toBeNull();
+});
+
 it("keeps identity UI and profile RPCs absent for unidentified connections", async () => {
   const request = vi.fn();
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);

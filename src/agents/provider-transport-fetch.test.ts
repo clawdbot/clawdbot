@@ -9,7 +9,7 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 
 type ProviderRequestPolicyConfigMockResult = {
   allowPrivateNetwork: boolean;
-  privateNetworkExplicitlyDenied?: boolean;
+  trustConfiguredBaseUrlOrigin?: boolean;
   policy?: {
     endpointClass?: string;
   };
@@ -94,7 +94,7 @@ vi.mock("./provider-local-service.js", () => ({
 
 vi.mock("./provider-request-config.js", () => ({
   buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
-  getModelProviderMetadataOwners: vi.fn(() => undefined),
+  getModelProviderRequestRouteFacts: vi.fn(() => undefined),
   getModelProviderRequestTransport: vi.fn(() => undefined),
   mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
@@ -797,6 +797,7 @@ describe("buildGuardedModelFetch", () => {
   it("trusts exact configured custom provider hosts without broad private-network opt-in", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
     const model = makeProviderModelFixture<"openai-completions">({
@@ -820,6 +821,7 @@ describe("buildGuardedModelFetch", () => {
   it("trusts exact configured HTTPS custom provider origins", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
     const model = makeProviderModelFixture<"openai-completions">({
@@ -841,7 +843,7 @@ describe("buildGuardedModelFetch", () => {
   it("keeps explicit private-network denial ahead of configured custom origin trust", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
-      privateNetworkExplicitlyDenied: true,
+      trustConfiguredBaseUrlOrigin: false,
       policy: { endpointClass: "custom" },
     });
     const model = makeProviderModelFixture<"openai-completions">({
@@ -861,6 +863,7 @@ describe("buildGuardedModelFetch", () => {
   it("trusts exact configured local provider origins", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "local" },
     });
     const model = makeProviderModelFixture<"openai-completions">({
@@ -1015,6 +1018,7 @@ describe("buildGuardedModelFetch", () => {
   it("merges explicit private-network opt-in into the provider-host policies", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: true,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
     const model = makeProviderModelFixture<"ollama">({

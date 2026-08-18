@@ -705,7 +705,11 @@ class ChannelsPage extends OpenClawLightDomElement {
           onCloseDetail: () => {
             this.selectedChannel = null;
           },
-          onStartSetup: (channelId) => this.wizardHost.startSetup(channelId),
+          onStartSetup: (channelId) => {
+            if (canAdmin) {
+              this.wizardHost.startSetup(channelId);
+            }
+          },
           onWizardAnswer: (value) => this.wizardHost.answer(value),
           onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
           onWizardTextInput: (value) => this.wizardHost.setTextValue(value),

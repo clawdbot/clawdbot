@@ -257,6 +257,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         onRemove: () => void this.runAction(() => callbacks.remove(widget)),
       });
     }
+    if (widget.contentKind === "plugin" && widget.frameUrl) {
+      return this.frame.render(widget);
+    }
     if (widget.contentKind === "plugin") {
       if (this.pluginRendererError) {
         return renderBoardWidgetError(this.pluginRendererError, () => this.retryPluginRenderer());
@@ -288,7 +291,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     const widget = this.widget;
     const activeKinds = this.context?.gateway.snapshot.hello?.controlUiWidgetKinds ?? [];
     const contribution =
-      widget?.contentKind === "plugin"
+      widget?.contentKind === "plugin" && !widget.frameUrl
         ? getPluginWidgetKindContribution(widget.pluginKind, activeKinds)
         : null;
     if (!contribution) {
@@ -389,9 +392,13 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       widget.grantState === "pending" ||
       widget.grantState === "rejected";
     const contentScrollable =
-      bodyScrollable || widget.contentKind === "mcp-app" || widget.contentKind === "plugin";
+      bodyScrollable ||
+      widget.contentKind === "mcp-app" ||
+      (widget.contentKind === "plugin" && !widget.frameUrl);
     const presentation =
-      widget.contentKind === "html" ? (widget.presentation ?? "card") : undefined;
+      widget.contentKind === "html" || widget.frameUrl
+        ? (widget.presentation ?? "card")
+        : undefined;
     // While a move/resize gesture runs, the card fills its (preview) cell so
     // the user manipulates the quantized rect they will actually commit.
     const exactHeightPx = this.dragging
@@ -429,7 +436,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
             >${widget.contentKind === "mcp-app"
               ? t("board.widget.kindMcp")
               : widget.contentKind === "plugin"
-                ? this.pluginRendererLabel || t("board.widget.kindPlugin")
+                ? widget.kindLabel || this.pluginRendererLabel || t("board.widget.kindPlugin")
                 : t("board.widget.kindHtml")}</span
           >
           ${renderBoardGrantedCapabilities(widget)}

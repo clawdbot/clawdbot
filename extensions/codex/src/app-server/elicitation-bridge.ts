@@ -7,6 +7,7 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   approvalRequestExplicitlyUnavailable,
+  codexApprovalTimeoutText,
   mapExecDecisionToOutcome,
   requestPluginApproval,
   sanitizeCodexApprovalVisibleText,
@@ -36,6 +37,8 @@ type BridgeableApprovalElicitation = {
   persistHintsMode?: "legacy" | "explicit";
   allowedDecisions?: ExecApprovalDecision[];
 };
+
+type ElicitationApprovalOutcome = AppServerApprovalOutcome | "timed-out";
 
 type PluginElicitationResolution =
   | { kind: "not_plugin" }
@@ -309,7 +312,7 @@ async function buildPluginPolicyElicitationResponse(params: {
     });
     return buildElicitationResponse(
       approvalPrompt,
-      oneShotPluginPolicyApprovalOutcome(mode, outcome),
+      mode === "ask" && outcome === "approved-session" ? "approved-once" : outcome,
     );
   }
   logPluginElicitationDecline("unmappable_schema", params.requestParams);
@@ -331,13 +334,6 @@ function allowedPluginPolicyApprovalDecisions(
     return allowedDecisions;
   }
   return allowedDecisions.filter((decision) => decision !== "allow-always");
-}
-
-function oneShotPluginPolicyApprovalOutcome(
-  mode: "allow" | "deny" | "auto" | "ask",
-  outcome: AppServerApprovalOutcome,
-): AppServerApprovalOutcome {
-  return mode === "ask" && outcome === "approved-session" ? "approved-once" : outcome;
 }
 
 function readPluginApprovalElicitation(
@@ -408,8 +404,8 @@ function canMapPersistentApproval(requestedSchema: JsonObject, meta: JsonObject)
   });
 }
 
-function declineElicitationResponse(): JsonValue {
-  return { action: "decline", content: null, _meta: null };
+function declineElicitationResponse(message?: string): JsonValue {
+  return { action: "decline", content: null, _meta: message ? { message } : null };
 }
 
 function logPluginElicitationDecline(reason: string, requestParams: JsonObject | undefined): void {
@@ -655,7 +651,7 @@ async function requestPluginApprovalOutcome(params: {
   description: string;
   allowedDecisions?: ExecApprovalDecision[];
   signal?: AbortSignal;
-}): Promise<AppServerApprovalOutcome> {
+}): Promise<ElicitationApprovalOutcome> {
   try {
     const requestResult = await requestPluginApproval({
       hostCapabilities: params.paramsForRun.hostCapabilities,
@@ -678,6 +674,12 @@ async function requestPluginApprovalOutcome(params: {
           approvalId,
           signal: params.signal,
         });
+    if (params.signal?.aborted) {
+      return "cancelled";
+    }
+    if (approvalResult?.terminalReason === "timeout") {
+      return "timed-out";
+    }
     return mapExecDecisionToOutcome(approvalResult?.decision);
   } catch {
     return params.signal?.aborted ? "cancelled" : "denied";
@@ -689,14 +691,17 @@ function buildElicitationResponse(
     BridgeableApprovalElicitation,
     "requestedSchema" | "meta" | "persistHintsMode"
   >,
-  outcome: AppServerApprovalOutcome,
+  outcome: ElicitationApprovalOutcome,
 ): JsonValue {
   const { requestedSchema, meta } = approvalPrompt;
   if (outcome === "cancelled") {
     return { action: "cancel", content: null, _meta: null };
   }
+  if (outcome === "timed-out") {
+    return declineElicitationResponse(codexApprovalTimeoutText("other"));
+  }
   if (outcome === "denied" || outcome === "unavailable") {
-    return { action: "decline", content: null, _meta: null };
+    return declineElicitationResponse();
   }
 
   const content = buildAcceptedContent(approvalPrompt, outcome);

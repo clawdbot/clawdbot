@@ -237,7 +237,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await page.goto(`${server.baseUrl}chat`);
       await setThemeMode(page, "dark");
       const commandPaletteShortcut = process.platform === "darwin" ? "⌘K" : "Ctrl K";
-      await expectHoverTooltip(page.getByRole("button", { name: "New session" }), "New session");
+      await expectHoverTooltip(
+        page.locator(".sidebar-brand").getByRole("button", { name: "New session" }),
+        "New session",
+      );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
         `Open command palette (${commandPaletteShortcut})`,

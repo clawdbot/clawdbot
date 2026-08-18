@@ -60,7 +60,7 @@ export function renderSessionOwnerChip(
     : nothing;
 }
 
-export function sessionOwnerInitials(owner: SessionCreatedActor): string {
+function sessionOwnerInitials(owner: SessionCreatedActor): string {
   const source = owner.label?.trim() || owner.id?.trim() || "";
   if (!source) {
     return "";
