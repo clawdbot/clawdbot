@@ -599,7 +599,13 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
     renderLoading(card);
     card.addEventListener("pointerenter", this.handleCardPointerEnter);
     card.addEventListener("pointerleave", this.handleCardPointerLeave);
-    this.hovercard.mount(anchor, card, placement);
+    // Sidebar actions share the row's trailing edge. Position from the whole row
+    // so the preview cannot cover controls that remain clickable while it is open.
+    const positioningAnchor =
+      placement === "horizontal"
+        ? (anchor.closest<HTMLElement>(".sidebar-recent-session") ?? anchor)
+        : anchor;
+    this.hovercard.mount(positioningAnchor, card, placement);
     void this.previewTask.run([target]);
   }
 
