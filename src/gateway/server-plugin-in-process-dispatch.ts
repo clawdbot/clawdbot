@@ -4,6 +4,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import {
   dispatchGatewayRequestInProcessRaw,
   type GatewayMethodDispatchResponse,
@@ -86,7 +87,7 @@ function resolveInProcessGatewayDispatch(
   const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
     ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
     : undefined;
-  const syntheticClient = createSyntheticPluginRuntimeClient({
+  const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentToolCaller: options?.agentToolCaller,
     agentRunTracking: options?.agentRunTracking,
@@ -104,6 +105,13 @@ function resolveInProcessGatewayDispatch(
     ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: options?.syntheticScopes,
   });
+  const agentRuntimeIdentity = readInProcessAgentRuntimeIdentity(options);
+  const syntheticClient = agentRuntimeIdentity
+    ? {
+        ...baseSyntheticClient,
+        internal: { ...baseSyntheticClient.internal, agentRuntimeIdentity },
+      }
+    : baseSyntheticClient;
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
     pluginRuntimeOwnerId ||

@@ -368,6 +368,33 @@ function contextIdentityLines(context: ExecutionIdentityContextV1): string[] {
   ];
 }
 
+function contextLineageLines(context: ExecutionIdentityContextV1): string[] {
+  const lineage = context.lineage;
+  if (!lineage) {
+    return [fieldLine("Parent", "absent")];
+  }
+  return [
+    fieldLine(
+      "Parent context",
+      lineage.parentContextId ? "present" : "unknown",
+      lineage.parentContextId,
+    ),
+    fieldLine(
+      "Parent execution",
+      lineage.parentExecutionId ? "present" : "unknown",
+      lineage.parentExecutionId,
+    ),
+    fieldLine("Parent run", lineage.parentRunId ? "present" : "unknown", lineage.parentRunId),
+    fieldLine(
+      "Parent agent",
+      lineage.parentAgentPrincipal ? "present" : "unknown",
+      lineage.parentAgentPrincipal ? principalText(lineage.parentAgentPrincipal) : undefined,
+    ),
+    fieldLine("Delegation", lineage.delegationRef ? "present" : "unknown", lineage.delegationRef),
+    fieldLine("Depth", "present", String(lineage.depth)),
+  ];
+}
+
 function unavailableIdentityLines(state: "unknown" | "unsupported"): string[] {
   return IDENTITY_FIELD_LABELS.map((label) => fieldLine(label, state));
 }
@@ -417,15 +444,7 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
       ...identityLines.slice(8),
       "",
       "Lineage",
-      result.identity.context.lineage
-        ? fieldLine(
-            "Parent",
-            "present",
-            result.identity.context.lineage.parentRunId ??
-              result.identity.context.lineage.parentContextId ??
-              `depth ${String(result.identity.context.lineage.depth)}`,
-          )
-        : fieldLine("Parent", "absent"),
+      ...contextLineageLines(result.identity.context),
     );
   } else if (result.identity.state === "ambiguous") {
     lines.push(

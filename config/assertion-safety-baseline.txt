@@ -2194,7 +2194,7 @@ src/agents/worktrees/git.ts	2
 src/agents/worktrees/provisioned-files.ts	3
 src/agents/worktrees/registry.ts	12
 src/agents/worktrees/run-lease.ts	1
-src/audit/execution-identity-admission.ts	5
+src/audit/execution-identity-admission.ts	2
 src/audit/execution-identity-context-build.ts	3
 src/auto-reply/chunk.ts	4
 src/auto-reply/command-auth.ts	5
