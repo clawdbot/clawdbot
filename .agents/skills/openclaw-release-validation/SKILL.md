@@ -134,7 +134,7 @@ exists. When it does not exist, generate it:
    command and pass condition need separation. Use the literal `{{TEST_ENV}}`
    in generated OCM commands: for example, `ocm @{{TEST_ENV}} -- onboard`,
    `ocm @{{TEST_ENV}} -- tui`, and `ocm @{{TEST_ENV}} -- channels status
-   --probe`. The validator replaces this token with the actual disposable
+--probe`. The validator replaces this token with the actual disposable
    environment name only in each tester's local worksheet. Avoid broad prompts
    that bundle unrelated features or say only to "use," "exercise," or "verify"
    a surface.
@@ -302,7 +302,7 @@ Then give this compact orientation, using the actual worksheet contents:
   condition.
 - **How to leave feedback:** as they test, they should simply tell the agent
   their notes and name the surface (for example, `Models: switching persisted
-  after restart`). The agent adds those notes to that surface's **Testing
+after restart`). The agent adds those notes to that surface's **Testing
   notes** cell. They do not need to edit the file themselves.
 
 Finish with the exit instruction: **You can stop after any amount of testing;
