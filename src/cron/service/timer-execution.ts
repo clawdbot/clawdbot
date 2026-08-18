@@ -147,6 +147,9 @@ export async function executeJobCore(
         toolsExec,
         agentToolsExec,
       },
+      // ClawSweeper P1: revalidate receipt immediately after awaited authorization
+      // and before host-shell spawn so a mid-authz config edit cannot run stale cmd.
+      assertStillCurrent: options?.assertRunCurrent,
     });
     if (precheckResult.decision !== "run") {
       state.deps.log.debug(

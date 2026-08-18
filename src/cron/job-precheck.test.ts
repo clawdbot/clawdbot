@@ -313,6 +313,26 @@ describe("authorizeCronJobPrecheckCommand", () => {
 });
 
 describe("runCronJobPrecheck", () => {
+
+  it("assertStillCurrent rejects spawn after authz (receipt revalidation)", async () => {
+    const spawnImpl = vi.fn(() => {
+      throw new Error("spawn must not run after stale receipt");
+    }) as never;
+    const result = await runCronJobPrecheck(
+      { command: "exit 0" },
+      {
+        authz: AUTH_FULL,
+        spawnImpl,
+        assertStillCurrent: () => {
+          throw new Error("run receipt no longer current");
+        },
+      },
+    );
+    expect(result.decision).toBe("error");
+    expect(result.reason).toContain("stale run receipt before spawn");
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
   it("uses fixed trusted shell executables (ignores $SHELL / %ComSpec%)", async () => {
     const prevShell = process.env.SHELL;
     process.env.SHELL = "/tmp/evil-shell-should-not-run";

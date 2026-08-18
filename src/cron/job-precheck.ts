@@ -424,6 +424,12 @@ export async function runCronJobPrecheck(
     spawnImpl?: typeof spawn;
     /** Required for host execution: triggers + exec security policy. */
     authz?: CronJobPrecheckAuthz;
+    /**
+     * Optional currency fence invoked after awaited authorization and again
+     * immediately before host-shell spawn (ClawSweeper P1 receipt revalidation).
+     * Throw or throw-like errors are mapped to a fail-closed error decision.
+     */
+    assertStillCurrent?: () => void;
   },
 ): Promise<CronJobPrecheckResult> {
   const command = normalizeOptionalString(precheck.command) ?? "";
@@ -480,6 +486,22 @@ export async function runCronJobPrecheck(
       exitCode: null,
       stdout: "",
       stderr: "aborted",
+    };
+  }
+
+  // Receipt/config currency fence immediately before spawn (ClawSweeper P1):
+  // authorization can await; a job edit/clear during that window must not run
+  // the stale host command.
+  try {
+    opts?.assertStillCurrent?.();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      decision: "error",
+      reason: `${PRECHECK_INVALID_REASON}: stale run receipt before spawn (${message})`,
+      exitCode: null,
+      stdout: "",
+      stderr: message,
     };
   }
 
