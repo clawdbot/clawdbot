@@ -792,9 +792,11 @@ describe("runReplyAgent auto-compaction token update", () => {
 
       vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
         const events = peekSystemEvents(key);
-        expect(events).toHaveLength(1);
+        expect(events).toHaveLength(2);
         expect(events[0]).toContain("Read the queued workspace startup file.");
         expect(events[0]).toContain("Never skip startup context after compaction.");
+        expect(events[1]).toContain("[system:post-compaction] Session compacted");
+        expect(events[1]).toContain("Queued 0 post-compaction delegate(s)");
       });
 
       const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({

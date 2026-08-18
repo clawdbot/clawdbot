@@ -40,6 +40,22 @@ function emitToolRun(params: {
   });
 }
 
+function emitRetryingCompactionEnd(params: {
+  emit: (evt: unknown) => void;
+  tokensAfter?: number;
+}): void {
+  params.emit({
+    type: "compaction_end",
+    reason: "overflow",
+    outcome: {
+      status: "completed",
+      tokensBefore: 200,
+      tokensAfter: params.tokensAfter ?? 100,
+      willRetry: true,
+    },
+  });
+}
+
 describe("subscribeEmbeddedAgentSession block reply rejections", () => {
   const unhandledRejections: unknown[] = [];
   const onUnhandledRejection = (reason: unknown) => {
@@ -302,11 +318,7 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     await subscription.waitForPendingEvents();
 
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry", tokensAfter: 100 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 100 });
     await subscription.waitForPendingEvents();
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -341,11 +353,7 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
 
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry", tokensAfter: 100 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 100 });
     emitMessageStartAndEndForAssistantText({ emit, text: "New" });
     await subscription.waitForPendingEvents();
 
@@ -379,11 +387,7 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
 
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry", tokensAfter: 100 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 100 });
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "New" });
     emitAssistantTextEnd({ emit });
@@ -424,11 +428,7 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
 
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry", tokensAfter: 100 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 100 });
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "New" });
     emitAssistantTextEnd({ emit });
@@ -467,20 +467,12 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     await Promise.resolve();
 
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry one", tokensAfter: 100 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 100 });
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "Retry one" });
     emitAssistantTextEnd({ emit });
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry two", tokensAfter: 80 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 80 });
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "Retry two" });
     emitAssistantTextEnd({ emit });
@@ -504,21 +496,13 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     });
 
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry one", tokensAfter: 100 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 100 });
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "partial replacement" });
     await subscription.waitForPendingEvents();
 
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry two", tokensAfter: 80 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 80 });
     emit({ type: "agent_end", messages: [], willRetry: false });
 
     await subscription.waitForPendingEvents();
@@ -531,12 +515,12 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
       runId: "run-preserve-older-retry",
     });
 
-    emit({ type: "compaction_end", willRetry: true });
-    emit({ type: "compaction_end", willRetry: true });
+    emitRetryingCompactionEnd({ emit });
+    emitRetryingCompactionEnd({ emit });
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "replacement activity" });
     await subscription.waitForPendingEvents();
-    emit({ type: "compaction_end", willRetry: true });
+    emitRetryingCompactionEnd({ emit });
 
     emit({ type: "agent_end", messages: [], willRetry: false });
     await subscription.waitForPendingEvents();
@@ -553,10 +537,10 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
       runId: "run-user-message-not-replacement",
     });
 
-    emit({ type: "compaction_end", willRetry: true });
+    emitRetryingCompactionEnd({ emit });
     emit({ type: "message_start", message: { role: "user", content: "queued user input" } });
     await subscription.waitForPendingEvents();
-    emit({ type: "compaction_end", willRetry: true });
+    emitRetryingCompactionEnd({ emit });
 
     emit({ type: "agent_end", messages: [], willRetry: false });
     await subscription.waitForPendingEvents();
@@ -573,13 +557,13 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
       runId: "run-transcript-message-not-replacement",
     });
 
-    emit({ type: "compaction_end", willRetry: true });
+    emitRetryingCompactionEnd({ emit });
     emit({
       type: "message_start",
       message: { role: "assistant", provider: "openclaw", model: "delivery-mirror" },
     });
     await subscription.waitForPendingEvents();
-    emit({ type: "compaction_end", willRetry: true });
+    emitRetryingCompactionEnd({ emit });
 
     emit({ type: "agent_end", messages: [], willRetry: false });
     await subscription.waitForPendingEvents();
@@ -627,11 +611,7 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
 
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry", tokensAfter: 100 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 100 });
     emitMessageStartAndEndForAssistantText({ emit, text: "New" });
     await subscription.waitForPendingEvents();
 
@@ -672,11 +652,7 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
 
     emit({ type: "compaction_start" });
-    emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "retry", tokensAfter: 100 },
-    });
+    emitRetryingCompactionEnd({ emit, tokensAfter: 100 });
     emitMessageStartAndEndForAssistantText({ emit, text: "Replacement" });
     emit({ type: "agent_end", messages: [], willRetry: false });
 
