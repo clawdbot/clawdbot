@@ -3571,7 +3571,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner).not.toContain("trap 'openclaw_e2e_stop_process \"${registry_pid:-}\"' EXIT");
     expectTextToIncludeAll(runner, [
       "message(action=send) with final=false",
-      "message(action=send) with final=true",
+      "final=true and send exactly",
     ]);
     expect(runner).not.toContain("--timeout 420");
     expectTextToIncludeAll(assertions, [
