@@ -3826,7 +3826,6 @@ jobs:
           name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}
           path: |
             apps/ios/fastlane/screenshots/en-US/*.png
-            apps/ios/build/UsageProof/en-US/*.png
             apps/ios/build/SnapshotTestResults/*.xcresult
           if-no-files-found: error
           retention-days: 14

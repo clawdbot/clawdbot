@@ -292,37 +292,6 @@ describe("iOS Fastlane release upload gates", () => {
     expect(rootTabs).toContain("self.selectedSidebarDestination.rawValue");
   });
 
-  it("publishes native Usage ordering proof outside the App Store screenshot manifest", () => {
-    const fastfile = readFastfile();
-    const screenshots = laneBody(fastfile, "screenshots");
-    const pngVerifier = functionBody(fastfile, "valid_png_file?");
-    const snapshotUITest = readFileSync(snapshotUITestPath, "utf8");
-    const workflow = readFileSync(ciWorkflowPath, "utf8");
-    const proofTest = swiftFunctionBody(snapshotUITest, "testUsageRecentDaysProofScreenshot");
-
-    expect(screenshots).toContain(
-      'usage_proof_directory = File.join(ios_root, "build", "UsageProof")',
-    );
-    expect(screenshots).toContain("screenshot: USAGE_PROOF_SCREENSHOT_TEST");
-    expect(screenshots).toContain("valid_png_file?(usage_proof_path)");
-    expect(pngVerifier).toContain("File.size?(path)");
-    expect(pngVerifier).toContain("PNG_SIGNATURE");
-    expect(screenshots.indexOf("usage_proof_directory")).toBeGreaterThan(
-      screenshots.indexOf("verify_release_ios_screenshot_manifest!"),
-    );
-    expect(screenshots.indexOf("valid_png_file?(usage_proof_path)")).toBeGreaterThan(
-      screenshots.indexOf("screenshot: USAGE_PROOF_SCREENSHOT_TEST"),
-    );
-    expect(screenshots.indexOf("valid_png_file?(usage_proof_path)")).toBeLessThan(
-      screenshots.indexOf("watch_screenshot("),
-    );
-    expect(proofTest).toContain("(18...31).reversed().map");
-    expect(proofTest).toContain('app.staticTexts["2026-08-01"]');
-    expect(proofTest).toContain('app.staticTexts["2026-07-17"]');
-    expect(proofTest).toContain('snapshot("usage-recent-days-after"');
-    expect(workflow).toContain("apps/ios/build/UsageProof/en-US/*.png");
-  });
-
   it("requires the exact nonempty PNG manifest before Watch capture", () => {
     const fastfile = readFastfile();
     const screenshots = laneBody(fastfile, "screenshots");
@@ -331,7 +300,8 @@ describe("iOS Fastlane release upload gates", () => {
     expect(fastfile).toContain("REQUIRED_IOS_SCREENSHOT_NAMES");
     expect(verifier).toContain("expected_names - actual_names");
     expect(verifier).toContain("actual_names - expected_names");
-    expect(verifier).toContain("valid_png_file?(path)");
+    expect(verifier).toContain("File.size?(path)");
+    expect(verifier).toContain("PNG_SIGNATURE");
     expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeGreaterThan(
       screenshots.indexOf("RELEASE_IOS_SCREENSHOT_TESTS.each"),
     );

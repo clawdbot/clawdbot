@@ -112,12 +112,6 @@ extension AgentOverviewSnapshot {
             state: ["lastStatus": AnyCodable("ok")],
             lastrunatms: now - 86_400_000 * 7,
             lastrunstatus: AnyCodable("ok"))
-        let usageDays = (12...31).map { day in
-            CostUsageDailyEntryLite(
-                date: String(format: "2026-07-%02d", day),
-                totalTokens: day * 100_000,
-                totalCost: Double(day) / 10)
-        }
         return AgentOverviewSnapshot(
             gatewayID: ScreenshotFixtureMode.gatewayID,
             skills: nil,
@@ -126,15 +120,7 @@ extension AgentOverviewSnapshot {
             cronJobs: [daily, weekly],
             dreaming: nil,
             dreamDiary: nil,
-            usage: CostUsageSummaryLite(
-                updatedAt: now,
-                days: 31,
-                daily: usageDays,
-                totals: [
-                    "totalTokens": AnyCodable(43_000_000),
-                    "totalCost": AnyCodable(43.0),
-                ],
-                cacheStatus: ["status": AnyCodable("warm")]),
+            usage: nil,
             agentSkillFilter: nil)
     }
 }

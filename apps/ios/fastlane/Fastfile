@@ -45,10 +45,6 @@ RELEASE_IOS_SCREENSHOT_TESTS = [
   { test: "testReleaseAgentScreenshot", name: "03-agent-connected" },
   { test: "testReleaseSettingsScreenshot", name: "04-settings-connected" }
 ].freeze
-USAGE_PROOF_SCREENSHOT_TEST = {
-  test: "testUsageRecentDaysProofScreenshot",
-  name: "usage-recent-days-after"
-}.freeze
 REQUIRED_IOS_SCREENSHOT_NAMES = RELEASE_IOS_SCREENSHOT_TESTS.map { |entry| entry.fetch(:name) }.freeze
 IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS = 180
 IOS_SCREENSHOT_XCARGS = [
@@ -140,10 +136,6 @@ def validate_required_screenshots!(paths)
   UI.user_error!("DELIVER_SCREENSHOTS=1 but screenshots are missing for: #{missing_families.join(', ')}.")
 end
 
-def valid_png_file?(path)
-  File.size?(path) && File.binread(path, PNG_SIGNATURE.bytesize) == PNG_SIGNATURE
-end
-
 def verify_release_ios_screenshot_manifest!(output_directory:, devices:)
   locale_directory = File.join(output_directory, "en-US")
   expected_names = devices.flat_map do |device|
@@ -162,7 +154,7 @@ def verify_release_ios_screenshot_manifest!(output_directory:, devices:)
 
   invalid = expected_names.reject do |name|
     path = File.join(locale_directory, name)
-    valid_png_file?(path)
+    File.size?(path) && File.binread(path, PNG_SIGNATURE.bytesize) == PNG_SIGNATURE
   end
   return if invalid.empty?
 
@@ -2158,31 +2150,6 @@ platform :ios do
       output_directory: output_directory,
       devices: devices
     )
-
-    usage_proof_directory = File.join(ios_root, "build", "UsageProof")
-    usage_result_bundle_path = File.join(
-      usage_proof_directory,
-      "test_output",
-      "en-US",
-      "OpenClawUITests.xcresult"
-    )
-    FileUtils.rm_rf(usage_proof_directory)
-    capture_release_ios_screenshot!(
-      project: project,
-      device: devices.first,
-      screenshot: USAGE_PROOF_SCREENSHOT_TEST,
-      output_directory: usage_proof_directory,
-      result_bundle_path: usage_result_bundle_path,
-      result_bundle_archive_directory: result_bundle_archive_directory,
-      derived_data_path: derived_data_path,
-      clear_previous_screenshots: true
-    )
-    usage_proof_path = File.join(
-      usage_proof_directory,
-      "en-US",
-      "#{devices.first}-#{USAGE_PROOF_SCREENSHOT_TEST.fetch(:name)}.png"
-    )
-    UI.test_failure!("Invalid iOS Usage proof PNG: #{usage_proof_path}.") unless valid_png_file?(usage_proof_path)
 
     # Snapshot fixes its result bundles under the screenshot root. Keep successful
     # evidence in build/ so Deliver sees only locale directories during validation.

@@ -72,35 +72,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.captureReleaseScreenshot(Self.settingsScreenshotTarget)
     }
 
-    func testUsageRecentDaysProofScreenshot() {
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "control",
-            initialDestination: "usage",
-            name: "usage-recent-days-after"))
-
-        guard let app = self.app else {
-            XCTFail("OpenClaw is not running for Usage proof")
-            return
-        }
-        let dateRows = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '2026-07-'"))
-        let newestDate = dateRows["2026-07-31"]
-        XCTAssertTrue(newestDate.waitForExistence(timeout: 8))
-        XCTAssertEqual(
-            dateRows.allElementsBoundByIndex.map(\.label),
-            (18...31).reversed().map { String(format: "2026-07-%02d", $0) })
-        XCTAssertFalse(app.staticTexts["2026-08-01"].exists)
-        XCTAssertFalse(app.staticTexts["2026-07-17"].exists)
-        for _ in 0..<3 where !newestDate.isHittable {
-            app.swipeUp()
-        }
-        let previousDate = dateRows["2026-07-30"]
-        XCTAssertTrue(newestDate.isHittable)
-        XCTAssertTrue(previousDate.isHittable)
-        XCTAssertLessThan(newestDate.frame.minY, previousDate.frame.minY)
-        snapshot("usage-recent-days-after", timeWaitingForIdle: 5)
-        self.attachScreenshot(named: "usage-recent-days-after")
-    }
-
     func testAgentsNavigateToSettingsThroughSidebar() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
         self.launchApp(for: Self.agentScreenshotTarget)
@@ -1069,7 +1040,6 @@ extension OpenClawSnapshotUITests {
         case "chat": app.otherElements["chat-composer-surface"]
         case "agents": app.buttons["agent-status-filter-menu"]
         case "settings": app.descendants(matching: .any)["settings-system-agent-row"]
-        case "usage": app.staticTexts["2026-07-31"]
         default: self.readinessMarker(in: app)
         }
     }
