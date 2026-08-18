@@ -596,6 +596,10 @@
   background: transparent;
 }
 
+.chat-activity-group__body .chat-tool-msg-collapse.is-open {
+  margin-bottom: 8px;
+}
+
 .chat-tool-msg-body .chat-diff {
   margin-top: 0;
   border-radius: 0;
