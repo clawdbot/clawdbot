@@ -50,7 +50,7 @@ describe("loadControlUiSessionPullRequests", () => {
       { match: "/pulls?head=", response: () => githubJson([pullListItem()]) },
       {
         match: "/pulls/103469",
-        response: () => githubJson({ additions: 4, deletions: 3 }),
+        response: () => githubJson({ additions: 4, deletions: 3, changed_files: 2 }),
       },
       {
         match: "/check-runs",
@@ -81,6 +81,7 @@ describe("loadControlUiSessionPullRequests", () => {
           state: "open",
           additions: 4,
           deletions: 3,
+          changedFiles: 2,
           checks: { state: "passing", passed: 1, failed: 0, skipped: 1, running: 0 },
           checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
         },

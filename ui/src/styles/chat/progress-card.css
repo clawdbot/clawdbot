@@ -4,6 +4,136 @@
   color: var(--text);
 }
 
+.session-hovercard {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.session-hovercard__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.session-hovercard__avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-subtle) 70%, var(--panel-strong));
+  color: var(--text);
+  flex: 0 0 34px;
+  font-size: var(--control-ui-text-xs);
+  font-weight: 700;
+  place-items: center;
+}
+
+.session-hovercard__heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session-hovercard__title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-hovercard__meta,
+.session-hovercard__no-pr,
+.session-hovercard__more {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+}
+
+.session-hovercard__chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.session-hovercard__chip,
+.session-hovercard__diff {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, currentColor 24%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.session-hovercard__chip {
+  padding: 3px 8px;
+  text-decoration: none;
+}
+
+.session-hovercard__diff {
+  padding: 3px 7px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-hovercard__pr-chip[data-state="open"] {
+  color: var(--ok);
+}
+
+.session-hovercard__pr-chip[data-state="draft"] {
+  color: var(--muted);
+}
+
+.session-hovercard__pr-chip[data-state="merged"] {
+  color: var(--pr-merged);
+}
+
+.session-hovercard__pr-chip[data-state="closed"] {
+  color: var(--danger);
+}
+
+.session-hovercard__pr-number,
+.session-hovercard__pr-state,
+.session-hovercard__files {
+  color: currentColor;
+}
+
+.session-hovercard__checks[data-checks="passing"],
+.session-hovercard__additions {
+  color: var(--ok);
+}
+
+.session-hovercard__checks[data-checks="failing"],
+.session-hovercard__deletions {
+  color: var(--danger);
+}
+
+.session-hovercard__checks[data-checks="pending"] {
+  color: var(--warn);
+}
+
+.session-hovercard__no-pr a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.session-hovercard__divider {
+  height: 1px;
+  background: var(--border);
+}
+
 .session-progress-card--composer {
   flex: 1 1 100%;
   overflow: hidden;

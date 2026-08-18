@@ -170,6 +170,27 @@ export const en: TranslationMap = {
     archived: "Archived",
     ariaLabel: "Session: {title}",
   },
+  sessionHovercard: {
+    ariaLabel: "Session information",
+    created: "created {time}",
+    updated: "updated {time}",
+    noPrYet: "No PR yet",
+    more: "+{count} more",
+    changedFile: "{count} file",
+    changedFiles: "{count} files",
+    pullRequestLabel: "Pull request #{number}, {state}",
+    states: {
+      open: "Open",
+      draft: "Draft",
+      merged: "Merged",
+      closed: "Closed",
+    },
+    checks: {
+      passing: "CI checks passing",
+      failing: "CI checks failing",
+      pending: "CI checks running",
+    },
+  },
   sessionProgressCard: {
     ariaLabel: "Session progress",
     title: "Progress",
