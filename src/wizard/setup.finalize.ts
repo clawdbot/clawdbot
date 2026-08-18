@@ -896,8 +896,8 @@ export async function finalizeSetupWizard(
         webSearchEnabled !== false &&
         (entry.requiresCredential === false || (entry.allowsKeyless === true && !hasCredential))
       ) {
-        // Keyless providers (e.g. Parallel Search (Free), DuckDuckGo, Ollama)
-        // and optional-key providers (Tavily) need no API key — report ready
+        // Keyless providers (e.g. Parallel Search (Free), DuckDuckGo, Ollama, Tavily) need
+        // no API key — report ready
         // rather than the credential-required warning.
         await prompter.note(
           [
