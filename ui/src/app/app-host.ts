@@ -41,7 +41,6 @@ import { showToast } from "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
-import { deleteStoredChatSessionSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { OpenClawApp } from "./app-root.ts";
@@ -496,29 +495,23 @@ class OpenClawShell
     if (deletedSessions.length === 0) {
       return;
     }
-    void deleteStoredChatSessionSnapshots(
-      {
-        assistantAgentId: context.gateway.snapshot.assistantAgentId,
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
-      },
-      deletedSessions,
-    );
-    let failureReported = false;
     const reportFailure = () => {
-      if (!failureReported && this.context === context) {
-        failureReported = true;
+      if (this.context === context) {
         showToast({ message: t("sessionsView.deleteDraftCleanupFailed") });
       }
     };
-    const client = context.gateway.snapshot.client;
-    if (!client) {
-      reportFailure();
-      return;
-    }
     void import("../lib/chat/composer-draft-retirement.runtime.ts")
       .then(({ retireDeletedComposerDrafts }) =>
-        retireDeletedComposerDrafts(client, deletedSessions, reportFailure),
+        retireDeletedComposerDrafts({
+          client: context.gateway.snapshot.client,
+          snapshotHost: {
+            assistantAgentId: context.gateway.snapshot.assistantAgentId,
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+          },
+          targets: deletedSessions,
+          onFailure: reportFailure,
+        }),
       )
       .catch(reportFailure);
   }

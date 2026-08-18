@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { deleteStoredChatSessionSnapshots } from "../../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { retireDurableComposerDrafts } from "./composer-draft-store.runtime.ts";
 import { retireStoredComposerDrafts, storedChatOutboxScopeKey } from "./outbox-store.ts";
 
@@ -8,14 +9,21 @@ type DeletedComposerDraftTarget = {
   retireBeforeRevision: number;
 };
 
-export async function retireDeletedComposerDrafts(
-  client: GatewayBrowserClient,
-  targets: readonly DeletedComposerDraftTarget[],
-  onFailure: () => void,
-): Promise<void> {
+export async function retireDeletedComposerDrafts(params: {
+  client: GatewayBrowserClient | null;
+  snapshotHost: Parameters<typeof deleteStoredChatSessionSnapshots>[0];
+  targets: readonly DeletedComposerDraftTarget[];
+  onFailure: () => void;
+}): Promise<void> {
+  void deleteStoredChatSessionSnapshots(params.snapshotHost, params.targets);
+  const client = params.client;
+  if (!client) {
+    params.onFailure();
+    return;
+  }
   const stored = retireStoredComposerDrafts(
     { settings: { gatewayUrl: client.gatewayUrl } },
-    targets,
+    params.targets,
   );
   let failed = stored.storageFailed;
   if (!client.recoveryScopeReady || !client.recoveryScope) {
@@ -32,6 +40,6 @@ export async function retireDeletedComposerDrafts(
     failed ||= durable === "storage-failed";
   }
   if (failed) {
-    onFailure();
+    params.onFailure();
   }
 }
