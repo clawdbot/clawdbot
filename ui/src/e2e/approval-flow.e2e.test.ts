@@ -149,6 +149,75 @@ suite.define(() => {
     }
   });
 
+  it("keeps no-auth inline and modal approvals readable while blocking decisions and shortcuts", async () => {
+    if (captureUiProof) {
+      await mkdir(proofDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      omitConnectHelloAuth: true,
+      sessionKey: activeSessionKey,
+    });
+
+    await currentPage.goto(controlUiSessionUrl(suite.server?.baseUrl ?? "", activeSessionKey));
+    await gateway.waitForRequest("sessions.list");
+    await gateway.emitGatewayEvent(
+      "exec.approval.requested",
+      approval("approval-review-only", "echo review only", 1_000),
+    );
+
+    const inlineCard = currentPage.locator(
+      '.chat-inline-approval [data-approval-id="approval-review-only"]',
+    );
+    await inlineCard.waitFor();
+    await inlineCard.getByText("echo review only", { exact: true }).waitFor();
+    await inlineCard
+      .getByText("Review only. Sign in with approval access to record a decision.", {
+        exact: true,
+      })
+      .waitFor();
+    const inlineDecisionButtons = inlineCard.locator(".exec-approval-actions button");
+    expect(await inlineDecisionButtons.count()).toBe(3);
+    expect(
+      await inlineDecisionButtons.evaluateAll((buttons) =>
+        buttons.every((button) => (button as HTMLButtonElement).disabled),
+      ),
+    ).toBe(true);
+    if (captureUiProof) {
+      await currentPage.screenshot({ path: path.join(proofDir, "review-only-inline.png") });
+    }
+
+    await approvalAttentionChip(currentPage).click();
+    const approvalModal = await waitForConfirmModal(currentPage);
+    const modalCard = approvalModal.locator('[data-approval-id="approval-review-only"]');
+    await modalCard.getByText("echo review only", { exact: true }).waitFor();
+    await modalCard
+      .getByText("Review only. Sign in with approval access to record a decision.", {
+        exact: true,
+      })
+      .waitFor();
+    const modalDecisionButtons = modalCard.locator(".exec-approval-actions button");
+    expect(await modalDecisionButtons.count()).toBe(3);
+    expect(
+      await modalDecisionButtons.evaluateAll((buttons) =>
+        buttons.every((button) => (button as HTMLButtonElement).disabled),
+      ),
+    ).toBe(true);
+
+    await approvalModal.dispatchEvent("keydown", {
+      bubbles: true,
+      ctrlKey: true,
+      key: "Enter",
+    });
+    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
+
+    if (captureUiProof) {
+      await currentPage.screenshot({ path: path.join(proofDir, "review-only-modal.png") });
+    }
+  });
+
   it("sends a typed approval command immediately while the active run waits", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();

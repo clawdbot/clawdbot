@@ -399,6 +399,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
       approvalBusy: overlays?.snapshot?.approvalBusy,
+      approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
       approvalErrors: overlays?.snapshot?.approvalErrors,
       approvalNowMs: overlays?.snapshot?.approvalNowMs,
       onApprovalDecision:
