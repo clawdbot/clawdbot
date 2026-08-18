@@ -12,7 +12,6 @@ import {
   createMattermostClient,
   fetchMattermostMe,
   normalizeMattermostBaseUrl,
-  type MattermostPost,
   type MattermostUser,
 } from "./client.js";
 import {
@@ -24,6 +23,7 @@ import {
 import {
   createMattermostIngressMonitor,
   type MattermostIngressLifecycle,
+  type MattermostIngressPost,
 } from "./monitor-ingress.js";
 import { registerMattermostInteractions } from "./monitor-interactions.js";
 import { createMattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
@@ -240,7 +240,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const handleReactionEvent = createMattermostReactionHandler(monitor);
 
   const debouncer = core.channel.debounce.createInboundDebouncer<{
-    post: MattermostPost;
+    post: MattermostIngressPost;
     payload: MattermostEventPayload;
     turnAdoptionLifecycle: MattermostIngressLifecycle;
   }>({
@@ -284,7 +284,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await settle();
               return;
             }
-            const mergedPost: MattermostPost = {
+            const mergedPost: MattermostIngressPost = {
               ...last.post,
               message: entries
                 .map((entry) => normalizeOptionalString(entry.post.message) ?? "")

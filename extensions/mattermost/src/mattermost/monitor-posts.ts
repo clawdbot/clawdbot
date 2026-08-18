@@ -16,7 +16,6 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { MattermostPost } from "./client.js";
 import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
 import {
   formatMattermostDirectMessageDropLog,
@@ -30,7 +29,7 @@ import {
   normalizeMention,
   shouldDropEmptyMattermostBody,
 } from "./monitor-helpers.js";
-import type { MattermostIngressLifecycle } from "./monitor-ingress.js";
+import type { MattermostIngressLifecycle, MattermostIngressPost } from "./monitor-ingress.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import {
   buildMattermostInboundMediaPayload,
@@ -59,7 +58,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
   );
 
   return async (
-    post: MattermostPost,
+    post: MattermostIngressPost,
     payload: MattermostEventPayload,
     turnAdoptionLifecycle?: MattermostIngressLifecycle,
     messageIds?: string[],
@@ -75,10 +74,6 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     }
     const allMessageIds = messageIds?.length ? messageIds : [post.id];
     const senderId = post.user_id;
-    if (!senderId) {
-      monitor.logVerboseMessage("mattermost: drop post (missing sender id)");
-      return;
-    }
     if (senderId === botUserId) {
       monitor.logVerboseMessage(`mattermost: drop post (self sender=${senderId})`);
       return;

@@ -79,6 +79,35 @@ afterEach(() => {
 });
 
 describe("Mattermost durable ingress", () => {
+  it("rejects posted events without an author before durable append", async () => {
+    await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
+      const dispatch = vi.fn();
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await expect(
+          monitor.receive(
+            JSON.stringify({
+              event: "posted",
+              data: {
+                post: JSON.stringify({
+                  id: "post-missing-author",
+                  channel_id: "channel-1",
+                  message: "hello",
+                }),
+              },
+              broadcast: { channel_id: "channel-1", user_id: "broadcast-user" },
+            }),
+          ),
+        ).rejects.toThrow("Mattermost posted event is missing post.user_id");
+        expect(enqueue).not.toHaveBeenCalled();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("propagates durable append failure before handler scheduling", async () => {
     await withQueue(async (queue) => {
       const appendError = new Error("sqlite unavailable");
