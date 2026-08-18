@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -203,6 +204,36 @@ function shouldCollapseUserMessage(markdown: string): boolean {
   );
 }
 
+function userMessageOverflowRef(expanded: boolean) {
+  let resizeObserver: ResizeObserver | null = null;
+  return (element: Element | undefined) => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    if (!(element instanceof HTMLElement)) {
+      return;
+    }
+    const update = () => {
+      const disclosure = element.parentElement;
+      const toggle = disclosure?.querySelector<HTMLButtonElement>(
+        ":scope > .chat-message-disclosure__toggle",
+      );
+      if (!disclosure || !toggle) {
+        return;
+      }
+      const overflowing = expanded || element.scrollHeight > element.clientHeight + 1;
+      disclosure.classList.toggle("has-overflow", overflowing);
+      toggle.hidden = !overflowing;
+    };
+    // Lit resolves refs while siblings are still committing. Measure after the
+    // toggle exists so wrapped text can reveal its own disclosure control.
+    queueMicrotask(update);
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(update);
+      resizeObserver.observe(element);
+    }
+  };
+}
+
 export function renderUserMessageMarkdown(
   markdown: string,
   messageKey: string,
@@ -213,20 +244,28 @@ export function renderUserMessageMarkdown(
   },
   markdownRenderOptions: MarkdownRenderOptions,
 ) {
-  if (!opts.onToggleUserMessageExpanded || !shouldCollapseUserMessage(markdown)) {
+  if (!opts.onToggleUserMessageExpanded) {
     return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions);
   }
 
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
+  const likelyOverflow = shouldCollapseUserMessage(markdown);
   return html`
-    <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
-      <div class="chat-message-disclosure__content">
+    <div
+      class="chat-message-disclosure ${expanded
+        ? "is-expanded has-overflow"
+        : likelyOverflow
+          ? "has-overflow"
+          : ""}"
+    >
+      <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
         ${renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)}
       </div>
       <button
         class="chat-message-disclosure__toggle"
         type="button"
+        ?hidden=${!expanded && !likelyOverflow}
         aria-label=${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
         aria-expanded=${String(expanded)}
         @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}

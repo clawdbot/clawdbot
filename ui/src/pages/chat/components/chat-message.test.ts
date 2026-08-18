@@ -999,7 +999,10 @@ describe("grouped chat rendering", () => {
       "user",
       { onToggleUserMessageExpanded },
     );
-    expect(container.querySelector(".chat-message-disclosure")).toBeNull();
+    expect(container.querySelector(".chat-message-disclosure")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")?.hidden,
+    ).toBe(true);
 
     renderAssistantMessage(
       container,

@@ -18,7 +18,7 @@ suite.define(() => {
     },
     {
       name: "soft-wrapped text",
-      text: `${"This long prompt must remain fully mounted while its visual preview is clamped. ".repeat(12)}Final prompt tail.`,
+      text: `${"This prompt remains mounted while its narrow visual preview is clamped. ".repeat(7)}Final prompt tail.`,
       viewport: { height: 844, width: 390 },
     },
   ] as const)(

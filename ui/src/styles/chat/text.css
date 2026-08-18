@@ -53,6 +53,10 @@
   cursor: var(--cursor-action);
 }
 
+.chat-message-disclosure__toggle[hidden] {
+  display: none;
+}
+
 .chat-message-disclosure__toggle:hover {
   background: color-mix(in srgb, currentColor 8%, transparent);
   color: var(--text);
@@ -68,7 +72,7 @@
   height: 15px;
 }
 
-.chat-message-disclosure .chat-message-disclosure__content {
+.chat-message-disclosure.has-overflow .chat-message-disclosure__content {
   padding-right: 30px;
 }
 
