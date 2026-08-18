@@ -23,6 +23,7 @@ import {
   redeemAgentRuntimeExecutionLineageHandoff,
   withAgentRuntimeExecutionLineageRedemption,
 } from "./agent-runtime-execution-lineage.js";
+import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
@@ -67,14 +68,7 @@ export type AgentRuntimeDelegatedAuthority = AgentRunDelegatedAuthority &
       }
   );
 
-export type AgentRuntimeSessionSpawnContext = {
-  completionOwnerSessionKey?: string;
-  inheritedToolPolicy: {
-    version: 1;
-    allow: string[];
-    deny: string[];
-  };
-};
+export type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 
 type AgentRuntimeIdentityTokenPayload = {
   kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND;

@@ -135,43 +135,44 @@ export function prepareAgentCommandExecutionIdentity(params: {
   if (admissionFacts) {
     attachAgentCommandAdmissionFacts(operationalRunInstance, admissionFacts);
   }
-  return prepareAgentCommandRunAdmissionWithSpawnFacts(
-    {
-      admission: opts.executionIdentityAdmission,
-      agentId: prepared.sessionAgentId,
-      cfg: prepared.cfg,
-      ingress: params.ingress,
-      operationalRunInstance,
-      runId: prepared.runId,
-      onAdmitted: async (admittedRunContext) => {
-        await opts.onAdmittedRunContext?.(admittedRunContext);
-        if (
-          opts.mainRestartRecoveryAdmitted !== true ||
-          opts.mainRestartRecoveryAttempt === undefined ||
-          !opts.mainRestartRecoveryOwnerLease ||
-          !admittedRunContext.executionIdentityToken ||
-          !prepared.sessionKey ||
-          !prepared.storePath
-        ) {
-          return;
-        }
-        const bindingFailure = await bindAgentCommandRecoveryExecutionIdentity({
-          attempt: opts.mainRestartRecoveryAttempt,
-          cycleId: opts.mainRestartRecoveryOwnerLease.cycleId,
-          lifecycleGeneration: params.lifecycleGeneration,
-          runId: prepared.runId,
-          sessionId: prepared.sessionId,
-          sessionKey: prepared.sessionKey,
-          storePath: prepared.storePath,
-          token: admittedRunContext.executionIdentityToken,
-        });
-        if (bindingFailure) {
-          log.warn(`failed to bind restart recovery execution identity: ${bindingFailure}`);
-        }
-      },
+  const admissionParams: Parameters<typeof prepareAgentCommandRunAdmission>[0] = {
+    admission: opts.executionIdentityAdmission,
+    agentId: prepared.sessionAgentId,
+    cfg: prepared.cfg,
+    ingress: params.ingress,
+    operationalRunInstance,
+    runId: prepared.runId,
+    onAdmitted: async (admittedRunContext) => {
+      await opts.onAdmittedRunContext?.(admittedRunContext);
+      if (
+        opts.mainRestartRecoveryAdmitted !== true ||
+        opts.mainRestartRecoveryAttempt === undefined ||
+        !opts.mainRestartRecoveryOwnerLease ||
+        !admittedRunContext.executionIdentityToken ||
+        !prepared.sessionKey ||
+        !prepared.storePath
+      ) {
+        return;
+      }
+      const bindingFailure = await bindAgentCommandRecoveryExecutionIdentity({
+        attempt: opts.mainRestartRecoveryAttempt,
+        cycleId: opts.mainRestartRecoveryOwnerLease.cycleId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        runId: prepared.runId,
+        sessionId: prepared.sessionId,
+        sessionKey: prepared.sessionKey,
+        storePath: prepared.storePath,
+        token: admittedRunContext.executionIdentityToken,
+      });
+      if (bindingFailure) {
+        log.warn(`failed to bind restart recovery execution identity: ${bindingFailure}`);
+      }
     },
-    readAgentCommandExecutionIdentitySpawnFacts(opts),
-  );
+  };
+  const spawnFacts = readAgentCommandExecutionIdentitySpawnFacts(opts);
+  return spawnFacts
+    ? prepareAgentCommandRunAdmissionWithSpawnFacts(admissionParams, spawnFacts)
+    : executionIdentity.prepare(admissionParams);
 }
 
 export function sanitizePublicAgentCommandIngressOpts(

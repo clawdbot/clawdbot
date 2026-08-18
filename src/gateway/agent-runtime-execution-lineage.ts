@@ -5,7 +5,7 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
-import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-identity-token.js";
+import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 
 type AgentRuntimeExecutionLineage = {
   relation: "sessions_spawn";

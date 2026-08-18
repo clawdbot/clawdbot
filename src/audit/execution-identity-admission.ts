@@ -269,15 +269,16 @@ function validateEnvelope(
   if (Buffer.byteLength(encoded, "utf8") > EXECUTION_IDENTITY_ADMISSION_MAX_BYTES) {
     throw new Error("execution identity admission envelope exceeds 16 KiB");
   }
-  return { ...baseEnvelope, ...owned };
+  return owned as ExecutionIdentityAdmissionEnvelope & Record<string, unknown>;
 }
 
 function validateFacts(value: unknown): ExecutionIdentityAdmissionFacts {
-  const spawnFacts = executionIdentitySpawnAdmission({ operation: "read", value });
-  const owned = copyOwnedData(executionIdentitySpawnAdmission({ operation: "base-facts", value }));
+  const baseFacts = executionIdentitySpawnAdmission({ operation: "base-facts", value });
+  const owned = copyOwnedData(baseFacts);
   if (!Value.Check(ExecutionIdentityAdmissionFactsSchema, owned)) {
     throw new Error("execution identity admission facts violate their bounded contract");
   }
+  const spawnFacts = executionIdentitySpawnAdmission({ operation: "read", value });
   return executionIdentitySpawnAdmission({ operation: "attach", value: owned, extra: spawnFacts });
 }
 

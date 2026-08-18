@@ -31,10 +31,40 @@ function isCarrierRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasSpawnAdmissionFacts(
-  value: object,
-): value is { [EXECUTION_IDENTITY_SPAWN_ADMISSION_FACTS]: unknown } {
-  return EXECUTION_IDENTITY_SPAWN_ADMISSION_FACTS in value;
+function ownDataDescriptor(value: object, key: PropertyKey): PropertyDescriptor | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!descriptor) {
+    return undefined;
+  }
+  if (!descriptor.enumerable || !("value" in descriptor)) {
+    throw new Error("execution identity spawn admission carrier is invalid");
+  }
+  return descriptor;
+}
+
+function copyBaseFacts(value: object): Record<string, unknown> {
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("execution identity spawn admission carrier is invalid");
+  }
+  const descriptors: Record<PropertyKey, PropertyDescriptor> =
+    Object.getOwnPropertyDescriptors(value);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = descriptors[key];
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !("value" in descriptor) ||
+      (typeof key !== "string" &&
+        (key !== EXECUTION_IDENTITY_SPAWN_ADMISSION_FACTS || typeof descriptor.value !== "string"))
+    ) {
+      throw new Error("execution identity spawn admission carrier is invalid");
+    }
+    if (typeof key !== "string") {
+      delete descriptors[key];
+    }
+  }
+  return Object.create(null, descriptors);
 }
 
 function validRef(value: unknown, maxLength: number): value is string {
@@ -156,12 +186,23 @@ export function executionIdentitySpawnAdmission(
     throw new Error("execution identity spawn admission carrier is invalid");
   }
   if (operation === "attach") {
-    return typeof operationInput.extra === "string"
-      ? { ...value, [EXECUTION_IDENTITY_SPAWN_ADMISSION_FACTS]: operationInput.extra }
-      : value;
+    if (typeof operationInput.extra !== "string") {
+      return value;
+    }
+    const carried = Object.create(
+      Object.getPrototypeOf(value),
+      Object.getOwnPropertyDescriptors(value),
+    );
+    Object.defineProperty(carried, EXECUTION_IDENTITY_SPAWN_ADMISSION_FACTS, {
+      configurable: true,
+      enumerable: true,
+      value: operationInput.extra,
+      writable: true,
+    });
+    return carried;
   }
   if (operation === "base-facts") {
-    return Object.fromEntries(Object.entries(value));
+    return copyBaseFacts(value);
   }
   if (operation === "extend-envelope") {
     const serialized =
@@ -184,19 +225,25 @@ export function executionIdentitySpawnAdmission(
     };
   }
   if (operation === "base-envelope") {
-    const { lineage, missingEvidence, ...baseEnvelope } = value;
+    const baseEnvelope = copyBaseFacts(value);
+    const { lineage, missingEvidence } = baseEnvelope;
     validateEnvelopeExtension(lineage, missingEvidence);
+    delete baseEnvelope.lineage;
+    delete baseEnvelope.missingEvidence;
     return baseEnvelope;
   }
-  const attached = hasSpawnAdmissionFacts(value)
-    ? value[EXECUTION_IDENTITY_SPAWN_ADMISSION_FACTS]
-    : undefined;
-  if (typeof attached === "string") {
+  const attached = ownDataDescriptor(value, EXECUTION_IDENTITY_SPAWN_ADMISSION_FACTS)?.value;
+  if (attached !== undefined) {
+    if (typeof attached !== "string") {
+      throw new Error("execution identity spawn admission carrier is invalid");
+    }
     return attached;
   }
-  if (!Array.isArray(value.missingEvidence)) {
+  const missingEvidence = ownDataDescriptor(value, "missingEvidence")?.value;
+  if (!Array.isArray(missingEvidence)) {
     return undefined;
   }
-  const extension = validateEnvelopeExtension(value.lineage, value.missingEvidence);
+  const lineage = ownDataDescriptor(value, "lineage")?.value;
+  const extension = validateEnvelopeExtension(lineage, missingEvidence);
   return JSON.stringify([extension.lineage ?? null, extension.missingEvidence]);
 }
