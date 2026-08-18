@@ -8,6 +8,7 @@ import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { ChannelOnboardingPostWriteHook } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -172,6 +173,7 @@ describe("agents add command", () => {
         workspace?: string;
         entry?: { id: string; name?: string; workspace?: string; agentDir?: string };
         bindingSpecs?: string[];
+        stagedConfig?: Record<string, unknown>;
       }) => {
         const name = params.name ?? params.entry?.name ?? params.entry?.id ?? "";
         const agentId = (params.entry?.id ?? name).toLowerCase();
@@ -192,6 +194,7 @@ describe("agents add command", () => {
           workspace: params.workspace ?? params.entry?.workspace ?? `/tmp/workspace-${agentId}`,
           agentDir: params.entry?.agentDir ?? `/tmp/agent-${agentId}`,
           bootstrapPending: true,
+          config: params.stagedConfig ?? {},
           ...(binding
             ? {
                 bindingResult: {
@@ -262,7 +265,7 @@ describe("agents add command", () => {
     return wizard;
   }
 
-  function stageChannelPostWriteHook(run: () => Promise<void>): void {
+  function stageChannelPostWriteHook(run: ChannelOnboardingPostWriteHook["run"]): void {
     onboardChannelsMocks.setupChannels.mockImplementationOnce(
       async (config, _runtime, _prompter, options) => {
         options?.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run });
@@ -703,6 +706,30 @@ describe("agents add command", () => {
     expect(createAgentMock.mock.invocationCallOrder[0]!).toBeLessThan(
       hook.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("passes canonical created config to fresh-agent post-write hooks", async () => {
+    const persistedConfig = {
+      agents: { entries: { work: { id: "work", workspace: "/tmp/canonical-workspace" } } },
+      plugins: { installs: {} },
+    };
+    const hook = vi.fn(async () => {});
+    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+    useFreshAgentWizard({ workspaceDir: "/tmp/staged-workspace", confirmValues: [false] });
+    stageChannelPostWriteHook(hook);
+    createAgentMock.mockResolvedValueOnce({
+      status: "created",
+      agentId: "work",
+      name: "work",
+      workspace: "/tmp/canonical-workspace",
+      agentDir: "/tmp/agent-work",
+      bootstrapPending: true,
+      config: persistedConfig,
+    });
+
+    await agentsAddCommand({}, runtime);
+
+    expect(hook).toHaveBeenCalledWith(expect.objectContaining({ cfg: persistedConfig }));
   });
 
   it("does not run channel post-write hooks when fresh agent creation fails", async () => {

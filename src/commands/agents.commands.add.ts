@@ -516,6 +516,7 @@ export async function agentsAddCommand(
         await prompter.outro(created.message);
         return;
       }
+      nextConfig = created.config;
       payload = {
         agentId: created.agentId,
         name: created.name,
