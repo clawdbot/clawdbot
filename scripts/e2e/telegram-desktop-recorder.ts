@@ -13,7 +13,6 @@ import {
   extractCrabboxLeaseId,
   inspectCrabbox,
   type CrabboxInspect,
-  type CrabboxProvider,
   type RunCommand,
   renderStartRemoteRecording,
   renderStopRemoteRecording,
@@ -29,6 +28,7 @@ import {
   parseRecorderArgs,
   readRecorderSession,
   recorderUsageText,
+  type RecorderProvider,
   type RecorderSession,
   type ScreenshotOptions,
   type StartOptions,
@@ -51,7 +51,8 @@ const TELEGRAM_BINARY = "/opt/Telegram/Telegram";
 // Crabbox variant image baked with CRABBOX_LINUX_TELEGRAM_DESKTOP=1 and promoted
 // catalog-only; the generic desktop image never carries the client, so the lease
 // must ask for it or Crabbox fails before leasing.
-const TELEGRAM_IMAGE_SDK = "telegram-desktop=7.0.9";
+const TELEGRAM_DESKTOP_VERSION = "7.0.9";
+const TELEGRAM_IMAGE_SDK = `telegram-desktop=${TELEGRAM_DESKTOP_VERSION}`;
 const TELEGRAM_WORKDIR = `${REMOTE_ROOT}/desktop`;
 const DEFAULT_PREVIEW_FPS = 24;
 const DEFAULT_PREVIEW_WIDTH = 1920;
@@ -95,7 +96,7 @@ export function renderGoldenImagePreflight(): string {
 contract="Telegram Desktop recorder golden image contract"
 fail() { echo "$contract failed: $1" >&2; exit 1; }
 test -x ${TELEGRAM_BINARY} || fail "${TELEGRAM_BINARY} is not executable"
-test -r /var/lib/crabbox/telegram-desktop-version || fail "/var/lib/crabbox/telegram-desktop-version is not readable"
+test "$(cat /var/lib/crabbox/telegram-desktop-version 2>/dev/null)" = "${TELEGRAM_DESKTOP_VERSION}" || fail "/var/lib/crabbox/telegram-desktop-version is not ${TELEGRAM_DESKTOP_VERSION}"
 for command in wmctrl xdotool scrot ffmpeg zbarimg xdpyinfo; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is not on PATH"
 done
@@ -252,7 +253,7 @@ async function stopBox(params: {
   crabboxBin: string;
   cwd: string;
   leaseId: string;
-  provider: CrabboxProvider;
+  provider: RecorderProvider;
   run: RunCommand;
 }): Promise<void> {
   await params.run({

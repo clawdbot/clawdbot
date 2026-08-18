@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { z } from "zod";
-import type { CrabboxProvider } from "./telegram-desktop-crabbox.ts";
 
 const recorderSessionSchema = z.object({
   artifacts: z.record(z.string(), z.string()).optional(),
@@ -11,7 +10,8 @@ const recorderSessionSchema = z.object({
   leaseId: z.string().min(1),
   /** False when `--lease-id` borrowed an existing box: the recorder never stops it. */
   leaseOwned: z.boolean(),
-  provider: z.enum(["aws", "hetzner"]),
+  // Only an AWS AMI variant is published (scripts/mantis/bake-telegram-desktop-image.sh).
+  provider: z.literal("aws"),
   recordFps: z.number().int().positive(),
   remotePaths: z.object({
     desktopLog: z.string(),
@@ -27,6 +27,7 @@ const recorderSessionSchema = z.object({
 });
 
 export type RecorderSession = z.infer<typeof recorderSessionSchema>;
+export type RecorderProvider = RecorderSession["provider"];
 
 export type StartOptions = {
   command: "start";
@@ -37,7 +38,7 @@ export type StartOptions = {
   leaseId?: string;
   messageId?: string;
   outputDir: string;
-  provider: CrabboxProvider;
+  provider: RecorderProvider;
   recordFps: number;
   ttl: string;
   userDriver: string[];
@@ -79,7 +80,7 @@ export function recorderUsageText(): string {
     "  pnpm qa:telegram-desktop-recorder status --session <recorder.json>",
     "",
     "Start options:",
-    "  --provider aws|hetzner    Crabbox provider. Default: aws.",
+    "  --provider aws            Crabbox provider (only aws publishes the Telegram variant image).",
     "  --lease-id <cbx…>        Reuse an existing desktop lease.",
     "  --class <name>            Crabbox class. Default: standard.",
     "  --ttl <duration>          Lease TTL. Default: 2h.",
@@ -191,8 +192,10 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     // paths are our own tooling and never contain spaces.
     const userDriver = requiredString(values, "--user-driver").split(/\s+/u);
     const provider = values.get("--provider") ?? "aws";
-    if (provider !== "aws" && provider !== "hetzner") {
-      throw new Error("--provider must be aws or hetzner.");
+    if (provider !== "aws") {
+      throw new Error(
+        "--provider must be aws: the Telegram Desktop variant image is published only as an AWS AMI.",
+      );
     }
     const leaseId = values.get("--lease-id");
     if (leaseId && !/^cbx_[A-Za-z0-9_-]+$/u.test(leaseId)) {

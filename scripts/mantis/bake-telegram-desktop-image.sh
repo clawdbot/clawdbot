@@ -146,9 +146,8 @@ fi
 # through to the coordinator, which answers "not found"; a non-admin login is
 # refused by the CLI before any request. Anything else (outage, auth, contract
 # drift) fails closed rather than paying for leases first.
-admin_probe_status=0
-admin_probe="$("$crabbox_resolved" image fsr-status ami-00000000000000000 --provider aws 2>&1)" || admin_probe_status=$?
-if [[ "$admin_probe_status" -eq 0 || "$admin_probe" == *"not found"* ]]; then
+admin_probe="$("$crabbox_resolved" image fsr-status ami-00000000000000000 --provider aws 2>&1 || true)"
+if [[ "$admin_probe" == *"not found"* ]]; then
   :
 elif [[ "$admin_probe" == *"admin command requires"* ]]; then
   printf 'Crabbox coordinator admin is required with --run (CRABBOX_GITHUB_ADMIN_OWNERS or CRABBOX_COORDINATOR_ADMIN_TOKEN).\n' >&2

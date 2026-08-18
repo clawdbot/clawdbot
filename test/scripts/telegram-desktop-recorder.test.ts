@@ -136,6 +136,19 @@ describe("Telegram Desktop recorder CLI", () => {
         "--chat",
         "-1001234",
         "--user-driver",
+        "driver",
+        "--provider",
+        "hetzner",
+      ]),
+    ).toThrow("--provider must be aws");
+    expect(() =>
+      parseRecorderArgs([
+        "start",
+        "--output-dir",
+        ".artifacts/telegram",
+        "--chat",
+        "-1001234",
+        "--user-driver",
         "   ",
       ]),
     ).toThrow("--user-driver is required");
@@ -226,7 +239,9 @@ describe("Telegram Desktop recorder remote contract", () => {
 
     expect(scripts).toContain("Telegram Desktop recorder golden image contract");
     expect(scripts).toContain("/opt/Telegram/Telegram");
-    expect(scripts).toContain("/var/lib/crabbox/telegram-desktop-version");
+    expect(scripts).toContain(
+      'test "$(cat /var/lib/crabbox/telegram-desktop-version 2>/dev/null)" = "7.0.9"',
+    );
     expect(scripts).toContain("DISPLAY=:99 xdpyinfo");
     expect(scripts).toContain("wmctrl xdotool scrot ffmpeg zbarimg xdpyinfo");
     expect(scripts.toLowerCase()).not.toMatch(/apt-get|curl|wget|tdlib|python/u);

@@ -6,8 +6,6 @@ import { z } from "zod";
 import { coerceErrorMessage, toStringifiedError } from "../lib/error-format.mts";
 import { signalExitCode, terminateManagedChild } from "../lib/managed-child-process.mts";
 
-export type CrabboxProvider = "aws" | "hetzner";
-
 const crabboxInspectSchema = z.object({
   host: z.string().optional(),
   id: z.string().optional(),
