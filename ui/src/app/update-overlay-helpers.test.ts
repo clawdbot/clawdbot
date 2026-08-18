@@ -89,6 +89,9 @@ async function verifyUpdate(params: {
     publishBanner: (value) => {
       banner = value;
     },
+    publishRecordedFailure: ({ banner: value }) => {
+      banner = value;
+    },
     ...(params.onVerifiedInstall ? { onVerifiedInstall: params.onVerifiedInstall } : {}),
   });
 
