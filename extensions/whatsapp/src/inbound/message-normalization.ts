@@ -75,13 +75,18 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     }
 
     const participantJid = msg.key?.participant ?? undefined;
-    const from = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);
+    // The envelope alternate JID always names the sender, so it stands in for the direct
+    // chat only when the peer sent it; our own echoes carry this account's number there.
+    const directChatAlternateJid = msg.key?.fromMe ? undefined : msg.key?.remoteJidAlt;
+    const from = group
+      ? remoteJid
+      : await socketSession.resolveInboundJid(remoteJid, directChatAlternateJid);
     if (!from) {
       return null;
     }
     const senderE164 = group
       ? participantJid
-        ? await socketSession.resolveInboundJid(participantJid)
+        ? await socketSession.resolveInboundJid(participantJid, msg.key?.participantAlt)
         : null
       : from;
 

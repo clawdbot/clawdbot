@@ -177,6 +177,58 @@ describe("web monitor inbox reply context", () => {
     await listener.close();
   });
 
+  it("delivers LID-addressed DMs from the envelope phone JID when no mapping exists", async () => {
+    const onMessage = vi.fn(async () => {});
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
+    const upsert = buildNotifyMessageUpsert({
+      id: nextMessageId("lid-envelope-dm"),
+      remoteJid: "777@lid",
+      remoteJidAlt: "1777@s.whatsapp.net",
+      addressingMode: "lid",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(getPNForLID).toHaveBeenCalledWith("777@lid");
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.payload.body).toBe("ping");
+    expect(inbound.admission?.conversation.id).toBe("+1777");
+    expect(inbound.admission?.conversation.kind).toBe("direct");
+
+    await listener.close();
+  });
+
+  it("resolves group participant identity from the envelope phone JID when no mapping exists", async () => {
+    const onMessage = vi.fn(async () => {});
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const upsert = buildNotifyMessageUpsert({
+      id: nextMessageId("lid-envelope-group"),
+      remoteJid: "123@g.us",
+      participant: "888@lid",
+      participantAlt: "1888@s.whatsapp.net",
+      addressingMode: "lid",
+      text: "ping",
+      timestamp: 1_700_000_000,
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.payload.body).toBe("ping");
+    expect(inbound.platform.senderE164).toBe("+1888");
+    expect(inbound.admission?.conversation.id).toBe("123@g.us");
+
+    await listener.close();
+  });
+
   it("resolves group participant LID JIDs via Baileys mapping", async () => {
     const onMessage = vi.fn(async () => {});
 

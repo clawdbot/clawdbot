@@ -306,6 +306,45 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("does not adopt this account's number as the chat identity for fromMe LID direct chats", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          allowFrom: ["+123"],
+          selfChatMode: true,
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+    const { onMessage, listener, sock } = await openInboxMonitor();
+
+    try {
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              id: "fromme-lid-1",
+              fromMe: true,
+              remoteJid: "777@lid",
+              remoteJidAlt: "123@s.whatsapp.net",
+              addressingMode: "lid",
+            },
+            message: { conversation: "sent from my phone" },
+            messageTimestamp: nowSeconds(),
+          },
+        ],
+      });
+      await settleInboundWork();
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
   it("skips pairing replies for outbound DMs in same-phone mode", async () => {
     await expectOutboundDmSkipsPairing({
       selfChatMode: true,

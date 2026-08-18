@@ -178,10 +178,18 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
   };
 
   const lidLookup = sock.signalRepository?.lidMapping;
-  const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
-    resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
+  const jidResolveOptions = { authDir: options.authDir, lidLookup };
+  // A LID-addressed sender can be missing from the mapping store while its phone JID
+  // rides along on the envelope. Without that second source the direct chat has no
+  // identity and inbound normalization drops the message.
+  const resolveInboundJid = async (
+    jid: string | null | undefined,
+    alternateJid?: string | null,
+  ): Promise<string | null> =>
+    (await resolveJidToE164(jid, jidResolveOptions)) ??
+    (await resolveJidToE164(alternateJid, jidResolveOptions));
   const resolveReactionTargetJids = async (jid: string): Promise<string[]> =>
-    resolveEquivalentWhatsAppDirectChatJids(jid, { authDir: options.authDir, lidLookup });
+    resolveEquivalentWhatsAppDirectChatJids(jid, jidResolveOptions);
 
   const rememberBaileysMessage = (
     remoteJid: string | null | undefined,
