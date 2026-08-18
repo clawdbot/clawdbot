@@ -40,7 +40,8 @@ OPENCLAW_BUNDLE_PREWARMED_RUNTIME=1 ./scripts/package-mac-app.sh
 
 The app still installs the runtime into the standard profile-owned `bin/` and
 `tools/` directories. The bundled archive is only an offline installation
-source and is not included in release builds.
+source and is not included in release builds. External plugin dependencies are
+locked and integrity-checked against `pnpm-lock.yaml` before the archive is built.
 
 Set `OPENCLAW_SKIP_MLX_TTS=1` to package a dev/proof build without the local
 MLX voice helper. This skips the `openclaw-mlx-tts` binary and its large

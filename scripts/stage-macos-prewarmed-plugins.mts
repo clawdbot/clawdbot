@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { generateNpmPackageLockArtifacts } from "./generate-npm-package-lock.mts";
 import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mts";
 
 type JsonRecord = Record<string, unknown>;
@@ -250,11 +251,10 @@ function stageMacOSPrewarmedPlugins(params: StageParams): MacOSPrewarmedPlugin[]
   const repoRoot = path.resolve(params.repoRoot);
   const runtimeRoot = path.resolve(params.runtimeRoot);
   const workDir = path.resolve(params.workDir);
-  const packsDir = path.join(workDir, "packs");
   const vendorDir = path.join(workDir, "vendor");
+  const packsDir = path.join(vendorDir, "packs");
   fs.mkdirSync(packsDir, { recursive: true });
-  fs.mkdirSync(vendorDir, { recursive: true });
-  if (fs.readdirSync(packsDir).length > 0 || fs.readdirSync(vendorDir).length > 0) {
+  if (fs.readdirSync(vendorDir).length > 1 || fs.readdirSync(packsDir).length > 0) {
     throw new Error(`Prewarmed plugin staging directory must be empty: ${workDir}`);
   }
 
@@ -267,15 +267,21 @@ function stageMacOSPrewarmedPlugins(params: StageParams): MacOSPrewarmedPlugin[]
     console.error(`[prewarm] packing plugin ${index + 1}/${plugins.length}: ${plugin.id}`);
     dependencies[plugin.packageName] = `file:${packPlugin({ plugin, packsDir, repoRoot })}`;
   }
+  const vendorPackagePath = path.join(vendorDir, "package.json");
   fs.writeFileSync(
-    path.join(vendorDir, "package.json"),
+    vendorPackagePath,
     `${JSON.stringify({ private: true, dependencies }, null, 2)}\n`,
-    "utf8",
   );
+  const lockedVendor = generateNpmPackageLockArtifacts(vendorDir, {
+    installStrategy: "nested",
+    legacyPeerDeps: true,
+  });
+  fs.writeFileSync(vendorPackagePath, lockedVendor.packageJson, "utf8");
+  fs.writeFileSync(path.join(vendorDir, "package-lock.json"), lockedVendor.packageLock, "utf8");
   runChecked({
     command: "npm",
     args: [
-      "install",
+      "ci",
       "--install-strategy=nested",
       "--omit=dev",
       "--omit=peer",
@@ -283,7 +289,6 @@ function stageMacOSPrewarmedPlugins(params: StageParams): MacOSPrewarmedPlugin[]
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      "--package-lock=false",
       "--loglevel=error",
     ],
     cwd: vendorDir,
