@@ -786,6 +786,41 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("begins immediately when the lifecycle service reloads after gateway startup", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:dashboard:plugin-reload";
+    const card = await createLinkedCard(store, { status: "todo", sessionKey });
+    const readSessions = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessions: [
+          { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
+        ],
+        complete: true,
+      })
+      .mockResolvedValueOnce({
+        sessions: [{ key: sessionKey, status: "done", updatedAt: card.updatedAt + 2 }],
+        complete: true,
+      });
+    const warn = vi.fn();
+    const context = { logger: { warn } } as never;
+    const original = createWorkboardLifecycleService({ store, readSessions });
+
+    await original.start(context);
+    original.onGatewayStart();
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("running"));
+    await original.stop?.(context);
+
+    const replacement = createWorkboardLifecycleService({ store, readSessions });
+    await replacement.start(context);
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    replacement.onGatewayStop();
+    await replacement.stop?.(context);
+
+    expect(readSessions).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("runs the bounded session reconciliation from the lifecycle-owned service interval", async () => {
     vi.useFakeTimers();
     const store = new WorkboardStore(createMemoryStore());
