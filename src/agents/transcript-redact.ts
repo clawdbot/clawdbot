@@ -50,11 +50,33 @@ function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
   return redactSensitiveText(value, redactTranscriptOptions(cfg));
 }
 
+// Match the UUID portion of a UUID-derived idempotency key.
+// UUIDv4: 8-4-4-4-12 hex chars. The fc- credential pattern can match
+// across the fourth segment boundary when it ends in fc (1/256 chance).
+const UUID_PREFIX_RE =
+  /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/;
+
 function redactTranscriptStructuredFieldValue(
   key: string,
   value: string,
   cfg?: OpenClawConfig,
 ): string {
+  // Preserve the UUID portion of an idempotency key that would be corrupted
+  // by the fc- credential pattern matching across UUID segment boundaries.
+  // Only the UUID prefix is preserved — any suffix after the UUID is still
+  // run through normal value-pattern redaction, so credential-shaped suffixes
+  // (e.g. ":fc-abcdef1234567890" or ":AKIAIOSFODNN7EXAMPLE") get redacted.
+  if (/^idempotency[_-]?key$/i.test(key)) {
+    const uuidMatch = value.match(UUID_PREFIX_RE);
+    if (uuidMatch) {
+      const uuidPart = uuidMatch[1];
+      const suffix = value.slice(uuidPart.length);
+      const redactedSuffix = suffix
+        ? redactSensitiveFieldValue(key, suffix, redactTranscriptOptions(cfg))
+        : "";
+      return uuidPart + redactedSuffix;
+    }
+  }
   // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
   return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
     ? redactTranscriptText(value, cfg)

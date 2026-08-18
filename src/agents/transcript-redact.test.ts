@@ -137,6 +137,46 @@ describe("redactTranscriptMessage", () => {
     expect(args.page_token).not.toContain("sk-abcdef1234567890xyz");
   });
 
+  it("preserves idempotencyKey exactly when UUID fourth segment ends in fc (#125214)", () => {
+    const idempotencyKey = "7c311c86-7836-4f47-bffc-aa8c3cbf261e:user";
+    const msg = {
+      role: "user" as const,
+      content: "continue",
+      idempotencyKey,
+    } as unknown as AgentMessage;
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      idempotencyKey: string;
+    };
+    expect(result.idempotencyKey).toBe(idempotencyKey);
+    expect(result.idempotencyKey).not.toContain("…");
+  });
+
+  it("still redacts a non-UUID secret in idempotencyKey position", () => {
+    const msg = {
+      role: "user" as const,
+      content: "continue",
+      idempotencyKey: "prefix-fc-abcdef1234567890xyz",
+    } as unknown as AgentMessage;
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      idempotencyKey: string;
+    };
+    expect(result.idempotencyKey).not.toBe("prefix-fc-abcdef1234567890xyz");
+    expect(result.idempotencyKey).toContain("…");
+  });
+
+  it("still redacts a UUID with a credential-shaped suffix in idempotencyKey", () => {
+    const msg = {
+      role: "user" as const,
+      content: "continue",
+      idempotencyKey: "7c311c86-7836-4f47-bffc-aa8c3cbf261e:AKIAIOSFODNN7EXAMPLE",
+    } as unknown as AgentMessage;
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      idempotencyKey: string;
+    };
+    // AWS-style credential suffix should still be redacted even after a UUID.
+    expect(result.idempotencyKey).not.toContain("AKIAIOSFODNN7EXAMPLE");
+  });
+
   it("redacts thinking block", () => {
     const msg = castAgentMessage({
       role: "assistant",
