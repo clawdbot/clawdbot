@@ -121,29 +121,87 @@ suite.define(() => {
       const requestsBeforeReplacement = (await gateway.getRequests("sessions.delete")).length;
       const replacementDelete = deleteFromRuntime([replacement]);
       await gateway.waitForRequest("sessions.delete", { after: requestsBeforeReplacement });
-      await page.evaluate(
+      const inFlightRevision = await page.evaluate(
         async ({ store, key, scopeOwner }) => {
           const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
             sessions: Record<string, unknown>;
           };
-          const revision = Date.now() + 10_000;
+          const revision = Date.now();
           local.sessions[`${key}\u0000agent:main`] = {
-            draft: "new local replacement",
+            draft: "in-flight local edit",
             draftRevision: revision,
             updatedAt: Date.now(),
           };
           sessionStorage.setItem(storageKey, JSON.stringify(local));
           await store.writeDurableComposerDraft(
             { ...scopeOwner, scopeKey: `${key}\u0000agent:main` },
-            { revision, text: "new durable replacement", attachments: [] },
-            { expectedRevision: 7, writeId: "new-replacement" },
+            { revision, text: "in-flight durable edit", attachments: [] },
+            { expectedRevision: 7, writeId: "in-flight-edit" },
           );
+          return revision;
         },
         { store: draftStore, key: replacement, scopeOwner: owner },
       );
+      await expect
+        .poll(() => page.evaluate((revision) => Date.now() > revision, inFlightRevision))
+        .toBe(true);
       await gateway.resolveDeferred("sessions.delete", { ok: true, deleted: true });
       await expect(replacementDelete).resolves.toMatchObject({ deleted: true });
+
+      await expect
+        .poll(() =>
+          page.evaluate(
+            async ({ store, key, scopeOwner }) => {
+              const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+              const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
+                sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
+              };
+              const scopeKey = `${key}\u0000agent:main`;
+              const localDraft = local.sessions?.[scopeKey];
+              const durable = await store.readDurableComposerDraft({ ...scopeOwner, scopeKey });
+              return {
+                local: Boolean(localDraft?.draft || localDraft?.queue?.length),
+                durable: durable.status === "found" ? durable.draft.text : durable.status,
+              };
+            },
+            { store: draftStore, key: replacement, scopeOwner: owner },
+          ),
+        )
+        .toEqual({ local: false, durable: "not-found" });
+
+      await page.evaluate(
+        async ({ store, key, scopeOwner }) => {
+          const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
+            sessions: Record<string, { draftRevision?: number }>;
+          };
+          const scopeKey = `${key}\u0000agent:main`;
+          const durable = await store.readDurableComposerDraft({ ...scopeOwner, scopeKey });
+          if (durable.status !== "not-found") {
+            throw new Error("confirmed deletion did not leave a durable retirement fence");
+          }
+          const revision = Date.now();
+          local.sessions[scopeKey] = {
+            draft: "post-confirm local replacement",
+            draftRevision: revision,
+          };
+          sessionStorage.setItem(storageKey, JSON.stringify(local));
+          const written = await store.writeDurableComposerDraft(
+            { ...scopeOwner, scopeKey },
+            { revision, text: "post-confirm durable replacement", attachments: [] },
+            {
+              expectedRevision: durable.revision ?? 0,
+              expectedWriteId: durable.writeId,
+              writeId: "post-confirm-replacement",
+            },
+          );
+          if (written.status !== "persisted") {
+            throw new Error(`post-confirm replacement failed: ${written.status}`);
+          }
+        },
+        { store: draftStore, key: replacement, scopeOwner: owner },
+      );
 
       await expect
         .poll(() =>
@@ -186,7 +244,7 @@ suite.define(() => {
           [noOp]: { local: true, durable: `durable ${noOp}` },
           [replacement]: {
             local: true,
-            durable: "new durable replacement",
+            durable: "post-confirm durable replacement",
           },
         });
     } finally {

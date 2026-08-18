@@ -409,11 +409,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return { deleted: false };
     }
     try {
-      const retireBeforeRevision = Date.now();
       const response = await requestSessionDelete(scope.client, key, options);
       if (!host.connection.isCurrent(scope) || !confirmsSessionDeletion(response)) {
         return { deleted: false };
       }
+      const retireBeforeRevision = Date.now();
       host.retirePullRequestSummary(key);
       confirmedArchives.delete(key.trim());
       preparedWorkSessionKeys.delete(key.trim());
@@ -454,12 +454,12 @@ export function createSessionMutations(host: SessionMutationsHost) {
         break;
       }
       try {
-        const retireBeforeRevision = Date.now();
         const response = await requestSessionDelete(scope.client, target.key, target);
         if (!host.connection.isCurrent(scope)) {
           break;
         }
         if (confirmsSessionDeletion(response)) {
+          const retireBeforeRevision = Date.now();
           deleted.push(target.key);
           deletionFacts.push({
             key: target.key,
