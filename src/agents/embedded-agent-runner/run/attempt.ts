@@ -246,6 +246,7 @@ export async function runEmbeddedAttempt(
       () =>
         prepareEmbeddedAttemptBootstrap({
           attempt: params,
+          bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
           effectiveWorkspace,
           hasReadTool: toolsEnabled && toolsRaw.some((tool) => tool.name === "read"),
           isRawModelRun,

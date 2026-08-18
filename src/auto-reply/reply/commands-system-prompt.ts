@@ -112,7 +112,7 @@ async function resolveCommandSkillsPrompt(params: {
               ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
               : {}),
           },
-          effectiveWorkspace: sandboxWorkspace.workspaceDir,
+          skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
         });
         const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
           workspaceDir: skillsWorkspaceDir,

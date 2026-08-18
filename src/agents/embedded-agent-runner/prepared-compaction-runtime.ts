@@ -142,7 +142,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       workspaceOnly: loadSkillsWorkspaceOnly,
     } = resolveSandboxSkillRuntimeInputs({
       sandbox,
-      effectiveWorkspace,
+      skillsAnchorWorkspace: params.bootstrapWorkspaceDir ?? effectiveWorkspace,
       skillsSnapshot: params.skillsSnapshot,
     });
     const { shouldLoadSkillEntries, skillEntries, loadSkillEntries } =
