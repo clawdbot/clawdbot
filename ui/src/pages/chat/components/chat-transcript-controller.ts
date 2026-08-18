@@ -1,11 +1,8 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
 import { VirtualizerController } from "@tanstack/lit-virtual";
 import {
-  defaultRangeExtractor,
   measureElement as measureVirtualElement,
   observeElementRect,
-  type Range,
-  Virtualizer,
 } from "@tanstack/virtual-core";
 import {
   html,
@@ -25,6 +22,7 @@ import {
   saveChatSessionScrollPosition,
   type ChatSessionScrollPosition,
 } from "../scroll.ts";
+import { extractTranscriptRange, previewTranscriptRowKeys } from "./chat-transcript-range.ts";
 
 export type TranscriptRow<T = unknown> =
   | { kind: "item"; key: string; item: T }
@@ -265,7 +263,8 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           }
         }),
       measureElement: measureVirtualElement,
-      rangeExtractor: (range) => this.extractTranscriptRange(range, this.rowIndexesByKey),
+      rangeExtractor: (range) =>
+        extractTranscriptRange(range, this.rowIndexesByKey, this.focusedRowKey),
       scrollEndThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
@@ -423,7 +422,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           return [];
         }
         const nextRenderedKeys = rowModelChanged
-          ? this.previewVirtualRowKeys(nextKeys)
+          ? previewTranscriptRowKeys(virtualizer, nextKeys, this.focusedRowKey)
           : new Set(nextRowKeys);
         return [...appRows].filter((row) => !nextRenderedKeys.has(row.dataset.virtualRowKey ?? ""));
       },
@@ -540,46 +539,6 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     this.currentAnnouncementText = announcement.text;
   }
 
-  private previewVirtualRowKeys(nextKeys: readonly string[]): Set<string> {
-    const virtualizer = this.virtualizerController.getVirtualizer();
-    const nextIndexes = new Map(nextKeys.map((key, index) => [key, index]));
-    const preview = new Virtualizer<HTMLDivElement, HTMLElement>({
-      ...virtualizer.options,
-      initialMeasurementsCache: virtualizer.takeSnapshot(),
-      initialOffset: virtualizer.scrollOffset ?? virtualizer.options.initialOffset,
-      initialRect: virtualizer.scrollRect ?? virtualizer.options.initialRect,
-      onChange: () => undefined,
-      rangeExtractor: (range) => this.extractTranscriptRange(range, nextIndexes),
-    });
-    preview.scrollElement = virtualizer.scrollElement;
-    // Apply the fork's key-anchor transition on isolated state so teardown
-    // selection is exact without advancing the model owned by connected DOM.
-    preview.setOptions({
-      ...preview.options,
-      count: nextKeys.length,
-      getItemKey: (index) => nextKeys[index] ?? `missing:${index}`,
-    });
-    return new Set(preview.getVirtualIndexes().flatMap((index) => nextKeys[index] ?? []));
-  }
-
-  private extractTranscriptRange(
-    range: Range,
-    rowIndexesByKey: ReadonlyMap<string, number>,
-  ): number[] {
-    const indexes = defaultRangeExtractor(range);
-    const focused =
-      this.focusedRowKey === null ? undefined : rowIndexesByKey.get(this.focusedRowKey);
-    if (
-      focused === undefined ||
-      focused < 0 ||
-      focused >= range.count ||
-      indexes.includes(focused)
-    ) {
-      return indexes;
-    }
-    return [...indexes, focused].toSorted((left, right) => left - right);
-  }
-
   private syncRows(nextKeys: string[]): void {
     const virtualizer = this.virtualizerController.getVirtualizer();
     const typingAdded =
@@ -599,7 +558,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       count: keys.length,
       getItemKey: (index) => keys[index] ?? `missing:${index}`,
       followOnAppend: false,
-      rangeExtractor: (range) => this.extractTranscriptRange(range, rowIndexesByKey),
+      rangeExtractor: (range) => extractTranscriptRange(range, rowIndexesByKey, this.focusedRowKey),
     });
     if (followTyping) {
       virtualizer.scrollToIndex(this.rowIndexesByKey.get("presence:typing") ?? keys.length - 1, {
