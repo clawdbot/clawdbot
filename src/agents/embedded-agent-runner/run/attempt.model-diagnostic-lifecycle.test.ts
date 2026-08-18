@@ -212,7 +212,58 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       type: "provider.request",
       ok: true,
       status: 200,
+      attributes: {
+        providerAccepted: true,
+        providerAcceptanceKind: "http_response",
+      },
     });
+  });
+
+  it("records provider acceptance when an SDK hides HTTP metadata", async () => {
+    const originalOnProviderAccepted = vi.fn(async () => undefined);
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        return options?.onProviderAccepted?.(
+          { kind: "provider_stream_opened", httpMetadata: "unavailable" },
+          model,
+        );
+      }) as unknown as StreamFn,
+      {
+        runId: "run-timeline-accepted",
+        provider: "mistral",
+        model: "mistral-large-latest",
+        api: "mistral-conversations",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-timeline-accepted",
+      },
+    );
+
+    const events = await collectProviderTimelineEvents(async () => {
+      await wrapped(
+        { id: "mistral-large-latest" } as never,
+        {} as never,
+        { onProviderAccepted: originalOnProviderAccepted } as never,
+      );
+    });
+
+    expect(originalOnProviderAccepted).toHaveBeenCalledWith(
+      { kind: "provider_stream_opened", httpMetadata: "unavailable" },
+      { id: "mistral-large-latest" },
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "provider.request",
+      ok: true,
+      attributes: {
+        providerAccepted: true,
+        providerAcceptanceKind: "provider_stream_opened",
+      },
+    });
+    expect(events[0]?.status).toBeUndefined();
   });
 
   it("writes Unicode-safe bounded attributes to the provider timeline JSONL", async () => {

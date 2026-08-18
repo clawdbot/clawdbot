@@ -227,6 +227,38 @@ describe("Mistral provider", () => {
     configureAiTransportHost({});
   });
 
+  it("reports SDK stream acceptance without fabricated HTTP metadata", async () => {
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: {
+            id: "resp-ack",
+            model: "mistral-large-latest",
+            choices: [{ finishReason: "stop", delta: { content: "ok" } }],
+          },
+        };
+      },
+    };
+    const onProviderAccepted = vi.fn();
+
+    const result = await runSimpleMistralFixture(context, { onProviderAccepted });
+
+    expect(result.stopReason).toBe("stop");
+    expect(onProviderAccepted).toHaveBeenCalledWith(
+      { kind: "provider_stream_opened", httpMetadata: "unavailable" },
+      expect.objectContaining({ provider: "mistral" }),
+    );
+  });
+
+  it("does not report acceptance when SDK stream setup fails", async () => {
+    const onProviderAccepted = vi.fn();
+
+    const result = await runSimpleMistralFixture(context, { onProviderAccepted });
+
+    expect(result.stopReason).toBe("error");
+    expect(onProviderAccepted).not.toHaveBeenCalled();
+  });
+
   it("forwards simple stop sequences to Mistral stop", async () => {
     const result = await runSimpleMistralFixture(context, {
       stop: ["STOP"],

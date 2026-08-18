@@ -34,6 +34,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  notifyProviderHttpResponse,
   sanitizeTransportPayloadText,
   sortPromptCacheToolsByName,
   stripSystemPromptCacheBoundary,
@@ -1104,6 +1105,14 @@ type GoogleSseAttempt =
     }
   | { type: "timeout" };
 
+async function notifyGoogleTransportHttpResponse(
+  model: GoogleTransportModel,
+  options: GoogleTransportOptions | undefined,
+  response: Response,
+): Promise<void> {
+  await notifyProviderHttpResponse({ options, response, model: canonicalGoogleModel(model) });
+}
+
 async function openGoogleSseAttempt(params: {
   guardedFetch: ReturnType<typeof buildGuardedModelFetch>;
   url: string;
@@ -1113,6 +1122,8 @@ async function openGoogleSseAttempt(params: {
   parentSignal?: AbortSignal;
   firstResponseTimeoutMs: number;
   errorPrefix: string;
+  model: GoogleTransportModel;
+  options: GoogleTransportOptions | undefined;
 }): Promise<GoogleSseAttempt> {
   const attemptSignal =
     params.firstResponseTimeoutMs > 0
@@ -1129,6 +1140,7 @@ async function openGoogleSseAttempt(params: {
     if (!response.ok) {
       throw await createProviderHttpError(response, params.errorPrefix);
     }
+    await notifyGoogleTransportHttpResponse(params.model, params.options, response);
     const chunks = parseGoogleSseChunks(response, signal);
     const iterator = chunks[Symbol.asyncIterator]();
     const first = await iterator.next();
@@ -1177,6 +1189,7 @@ async function openGoogleSseChunks(params: {
     if (!response.ok) {
       throw await createProviderHttpError(response, errorPrefix);
     }
+    await notifyGoogleTransportHttpResponse(params.model, params.options, response);
     return {
       type: "ready",
       chunks: parseGoogleSseChunks(response, params.options?.signal),
@@ -1194,6 +1207,7 @@ async function openGoogleSseChunks(params: {
     if (!response.ok) {
       throw await createProviderHttpError(response, errorPrefix);
     }
+    await notifyGoogleTransportHttpResponse(params.model, params.options, response);
     return {
       type: "ready",
       chunks: parseGoogleSseChunks(response, params.options?.signal),
@@ -1209,6 +1223,8 @@ async function openGoogleSseChunks(params: {
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: retryMs,
     errorPrefix,
+    model: params.model,
+    options: params.options,
   });
   if (firstAttempt.type === "ready") {
     return firstAttempt;
@@ -1229,6 +1245,8 @@ async function openGoogleSseChunks(params: {
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: 0,
     errorPrefix,
+    model: params.model,
+    options: params.options,
   });
   if (retryAttempt.type === "timeout") {
     throw new Error("Google Gemini first response retry timed out unexpectedly");

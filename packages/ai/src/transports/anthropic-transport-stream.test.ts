@@ -4333,10 +4333,12 @@ describe("anthropic transport stream", () => {
       ]),
     );
     const streamFn = createAnthropicMessagesTransportStreamFn();
+    const onProviderAccepted = vi.fn();
+    const onResponse = vi.fn();
     const stream = streamFn(
       makeAnthropicTransportModel(),
       { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
-      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      { apiKey: "sk-ant-api", onProviderAccepted, onResponse } as AnthropicStreamOptions,
     );
 
     const eventTypes: string[] = [];
@@ -4347,6 +4349,11 @@ describe("anthropic transport stream", () => {
     const startIndex = eventTypes.indexOf("start");
     expect(startIndex).toBeGreaterThanOrEqual(0);
     expect(eventTypes.slice(0, startIndex).some((t) => t === "error")).toBe(false);
+    expect(onProviderAccepted).toHaveBeenCalledWith(
+      { kind: "provider_stream_opened", httpMetadata: "unavailable" },
+      expect.objectContaining({ provider: "anthropic" }),
+    );
+    expect(onResponse).not.toHaveBeenCalled();
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

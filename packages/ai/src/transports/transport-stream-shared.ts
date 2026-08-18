@@ -3,9 +3,10 @@
  *
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
-import type { AssistantMessage, Usage } from "@openclaw/llm-core";
+import type { AssistantMessage, Model, StreamOptions, Usage } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { headersToRecord } from "../utils/headers.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
@@ -121,6 +122,37 @@ export function transportAbortError(signal?: AbortSignal): Error {
   return reason instanceof Error && typeof (reason as { code?: unknown }).code === "string"
     ? reason
     : new Error("Request was aborted");
+}
+
+type ProviderAcceptanceOptions = Pick<StreamOptions, "onProviderAccepted" | "onResponse">;
+
+/** Report a real HTTP response before its body stream is consumed. */
+export async function notifyProviderHttpResponse(params: {
+  options?: ProviderAcceptanceOptions;
+  response: Response;
+  model: Model;
+}): Promise<void> {
+  if (!params.options?.onProviderAccepted && !params.options?.onResponse) {
+    return;
+  }
+  const status = params.response.status;
+  const headers = headersToRecord(params.response.headers);
+  await params.options.onProviderAccepted?.(
+    { kind: "http_response", status, headers },
+    params.model,
+  );
+  await params.options.onResponse?.({ status, headers }, params.model);
+}
+
+/** Report an accepted SDK stream when the SDK does not expose HTTP metadata. */
+export async function notifyProviderStreamOpened(params: {
+  options?: Pick<StreamOptions, "onProviderAccepted">;
+  model: Model;
+}): Promise<void> {
+  await params.options?.onProviderAccepted?.(
+    { kind: "provider_stream_opened", httpMetadata: "unavailable" },
+    params.model,
+  );
 }
 
 /** Run a provider-response hook before start/body consumption inside the first-event deadline. */

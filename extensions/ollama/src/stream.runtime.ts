@@ -20,6 +20,7 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import { notifyProviderHttpResponse } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -1082,6 +1083,7 @@ function createRawOllamaStreamFn(
             ).catch(() => "unknown error");
             throw new Error(`${response.status} ${errorText}`);
           }
+          await notifyProviderHttpResponse({ options, response, model });
           if (!response.body) {
             throw new Error("Ollama API returned empty response body");
           }

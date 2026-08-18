@@ -33,7 +33,7 @@ import {
   type ResponsesEncryptedContentAttempt,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import { createOpenAIResponseHook } from "../transports/openai-transport-shared.js";
+import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
   transportAbortError,
   withProviderResponseHook,
@@ -520,7 +520,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             withProviderResponseHook({
               signal: firstEventAbort.signal,
               abort: firstEventAbort.abort,
-              hook: createOpenAIResponseHook(options?.onResponse, attemptResponse, model),
+              hook: createOpenAIProviderAcceptanceHook(options, attemptResponse, model),
             }),
             {
               provider: model.provider,
@@ -582,7 +582,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         stream: mapCodexEvents(parseOpenAIChatGptResponsesSse(response)),
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
-        hook: createOpenAIResponseHook(options?.onResponse, response, model),
+        hook: createOpenAIProviderAcceptanceHook(options, response, model),
         onReady: () => stream.push({ type: "start", partial: output }),
       });
       await processResponsesStream(hookedResponseStream, output, stream, model, {

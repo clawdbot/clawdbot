@@ -29,7 +29,10 @@ import {
   type AnthropicCompactionBlock,
 } from "../transports/anthropic-compaction-replay.js";
 import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import {
+  notifyProviderHttpResponse,
+  transportAbortError,
+} from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
   AnthropicMessagesCompat,
@@ -49,7 +52,6 @@ import type {
 } from "../types.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { projectProviderError } from "../utils/provider-error.js";
@@ -422,10 +424,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
         .asResponse();
-      await requestOptions?.onResponse?.(
-        { status: response.status, headers: headersToRecord(response.headers) },
-        model,
-      );
+      await notifyProviderHttpResponse({ options: requestOptions, response, model });
 
       type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & {
         index: number;

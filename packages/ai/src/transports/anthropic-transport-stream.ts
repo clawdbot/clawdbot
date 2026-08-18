@@ -107,6 +107,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  notifyProviderStreamOpened,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
   transportAbortError,
@@ -1094,6 +1095,8 @@ function resolveAnthropicTransportOptions(
     sessionId: options?.sessionId,
     headers: options?.headers,
     onPayload: options?.onPayload,
+    onProviderAccepted: options?.onProviderAccepted,
+    onResponse: options?.onResponse,
     maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
     interleavedThinking: options?.interleavedThinking,
@@ -1326,10 +1329,15 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             });
           }
         };
+        let providerAccepted = false;
         for await (const event of anthropicStream) {
           if (event.type === "error") {
             const error = event.error as { message?: string } | undefined;
             throw new Error(error?.message || "Anthropic Messages stream failed");
+          }
+          if (!providerAccepted) {
+            providerAccepted = true;
+            await notifyProviderStreamOpened({ options: transportOptions, model });
           }
           if (event.type === "message_start") {
             const message = event.message as

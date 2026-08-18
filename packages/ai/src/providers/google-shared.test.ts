@@ -590,6 +590,21 @@ describe("consumeGoogleGenerateContentStream", () => {
 });
 
 describe("runGoogleGenerateContentLifecycle", () => {
+  it("reports SDK stream acceptance without fabricated HTTP metadata", async () => {
+    const onProviderAccepted = vi.fn();
+
+    const { result } = await runGoogleFixture(
+      [googleResponse({ parts: [{ text: "ok" }], finishReason: FinishReason.STOP })],
+      { options: { onProviderAccepted } },
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(onProviderAccepted).toHaveBeenCalledWith(
+      { kind: "provider_stream_opened", httpMetadata: "unavailable" },
+      model,
+    );
+  });
+
   it.each(["google-generative-ai", "google-vertex"] as const)(
     "rejects an unfinished %s stream instead of silently completing partial output",
     async (api) => {

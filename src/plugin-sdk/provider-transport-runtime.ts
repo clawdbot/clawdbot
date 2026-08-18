@@ -19,6 +19,8 @@ export {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  notifyProviderHttpResponse,
+  notifyProviderStreamOpened,
   sanitizeTransportPayloadText,
   type WritableTransportStream,
 } from "@openclaw/ai/transports";

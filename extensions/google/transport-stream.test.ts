@@ -630,6 +630,30 @@ describe("google transport stream", () => {
     expect(guardedFetchMock).not.toHaveBeenCalled();
   });
 
+  it("reports the real HTTP response before consuming Gemini SSE output", async () => {
+    mockGoogleTextResponse();
+    const onProviderAccepted = vi.fn();
+    const onResponse = vi.fn();
+
+    const result = await runGeminiStreamResult({
+      options: { onProviderAccepted, onResponse },
+    });
+
+    expect(result.stopReason).toBe("stop");
+    expect(onProviderAccepted).toHaveBeenCalledWith(
+      {
+        kind: "http_response",
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      },
+      expect.objectContaining({ provider: "google" }),
+    );
+    expect(onResponse).toHaveBeenCalledWith(
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+      expect.objectContaining({ provider: "google" }),
+    );
+  });
+
   it("uses the guarded fetch transport and parses Gemini SSE output", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([

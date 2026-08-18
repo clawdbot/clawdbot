@@ -13,7 +13,10 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import {
+  notifyProviderStreamOpened,
+  transportAbortError,
+} from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
   Context,
@@ -178,6 +181,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         headers,
         signal: options?.signal,
       });
+      await notifyProviderStreamOpened({ options, model });
       stream.push({ type: "start", partial: output });
       await consumeChatStream(model, output, stream, mistralStream);
 
