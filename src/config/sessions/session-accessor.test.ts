@@ -80,8 +80,8 @@ import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-access
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-event-write.js";
 import {
-  appendTranscriptEventSync,
   replaceTranscriptEvents,
   trimTranscriptForManualCompact,
 } from "./session-accessor.sqlite-transcript-write.js";

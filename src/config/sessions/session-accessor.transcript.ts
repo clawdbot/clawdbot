@@ -17,16 +17,19 @@ import {
   readTranscriptEventAtSeqSync,
   type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
-import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import {
   appendTranscriptEvent,
   appendTranscriptEventSync,
   appendTranscriptEventWithSnapshotSync,
+} from "./session-accessor.sqlite-transcript-event-write.js";
+import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-transcript-message-rewrite.js";
+import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   appendTranscriptMessageWithSnapshotSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
+  replaceTranscriptEventsWithSnapshotSync,
   rewriteTranscriptEventRowsExact,
   SqliteTranscriptMutationConflictError,
   trimTranscriptForManualCompact,
@@ -67,6 +70,7 @@ export {
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
+  replaceTranscriptEventsWithSnapshotSync,
   rewriteTranscriptEventRowsExact,
   rewriteTranscriptMessageAtAnchor,
   resolveTranscriptSessionKeyBySessionId,

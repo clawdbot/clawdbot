@@ -1,7 +1,6 @@
 import {
   loadTranscriptEventsWithRowSnapshotSync,
-  loadTranscriptRowSnapshotSync,
-  replaceTranscriptEventsSync,
+  replaceTranscriptEventsWithSnapshotSync,
   SqliteTranscriptMutationConflictError,
   type SessionTranscriptRuntimeTarget,
   type SqliteTranscriptSnapshotRow,
@@ -540,8 +539,13 @@ export class SessionManagerCore {
       leafAppendParentId,
       options?.leafAppendMode ?? this.appendMode,
     );
+    let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
     try {
-      replaceTranscriptEventsSync(this.persistenceTarget, nextEntries, this.persistedRowSnapshot);
+      ({ snapshot } = replaceTranscriptEventsWithSnapshotSync(
+        this.persistenceTarget,
+        nextEntries,
+        this.persistedRowSnapshot,
+      ));
     } catch (err) {
       if (err instanceof SqliteTranscriptMutationConflictError) {
         // A foreign process committed a transcript row between this manager's
@@ -553,38 +557,30 @@ export class SessionManagerCore {
       throw err;
     }
     this.persistenceHeaderPending = false;
-    this.refreshPersistedRowSnapshot();
+    // Adopt the snapshot captured inside the same write transaction as the replace,
+    // not a separate post-commit read: a foreign process's commit landing between
+    // this transaction's commit and a later out-of-transaction read would otherwise
+    // be silently folded into the tracked snapshot without ever appearing in
+    // `fileEntries`, so the next rewrite would delete that foreign row instead of
+    // rejecting it.
+    this.applyPersistedRowSnapshot(snapshot);
   }
 
   /**
-   * Refreshes the tracked transcript row snapshot from the authoritative store.
-   * Safe to call immediately after a persisted append or rewrite: Node's
-   * single-threaded execution guarantees no other in-process code interleaves
-   * between that write committing and this follow-up read, so only a truly
-   * concurrent foreign OS process can still race it — the same residual risk
-   * `withTranscriptWriteLock` already accepts for its own tracked snapshot.
-   */
-  protected refreshPersistedRowSnapshot(): void {
-    if (this.persistenceTarget) {
-      this.persistedRowSnapshot = loadTranscriptRowSnapshotSync(this.persistenceTarget);
-    }
-  }
-
-  /**
-   * Adopts a row snapshot captured inside the same write transaction as the append that
-   * produced it (via appendTranscriptEvent/MessageWithSnapshotSync). Prefer this over
-   * refreshPersistedRowSnapshot()'s separate post-commit read for persistence call sites:
-   * a foreign process's commit landing between this manager's own commit and a later
-   * out-of-transaction read would otherwise be silently folded into the tracked snapshot
-   * without ever appearing in `fileEntries`, so the next rewrite would delete that foreign
-   * row instead of rejecting it.
+   * Adopts a row snapshot captured inside the same write transaction as the append or
+   * replace that produced it (via *WithSnapshotSync). Prefer this over a separate
+   * post-commit read for every persistence call site: a foreign process's commit
+   * landing between this manager's own commit and a later out-of-transaction read
+   * would otherwise be silently folded into the tracked snapshot without ever
+   * appearing in `fileEntries`, so the next rewrite would delete that foreign row
+   * instead of rejecting it.
    */
   protected applyPersistedRowSnapshot(snapshot: SqliteTranscriptSnapshotRow[] | undefined): void {
     if (!this.persistenceTarget) {
       return;
     }
     if (!snapshot) {
-      throw new Error("Transcript append succeeded without a captured row snapshot");
+      throw new Error("Transcript append or replace succeeded without a captured row snapshot");
     }
     this.persistedRowSnapshot = snapshot;
   }

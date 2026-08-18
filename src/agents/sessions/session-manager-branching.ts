@@ -2,8 +2,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
+  replaceTranscriptEventsWithSnapshotSync,
   withTranscriptWriteTransaction,
+  type SqliteTranscriptSnapshotRow,
 } from "../../config/sessions/session-accessor.js";
 import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
@@ -170,6 +171,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
       updatedAt,
     };
     try {
+      let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
       const persisted = await withTranscriptWriteTransaction(persistenceTarget, () => {
         const currentEntry = loadSessionEntry(entryScope);
         if (
@@ -179,9 +181,14 @@ export class SessionManagerBranching extends SessionManagerEntries {
           return false;
         }
         replaceSessionEntrySync(entryScope, nextEntry);
-        if (!replaceTranscriptEventsSync(nextTarget, this.getPersistedFileEntries())) {
+        const replaceResult = replaceTranscriptEventsWithSnapshotSync(
+          nextTarget,
+          this.getPersistedFileEntries(),
+        );
+        if (!replaceResult.replaced) {
           throw new Error("Branched session transcript was not persisted");
         }
+        snapshot = replaceResult.snapshot;
         return true;
       });
       if (!persisted) {
@@ -200,16 +207,19 @@ export class SessionManagerBranching extends SessionManagerEntries {
             };
         throw new Error(`Branched session was not persisted: ${cause.code}`, { cause });
       }
+      this.persistenceTarget = nextTarget;
+      this.persistenceHeaderPending = false;
+      // Adopt the snapshot captured inside the same write transaction as the replace,
+      // not a separate post-commit read: a foreign process's commit landing between
+      // this transaction's commit and a later out-of-transaction read would otherwise
+      // be silently folded into the tracked snapshot without ever appearing in
+      // `fileEntries`, so the next replacePersistedTranscript() would delete that
+      // foreign row instead of rejecting it.
+      this.applyPersistedRowSnapshot(snapshot);
     } catch (error) {
       this.setSessionTarget(persistenceTarget);
       throw error;
     }
-    this.persistenceTarget = nextTarget;
-    this.persistenceHeaderPending = false;
-    // The tracked snapshot still reflects the previous session's rows. Refresh
-    // it against nextTarget so the next replacePersistedTranscript() compares
-    // against this session's actual rows instead of a stale, unrelated set.
-    this.refreshPersistedRowSnapshot();
     return newSessionId;
   }
 }

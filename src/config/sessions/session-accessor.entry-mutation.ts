@@ -21,7 +21,7 @@ import {
   forkSessionTranscriptFromParent,
   resolveSessionParentForkDecision,
 } from "./session-accessor.sqlite-parent-session.js";
-import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-event-write.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,

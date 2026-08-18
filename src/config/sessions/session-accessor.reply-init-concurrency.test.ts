@@ -525,4 +525,123 @@ describe("session accessor cross-process concurrency", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("silently drops a foreign append when a second rewrite's snapshot is a stale post-commit refresh", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-rewrite-race-bug-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-rewrite-race-bug";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-rewrite-race",
+          sessionId,
+          storePath,
+          useAtomicSnapshot: false,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 2 });
+          // Foreign append lands after the worker's first rewrite committed but
+          // before its second rewrite -- the exact refreshPersistedRowSnapshot()
+          // gap ClawSweeper flagged at the rewrite call sites in
+          // session-manager-core.ts / session-manager-branching.ts.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, rewriteRejected: false });
+      // Bug reproduced: the stale post-commit refresh trivially matches the
+      // now-current DB (it already includes the foreign row), so the second
+      // rewrite proceeds and silently deletes the foreign row since its
+      // in-memory nextEvents never saw it.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "rewrite-a-target",
+          message: expect.objectContaining({ role: "assistant", content: "rewrite a" }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("rejects a second rewrite and preserves a foreign append when its snapshot is captured atomically", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-rewrite-race-fix-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-rewrite-race-fix";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-rewrite-race",
+          sessionId,
+          storePath,
+          useAtomicSnapshot: true,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 2 });
+          // Same foreign-append timing as the bug case above, but the worker's
+          // second rewrite now reuses the snapshot captured inside the first
+          // rewrite's own write transaction (before this gap ever ran)
+          // instead of a separate out-of-transaction refresh.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, rewriteRejected: true });
+      // Fix verified: the pre-gap snapshot correctly lacks the foreign row, so
+      // the second rewrite is rejected and the foreign row survives untouched.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "rewrite-a-target",
+          message: expect.objectContaining({ role: "assistant", content: "rewrite a" }),
+        }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

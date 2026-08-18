@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -12,8 +11,6 @@ import type {
   SessionTranscriptTurnWriteContext,
   SessionTranscriptWriteScope,
   TranscriptEvent,
-  TranscriptEventAppendError,
-  TranscriptEventAppendOptions,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
@@ -41,14 +38,12 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
-import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequencesInTransaction,
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
-  appendTranscriptEventInTransaction,
   replaceSqliteTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
@@ -153,11 +148,18 @@ export async function rewriteTranscriptEventRowsExact(
   });
 }
 
-/** Fully replaces rows for one transcript synchronously for sync session runtimes. */
-export function replaceTranscriptEventsSync(
+/**
+ * Shared transaction body for the sync transcript-replace entry points. `afterReplace` runs
+ * inside the same write transaction immediately after a successful replace, so a caller that
+ * needs the resulting row set (e.g. to track a last-known-good snapshot) reads it atomically
+ * instead of racing a foreign commit that could land after this transaction commits but before
+ * a separate out-of-transaction read.
+ */
+function replaceTranscriptEventsSyncCore(
   scope: SessionTranscriptWriteScope,
   events: TranscriptEvent[],
-  expectedSnapshot?: readonly SqliteTranscriptSnapshotRow[],
+  expectedSnapshot: readonly SqliteTranscriptSnapshotRow[] | undefined,
+  afterReplace?: (database: OpenClawAgentDatabase, resolved: { sessionId: string }) => void,
 ): boolean {
   // Every sync replacement inherits and enforces the admitted writer claim.
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
@@ -190,11 +192,52 @@ export function replaceTranscriptEventsSync(
     assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshotRows);
     replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events);
     replaced = true;
+    if (replaced) {
+      afterReplace?.(writeDatabase, resolved);
+    }
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !replaced) {
     throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
   }
   return replaced;
+}
+
+/** Fully replaces rows for one transcript synchronously for sync session runtimes. */
+export function replaceTranscriptEventsSync(
+  scope: SessionTranscriptWriteScope,
+  events: TranscriptEvent[],
+  expectedSnapshot?: readonly SqliteTranscriptSnapshotRow[],
+): boolean {
+  return replaceTranscriptEventsSyncCore(scope, events, expectedSnapshot);
+}
+
+/**
+ * Fully replaces rows for one transcript synchronously and atomically captures the
+ * post-replace row snapshot in the same write transaction. Callers that track their own
+ * last-known-good snapshot (e.g. SessionManagerCore) must use this instead of
+ * replaceTranscriptEventsSync plus a separate loadTranscriptRowSnapshotSync call: a foreign
+ * process committing between this transaction's commit and that later read would otherwise
+ * be silently folded into the tracked snapshot without ever appearing in the caller's
+ * in-memory entries.
+ */
+export function replaceTranscriptEventsWithSnapshotSync(
+  scope: SessionTranscriptWriteScope,
+  events: TranscriptEvent[],
+  expectedSnapshot?: readonly SqliteTranscriptSnapshotRow[],
+): {
+  replaced: boolean;
+  snapshot?: SqliteTranscriptSnapshotRow[];
+} {
+  let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
+  const replaced = replaceTranscriptEventsSyncCore(
+    scope,
+    events,
+    expectedSnapshot,
+    (database, resolved) => {
+      snapshot = readTranscriptEventRows(database, resolved.sessionId);
+    },
+  );
+  return { replaced, ...(snapshot ? { snapshot } : {}) };
 }
 
 export async function trimTranscriptForManualCompact(
@@ -258,152 +301,6 @@ export async function trimTranscriptForManualCompact(
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     return { kept: retainedLines.length, trimmed: true };
   });
-}
-
-/** Appends one raw transcript event to the additive SQLite transcript store. */
-export async function appendTranscriptEvent(
-  scope: SessionTranscriptAccessScope,
-  event: TranscriptEvent,
-  options: TranscriptEventAppendOptions = {},
-): Promise<void> {
-  assertNonMessageTranscriptEvent(event);
-  const resolved = resolveSqliteTranscriptScope(scope);
-  await runExclusiveSqliteSessionWrite(resolved, async () => {
-    runOpenClawAgentWriteTransaction((database) => {
-      options.beforeCommitInTransaction?.();
-      appendTranscriptEventInTransaction(
-        database,
-        resolved,
-        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
-      );
-    }, toDatabaseOptions(resolved));
-  });
-}
-
-/**
- * Shared transaction body for the sync event-append entry points. `afterAppend` runs
- * inside the same write transaction immediately after a successful insert, so a caller
- * that needs the resulting row set (e.g. to track a last-known-good snapshot) reads it
- * atomically instead of racing a foreign commit that could land after this transaction
- * commits but before a separate out-of-transaction read.
- */
-function appendTranscriptEventSyncCore(
-  scope: SessionTranscriptWriteScope,
-  event: TranscriptEvent,
-  options: TranscriptEventAppendOptions,
-  afterAppend?: (database: OpenClawAgentDatabase, resolved: { sessionId: string }) => void,
-): Result<boolean, TranscriptEventAppendError> {
-  assertNonMessageTranscriptEvent(event);
-  // Every sync event append inherits and enforces the admitted writer claim.
-  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
-  const resolved = resolveSqliteTranscriptScope(fencedScope);
-  let result: Result<boolean, TranscriptEventAppendError> = ok(false);
-  runOpenClawAgentWriteTransaction((database) => {
-    options.beforeCommitInTransaction?.();
-    const fresh = readSessionEntryRow(database, resolved.sessionKey);
-    if (!fresh) {
-      result = err({
-        code: "session-entry-missing",
-        expectedSessionId: resolved.sessionId,
-        sessionKey: resolved.sessionKey,
-      });
-      return;
-    }
-    if (fresh.entry.sessionId !== resolved.sessionId) {
-      result = err({
-        actualSessionId: fresh.entry.sessionId,
-        code: "session-rebound",
-        expectedSessionId: resolved.sessionId,
-        sessionKey: resolved.sessionKey,
-      });
-      return;
-    }
-    if (
-      (fencedScope.expectedLifecycleRevision !== undefined &&
-        fresh.entry.lifecycleRevision !== fencedScope.expectedLifecycleRevision) ||
-      (fencedScope.expectedWriterRunId !== undefined &&
-        (fresh.entry as InternalSessionEntry).activeWriterRunId !== fencedScope.expectedWriterRunId)
-    ) {
-      result = err({
-        actualSessionId: fresh.entry.sessionId,
-        code: "session-rebound",
-        expectedSessionId: resolved.sessionId,
-        sessionKey: resolved.sessionKey,
-      });
-      return;
-    }
-    const appended = appendTranscriptEventInTransaction(
-      database,
-      resolved,
-      resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
-    );
-    result = ok(appended);
-    if (appended) {
-      afterAppend?.(database, resolved);
-    }
-  }, toDatabaseOptions(resolved));
-  if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
-    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
-  }
-  return result;
-}
-
-/** Appends one raw non-message transcript event synchronously for sync session runtimes. */
-export function appendTranscriptEventSync(
-  scope: SessionTranscriptWriteScope,
-  event: TranscriptEvent,
-  options: TranscriptEventAppendOptions = {},
-): Result<boolean, TranscriptEventAppendError> {
-  return appendTranscriptEventSyncCore(scope, event, options);
-}
-
-/**
- * Appends one raw non-message transcript event and atomically captures the post-append
- * row snapshot in the same write transaction. Callers that track their own last-known-good
- * snapshot (e.g. SessionManagerCore) must use this instead of appendTranscriptEventSync plus
- * a separate loadTranscriptRowSnapshotSync call: a foreign process committing between this
- * transaction's commit and that later read would otherwise be silently folded into the
- * tracked snapshot without ever appearing in the caller's in-memory entries.
- */
-export function appendTranscriptEventWithSnapshotSync(
-  scope: SessionTranscriptWriteScope,
-  event: TranscriptEvent,
-  options: TranscriptEventAppendOptions = {},
-): {
-  result: Result<boolean, TranscriptEventAppendError>;
-  snapshot?: SqliteTranscriptSnapshotRow[];
-} {
-  let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
-  const result = appendTranscriptEventSyncCore(scope, event, options, (database, resolved) => {
-    snapshot = readTranscriptEventRows(database, resolved.sessionId);
-  });
-  return { result, ...(snapshot ? { snapshot } : {}) };
-}
-
-function resolveTranscriptEventAppendParent(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  event: TranscriptEvent,
-  options: TranscriptEventAppendOptions,
-): TranscriptEvent {
-  if (
-    options.appendIntent !== "active-branch" ||
-    !event ||
-    typeof event !== "object" ||
-    Array.isArray(event) ||
-    !("parentId" in event)
-  ) {
-    return event;
-  }
-  const parentId = event.parentId;
-  if (parentId !== null && typeof parentId !== "string") {
-    return event;
-  }
-  const effectiveParentId = resolveTranscriptMessageAppendParent(database, sessionId, {
-    appendIntent: "active-branch",
-    parentId,
-  });
-  return effectiveParentId === parentId ? event : { ...event, parentId: effectiveParentId };
 }
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
@@ -760,18 +657,5 @@ function assertSqliteTranscriptSnapshotUnchanged(
 ): void {
   if (!isSqliteTranscriptSnapshotUnchanged(database, sessionId, expected)) {
     throw new SqliteTranscriptMutationConflictError(sessionId);
-  }
-}
-
-function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return;
-  }
-  // Message records require parent-link, idempotency, and redaction handling
-  // from appendTranscriptMessage; raw event writes would bypass those invariants.
-  if ((event as { type?: unknown }).type === "message") {
-    throw new Error(
-      "appendTranscriptEvent cannot write message transcript records; use appendTranscriptMessage instead.",
-    );
   }
 }

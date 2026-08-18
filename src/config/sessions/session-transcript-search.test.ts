@@ -11,8 +11,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { TranscriptEvent } from "./session-accessor.js";
+import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-event-write.js";
 import {
-  appendTranscriptEvent,
   appendTranscriptMessage,
   replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.js";

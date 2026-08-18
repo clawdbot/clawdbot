@@ -33,6 +33,8 @@ type TranscriptRewriteChildResult =
       ok: false;
     };
 
+// Shared by sync-append-race and sync-rewrite-race: both report whether the
+// rewrite step was rejected by the atomic-snapshot conflict guard.
 type SyncAppendRaceChildResult =
   | { ok: true; rewriteRejected: boolean }
   | {
@@ -40,6 +42,8 @@ type SyncAppendRaceChildResult =
       name: string;
       ok: false;
     };
+
+type SyncRewriteRaceChildResult = SyncAppendRaceChildResult;
 
 type ConcurrencyWorkerRequest =
   | {
@@ -64,6 +68,12 @@ type ConcurrencyWorkerRequest =
       sessionId: string;
       storePath: string;
       useAtomicSnapshot: boolean;
+    }
+  | {
+      kind: "sync-rewrite-race";
+      sessionId: string;
+      storePath: string;
+      useAtomicSnapshot: boolean;
     };
 
 type ConcurrencyWorkerReady<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
@@ -78,7 +88,9 @@ type ConcurrencyWorkerResult<TRequest extends ConcurrencyWorkerRequest> = TReque
   ? ChildResult
   : TRequest extends { kind: "sync-append-race" }
     ? SyncAppendRaceChildResult
-    : TranscriptRewriteChildResult;
+    : TRequest extends { kind: "sync-rewrite-race" }
+      ? SyncRewriteRaceChildResult
+      : TranscriptRewriteChildResult;
 
 type ConcurrencyWorkerMessage =
   | { phase: "booted" }
@@ -109,6 +121,7 @@ const {
   loadReplySessionInitializationSnapshot,
   loadTranscriptRowSnapshotSync,
   replaceTranscriptEventsSync,
+  replaceTranscriptEventsWithSnapshotSync,
   SqliteTranscriptMutationConflictError,
   withTranscriptWriteLock,
 } = await import(${JSON.stringify(sessionAccessorUrl)});
@@ -337,6 +350,77 @@ async function runSyncAppendRace(request) {
   return result;
 }
 
+async function runSyncRewriteRace(request) {
+  let result;
+  try {
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId: request.sessionId,
+      sessionKey: SESSION_KEY,
+      storePath: request.storePath,
+    };
+    const header = { type: "session", version: 3, id: request.sessionId };
+    const firstEvents = [
+      header,
+      {
+        type: "message",
+        id: "rewrite-a-target",
+        parentId: null,
+        message: { role: "assistant", content: "rewrite a" },
+      },
+    ];
+    // This first rewrite stands in for a real SessionManagerCore's own prior
+    // replacePersistedTranscript() call -- the atomic snapshot it captures
+    // here is what a caller like session-manager-core.ts now tracks in
+    // persistedRowSnapshot across calls, instead of refreshing it with a
+    // separate read after this transaction has already committed.
+    const { snapshot: atomicSnapshot } = replaceTranscriptEventsWithSnapshotSync(
+      scope,
+      firstEvents,
+    );
+    const nextEvents = [...firstEvents];
+
+    const proceed = waitForProceed(request.requestId);
+    send({
+      phase: "ready",
+      requestId: request.requestId,
+      value: { eventCount: nextEvents.length },
+    });
+    await proceed;
+
+    // Old-style path: a separate out-of-transaction read taken AFTER this
+    // rewrite's own commit and AFTER the ready/proceed handshake -- the
+    // exact refreshPersistedRowSnapshot() shape ClawSweeper flagged at the
+    // rewrite call sites. A foreign append committed during the handshake
+    // gap is folded into this "snapshot" even though nextEvents above never
+    // saw it. Fixed path: reuse the snapshot captured inside the FIRST
+    // rewrite's own write transaction, before the handshake ever ran, so it
+    // cannot have observed the foreign commit either.
+    const snapshotForRewrite = request.useAtomicSnapshot
+      ? atomicSnapshot
+      : loadTranscriptRowSnapshotSync(scope);
+
+    let rewriteRejected = false;
+    try {
+      replaceTranscriptEventsSync(scope, nextEvents, snapshotForRewrite);
+    } catch (error) {
+      if (error instanceof SqliteTranscriptMutationConflictError) {
+        rewriteRejected = true;
+      } else {
+        throw error;
+      }
+    }
+    result = { ok: true, rewriteRejected };
+  } catch (error) {
+    result = {
+      ok: false,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return result;
+}
+
 process.on("message", (request) => {
   if (!request || typeof request !== "object") {
     return;
@@ -361,7 +445,9 @@ process.on("message", (request) => {
           ? await runSyncTranscriptRewrite(request)
           : request.kind === "sync-append-race"
             ? await runSyncAppendRace(request)
-            : await runTranscriptRewrite(request);
+            : request.kind === "sync-rewrite-race"
+              ? await runSyncRewriteRace(request)
+              : await runTranscriptRewrite(request);
     send({ phase: "result", requestId: request.requestId, value });
   })().catch((error) => {
     send({
