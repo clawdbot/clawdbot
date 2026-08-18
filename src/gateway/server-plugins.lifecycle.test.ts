@@ -2,14 +2,20 @@
  * Tests gateway plugin lifecycle loading, startup, and shutdown behavior.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
+import {
+  connectWebchatClient,
+  installGatewayTestHooks,
+  rpcReq,
+  startTestGatewayServer,
+} from "./test-helpers.server.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const INSTANCE_BINDING_PROBE_KEY = Symbol.for("openclaw.test.gatewayInstanceBindingProbe");
 const INSTANCE_BINDING_PROBE_METHOD = "instanceBinding.probe";
@@ -58,11 +64,16 @@ async function requireBoundRuntime(
   throw new Error(`${label} Gateway did not register an instance-bound plugin runtime`);
 }
 
-async function writeInstanceBindingProbePlugin(): Promise<{
-  bundledRoot: string;
-  pluginDir: string;
-}> {
-  const bundledRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-instance-binding-"));
+function requestInstanceBindingProbe(runtime: PluginRuntime) {
+  return runtime.gateway.request<InstanceBindingProbeResult>(
+    INSTANCE_BINDING_PROBE_METHOD,
+    {},
+    { scopes: ["operator.read"] },
+  );
+}
+
+async function writeInstanceBindingProbePlugin(): Promise<{ bundledRoot: string }> {
+  const bundledRoot = tempDirs.make("openclaw-instance-binding-");
   const pluginDir = path.join(bundledRoot, "instance-binding-probe");
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(
@@ -102,54 +113,57 @@ async function writeInstanceBindingProbePlugin(): Promise<{
 };
 `,
   );
-  return { bundledRoot, pluginDir };
+  return { bundledRoot };
+}
+
+async function prepareInstanceBindingTest() {
+  const coordinator = installInstanceBindingProbeCoordinator();
+  const plugin = await writeInstanceBindingProbePlugin();
+  process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = plugin.bundledRoot;
+  process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+  process.env.OPENCLAW_SKIP_CHANNELS = "1";
+  process.env.OPENCLAW_SKIP_CRON = "1";
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("gateway test hooks did not install OPENCLAW_CONFIG_PATH");
+  }
+  const config = {
+    plugins: {
+      enabled: true,
+      allow: ["instance-binding-probe"],
+      entries: { "instance-binding-probe": { enabled: true } },
+    },
+  };
+  const { loadPluginLookUpTable } = await import("../plugins/plugin-lookup-table.js");
+  expect(loadPluginLookUpTable({ config, env: process.env }).startup.pluginIds).toContain(
+    "instance-binding-probe",
+  );
+  await fs.writeFile(configPath, `${JSON.stringify(config)}\n`);
+  return { coordinator };
 }
 
 describe("gateway plugin instance bindings", () => {
   const started: Array<Awaited<ReturnType<typeof startTestGatewayServer>>> = [];
-  let bundledRoot: string | undefined;
+  const sockets: Array<Awaited<ReturnType<typeof connectWebchatClient>>> = [];
 
   afterEach(async () => {
+    for (const socket of sockets.splice(0)) {
+      socket.close();
+    }
     for (const server of started.splice(0).toReversed()) {
       await server.close({ reason: "instance binding cleanup" });
     }
     delete (globalThis as Record<PropertyKey, unknown>)[INSTANCE_BINDING_PROBE_KEY];
     delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-    if (bundledRoot) {
-      await fs.rm(bundledRoot, { recursive: true, force: true });
-      bundledRoot = undefined;
-    }
   });
 
   it(
     "keeps unscoped plugin work bound to each real Gateway across reverse shutdown",
     { timeout: 600_000 },
     async () => {
-      const coordinator = installInstanceBindingProbeCoordinator();
-      const plugin = await writeInstanceBindingProbePlugin();
-      bundledRoot = plugin.bundledRoot;
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = plugin.bundledRoot;
-      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      const configPath = process.env.OPENCLAW_CONFIG_PATH;
-      if (!configPath) {
-        throw new Error("gateway test hooks did not install OPENCLAW_CONFIG_PATH");
-      }
-      const config = {
-        plugins: {
-          enabled: true,
-          allow: ["instance-binding-probe"],
-          entries: { "instance-binding-probe": { enabled: true } },
-        },
-      };
-      const { loadPluginLookUpTable } = await import("../plugins/plugin-lookup-table.js");
-      expect(loadPluginLookUpTable({ config, env: process.env }).startup.pluginIds).toContain(
-        "instance-binding-probe",
-      );
-      await fs.writeFile(configPath, `${JSON.stringify(config)}\n`);
+      const { coordinator } = await prepareInstanceBindingTest();
 
       const first = await startTestGatewayServer(await getFreePort(), {
         auth: { mode: "none" },
@@ -178,14 +192,8 @@ describe("gateway plugin instance bindings", () => {
         "second",
       );
 
-      const requestProbe = (runtime: PluginRuntime) =>
-        runtime.gateway.request<InstanceBindingProbeResult>(
-          INSTANCE_BINDING_PROBE_METHOD,
-          {},
-          { scopes: ["operator.read"] },
-        );
-      const firstProbe = await requestProbe(firstRuntime);
-      const secondProbe = await requestProbe(secondRuntime);
+      const firstProbe = await requestInstanceBindingProbe(firstRuntime);
+      const secondProbe = await requestInstanceBindingProbe(secondRuntime);
       expect(firstProbe.registryId).not.toBe(secondProbe.registryId);
       expect(firstProbe.sessionsId).not.toBe(secondProbe.sessionsId);
       expect(firstProbe.placementId).not.toBe(secondProbe.placementId);
@@ -198,9 +206,70 @@ describe("gateway plugin instance bindings", () => {
 
       await second.close({ reason: "close last-started Gateway first" });
       started.pop();
-      await expect(requestProbe(firstRuntime)).resolves.toEqual(firstProbe);
+      await expect(requestInstanceBindingProbe(firstRuntime)).resolves.toEqual(firstProbe);
       await expect(
         firstRuntime.subagent.getSessionMessages({ sessionKey: "agent:main:main", limit: 1 }),
+      ).resolves.toEqual({ messages: [] });
+    },
+  );
+
+  it(
+    "keeps a hot-reloaded plugin runtime bound to the same real Gateway",
+    { timeout: 600_000 },
+    async () => {
+      const { coordinator } = await prepareInstanceBindingTest();
+
+      const port = await getFreePort();
+      const server = await startTestGatewayServer(port, {
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        sidecarStartup: "start",
+      });
+      started.push(server);
+      await server.startupSettled;
+      const initialRegistrationCount = coordinator.runtimes.length;
+      expect(initialRegistrationCount).toBeGreaterThan(0);
+      const initialRuntime = await requireBoundRuntime(
+        coordinator.runtimes.slice(0, initialRegistrationCount),
+        "initial",
+      );
+      const initialProbe = await requestInstanceBindingProbe(initialRuntime);
+
+      const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      sockets.push(socket);
+      const currentConfig = await rpcReq<{ hash?: string }>(socket, "config.get", {});
+      expect(currentConfig.ok).toBe(true);
+      expect(typeof currentConfig.payload?.hash).toBe("string");
+      const reload = await rpcReq(socket, "config.patch", {
+        raw: JSON.stringify({
+          plugins: {
+            entries: {
+              "instance-binding-probe": {
+                subagent: { allowModelOverride: true },
+              },
+            },
+          },
+        }),
+        baseHash: currentConfig.payload?.hash,
+      });
+      expect(reload.ok, reload.error?.message).toBe(true);
+      await expect
+        .poll(() => coordinator.runtimes.length, { timeout: 300_000 })
+        .toBeGreaterThan(initialRegistrationCount);
+      const reloadedRuntime = await requireBoundRuntime(
+        coordinator.runtimes.slice(initialRegistrationCount),
+        "hot-reloaded",
+      );
+      const reloadedProbe = await requestInstanceBindingProbe(reloadedRuntime);
+
+      expect(reloadedProbe.registryId).not.toBe(initialProbe.registryId);
+      expect(reloadedProbe.sessionsId).toBe(initialProbe.sessionsId);
+      expect(reloadedProbe.placementId).toBe(initialProbe.placementId);
+      await expect(
+        reloadedRuntime.subagent.getSessionMessages({
+          sessionKey: "agent:main:main",
+          limit: 1,
+        }),
       ).resolves.toEqual({ messages: [] });
     },
   );

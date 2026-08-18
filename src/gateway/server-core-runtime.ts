@@ -147,6 +147,7 @@ export async function startGatewayCoreRuntime(input: {
     baseMethods,
     pluginWorkspaceDir,
     ambientEnvTriggers,
+    resolvePluginGatewayContext,
     workerEnvironmentStartup,
     broadcastPluginEvent,
     activateRuntimeSecrets,
@@ -600,6 +601,7 @@ export async function startGatewayCoreRuntime(input: {
       baseMethods,
       pluginLookUpTable: nextPluginLookUpTable,
       ambientEnvTriggers,
+      resolveGatewayContext: resolvePluginGatewayContext,
     });
     const nextPluginMetadataSnapshot = completePluginMetadataSnapshot({
       snapshot: nextPluginLookUpTable,

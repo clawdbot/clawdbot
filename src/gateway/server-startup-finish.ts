@@ -72,7 +72,7 @@ export async function finishGatewayStartup(params: {
     lifecycle,
     startupState,
     pluginRuntime,
-    pluginGatewayContext,
+    resolvePluginGatewayContext,
     gatewayTls,
     bindHost,
     getResolvedAuth,
@@ -280,7 +280,7 @@ export async function finishGatewayStartup(params: {
             pluginLookUpTable,
             startupTrace,
             ambientEnvTriggers,
-            resolveGatewayContext: () => pluginGatewayContext.current,
+            resolveGatewayContext: resolvePluginGatewayContext,
           });
         },
         onStartupPluginsLoading: () => {

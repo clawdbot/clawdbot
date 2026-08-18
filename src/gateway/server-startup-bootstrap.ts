@@ -459,6 +459,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const pluginGatewayContext: {
     current: import("./server-methods/types.js").GatewayRequestContext | undefined;
   } = { current: undefined };
+  const resolvePluginGatewayContext = () => pluginGatewayContext.current;
   await startupTrace.measure("startup.maintenance", () =>
     runGatewayStartupMaintenance({
       cfgAtStart,
@@ -549,6 +550,7 @@ export async function prepareGatewayServerBootstrap(input: {
     startupLastGoodSnapshot,
     workerEnvironmentStartup,
     pluginGatewayContext,
+    resolvePluginGatewayContext,
     pluginBootstrap,
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
