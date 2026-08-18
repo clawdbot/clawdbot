@@ -842,7 +842,12 @@ describe("resolveVoiceCallStreamExposurePaths", () => {
       realtime: { enabled: true },
     });
 
-    expect(resolveVoiceCallStreamExposurePaths(config)).toEqual(["/custom/stream/realtime"]);
+    expect(resolveVoiceCallStreamExposurePaths(config)).toEqual([
+      {
+        localPath: "/custom/stream/realtime",
+        publicPath: "/custom/stream/realtime",
+      },
+    ]);
   });
 
   it("normalizes explicit realtime and streaming paths", () => {
@@ -852,8 +857,8 @@ describe("resolveVoiceCallStreamExposurePaths", () => {
     });
 
     expect(resolveVoiceCallStreamExposurePaths(config)).toEqual([
-      "/custom/realtime",
-      "/custom/stream",
+      { localPath: "/custom/realtime", publicPath: "/custom/realtime" },
+      { localPath: "/custom/stream", publicPath: "/custom/stream" },
     ]);
   });
 
@@ -863,7 +868,26 @@ describe("resolveVoiceCallStreamExposurePaths", () => {
       streaming: { enabled: true, streamPath: "/voice/stream" },
     });
 
-    expect(resolveVoiceCallStreamExposurePaths(config)).toEqual(["/voice/stream"]);
+    expect(resolveVoiceCallStreamExposurePaths(config)).toEqual([
+      { localPath: "/voice/stream", publicPath: "/voice/stream" },
+    ]);
+  });
+
+  it("maps stream paths through a distinct public Tailscale prefix", () => {
+    const config = normalizeVoiceCallConfig({
+      serve: { path: "/voice/webhook" },
+      tailscale: { path: "/edge/voice/webhook" },
+      realtime: { enabled: true },
+      streaming: { enabled: true, streamPath: "/voice/stream" },
+    });
+
+    expect(resolveVoiceCallStreamExposurePaths(config)).toEqual([
+      {
+        localPath: "/voice/stream/realtime",
+        publicPath: "/edge/voice/stream/realtime",
+      },
+      { localPath: "/voice/stream", publicPath: "/edge/voice/stream" },
+    ]);
   });
 });
 

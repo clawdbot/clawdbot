@@ -7,6 +7,7 @@ import {
   emptyBoundedChildOutput,
   formatBoundedChildOutput,
 } from "./bounded-child-output.js";
+import type { VoiceCallStreamExposurePath } from "./config.js";
 import { getTailscaleDnsName } from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
@@ -77,8 +78,8 @@ interface TunnelConfig {
   port: number;
   /** Path prefix for the tunnel (e.g., /voice/webhook) */
   path: string;
-  /** Additional local WebSocket paths exposed by Tailscale */
-  streamPaths?: string[];
+  /** Additional public-to-local WebSocket paths exposed by Tailscale */
+  streamPaths?: VoiceCallStreamExposurePath[];
   /** ngrok auth token (optional, enables longer sessions) */
   ngrokAuthToken?: string;
   /** ngrok custom domain (paid feature) */
@@ -279,7 +280,7 @@ async function startTailscaleTunnel(config: {
   mode: "serve" | "funnel";
   port: number;
   path: string;
-  streamPaths?: string[];
+  streamPaths?: VoiceCallStreamExposurePath[];
 }): Promise<TunnelResult> {
   // Get Tailscale DNS name
   const dnsName = await getTailscaleDnsName();
@@ -288,18 +289,22 @@ async function startTailscaleTunnel(config: {
   }
 
   const path = config.path.startsWith("/") ? config.path : `/${config.path}`;
-  const exposurePaths = [
-    path,
-    ...(config.streamPaths ?? []).map((streamPath) =>
-      streamPath.startsWith("/") ? streamPath : `/${streamPath}`,
-    ),
+  const exposurePaths: VoiceCallStreamExposurePath[] = [
+    { publicPath: path, localPath: path },
+    ...(config.streamPaths ?? []),
   ];
   const mountedPaths: string[] = [];
 
-  for (const exposurePath of exposurePaths) {
-    const localUrl = `http://127.0.0.1:${config.port}${exposurePath}`;
+  for (const exposure of exposurePaths) {
+    const publicPath = exposure.publicPath.startsWith("/")
+      ? exposure.publicPath
+      : `/${exposure.publicPath}`;
+    const localPath = exposure.localPath.startsWith("/")
+      ? exposure.localPath
+      : `/${exposure.localPath}`;
+    const localUrl = `http://127.0.0.1:${config.port}${localPath}`;
     const result = await runCommandWithTimeout(
-      ["tailscale", config.mode, "--bg", "--yes", "--set-path", exposurePath, localUrl],
+      ["tailscale", config.mode, "--bg", "--yes", "--set-path", publicPath, localUrl],
       {
         killProcessTree: true,
         maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
@@ -323,7 +328,7 @@ async function startTailscaleTunnel(config: {
       }
       throw failure;
     }
-    mountedPaths.push(exposurePath);
+    mountedPaths.push(publicPath);
   }
   const publicUrl = `https://${dnsName}${path}`;
   console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
@@ -332,8 +337,8 @@ async function startTailscaleTunnel(config: {
     publicUrl,
     provider: `tailscale-${config.mode}`,
     stop: async () => {
-      for (const exposurePath of exposurePaths) {
-        await stopTailscaleTunnel(config.mode, exposurePath);
+      for (const mountedPath of mountedPaths) {
+        await stopTailscaleTunnel(config.mode, mountedPath);
       }
     },
   };

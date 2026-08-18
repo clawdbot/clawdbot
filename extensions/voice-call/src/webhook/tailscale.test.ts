@@ -13,7 +13,7 @@ import {
   getTailscaleDnsName,
   getTailscaleSelfInfo,
   setupTailscaleExposure,
-  setupTailscaleExposureRoute,
+  setupTailscaleExposureRoutes,
 } from "./tailscale.js";
 
 function commandResult(overrides: Record<string, unknown> = {}) {
@@ -84,10 +84,9 @@ describe("voice-call tailscale helpers", () => {
       .mockResolvedValueOnce(commandResult());
 
     await expect(
-      setupTailscaleExposureRoute({
+      setupTailscaleExposureRoutes({
         mode: "serve",
-        path: "/voice",
-        localUrl: "http://127.0.0.1:8787/webhook",
+        routes: [{ path: "/voice", localUrl: "http://127.0.0.1:8787/webhook" }],
       }),
     ).resolves.toBe("https://bot.example.ts.net/voice");
     await cleanupTailscaleExposureRoute({ mode: "serve", path: "/voice" });
@@ -121,17 +120,15 @@ describe("voice-call tailscale helpers", () => {
       .mockResolvedValueOnce(commandResult({ code: 1 }));
 
     await expect(
-      setupTailscaleExposureRoute({
+      setupTailscaleExposureRoutes({
         mode: "funnel",
-        path: "/voice",
-        localUrl: "http://127.0.0.1:8787/webhook",
+        routes: [{ path: "/voice", localUrl: "http://127.0.0.1:8787/webhook" }],
       }),
     ).resolves.toBeNull();
     await expect(
-      setupTailscaleExposureRoute({
+      setupTailscaleExposureRoutes({
         mode: "funnel",
-        path: "/voice",
-        localUrl: "http://127.0.0.1:8787/webhook",
+        routes: [{ path: "/voice", localUrl: "http://127.0.0.1:8787/webhook" }],
       }),
     ).resolves.toBeNull();
   });
@@ -199,7 +196,7 @@ describe("voice-call tailscale helpers", () => {
         : commandResult(),
     );
     const voiceCallConfig = {
-      tailscale: { mode: "funnel", path: "/voice/webhook" },
+      tailscale: { mode: "funnel", path: "/edge/voice/webhook" },
       serve: { port: 8787, path: "/voice/webhook" },
       realtime: { enabled: false },
       streaming: { enabled: false },
@@ -216,13 +213,13 @@ describe("voice-call tailscale helpers", () => {
         "--bg",
         "--yes",
         "--set-path",
-        streamPath,
+        `/edge${streamPath}`,
         `http://127.0.0.1:8787${streamPath}`,
       ],
       expect.any(Object),
     );
     expect(runCommandMock).toHaveBeenCalledWith(
-      ["tailscale", "funnel", "off", streamPath],
+      ["tailscale", "funnel", "off", `/edge${streamPath}`],
       expect.any(Object),
     );
   });
@@ -248,5 +245,31 @@ describe("voice-call tailscale helpers", () => {
       ([command]) => command[5] === "/voice/stream",
     );
     expect(streamMounts).toHaveLength(1);
+  });
+
+  it("rolls back direct exposure when a stream route cannot be mounted", async () => {
+    runCommandMock.mockImplementation(async (command: string[]) => {
+      if (command[1] === "status") {
+        return commandResult({
+          stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
+        });
+      }
+      if (command[1] === "funnel" && command[5] === "/voice/stream/realtime") {
+        return commandResult({ code: 1 });
+      }
+      return commandResult();
+    });
+    const config = {
+      tailscale: { mode: "funnel", path: "/voice/webhook" },
+      serve: { port: 8787, path: "/voice/webhook" },
+      realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
+      streaming: { enabled: false },
+    } as never;
+
+    await expect(setupTailscaleExposure(config)).resolves.toBeNull();
+    expect(runCommandMock).toHaveBeenCalledWith(
+      ["tailscale", "funnel", "off", "/voice/webhook"],
+      expect.any(Object),
+    );
   });
 });

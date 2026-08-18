@@ -89,7 +89,7 @@ function startTailscaleTunnel(config: {
   mode: "serve" | "funnel";
   port: number;
   path: string;
-  streamPaths?: string[];
+  streamPaths?: Array<{ publicPath: string; localPath: string }>;
 }) {
   return requireTunnel(
     startTunnel({
@@ -377,7 +377,13 @@ describe("voice-call tunnels", () => {
         mode,
         port: 3334,
         path: "/voice/webhook",
-        streamPaths: ["/voice/stream/realtime", "/voice/stream"],
+        streamPaths: [
+          {
+            publicPath: "/edge/voice/stream/realtime",
+            localPath: "/voice/stream/realtime",
+          },
+          { publicPath: "/edge/voice/stream", localPath: "/voice/stream" },
+        ],
       });
 
       await tunnel.stop();
@@ -398,7 +404,7 @@ describe("voice-call tunnels", () => {
           "--bg",
           "--yes",
           "--set-path",
-          "/voice/stream/realtime",
+          "/edge/voice/stream/realtime",
           "http://127.0.0.1:3334/voice/stream/realtime",
         ],
         [
@@ -407,12 +413,12 @@ describe("voice-call tunnels", () => {
           "--bg",
           "--yes",
           "--set-path",
-          "/voice/stream",
+          "/edge/voice/stream",
           "http://127.0.0.1:3334/voice/stream",
         ],
         ["tailscale", mode, "off", "/voice/webhook"],
-        ["tailscale", mode, "off", "/voice/stream/realtime"],
-        ["tailscale", mode, "off", "/voice/stream"],
+        ["tailscale", mode, "off", "/edge/voice/stream/realtime"],
+        ["tailscale", mode, "off", "/edge/voice/stream"],
       ]);
     },
   );
@@ -428,7 +434,12 @@ describe("voice-call tunnels", () => {
         mode: "funnel",
         port: 3334,
         path: "/voice/webhook",
-        streamPaths: ["/voice/stream/realtime"],
+        streamPaths: [
+          {
+            publicPath: "/voice/stream/realtime",
+            localPath: "/voice/stream/realtime",
+          },
+        ],
       }),
     ).rejects.toThrow("Tailscale funnel failed with code 1: stream mount failed");
     expect(mocks.runCommand).toHaveBeenLastCalledWith(

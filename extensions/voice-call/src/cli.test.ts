@@ -39,7 +39,7 @@ vi.mock("./webhook/tailscale.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./webhook/tailscale.js")>()),
   cleanupTailscaleExposureRoute: tailscaleMocks.cleanup,
   getTailscaleSelfInfo: tailscaleMocks.getSelfInfo,
-  setupTailscaleExposureRoute: tailscaleMocks.setup,
+  setupTailscaleExposureRoutes: tailscaleMocks.setup,
 }));
 
 import { registerVoiceCallCli } from "./cli.js";
@@ -187,7 +187,7 @@ describe("voice-call CLI status fallback", () => {
           "--port",
           "4444",
           "--path",
-          "/custom/webhook",
+          "/edge/custom/webhook",
           "--serve-path",
           "/custom/webhook",
         ],
@@ -197,32 +197,51 @@ describe("voice-call CLI status fallback", () => {
       capturer.restore();
     }
 
-    expect(tailscaleMocks.setup.mock.calls).toEqual([
-      [
+    expect(tailscaleMocks.setup).toHaveBeenCalledWith({
+      mode: "funnel",
+      routes: [
         {
-          mode: "funnel",
-          path: "/custom/webhook",
+          path: "/edge/custom/webhook",
           localUrl: "http://127.0.0.1:4444/custom/webhook",
         },
-      ],
-      [
         {
-          mode: "funnel",
-          path: "/voice/stream/realtime",
+          path: "/edge/voice/stream/realtime",
           localUrl: "http://127.0.0.1:4444/voice/stream/realtime",
         },
-      ],
-      [
         {
-          mode: "funnel",
-          path: "/voice/stream",
+          path: "/edge/voice/stream",
           localUrl: "http://127.0.0.1:4444/voice/stream",
         },
       ],
-    ]);
+    });
     expect(JSON.parse(capturer.output())).toMatchObject({
       localUrl: "http://127.0.0.1:4444/custom/webhook",
-      streamPaths: ["/voice/stream/realtime", "/voice/stream"],
+      streamPaths: ["/edge/voice/stream/realtime", "/edge/voice/stream"],
+    });
+  });
+
+  it("reports failure when any exposure route cannot be mounted", async () => {
+    tailscaleMocks.setup.mockResolvedValue(null);
+    tailscaleMocks.getSelfInfo.mockResolvedValue(null);
+    const program = buildProgram(
+      {},
+      {
+        serve: { port: 3334, path: "/voice/webhook" },
+        tailscale: { mode: "off", path: "/voice/webhook" },
+        realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
+        streaming: { enabled: false },
+      },
+    );
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(["voicecall", "expose", "--mode", "funnel"], { from: "user" });
+    } finally {
+      capturer.restore();
+    }
+
+    expect(JSON.parse(capturer.output())).toMatchObject({
+      ok: false,
+      publicUrl: null,
     });
   });
 

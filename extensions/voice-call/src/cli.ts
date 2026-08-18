@@ -36,7 +36,7 @@ import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
 import {
   cleanupTailscaleExposureRoute,
   getTailscaleSelfInfo,
-  setupTailscaleExposureRoute,
+  setupTailscaleExposureRoutes,
 } from "./webhook/tailscale.js";
 
 type Logger = {
@@ -897,7 +897,11 @@ export function registerVoiceCallCli(params: {
         );
         const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
-        const streamPaths = resolveVoiceCallStreamExposurePaths(config);
+        const streamExposurePaths = resolveVoiceCallStreamExposurePaths(config, {
+          publicWebhookPath: tsPath,
+          localWebhookPath: servePath,
+        });
+        const streamPaths = streamExposurePaths.map(({ publicPath }) => publicPath);
         const localUrl = `http://127.0.0.1:${servePort}${servePath}`;
 
         if (mode === "off") {
@@ -909,18 +913,16 @@ export function registerVoiceCallCli(params: {
           return;
         }
 
-        const publicUrl = await setupTailscaleExposureRoute({
+        const publicUrl = await setupTailscaleExposureRoutes({
           mode,
-          path: tsPath,
-          localUrl,
+          routes: [
+            { path: tsPath, localUrl },
+            ...streamExposurePaths.map(({ publicPath, localPath }) => ({
+              path: publicPath,
+              localUrl: `http://127.0.0.1:${servePort}${localPath}`,
+            })),
+          ],
         });
-        for (const streamPath of streamPaths) {
-          await setupTailscaleExposureRoute({
-            mode,
-            path: streamPath,
-            localUrl: `http://127.0.0.1:${servePort}${streamPath}`,
-          });
-        }
 
         const tsInfo = publicUrl ? null : await getTailscaleSelfInfo();
         const enableUrl = tsInfo?.nodeId

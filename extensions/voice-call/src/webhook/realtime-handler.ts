@@ -27,7 +27,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket, { WebSocketServer } from "ws";
-import type { VoiceCallRealtimeConfig } from "../config.js";
+import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
@@ -383,10 +383,7 @@ export class RealtimeCallHandler {
     try {
       const parsed = new URL(url);
       this.publicOrigin = parsed.host;
-      const normalizedServePath = normalizeWebhookPath(this.servePath);
-      const normalizedPublicPath = normalizeWebhookPath(parsed.pathname);
-      const idx = normalizedPublicPath.indexOf(normalizedServePath);
-      this.publicPathPrefix = idx > 0 ? normalizedPublicPath.slice(0, idx) : "";
+      this.publicPathPrefix = resolveVoiceCallPublicPathPrefix(parsed.pathname, this.servePath);
     } catch {
       this.publicOrigin = null;
       this.publicPathPrefix = "";

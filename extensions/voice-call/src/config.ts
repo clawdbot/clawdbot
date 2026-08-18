@@ -539,19 +539,41 @@ function defaultRealtimeStreamPathForServePath(servePath: string): string {
   return `${normalized}/stream/realtime`;
 }
 
-export function resolveVoiceCallStreamExposurePaths(config: VoiceCallConfig): string[] {
-  const paths: string[] = [];
+export type VoiceCallStreamExposurePath = {
+  publicPath: string;
+  localPath: string;
+};
+
+export function resolveVoiceCallPublicPathPrefix(
+  publicWebhookPath: string,
+  localWebhookPath: string,
+): string {
+  const normalizedPublicPath = normalizeWebhookPath(publicWebhookPath);
+  const normalizedLocalPath = normalizeWebhookPath(localWebhookPath);
+  const localPathIndex = normalizedPublicPath.indexOf(normalizedLocalPath);
+  return localPathIndex > 0 ? normalizedPublicPath.slice(0, localPathIndex) : "";
+}
+
+export function resolveVoiceCallStreamExposurePaths(
+  config: VoiceCallConfig,
+  webhookPaths: { publicWebhookPath?: string; localWebhookPath?: string } = {},
+): VoiceCallStreamExposurePath[] {
+  const streamPaths: string[] = [];
   if (config.realtime.enabled) {
-    paths.push(
+    streamPaths.push(
       config.realtime.streamPath ?? defaultRealtimeStreamPathForServePath(config.serve.path),
     );
   }
   if (config.streaming.enabled) {
-    paths.push(config.streaming.streamPath);
+    streamPaths.push(config.streaming.streamPath);
   }
-  // Accepted tradeoff: exotic prefixed tailscale paths are not prefix-mapped;
-  // stream mounts keep the proven public-path-equals-local-path shape.
-  return [...new Set(paths.map((path) => normalizeWebhookPath(path)))];
+  const localWebhookPath = webhookPaths.localWebhookPath ?? config.serve.path;
+  const publicWebhookPath = webhookPaths.publicWebhookPath ?? config.tailscale.path;
+  const publicPathPrefix = resolveVoiceCallPublicPathPrefix(publicWebhookPath, localWebhookPath);
+  return [...new Set(streamPaths.map((path) => normalizeWebhookPath(path)))].map((localPath) => ({
+    localPath,
+    publicPath: `${publicPathPrefix}${localPath}`,
+  }));
 }
 
 function normalizeVoiceCallTtsConfig(

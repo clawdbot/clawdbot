@@ -486,7 +486,10 @@ export async function createVoiceCallRuntime(params: {
           provider: config.tunnel.provider,
           port: config.serve.port,
           path: config.serve.path,
-          streamPaths: resolveVoiceCallStreamExposurePaths(config),
+          streamPaths: resolveVoiceCallStreamExposurePaths(config, {
+            publicWebhookPath: config.serve.path,
+            localWebhookPath: config.serve.path,
+          }),
           ngrokAuthToken: config.tunnel.ngrokAuthToken,
           ngrokDomain: config.tunnel.ngrokDomain,
         });
