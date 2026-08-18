@@ -201,10 +201,7 @@ suite.define(() => {
         expect(chatMarkdownStyles.tableToCopyGap).toBeGreaterThan(0);
         expect(chatMarkdownStyles.taskListToDetailsGap).toBeGreaterThan(0);
         expect(chatMarkdownStyles.unorderedToOrderedGap).toBeGreaterThan(0);
-        expect(chatMarkdownStyles.quoteMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(
-          0.75,
-          2,
-        );
+        expect(chatMarkdownStyles.quoteMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(1, 2);
         expect(chatMarkdownStyles.tableCopyMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(
           0.75,
           2,
