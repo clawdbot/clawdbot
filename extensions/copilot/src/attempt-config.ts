@@ -4,7 +4,6 @@ import {
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
   resolveUserPath,
-  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toStringifiedError as toCopilotError } from "openclaw/plugin-sdk/error-runtime";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -317,27 +316,9 @@ function resolveImageCapabilityModel(params: AttemptParamsLike): { input?: strin
   }
   return { input: ["image"] };
 }
-export function createSystemMessageContent(
-  params: AttemptParamsLike,
-  workspaceBootstrapInstructions: string | undefined,
-): string | undefined {
-  if (isRawCopilotModelRun(params)) {
-    return undefined;
-  }
-  const sections: string[] = [TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT];
-  const bootstrap = workspaceBootstrapInstructions?.trim();
-  if (bootstrap) {
-    sections.push(bootstrap);
-  }
-  const extraSystemPrompt = readNonEmptyString(params.extraSystemPrompt)?.trim();
-  if (extraSystemPrompt) {
-    const contextHeader =
-      params.promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
-    sections.push(`${contextHeader}\n${extraSystemPrompt}`);
-  }
-  return sections.length > 0 ? sections.join("\n\n") : undefined;
-}
-export function isRawCopilotModelRun(params: AttemptParamsLike): boolean {
+export function isRawCopilotModelRun(
+  params: Pick<AttemptParamsLike, "modelRun" | "promptMode">,
+): boolean {
   return params.modelRun === true || params.promptMode === "none";
 }
 export { readNonEmptyString };

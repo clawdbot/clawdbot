@@ -293,7 +293,7 @@ extensions/copilot/src/provider-bridge.ts	1
 extensions/copilot/src/replay-shim.ts	3
 extensions/copilot/src/runtime.ts	1
 extensions/copilot/src/sdk-loader.ts	2
-extensions/copilot/src/tool-bridge.ts	7
+extensions/copilot/src/tool-bridge.ts	6
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/crabbox/src/crabbox-worker-inspect.ts	3
 extensions/crabbox/src/crabbox-worker-provider.ts	1
@@ -1853,7 +1853,6 @@ src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	2
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
 src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts	2
-src/agents/embedded-agent-runner/run/attempt-prompt-support.ts	2
 src/agents/embedded-agent-runner/run/attempt-queue-message.ts	7
 src/agents/embedded-agent-runner/run/attempt-session-prepare.ts	4
 src/agents/embedded-agent-runner/run/attempt-sessions-yield.ts	1
