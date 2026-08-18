@@ -90,13 +90,13 @@ export function parseSmokeCliArgs<TOptions extends SmokeCliOptions>(
     if (arg === "--") {
       break;
     }
-    const valueHandler = valueHandlers[arg];
+    const valueHandler = Object.hasOwn(valueHandlers, arg) ? valueHandlers[arg] : undefined;
     if (valueHandler) {
       valueHandler(ensureValue(args, index, arg));
       index += 1;
       continue;
     }
-    const flagHandler = flagHandlers[arg];
+    const flagHandler = Object.hasOwn(flagHandlers, arg) ? flagHandlers[arg] : undefined;
     if (flagHandler) {
       flagHandler();
       continue;
