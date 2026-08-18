@@ -1293,7 +1293,7 @@ describe("gateway agent handler", () => {
       lastAccountId: "acct-1",
       lastThreadId: 42,
       totalTokens: 12,
-      status: "running",
+      status: "queued",
     });
     expect(mockCallArg(broadcastToConnIds, 0, 2)).toEqual(new Set(["conn-1"]));
     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({
