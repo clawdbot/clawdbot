@@ -5,7 +5,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
-import { printDaemonStatus } from "./status.print.js";
+import type { DaemonStatus } from "./status.gather.js";
+import { printDaemonStatus as printDaemonStatusRuntime } from "./status.print.js";
+
+type TestDaemonStatus = Omit<DaemonStatus, "service"> & {
+  service: Omit<DaemonStatus["service"], "loaded"> & { loaded?: boolean | null };
+};
+
+function printDaemonStatus(
+  status: TestDaemonStatus,
+  options: Parameters<typeof printDaemonStatusRuntime>[1],
+) {
+  const loaded =
+    status.service.loaded !== undefined
+      ? status.service.loaded
+      : status.service.loadState.status === "unknown"
+        ? null
+        : status.service.loadState.status === "loaded";
+  printDaemonStatusRuntime(
+    {
+      ...status,
+      service: { ...status.service, loaded },
+    },
+    options,
+  );
+}
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),

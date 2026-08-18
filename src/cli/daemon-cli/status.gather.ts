@@ -293,6 +293,7 @@ export type DaemonStatus = {
   logFile?: string;
   service: {
     label: string;
+    loaded: boolean | null;
     loadState: GatewayServiceLoadState;
     loadedText: string;
     notLoadedText: string;
@@ -807,6 +808,7 @@ export async function gatherDaemonStatus(
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       label: service.label,
+      loaded: loadState.status === "unknown" ? null : loaded,
       loadState,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,

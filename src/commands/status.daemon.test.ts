@@ -38,6 +38,7 @@ describe("status daemon summary", () => {
     });
 
     const summary = await getDaemonStatusSummary();
+    expect(summary.loaded).toBe(true);
     expect(summary.runtimeShort).toBe("running (pid 1234)");
     expect(summary.layout?.execStart).toBe("/usr/bin/node /opt/openclaw/dist/entry.js gateway");
     expect(summary.layout?.sourceScope).toBe("system");
@@ -116,6 +117,7 @@ describe("status daemon summary", () => {
     expect(mocks.resolveGatewayService).toHaveBeenCalled();
     expect(summary.label).toBe("Gateway service");
     expect(summary.installed).toBe(false);
+    expect(summary.loaded).toBeNull();
     expect(summary.runtimeShort).toBe("unknown (Gateway service install not supported on aix)");
   });
 });

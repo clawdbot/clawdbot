@@ -7,6 +7,7 @@ const gatherDaemonStatus = vi.fn(
   async (_opts?: unknown): Promise<DaemonStatus> => ({
     service: {
       label: "LaunchAgent",
+      loaded: true,
       loadState: { status: "loaded" },
       loadedText: "loaded",
       notLoadedText: "not loaded",
@@ -56,6 +57,7 @@ describe("runDaemonStatus", () => {
     gatherDaemonStatus.mockResolvedValueOnce({
       service: {
         label: "LaunchAgent",
+        loaded: true,
         loadState: { status: "loaded" },
         loadedText: "loaded",
         notLoadedText: "not loaded",
@@ -91,6 +93,7 @@ describe("runDaemonStatus", () => {
       gatherDaemonStatus.mockResolvedValueOnce({
         service: {
           label: "LaunchAgent",
+          loaded: true,
           loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
@@ -207,6 +210,7 @@ describe("runDaemonStatus", () => {
     gatherDaemonStatus.mockResolvedValueOnce({
       service: {
         label: "LaunchAgent",
+        loaded: true,
         loadState: { status: "loaded" },
         loadedText: "loaded",
         notLoadedText: "not loaded",

@@ -441,6 +441,7 @@ describe("gatherDaemonStatus", () => {
     const status = {
       service: {
         label: "Scheduled Task",
+        loaded: true,
         loadState: { status: "loaded" as const },
         loadedText: "registered",
         notLoadedText: "not registered",
@@ -734,6 +735,7 @@ describe("gatherDaemonStatus", () => {
     expect(
       serviceReadRuntime.mock.calls.some(([env]) => env?.OPENCLAW_GATEWAY_PORT === "19001"),
     ).toBe(true);
+    expect(status.service.loaded).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
@@ -764,6 +766,7 @@ describe("gatherDaemonStatus", () => {
       status: "unknown",
       detail: "Error: systemctl is-enabled timed out",
     });
+    expect(status.service.loaded).toBeNull();
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Error: systemctl show timed out",
@@ -779,6 +782,7 @@ describe("gatherDaemonStatus", () => {
       }
       expect(JSON.parse(serialized)).toMatchObject({
         service: {
+          loaded: null,
           loadState: {
             status: "unknown",
             detail: "Error: systemctl is-enabled timed out",
@@ -818,6 +822,7 @@ describe("gatherDaemonStatus", () => {
     const status = await gatherStatus({ probe: false });
 
     expect(status.service.command).toBeNull();
+    expect(status.service.loaded).toBe(false);
     expect(status.service.loadState).toEqual({ status: "not-loaded" });
     expect(status.service.runtime).toEqual({
       status: "unknown",
