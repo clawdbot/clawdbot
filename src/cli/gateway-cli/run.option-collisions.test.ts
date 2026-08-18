@@ -16,6 +16,7 @@ import {
 import { getFreePort } from "../../test-utils/ports.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { VERSION } from "../../version.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
@@ -941,6 +942,10 @@ describe("gateway run option collisions", () => {
         agents: { entries: { main: {} } },
         env: stableConfig.env,
         gateway: { mode: "local" as const },
+        meta: {
+          lastTouchedVersion: VERSION,
+          migrations: { modelPolicyAllowlist: true },
+        },
       } satisfies ConfigFileSnapshot["sourceConfig"];
       const repairedSnapshot = {
         config: repairedConfig,

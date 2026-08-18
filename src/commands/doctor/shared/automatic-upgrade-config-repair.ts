@@ -1,6 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
-import { applyUnsetPathsForWrite } from "../../../config/config-path-mutation.js";
+import {
+  applyUnsetPathsForWrite,
+  resolveManagedUnsetPathsForWrite,
+} from "../../../config/config-path-mutation.js";
 import { replaceConfigFile } from "../../../config/config.js";
+import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
@@ -14,7 +18,6 @@ const AUTOMATIC_UPGRADE_CONFIG_UNSET_PATHS: string[][] = [
 ];
 
 const AUTOMATIC_UPGRADE_CONFIG_ISSUE_PATHS = new Set(["meta", "agents.defaults.heartbeat"]);
-const CONFIG_WRITER_METADATA_PATHS = [["meta", "lastTouchedVersion"]];
 
 type UpgradeConfigRepairPlan = {
   config: OpenClawConfig;
@@ -75,14 +78,19 @@ export function isUpgradeConfigRepairResult(
   after: ConfigFileSnapshot,
 ): boolean {
   const plan = planUpgradeConfigRepair(before);
+  const expected = plan
+    ? stampConfigWriteMetadata(
+        applyUnsetPathsForWrite(plan.config, resolveManagedUnsetPathsForWrite(plan.unsetPaths)),
+        undefined,
+        undefined,
+        before.parsed,
+      )
+    : null;
   return Boolean(
-    plan &&
+    expected &&
     after.valid &&
     before.path === after.path &&
-    isDeepStrictEqual(
-      applyUnsetPathsForWrite(plan.config, CONFIG_WRITER_METADATA_PATHS),
-      applyUnsetPathsForWrite(after.sourceConfig, CONFIG_WRITER_METADATA_PATHS),
-    ),
+    isDeepStrictEqual(expected, after.sourceConfig),
   );
 }
 

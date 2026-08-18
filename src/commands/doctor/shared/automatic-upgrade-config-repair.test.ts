@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
-import { planUpgradeConfigRepair } from "./automatic-upgrade-config-repair.js";
+import {
+  isUpgradeConfigRepairResult,
+  planUpgradeConfigRepair,
+} from "./automatic-upgrade-config-repair.js";
 
 function invalidSnapshot(params: {
   config: OpenClawConfig;
@@ -51,6 +54,45 @@ describe("automatic upgrade config repair", () => {
     expect(plan?.snapshot.valid).toBe(true);
     expect(plan?.snapshot.issues).toEqual([]);
     expect(snapshot.sourceConfig).toHaveProperty("meta.lastTouchedAt");
+  });
+
+  it("accepts the canonical writer metadata stamped onto the repaired stable config", () => {
+    const before = invalidSnapshot({
+      config: {
+        meta: {
+          lastTouchedAt: "2026-08-01T00:00:00.000Z",
+          lastTouchedVersion: "2026.7.1-2",
+        },
+        agents: {
+          defaults: { heartbeat: { skipWhenBusy: true }, workspace: "/tmp/workspace" },
+          entries: { main: {} },
+        },
+        gateway: { mode: "local" },
+      } as OpenClawConfig,
+      issuePaths: ["meta", "agents.defaults.heartbeat"],
+    });
+    const repaired = {
+      meta: {
+        lastTouchedVersion: "2026.8.1",
+        migrations: { modelPolicyAllowlist: true },
+      },
+      agents: { defaults: { workspace: "/tmp/workspace" }, entries: { main: {} } },
+      gateway: { mode: "local" },
+    } as OpenClawConfig;
+    const after: ConfigFileSnapshot = {
+      ...before,
+      raw: JSON.stringify(repaired),
+      parsed: repaired,
+      sourceConfig: repaired,
+      resolved: repaired,
+      runtimeConfig: repaired,
+      config: repaired,
+      valid: true,
+      issues: [],
+      legacyIssues: [],
+    };
+
+    expect(isUpgradeConfigRepairResult(before, after)).toBe(true);
   });
 
   it.each([
