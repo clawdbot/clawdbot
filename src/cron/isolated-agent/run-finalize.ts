@@ -3,15 +3,17 @@ import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber as resolvePositiveContextTokens,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { resolveAuthoredModelContextTokens } from "../../agents/context-resolution.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
+import {
+  resolveProjectedSessionContextTokens,
+  resolveTrustedSessionContextTokens,
+} from "../../config/sessions/context-token-provenance.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -106,38 +108,40 @@ export async function finalizeCronRun(params: {
     model: modelUsed,
     allowAsyncLoad: false,
   });
-  const persistedContextTokens = resolvePositiveContextTokens(
-    prepared.cronSession.sessionEntry.contextTokens,
-  );
   const agentHarnessId = normalizeOptionalString(finalRunResult.meta?.agentMeta?.agentHarnessId);
-  const persistedRuntimeContextMatchesRun =
-    persistedContextTokens !== undefined &&
-    prepared.cronSession.sessionEntry.contextTokensSource === "runtime" &&
-    Boolean(agentHarnessId) &&
-    normalizeLowercaseStringOrEmpty(prepared.cronSession.sessionEntry.modelProvider) ===
-      normalizeLowercaseStringOrEmpty(providerUsed) &&
-    normalizeLowercaseStringOrEmpty(prepared.cronSession.sessionEntry.model) ===
-      normalizeLowercaseStringOrEmpty(modelUsed) &&
-    normalizeLowercaseStringOrEmpty(prepared.cronSession.sessionEntry.agentHarnessId) ===
-      normalizeLowercaseStringOrEmpty(agentHarnessId);
-  // A fallback value without the same producer identity would relabel stale
-  // telemetry as if the completed run's harness had observed it.
-  const retainedRuntimeContextTokens = persistedRuntimeContextMatchesRun
-    ? persistedContextTokens
-    : undefined;
-  const contextTokens =
-    runtimeContextTokens ??
-    modelContextTokens ??
-    retainedRuntimeContextTokens ??
-    DEFAULT_CONTEXT_TOKENS;
+  const authoredContextTokens = resolveAuthoredModelContextTokens({
+    cfg: prepared.cfgWithAgentDefaults,
+    provider: providerUsed,
+    model: modelUsed,
+  });
+  const retainedRuntimeContextTokens = resolveTrustedSessionContextTokens({
+    entry: prepared.cronSession.sessionEntry,
+    provider: providerUsed,
+    model: modelUsed,
+    agentHarnessId,
+  });
+  const projectedContextTokens = resolveProjectedSessionContextTokens({
+    entry: prepared.cronSession.sessionEntry,
+    provider: providerUsed,
+    model: modelUsed,
+    agentHarnessId,
+    resolvedContextTokens: modelContextTokens,
+    authoredContextTokens,
+  });
+  const contextTokens = runtimeContextTokens ?? projectedContextTokens ?? DEFAULT_CONTEXT_TOKENS;
+  // Preserve persisted provenance only when the projector selected that owner;
+  // a current/authored clamp stays resolved so removed caps cannot stick.
+  const projectedUsesPersistedContext =
+    retainedRuntimeContextTokens !== undefined &&
+    (prepared.cronSession.sessionEntry.modelSelectionLocked === true ||
+      (authoredContextTokens === undefined &&
+        projectedContextTokens === retainedRuntimeContextTokens));
   const contextTokensSource =
     runtimeContextTokens !== undefined
       ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "resolved")
-      : modelContextTokens !== undefined
-        ? "resolved"
-        : retainedRuntimeContextTokens !== undefined
-          ? "runtime"
-          : "resolved";
+      : projectedUsesPersistedContext
+        ? prepared.cronSession.sessionEntry.contextTokensSource
+        : "resolved";
 
   if (!params.isAborted()) {
     setCronSessionRuntimeModel({
