@@ -34,7 +34,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
   };
 });
 
-import { createEmbeddings } from "./embeddings.js";
+import { createEmbeddings, type Embeddings } from "./embeddings.js";
 
 function createApi(): OpenClawPluginApi {
   const config = {};
@@ -51,6 +51,15 @@ const embeddingConfig = {
   provider: "openai",
   model: "text-embedding-3-small",
 } as MemoryConfig["embedding"];
+
+function embed(
+  embeddings: Embeddings,
+  agentId: string,
+  text: string,
+  embedding: MemoryConfig["embedding"] = embeddingConfig,
+) {
+  return embeddings.embed(agentId, text, embedding);
+}
 
 describe("memory-lancedb provider lifecycle", () => {
   it("authenticates private agent embeddings without using the default agent's credentials", async () => {
@@ -81,9 +90,9 @@ describe("memory-lancedb provider lifecycle", () => {
         agent: { resolveAgentDir },
       },
     } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api, { embedding: embeddingConfig } as MemoryConfig);
+    const embeddings = createEmbeddings(api);
 
-    await expect(embeddings.embed("private", "private account memory")).resolves.toEqual([
+    await expect(embed(embeddings, "private", "private account memory")).resolves.toEqual([
       0.1, 0.2, 0.3,
     ]);
 
@@ -127,13 +136,13 @@ describe("memory-lancedb provider lifecycle", () => {
         agent: { resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}` },
       },
     } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api, { embedding: embeddingConfig } as MemoryConfig);
+    const embeddings = createEmbeddings(api);
 
     await Promise.all([
-      embeddings.embed("private", "private first"),
-      embeddings.embed("main", "main first"),
-      embeddings.embed(" PRIVATE ", "private second"),
-      embeddings.embed("main", "main second"),
+      embed(embeddings, "private", "private first"),
+      embed(embeddings, "main", "main first"),
+      embed(embeddings, " PRIVATE ", "private second"),
+      embed(embeddings, "main", "main second"),
     ]);
 
     expect(createProvider).toHaveBeenCalledTimes(2);
@@ -178,11 +187,11 @@ describe("memory-lancedb provider lifecycle", () => {
         agent: { resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}` },
       },
     } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api, { embedding: embeddingConfig } as MemoryConfig);
+    const embeddings = createEmbeddings(api);
 
     await Promise.all([
-      embeddings.embed("private", "private before rotation"),
-      embeddings.embed("other", "other before rotation"),
+      embed(embeddings, "private", "private before rotation"),
+      embed(embeddings, "other", "other before rotation"),
     ]);
     const listener = Array.from(providerMocks.authMutationListeners).at(-1);
     expect(listener).toBeTypeOf("function");
@@ -191,9 +200,9 @@ describe("memory-lancedb provider lifecycle", () => {
       affectsInheritedStores: false,
     });
 
-    await embeddings.embed("other", "other warm provider");
+    await embed(embeddings, "other", "other warm provider");
     expect(createProvider).toHaveBeenCalledTimes(2);
-    await embeddings.embed("private", "private rotated provider");
+    await embed(embeddings, "private", "private rotated provider");
     expect(createProvider).toHaveBeenCalledTimes(3);
     expect(closedAgentDirs).toEqual(["/tmp/agent-private"]);
 
@@ -264,13 +273,13 @@ describe("memory-lancedb provider lifecycle", () => {
         agent: { resolveAgentDir: () => agentDir },
       },
     } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api, { embedding: embeddingConfig } as MemoryConfig);
+    const embeddings = createEmbeddings(api);
 
     try {
       publishCredential("fixture-old-account");
-      await embeddings.embed("private", "before-account-rotation");
+      await embed(embeddings, "private", "before-account-rotation");
       publishCredential("fixture-new-account");
-      await embeddings.embed("private", "private-secret-after-account-rotation");
+      await embed(embeddings, "private", "private-secret-after-account-rotation");
 
       expect(requests).toEqual([
         { text: "before-account-rotation", credential: "fixture-old-account" },
@@ -280,7 +289,7 @@ describe("memory-lancedb provider lifecycle", () => {
       expect(closeProvider).toHaveBeenCalledOnce();
 
       publishCredential(undefined);
-      await expect(embeddings.embed("private", "private-secret-after-revocation")).rejects.toThrow(
+      await expect(embed(embeddings, "private", "private-secret-after-revocation")).rejects.toThrow(
         "Private agent credentials were revoked",
       );
       expect(requests).toHaveLength(2);
@@ -354,18 +363,18 @@ describe("memory-lancedb provider lifecycle", () => {
         },
       },
     } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api, { embedding: embeddingConfig } as MemoryConfig);
+    const embeddings = createEmbeddings(api);
 
     try {
       publishMainCredential("fixture-inherited-old");
       await Promise.all([
-        embeddings.embed("private", "private old inherited credential"),
-        embeddings.embed("secondary", "secondary old inherited credential"),
+        embed(embeddings, "private", "private old inherited credential"),
+        embed(embeddings, "secondary", "secondary old inherited credential"),
       ]);
       publishMainCredential("fixture-inherited-new");
       await Promise.all([
-        embeddings.embed("private", "private new inherited credential"),
-        embeddings.embed("secondary", "secondary new inherited credential"),
+        embed(embeddings, "private", "private new inherited credential"),
+        embed(embeddings, "secondary", "secondary new inherited credential"),
       ]);
 
       expect(createProvider).toHaveBeenCalledTimes(4);
@@ -446,12 +455,12 @@ describe("memory-lancedb provider lifecycle", () => {
         agent: { resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}` },
       },
     } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api, { embedding: embeddingConfig } as MemoryConfig);
+    const embeddings = createEmbeddings(api);
 
-    await embeddings.embed("private", "before revocation");
+    await embed(embeddings, "private", "before revocation");
     currentConfig = revokedConfig;
 
-    await expect(embeddings.embed("private", "after revocation")).rejects.toThrow(
+    await expect(embed(embeddings, "private", "after revocation")).rejects.toThrow(
       "Private agent credentials were revoked",
     );
     expect(oldEmbedQuery).toHaveBeenCalledOnce();
@@ -460,6 +469,96 @@ describe("memory-lancedb provider lifecycle", () => {
     expect(createProvider).toHaveBeenCalledTimes(2);
 
     await embeddings.close?.();
+  });
+
+  it("rotates live embedding overrides after admitted work drains", async () => {
+    let releaseOldEmbedding: () => void = () => {};
+    const oldEmbeddingGate = new Promise<void>((resolve) => {
+      releaseOldEmbedding = resolve;
+    });
+    let oldEmbeddingStarted: () => void = () => {};
+    const oldEmbeddingStart = new Promise<void>((resolve) => {
+      oldEmbeddingStarted = resolve;
+    });
+    const closeOldProvider = vi.fn(async () => {});
+    const closeReplacementProvider = vi.fn(async () => {});
+    const createProvider = vi.fn(async (options: { provider: string; model: string }) => {
+      const isOld = options.provider === "fixture-old-provider";
+      return {
+        provider: {
+          id: options.provider,
+          model: options.model,
+          embedQuery: vi.fn(async () => {
+            if (isOld) {
+              oldEmbeddingStarted();
+              await oldEmbeddingGate;
+            }
+            return isOld ? [0.1] : [0.2];
+          }),
+          embedBatch: vi.fn(async () => [[0.1]]),
+          close: isOld ? closeOldProvider : closeReplacementProvider,
+        },
+      };
+    });
+    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
+      id: "fixture-provider",
+      create: createProvider,
+    });
+    const oldConfig = {
+      provider: "fixture-old-provider",
+      model: "fixture-old-model",
+      apiKey: "fixture-old-key",
+      baseUrl: "https://old.example.test/v1",
+      dimensions: 3,
+    } satisfies MemoryConfig["embedding"];
+    const newConfig = {
+      provider: "fixture-new-provider",
+      model: "fixture-new-model",
+      apiKey: "fixture-new-key",
+      baseUrl: "https://new.example.test/v1",
+      dimensions: 4,
+    } satisfies MemoryConfig["embedding"];
+    const embeddings = createEmbeddings(createApi());
+
+    try {
+      const oldEmbedding = embed(embeddings, "main", "old config request", oldConfig);
+      await oldEmbeddingStart;
+      const replacementEmbedding = embed(embeddings, "main", "new config request", newConfig);
+      await Promise.resolve();
+      expect(createProvider).toHaveBeenCalledOnce();
+      expect(closeOldProvider).not.toHaveBeenCalled();
+
+      releaseOldEmbedding();
+      await expect(Promise.all([oldEmbedding, replacementEmbedding])).resolves.toEqual([
+        [0.1],
+        [0.2],
+      ]);
+      expect(createProvider.mock.calls.map(([options]) => options)).toEqual([
+        expect.objectContaining({
+          provider: oldConfig.provider,
+          model: oldConfig.model,
+          remote: { apiKey: oldConfig.apiKey, baseUrl: oldConfig.baseUrl },
+          outputDimensionality: oldConfig.dimensions,
+        }),
+        expect.objectContaining({
+          provider: newConfig.provider,
+          model: newConfig.model,
+          remote: { apiKey: newConfig.apiKey, baseUrl: newConfig.baseUrl },
+          outputDimensionality: newConfig.dimensions,
+        }),
+      ]);
+      expect(closeOldProvider).toHaveBeenCalledOnce();
+      expect(
+        expectDefined(closeOldProvider.mock.invocationCallOrder[0], "old config close order"),
+      ).toBeLessThan(
+        expectDefined(createProvider.mock.invocationCallOrder[1], "new config create order"),
+      );
+    } finally {
+      releaseOldEmbedding();
+      await embeddings.close?.();
+    }
+
+    expect(closeReplacementProvider).toHaveBeenCalledOnce();
   });
 
   it("drains an admitted embedding before retiring a rotated actual auth snapshot", async () => {
@@ -527,15 +626,15 @@ describe("memory-lancedb provider lifecycle", () => {
         agent: { resolveAgentDir: () => agentDir },
       },
     } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api, { embedding: embeddingConfig } as MemoryConfig);
+    const embeddings = createEmbeddings(api);
 
     try {
       publishCredential("fixture-inflight-old");
-      const firstEmbedding = embeddings.embed("private", "old account request");
+      const firstEmbedding = embed(embeddings, "private", "old account request");
       await oldEmbeddingStart;
 
       publishCredential("fixture-inflight-new");
-      const replacementEmbedding = embeddings.embed("private", "new account request");
+      const replacementEmbedding = embed(embeddings, "private", "new account request");
       await Promise.resolve();
       expect(createProvider).toHaveBeenCalledOnce();
       expect(closeOldProvider).not.toHaveBeenCalled();
@@ -586,15 +685,13 @@ describe("memory-lancedb provider lifecycle", () => {
       create: createProvider,
     });
 
-    const first = createEmbeddings(createApi(), { embedding: embeddingConfig } as MemoryConfig);
-    const firstEmbed = first.embed("main", "first");
+    const first = createEmbeddings(createApi());
+    const firstEmbed = embed(first, "main", "first");
     await vi.waitFor(() => expect(createProvider).toHaveBeenCalledTimes(1));
 
     const closePromise = first.close?.();
-    const replacement = createEmbeddings(createApi(), {
-      embedding: embeddingConfig,
-    } as MemoryConfig);
-    const replacementEmbed = replacement.embed("main", "replacement");
+    const replacement = createEmbeddings(createApi());
+    const replacementEmbed = embed(replacement, "main", "replacement");
     await Promise.resolve();
     expect(createProvider).toHaveBeenCalledTimes(1);
 
@@ -645,10 +742,10 @@ describe("memory-lancedb provider lifecycle", () => {
       create: createProvider,
     });
 
-    const older = createEmbeddings(createApi(), { embedding: embeddingConfig } as MemoryConfig);
-    const current = createEmbeddings(createApi(), { embedding: embeddingConfig } as MemoryConfig);
-    await older.embed("main", "older");
-    await current.embed("main", "current");
+    const older = createEmbeddings(createApi());
+    const current = createEmbeddings(createApi());
+    await embed(older, "main", "older");
+    await embed(current, "main", "current");
 
     await expect(older.close?.()).rejects.toThrow("older close failed once");
     await expect(current.close?.()).rejects.toThrow("older close failed twice");
@@ -686,16 +783,14 @@ describe("memory-lancedb provider lifecycle", () => {
       })),
     });
 
-    const embeddings = createEmbeddings(createApi(), {
-      embedding: embeddingConfig,
-    } as MemoryConfig);
-    const embedPromise = embeddings.embed("main", "active");
+    const embeddings = createEmbeddings(createApi());
+    const embedPromise = embed(embeddings, "main", "active");
     await embedStarted;
     const closePromise = embeddings.close?.();
     await Promise.resolve();
 
     expect(closeProvider).not.toHaveBeenCalled();
-    await expect(embeddings.embed("main", "late")).rejects.toThrow(
+    await expect(embed(embeddings, "main", "late")).rejects.toThrow(
       "memory-lancedb embeddings are closed",
     );
 
