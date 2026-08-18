@@ -6,7 +6,7 @@ import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import "./chat-sidebar.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
-import { resetTaskDetail } from "./chat-task-detail-state.ts";
+import { resetTaskDetail, type TaskDetailHost } from "./chat-task-detail-state.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 
@@ -34,9 +34,10 @@ export function renderChatDetailSlot(params: {
   transcript: ChatTranscriptController;
 }): TemplateResult {
   const { content, host } = params;
+  const taskDetailHost: TaskDetailHost = host;
   const taskId = openTaskDetailId(content, params.layout);
-  if (taskId === undefined) {
-    resetTaskDetail(host);
+  if (taskId === undefined && taskDetailHost.taskDetailState !== undefined) {
+    resetTaskDetail(taskDetailHost);
   }
   const documents: Partial<Record<SidebarContent["kind"], TemplateResult>> = {
     task:

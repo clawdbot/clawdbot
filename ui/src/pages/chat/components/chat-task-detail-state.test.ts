@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import type { ChatPageHost } from "../chat-state-host.ts";
+import type { ChatProps } from "../chat-view.ts";
+import { closeSlot, openSlot, type SidebarLayout } from "../sidebar-layout.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import { renderChatDetailSlot } from "./chat-detail-slot.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
+import * as taskDetailState from "./chat-task-detail-state.ts";
 import {
   observeTaskDetailEvent,
   readTaskTranscript,
   type TaskDetailHost,
 } from "./chat-task-detail-state.ts";
+import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -49,6 +57,55 @@ function task(status: TaskSummary["status"]): TaskSummary {
   };
 }
 
+function backgroundTasks(selectedTask: TaskSummary): BackgroundTasksProps {
+  return {
+    sessionKey: "agent:main:main",
+    statusRowId: "chat-tasks-status-test",
+    collapsed: false,
+    narrowLayout: false,
+    connected: true,
+    canCancel: false,
+    loading: false,
+    error: null,
+    tasks: [selectedTask],
+    subagentActivity: {
+      rows: [],
+      overflowWorking: 0,
+      taskIds: new Set(),
+      nextExpiryAt: null,
+    },
+    taskDetails: new Map(),
+    taskDetailErrors: new Map(),
+    taskDetailLoadingIds: new Set(),
+    cancellingTaskIds: new Set(),
+    finishedCollapsed: false,
+    onToggleCollapsed: () => undefined,
+    onToggleFinished: () => undefined,
+    onRefresh: () => undefined,
+    onCancel: () => undefined,
+  };
+}
+
+const taskContent = { kind: "task", taskId: "task-1" } satisfies SidebarContent;
+const fileContent = {
+  kind: "file",
+  path: "notes.txt",
+  name: "notes.txt",
+  content: "Non-task detail",
+} satisfies SidebarContent;
+
+function renderDetail(host: TaskDetailHost, content: SidebarContent, layout: SidebarLayout) {
+  renderChatDetailSlot({
+    backgroundTasks: backgroundTasks(task("running")),
+    chat: { paneId: "pane-1" } as ChatProps,
+    content,
+    fullMessageLoader: null,
+    host: host as ChatPageHost,
+    layout,
+    transcript: {} as ChatTranscriptController,
+  });
+}
+
 async function flushAsync() {
   await Promise.resolve();
   await Promise.resolve();
@@ -60,6 +117,52 @@ afterEach(() => {
 });
 
 describe("task detail transcript state", () => {
+  it.each([
+    {
+      label: "the detail slot closes",
+      nextContent: taskContent,
+      nextLayout: closeSlot(openSlot({ columns: [] }, "detail"), "detail"),
+    },
+    {
+      label: "the detail slot switches to a file",
+      nextContent: fileContent,
+      nextLayout: openSlot({ columns: [] }, "detail"),
+    },
+  ])("clears transcript state when $label", ({ nextContent, nextLayout }) => {
+    const pending = deferred<never>();
+    const host = hostWith(vi.fn().mockReturnValue(pending.promise));
+    const openDetailLayout = openSlot({ columns: [] }, "detail");
+
+    renderDetail(host, taskContent, openDetailLayout);
+    expect(host.taskDetailState).toBeDefined();
+
+    renderDetail(host, nextContent, nextLayout);
+    expect(host.taskDetailState).toBeUndefined();
+  });
+
+  it("does not reset transcript state during stable task or non-task renders", () => {
+    const pending = deferred<never>();
+    const request = vi.fn().mockReturnValue(pending.promise);
+    const host = hostWith(request);
+    const openDetailLayout = openSlot({ columns: [] }, "detail");
+    const reset = vi.spyOn(taskDetailState, "resetTaskDetail");
+
+    renderDetail(host, taskContent, openDetailLayout);
+    const openTaskState = host.taskDetailState;
+    renderDetail(host, taskContent, openDetailLayout);
+
+    expect(host.taskDetailState).toBe(openTaskState);
+    expect(request).toHaveBeenCalledOnce();
+    expect(reset).not.toHaveBeenCalled();
+
+    renderDetail(host, fileContent, openDetailLayout);
+    expect(host.taskDetailState).toBeUndefined();
+    expect(reset).toHaveBeenCalledOnce();
+
+    renderDetail(host, fileContent, openDetailLayout);
+    expect(reset).toHaveBeenCalledOnce();
+  });
+
   it("loads the selected child transcript", async () => {
     const pending = deferred<ReturnType<typeof history>>();
     const request = vi.fn().mockReturnValue(pending.promise);
