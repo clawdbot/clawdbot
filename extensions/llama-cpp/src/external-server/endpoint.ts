@@ -6,15 +6,6 @@ type LlamaServerEndpoint = {
   inferenceBaseUrl: string;
 };
 
-const LLAMA_SERVER_LOCAL_SERVICE_ERROR =
-  "models.providers.llama-server.localService is not supported; use the llama-cpp provider when OpenClaw should manage the server";
-
-export function assertExternalLlamaServerConfig(provider: ModelProviderConfig): void {
-  if (provider.localService) {
-    throw new Error(LLAMA_SERVER_LOCAL_SERVICE_ERROR);
-  }
-}
-
 function toFetchableBaseUrl(value: string): string {
   if (/^[a-z][a-z\d+.-]*:\/\//iu.test(value)) {
     return value;
@@ -48,7 +39,6 @@ export function resolveLlamaServerEndpoint(configuredBaseUrl?: string): LlamaSer
 export function normalizeLlamaServerProviderConfig(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
-  assertExternalLlamaServerConfig(provider);
   const endpoint = resolveLlamaServerEndpoint(provider.baseUrl);
   const request = provider.request ?? {};
   const normalizedRequest =

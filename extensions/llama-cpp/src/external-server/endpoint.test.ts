@@ -45,8 +45,8 @@ describe("llama-server endpoint", () => {
     });
   });
 
-  it("rejects local service ownership", () => {
-    expect(() =>
+  it("preserves explicitly configured local service compatibility", () => {
+    expect(
       normalizeLlamaServerProviderConfig({
         baseUrl: "http://localhost:8080/v1",
         api: "openai-completions",
@@ -56,6 +56,11 @@ describe("llama-server endpoint", () => {
           healthUrl: "http://localhost:8080/health",
         },
       }),
-    ).toThrow("use the llama-cpp provider when OpenClaw should manage the server");
+    ).toMatchObject({
+      localService: {
+        command: "/usr/local/bin/llama-server",
+        healthUrl: "http://localhost:8080/health",
+      },
+    });
   });
 });

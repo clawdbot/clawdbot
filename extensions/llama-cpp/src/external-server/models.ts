@@ -8,7 +8,7 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { asBoolean, asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { assertExternalLlamaServerConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
+import { resolveLlamaServerEndpoint } from "./endpoint.js";
 
 type LlamaServerModelStatus =
   | "unloaded"
@@ -177,9 +177,6 @@ export function buildLlamaServerProviderConfig(params: {
   configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
 }): ModelProviderConfig {
-  if (params.configured) {
-    assertExternalLlamaServerConfig(params.configured);
-  }
   const endpoint = resolveLlamaServerEndpoint(params.configured?.baseUrl);
   const request = params.configured?.request ?? {};
   return {

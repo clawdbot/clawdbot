@@ -84,8 +84,9 @@ Both providers can be configured at the same time. Use `llama-cpp` when you
 want OpenClaw to manage the process. Use `llama-server` when another terminal,
 container, host manager, or machine owns the process.
 
-`models.providers.llama-server.localService` is not supported. Configure the
-managed `llama-cpp` provider instead when OpenClaw must own the server process.
+Existing manual `llama-server` configurations that use `localService` continue
+to work. New setups should use the managed `llama-cpp` provider when OpenClaw
+must own the server process.
 
 ## Discovery
 
