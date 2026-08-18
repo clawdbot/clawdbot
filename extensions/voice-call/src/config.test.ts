@@ -886,7 +886,7 @@ describe("resolveVoiceCallStreamExposurePaths", () => {
         localPath: "/voice/stream/realtime",
         publicPath: "/edge/voice/stream/realtime",
       },
-      { localPath: "/voice/stream", publicPath: "/edge/voice/stream" },
+      { localPath: "/voice/stream", publicPath: "/voice/stream" },
     ]);
   });
 });

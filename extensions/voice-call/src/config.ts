@@ -548,32 +548,37 @@ export function resolveVoiceCallPublicPathPrefix(
   publicWebhookPath: string,
   localWebhookPath: string,
 ): string {
-  const normalizedPublicPath = normalizeWebhookPath(publicWebhookPath);
-  const normalizedLocalPath = normalizeWebhookPath(localWebhookPath);
-  const localPathIndex = normalizedPublicPath.indexOf(normalizedLocalPath);
-  return localPathIndex > 0 ? normalizedPublicPath.slice(0, localPathIndex) : "";
+  const publicPath = normalizeWebhookPath(publicWebhookPath);
+  const localPathIndex = publicPath.indexOf(normalizeWebhookPath(localWebhookPath));
+  return localPathIndex > 0 ? publicPath.slice(0, localPathIndex) : "";
 }
 
 export function resolveVoiceCallStreamExposurePaths(
   config: VoiceCallConfig,
   webhookPaths: { publicWebhookPath?: string; localWebhookPath?: string } = {},
 ): VoiceCallStreamExposurePath[] {
-  const streamPaths: string[] = [];
-  if (config.realtime.enabled) {
-    streamPaths.push(
-      config.realtime.streamPath ?? defaultRealtimeStreamPathForServePath(config.serve.path),
-    );
-  }
-  if (config.streaming.enabled) {
-    streamPaths.push(config.streaming.streamPath);
-  }
+  const exposurePaths: VoiceCallStreamExposurePath[] = [];
   const localWebhookPath = webhookPaths.localWebhookPath ?? config.serve.path;
   const publicWebhookPath = webhookPaths.publicWebhookPath ?? config.tailscale.path;
   const publicPathPrefix = resolveVoiceCallPublicPathPrefix(publicWebhookPath, localWebhookPath);
-  return [...new Set(streamPaths.map((path) => normalizeWebhookPath(path)))].map((localPath) => ({
-    localPath,
-    publicPath: `${publicPathPrefix}${localPath}`,
-  }));
+  if (config.realtime.enabled) {
+    const localPath = normalizeWebhookPath(
+      config.realtime.streamPath ?? defaultRealtimeStreamPathForServePath(config.serve.path),
+    );
+    exposurePaths.push({
+      localPath,
+      publicPath: `${publicPathPrefix}${localPath}`,
+    });
+  }
+  if (config.streaming.enabled) {
+    const localPath = normalizeWebhookPath(config.streaming.streamPath);
+    if (
+      !exposurePaths.some((path) => path.localPath === localPath && path.publicPath === localPath)
+    ) {
+      exposurePaths.push({ localPath, publicPath: localPath });
+    }
+  }
+  return exposurePaths;
 }
 
 function normalizeVoiceCallTtsConfig(

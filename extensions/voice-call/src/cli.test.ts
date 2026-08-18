@@ -209,14 +209,14 @@ describe("voice-call CLI status fallback", () => {
           localUrl: "http://127.0.0.1:4444/voice/stream/realtime",
         },
         {
-          path: "/edge/voice/stream",
+          path: "/voice/stream",
           localUrl: "http://127.0.0.1:4444/voice/stream",
         },
       ],
     });
     expect(JSON.parse(capturer.output())).toMatchObject({
       localUrl: "http://127.0.0.1:4444/custom/webhook",
-      streamPaths: ["/edge/voice/stream/realtime", "/edge/voice/stream"],
+      streamPaths: ["/edge/voice/stream/realtime", "/voice/stream"],
     });
   });
 

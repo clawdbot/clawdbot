@@ -181,48 +181,53 @@ describe("voice-call tailscale helpers", () => {
       name: "realtime",
       config: { realtime: { enabled: true, streamPath: "/voice/stream/realtime" } },
       streamPath: "/voice/stream/realtime",
+      publicStreamPath: "/edge/voice/stream/realtime",
     },
     {
       name: "streaming",
       config: { streaming: { enabled: true, streamPath: "/voice/stream" } },
       streamPath: "/voice/stream",
+      publicStreamPath: "/voice/stream",
     },
-  ])("mounts and cleans up the enabled $name stream path", async ({ config, streamPath }) => {
-    runCommandMock.mockImplementation(async (command: string[]) =>
-      command[1] === "status"
-        ? commandResult({
-            stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
-          })
-        : commandResult(),
-    );
-    const voiceCallConfig = {
-      tailscale: { mode: "funnel", path: "/edge/voice/webhook" },
-      serve: { port: 8787, path: "/voice/webhook" },
-      realtime: { enabled: false },
-      streaming: { enabled: false },
-      ...config,
-    } as never;
+  ])(
+    "mounts and cleans up the enabled $name stream path",
+    async ({ config, streamPath, publicStreamPath }) => {
+      runCommandMock.mockImplementation(async (command: string[]) =>
+        command[1] === "status"
+          ? commandResult({
+              stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
+            })
+          : commandResult(),
+      );
+      const voiceCallConfig = {
+        tailscale: { mode: "funnel", path: "/edge/voice/webhook" },
+        serve: { port: 8787, path: "/voice/webhook" },
+        realtime: { enabled: false },
+        streaming: { enabled: false },
+        ...config,
+      } as never;
 
-    await setupTailscaleExposure(voiceCallConfig);
-    await cleanupTailscaleExposure(voiceCallConfig);
+      await setupTailscaleExposure(voiceCallConfig);
+      await cleanupTailscaleExposure(voiceCallConfig);
 
-    expect(runCommandMock).toHaveBeenCalledWith(
-      [
-        "tailscale",
-        "funnel",
-        "--bg",
-        "--yes",
-        "--set-path",
-        `/edge${streamPath}`,
-        `http://127.0.0.1:8787${streamPath}`,
-      ],
-      expect.any(Object),
-    );
-    expect(runCommandMock).toHaveBeenCalledWith(
-      ["tailscale", "funnel", "off", `/edge${streamPath}`],
-      expect.any(Object),
-    );
-  });
+      expect(runCommandMock).toHaveBeenCalledWith(
+        [
+          "tailscale",
+          "funnel",
+          "--bg",
+          "--yes",
+          "--set-path",
+          publicStreamPath,
+          `http://127.0.0.1:8787${streamPath}`,
+        ],
+        expect.any(Object),
+      );
+      expect(runCommandMock).toHaveBeenCalledWith(
+        ["tailscale", "funnel", "off", publicStreamPath],
+        expect.any(Object),
+      );
+    },
+  );
 
   it("deduplicates equal realtime and streaming paths", async () => {
     runCommandMock.mockImplementation(async (command: string[]) =>
