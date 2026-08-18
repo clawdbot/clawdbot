@@ -25,7 +25,10 @@ import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gate
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { readScopeUpgradeAvailability } from "./device-scope-upgrade.ts";
+import {
+  readScopeUpgradeAvailability,
+  shouldHideDismissedScopeUpgradeBanner,
+} from "./device-scope-upgrade.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   ensureOptionalElementForHost,
@@ -62,7 +65,7 @@ function renderScopeUpgradeBanner(
   snapshot: ApplicationContext["gateway"]["snapshot"],
 ) {
   const state = readScopeUpgradeAvailability(snapshot);
-  if (state.phase === "hidden") {
+  if (state.phase === "hidden" || shouldHideDismissedScopeUpgradeBanner(state)) {
     return nothing;
   }
   void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
@@ -302,6 +305,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     uiHints: runtimeConfig.configUiHints,
     identityAvailable: Boolean(gatewaySnapshot.selfUser),
     basePath: context.basePath,
+    canAdmin: operatorAccess.canAdmin,
   });
   const onboarding = host.onboardingMode;
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
@@ -462,6 +466,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
         },
+        canAdmin: operatorAccess.canAdmin,
       })
     : host.navigationSidebar;
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,

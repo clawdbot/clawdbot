@@ -87,7 +87,7 @@ export function createRuntimeConfigCapability(
         phase: gateway.snapshot.phase,
       },
       method,
-      "operator.admin",
+      method === "config.schema" ? "operator.read" : "operator.admin",
       options,
     );
   const publish = () => {
@@ -184,7 +184,9 @@ export function createRuntimeConfigCapability(
     appliedRefresh.reconcile();
   };
   const ensureSchemaLoaded = () =>
-    state.configSchema ? Promise.resolve() : loadOnce("schema", () => loadConfigSchema(state));
+    state.configSchema || !canCallConfigMethod("config.schema")
+      ? Promise.resolve()
+      : loadOnce("schema", () => loadConfigSchema(state));
 
   return {
     get state() {

@@ -9,6 +9,7 @@ import {
   dismissScopeUpgradeBanner,
   hasDismissedScopeUpgradeBanner,
   readScopeUpgradeAvailability,
+  shouldHideDismissedScopeUpgradeBanner,
   type ScopeUpgradeState,
 } from "./device-scope-upgrade.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -167,10 +168,13 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
     const state =
       this.controller?.state ??
       (props ? readScopeUpgradeAvailability(props.snapshot) : { phase: "hidden" as const });
-    if (!props || state.phase === "hidden") {
+    if (!props || state.phase === "hidden" || shouldHideDismissedScopeUpgradeBanner(state)) {
       return nothing;
     }
-    if (!this.expanded && (state.phase === "available" || state.phase === "guidance")) {
+    if (!this.expanded && state.phase === "guidance") {
+      return nothing;
+    }
+    if (!this.expanded && state.phase === "available") {
       return html`<div class="scope-upgrade-chip-row">
         <button
           class="scope-upgrade-chip"

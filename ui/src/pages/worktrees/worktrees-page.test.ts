@@ -117,6 +117,44 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("keeps read-only viewers in browsing mode without branch or mutation RPCs", async () => {
+    const record = worktree();
+    const request = vi.fn(async (method: string) =>
+      method === "worktrees.list" ? { worktrees: [record] } : {},
+    );
+    const gateway = gatewayWithClient({ request } as unknown as GatewayBrowserClient);
+    gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: {
+        methods: ["worktrees.list", "worktrees.branches", "worktrees.remove", "worktrees.gc"],
+      },
+    } as ApplicationGatewaySnapshot["hello"];
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(gateway);
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+
+    await waitForFast(() => expect(page.records).toEqual([record]));
+    await page.updateComplete;
+    expect(page.querySelector(".callout.info")?.textContent).toContain(
+      "Worktree changes require operator.admin access.",
+    );
+    const mutationButtons = [...page.querySelectorAll<HTMLButtonElement>("button")].filter(
+      (button) =>
+        ["New worktree", "Clean up now", "Delete"].includes(button.textContent?.trim() ?? ""),
+    );
+    expect(mutationButtons).toHaveLength(3);
+    expect(mutationButtons.every((button) => button.disabled)).toBe(true);
+
+    page.loadCreateBranches();
+    await page.removeWorktree(record);
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.branches");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.remove");
+    expect(showConfirmDialog).not.toHaveBeenCalled();
+  });
+
   it("navigates a session-owned worktree with the face-preference marker", async () => {
     // The owner key comes from a worktree record, not the cached session page, so its
     // face is a guess: the in-app click must carry the marker while href stays clean.

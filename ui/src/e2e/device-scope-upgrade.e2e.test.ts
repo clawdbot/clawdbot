@@ -315,7 +315,12 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
       await page.getByRole("button", { name: "Collapse limited access banner" }).click();
-      await page.getByRole("button", { name: "Show limited access details" }).waitFor();
+      expect(await page.getByRole("button", { name: "Show limited access details" }).count()).toBe(
+        0,
+      );
+      await page.reload();
+      await page.locator("openclaw-app-shell").waitFor();
+      expect(await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).count()).toBe(0);
     },
   );
 

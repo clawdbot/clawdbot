@@ -9,7 +9,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
@@ -88,6 +88,8 @@ class DevicesPage extends OpenClawLightDomElement {
   @state() presence: PresenceEntry[] = [];
   @state() private pageState = createInitialDevicesState();
   @state() private canPairDevice = false;
+  @state() private canManagePairing = false;
+  @state() private canAdmin = false;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() private execApprovalsTargetNodeId: string | null = null;
   private pendingConfirmation: AbortController | null = null;
@@ -132,7 +134,9 @@ class DevicesPage extends OpenClawLightDomElement {
     DEVICES_ACTIVE_POLL_INTERVAL_MS,
     () => {
       void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
-      void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+      if (this.canManagePairing) {
+        void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+      }
     },
     false,
   );
@@ -161,7 +165,9 @@ class DevicesPage extends OpenClawLightDomElement {
             }
           }
           if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
-            void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+            if (this.canManagePairing) {
+              void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+            }
           }
           if (
             event.event === "node.pair.requested" ||
@@ -191,6 +197,8 @@ class DevicesPage extends OpenClawLightDomElement {
     void this.presenceTask.run([null, null]);
     this.presence = [];
     this.canPairDevice = false;
+    this.canManagePairing = false;
+    this.canAdmin = false;
     super.disconnectedCallback();
   }
 
@@ -218,8 +226,11 @@ class DevicesPage extends OpenClawLightDomElement {
   }
 
   private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
-    this.canPairDevice =
-      snapshot.phase === "connected" && hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
+    const connected = snapshot.phase === "connected";
+    const auth = snapshot.hello?.auth ?? null;
+    this.canAdmin = connected && hasOperatorAdminAccess(auth);
+    this.canManagePairing = connected && (!auth || hasOperatorPairingAccess(auth));
+    this.canPairDevice = this.canAdmin;
   }
 
   private applyRouteData() {
@@ -287,14 +298,14 @@ class DevicesPage extends OpenClawLightDomElement {
     if (!pageState.nodes.length && !pageState.nodesLoading) {
       void this.runPageTask((current) => loadNodes(current));
     }
-    if (!pageState.devicesList && !pageState.devicesLoading) {
+    if (this.canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {
       void this.runPageTask((current) => loadDevices(current));
     }
     const config = this.context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
       void this.context.runtimeConfig.refresh();
     }
-    if (!pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
+    if (this.canAdmin && !pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
       void this.runPageTask((current) =>
         loadExecApprovals(current, this.resolveExecApprovalsTarget()),
       );
@@ -357,7 +368,10 @@ class DevicesPage extends OpenClawLightDomElement {
     await this.runPageTask(run);
   }
 
-  private confirmInventoryRemoval(prompt: InventoryRemovalPrompt) {
+  private confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
+    if (!this.canManagePairing) {
+      return Promise.resolve();
+    }
     if (prompt.kind === "entry") {
       const entry = prompt.entry;
       return this.confirmDestructiveAction(
@@ -386,7 +400,10 @@ class DevicesPage extends OpenClawLightDomElement {
     );
   }
 
-  private confirmPairingReject(target: "device" | "node", requestId: string) {
+  private confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
+    if (!this.canManagePairing) {
+      return Promise.resolve();
+    }
     return this.confirmDestructiveAction(
       {
         title: t(
@@ -404,7 +421,10 @@ class DevicesPage extends OpenClawLightDomElement {
     );
   }
 
-  private confirmTokenRevoke(deviceId: string, role: string) {
+  private confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
+    if (!this.canManagePairing) {
+      return Promise.resolve();
+    }
     return this.confirmDestructiveAction(
       {
         title: t("devices.inventory.revokePromptTitle", { role }),
@@ -430,6 +450,9 @@ class DevicesPage extends OpenClawLightDomElement {
     role: string,
     scopes?: string[],
   ) {
+    if (!this.canManagePairing) {
+      return;
+    }
     const outcome = await this.runPageTask((pageState) =>
       rotateDeviceToken(pageState, {
         deviceId: device.id,
@@ -497,6 +520,8 @@ class DevicesPage extends OpenClawLightDomElement {
           devicesError: devices.devicesError,
           devicesList: devices.devicesList,
           canPairDevice: this.canPairDevice,
+          canManagePairing: this.canManagePairing,
+          canAdmin: this.canAdmin,
           configForm: currentConfigObject(config),
           configLoading: config.configLoading,
           configSaving: config.configSaving,
@@ -510,12 +535,22 @@ class DevicesPage extends OpenClawLightDomElement {
           execApprovalsSelectedAgent: devices.execApprovalsSelectedAgent,
           execApprovalsTarget: this.execApprovalsTarget,
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
-          onDevicePairSetupOpen: () => void this.context.overlays.openDevicePairSetup(),
-          onDeviceApprove: (requestId) =>
-            void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId)),
+          onDevicePairSetupOpen: () => {
+            if (this.canAdmin) {
+              void this.context.overlays.openDevicePairSetup();
+            }
+          },
+          onDeviceApprove: (requestId) => {
+            if (this.canManagePairing) {
+              void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId));
+            }
+          },
           onDeviceReject: (requestId) => void this.confirmPairingReject("device", requestId),
-          onNodeApprove: (requestId) =>
-            void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId)),
+          onNodeApprove: (requestId) => {
+            if (this.canManagePairing) {
+              void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
+            }
+          },
           onNodeReject: (requestId) => void this.confirmPairingReject("node", requestId),
           onInventoryRemove: (entry) => void this.confirmInventoryRemoval({ kind: "entry", entry }),
           onInventoryCleanup: (entries) => {
@@ -529,10 +564,15 @@ class DevicesPage extends OpenClawLightDomElement {
           onLoadConfig: () =>
             void this.context.runtimeConfig.refresh({ discardPendingChanges: true }),
           onLoadExecApprovals: () =>
-            void this.runPageTask((pageState) =>
-              loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-            ),
+            this.canAdmin
+              ? void this.runPageTask((pageState) =>
+                  loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+                )
+              : undefined,
           onBindDefault: (nodeId) => {
+            if (!this.canAdmin) {
+              return;
+            }
             if (nodeId) {
               this.context.runtimeConfig.patchForm(["tools", "exec", "node"], nodeId);
             } else {
@@ -540,6 +580,9 @@ class DevicesPage extends OpenClawLightDomElement {
             }
           },
           onBindAgent: (agentId, nodeId) => {
+            if (!this.canAdmin) {
+              return;
+            }
             const target = this.context.runtimeConfig.agentEntry(agentId, {
               ensure: Boolean(nodeId),
             });
@@ -553,7 +596,11 @@ class DevicesPage extends OpenClawLightDomElement {
               this.context.runtimeConfig.removeFormValue(path);
             }
           },
-          onSaveBindings: () => void this.context.runtimeConfig.save(),
+          onSaveBindings: () => {
+            if (this.canAdmin) {
+              void this.context.runtimeConfig.save();
+            }
+          },
           onExecApprovalsTargetChange: (kind, nodeId) => {
             this.execApprovalsTarget = kind;
             this.execApprovalsTargetNodeId = nodeId;
@@ -568,15 +615,21 @@ class DevicesPage extends OpenClawLightDomElement {
             this.requestUpdate();
           },
           onExecApprovalsPatch: (path, value) =>
-            void this.runPageTask((pageState) =>
-              updateExecApprovalsFormValue(pageState, path, value),
-            ),
+            this.canAdmin
+              ? void this.runPageTask((pageState) =>
+                  updateExecApprovalsFormValue(pageState, path, value),
+                )
+              : undefined,
           onExecApprovalsRemove: (path) =>
-            void this.runPageTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
+            this.canAdmin
+              ? void this.runPageTask((pageState) => removeExecApprovalsFormValue(pageState, path))
+              : undefined,
           onSaveExecApprovals: () =>
-            void this.runPageTask((pageState) =>
-              saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-            ),
+            this.canAdmin
+              ? void this.runPageTask((pageState) =>
+                  saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+                )
+              : undefined,
         }),
       )}
     `;

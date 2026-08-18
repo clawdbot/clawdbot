@@ -320,6 +320,39 @@ describe("DevicesPage gateway lifecycle", () => {
     await initialLoad;
     expect(state.nodes).toEqual([{ id: "new" }]);
     expect(state.nodesLoading).toBe(false);
+  it("does not load pairing or exec approvals without their scopes", async () => {
+    const request = vi.fn(async (method: string) => (method === "node.list" ? { nodes: [] } : {}));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      ...gatewaySnapshot(client, true),
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["node.list", "device.pair.list", "exec.approvals.get"] },
+      },
+    } as ApplicationGatewaySnapshot;
+    const currentGateway = gateway(client, snapshot);
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    page.routeData = {
+      gateway: currentGateway,
+      gatewaySnapshot: snapshot,
+      devices: createInitialDevicesState({ client, connected: true }),
+    };
+    page.willUpdate(new Map([["routeData", undefined]]));
+    applyGatewaySnapshot(page, snapshot);
+    page.ensureInitialData();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
   });
 
   it("retries a node load after a same-client disconnect", async () => {
