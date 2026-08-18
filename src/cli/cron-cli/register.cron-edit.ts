@@ -55,6 +55,10 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
   }
 }
 
+function asPlainRecord(value: object): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value));
+}
+
 function readPrecheckField(existingPrecheck: unknown): {
   command?: string;
   timeoutMs?: number;
@@ -63,7 +67,7 @@ function readPrecheckField(existingPrecheck: unknown): {
   if (!existingPrecheck || typeof existingPrecheck !== "object") {
     return {};
   }
-  const rec = existingPrecheck as Record<string, unknown>; // SAFETY: precheck object from gateway job
+  const rec = asPlainRecord(existingPrecheck);
   const command = "command" in rec ? normalizeOptionalString(rec.command) : undefined;
   const timeoutMs =
     "timeoutMs" in rec && typeof rec.timeoutMs === "number" ? rec.timeoutMs : undefined;
@@ -84,10 +88,7 @@ function mergeCronEditPrecheckPatch(params: {
 }): Record<string, unknown> {
   const base =
     params.existingPrecheck && typeof params.existingPrecheck === "object"
-      ? {
-          // SAFETY: existing precheck object from gateway job; spread into a plain record for CLI patch merge.
-          ...(params.existingPrecheck as Record<string, unknown>),
-        }
+      ? asPlainRecord(params.existingPrecheck)
       : {};
   const next: Record<string, unknown> = {
     ...base,
