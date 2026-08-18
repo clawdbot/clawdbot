@@ -2019,7 +2019,7 @@ button.chat-reply-preview--message:disabled {
   min-width: 0;
   margin: 0;
   border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  background: var(--sidebar-bg, var(--panel-strong));
   color: var(--text);
   font: 11px/1.4 var(--mono);
   white-space: pre-wrap;
@@ -2046,6 +2046,7 @@ button.chat-reply-preview--message:disabled {
   padding: 12px 13px;
   overflow: auto;
   border-radius: 10px;
+  background: var(--panel);
 }
 
 .task-suggestion__actions {
