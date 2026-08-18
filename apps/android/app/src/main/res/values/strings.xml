@@ -110,6 +110,7 @@
     <string name="native_0f4c8529742b31ea" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Start Chat"</string>
     <string name="native_0f559ff270904904" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chat tool calls waiting in the active thread remain visible here."</string>
     <string name="native_0f56cc286a4f23d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Certificate review needed"</string>
+    <string name="native_0f8fe3a9688138a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Open the current Canvas surface to inspect or interact with it."</string>
     <string name="native_0ff98f05be01ce5e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Automation updated."</string>
     <string name="native_100ac08064a6d586" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No recent sessions"</string>
     <string name="native_102acc10e67a297d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Script"</string>
@@ -193,6 +194,7 @@
     <string name="native_1c1174c05c1e6582" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Last command: %1$s"</string>
     <string name="native_1c14dd24ad063de3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Have a terminal open on the device running OpenClaw."</string>
     <string name="native_1c57b89e11e96ec1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No missing items"</string>
+    <string name="native_1c8217deb20c30d4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Canvas output needs an active gateway connection."</string>
     <string name="native_1cac239d3c742bf2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Collapse progress card"</string>
     <string name="native_1cea287c3ba01d1d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_1d183f3f10e963ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Isolated"</string>
@@ -299,6 +301,7 @@
     <string name="native_2a1446dd9ce169e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telegram, WhatsApp, email, and other channels appear here after setup."</string>
     <string name="native_2a33d984de881573" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Network error"</string>
     <string name="native_2ac86a8e8f1d6cfb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidepooling"</string>
+    <string name="native_2b54c265effc491b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Restore canvas now for session=%1$s source=%2$s. If existing A2UI state exists, replay it immediately. If not, create and render a compact mobile-friendly dashboard in Canvas."</string>
     <string name="native_2b7d5b8c98a1bc16" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Start failed: %1$s"</string>
     <string name="native_2bb186b55caf8791" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Not requested"</string>
     <string name="native_2bc8446b79ad43f2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Configure a %1$s provider on the Gateway"</string>
@@ -309,7 +312,6 @@
     <string name="native_2c75802a5f8df5f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Find people and contact details"</string>
     <string name="native_2c9cce8250d746e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Device identity required"</string>
     <string name="native_2cd62f7a670b2819" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw thread"</string>
-    <string name="native_2cee6c17e5e55571" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Waiting for a concurrency slot"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Allow photo library access."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"A prior response already resolved this approval."</string>
     <string name="native_2d85de9d56c226e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No recent threads"</string>
@@ -375,6 +377,7 @@
     <string name="native_35e70a7ab8a0d399" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Next heartbeat"</string>
     <string name="native_35f2ff4f129d2a63" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway paired. Waiting for node capability approval."</string>
     <string name="native_36409c59c2b80eff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Brining"</string>
+    <string name="native_3643db520673cdf0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Close Canvas"</string>
     <string name="native_364802f3894668df" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Write Contacts"</string>
     <string name="native_367ccfda39b62aa7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No installed skills match this search."</string>
     <string name="native_36c725ddb20f8bd3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Talk Provider Setup"</string>
@@ -387,6 +390,7 @@
     <string name="native_379ce0aacf46c35f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway did not return %1$s readiness"</string>
     <string name="native_37b637bd85f6d2cb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s configured models. Refresh to recheck availability."</string>
     <string name="native_381428f5f251a764" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversation Send"</string>
+    <string name="native_3824a9f4dafe92c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Canvas"</string>
     <string name="native_384ae4ab1a2830f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 provider"</string>
     <string name="native_385001409de8562a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host."</string>
     <string name="native_387b2569e440838c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Send failed: %1$s"</string>
@@ -585,6 +589,7 @@
     <string name="native_57fce44d7c6df51a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"steer"</string>
     <string name="native_57fd7a0cf33f2666" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Selected"</string>
     <string name="native_58268edca12a81a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below."</string>
+    <string name="native_584162ac73e99ee6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Canvas Status"</string>
     <string name="native_5855b3ac2fcc1b3e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fix connection"</string>
     <string name="native_587876eaa5a53621" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Subagent cancelled"</string>
     <string name="native_58e909c0f4cc5723" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Save image"</string>
@@ -1026,6 +1031,7 @@
     <string name="native_9aa95cab245f4330" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Proposal quarantined."</string>
     <string name="native_9ac97bafbb1dae00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Automation paused."</string>
     <string name="native_9adab9e889c70409" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw mobile"</string>
+    <string name="native_9b233c8afd34ea09" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"A2UI reset"</string>
     <string name="native_9b797864ba532a10" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway unavailable"</string>
     <string name="native_9b9a8d05a7ec353b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Read"</string>
     <string name="native_9bd88f2485acbb94" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Desktop"</string>
@@ -1250,6 +1256,7 @@
     <string name="native_c253f451bdd56431" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reply"</string>
     <string name="native_c26225b6c16a4bc7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Provider catalog"</string>
     <string name="native_c272b225cf5bd643" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Enable permission in Settings"</string>
+    <string name="native_c280e195aa8b8982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"A2UI push"</string>
     <string name="native_c2a2701582c4413a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Check Access"</string>
     <string name="native_c2c631adbec7a8e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"If the gateway is reachable, reconnect should complete without intervention."</string>
     <string name="native_c2d60919f955cd83" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agent turn"</string>
@@ -1293,6 +1300,7 @@
     <string name="native_c7b6dfd5c3a183c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Forget gateway?"</string>
     <string name="native_c7b7b7f01360f6a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Optional description"</string>
     <string name="native_c7e1091492cdd0d9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Open %1$s"</string>
+    <string name="native_c81a0f64382da434" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Home canvas"</string>
     <string name="native_c82c37f336bc03f4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dreaming"</string>
     <string name="native_c83fa24c856f0b06" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s to %2$s"</string>
     <string name="native_c8864e27d32de6c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Share file"</string>
@@ -1515,6 +1523,7 @@
     <string name="native_eaa2090d6781a821" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Send SMS"</string>
     <string name="native_eabec9fd718dea48" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw is ready to continue in your ordinary chat."</string>
     <string name="native_eac0d0947c6fa808" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No commands found"</string>
+    <string name="native_eacf0905afcf79b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No canvas update yet. Tap to retry."</string>
     <string name="native_eadb3e64a1178e71" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Terminal needs a connected gateway"</string>
     <string name="native_eae47ccdd51f34b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Exec"</string>
     <string name="native_eaf3a81a6411115f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"App Filter"</string>
