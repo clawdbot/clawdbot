@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertSupportedBridgeVersion,
   ClaudeAppServerVersionError,
+  classifyBridgeStderrLevel,
   resolveBridgeSpawnEnv,
   resolveClaudeBridgeSpawnInvocation,
 } from "./client.js";
@@ -250,5 +251,40 @@ describe("resolveClaudeBridgeSpawnInvocation", () => {
         },
       ),
     ).toThrow(/without shell execution/);
+  });
+});
+
+describe("classifyBridgeStderrLevel (openclaw-tb9g)", () => {
+  it("promotes the attempt-registry silent-kill WARN out of debug", () => {
+    // Verbatim shape the deployed bridge emits from attempt-registry closeEntry()
+    // when no turn awaits the discarded attempt — the only signal that a
+    // backgrounded command was killed with the subprocess.
+    const line =
+      '[warn] [attempt-registry] discarded an attempt with no turn awaiting its result — any work still running under this subprocess (e.g. a backgrounded shell command) was silently killed {"threadId":"t1","reason":"dynamic tool catalog changed"}';
+    expect(classifyBridgeStderrLevel(line)).toBe("warn");
+  });
+
+  it("maps the bridge's own warn/error prefixes onto host levels", () => {
+    expect(classifyBridgeStderrLevel("[warn] something degraded")).toBe("warn");
+    expect(classifyBridgeStderrLevel("[error] transport died")).toBe("error");
+  });
+
+  it("keeps per-RPC info/debug chatter at debug", () => {
+    expect(classifyBridgeStderrLevel('[info] [turn/start] received {"threadId":"t1"}')).toBe(
+      "debug",
+    );
+    expect(classifyBridgeStderrLevel("[debug] sdk message")).toBe("debug");
+  });
+
+  it("defaults to debug for unprefixed or lookalike lines", () => {
+    expect(classifyBridgeStderrLevel("plain stderr from a dependency")).toBe("debug");
+    expect(classifyBridgeStderrLevel("")).toBe("debug");
+    // Prefix must be at the start and followed by whitespace — no substring match.
+    expect(classifyBridgeStderrLevel("emitted [warn] mid-line")).toBe("debug");
+    expect(classifyBridgeStderrLevel("[warning] not our formatter")).toBe("debug");
+  });
+
+  it("tolerates leading whitespace from wrapped output", () => {
+    expect(classifyBridgeStderrLevel("   [error] indented")).toBe("error");
   });
 });
