@@ -486,8 +486,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   const routeFacts = getModelProviderRequestRouteFacts(effectiveModel);
   const fallbackEndpointClass = routeFacts
     ? undefined
-    : resolveProviderEndpoint(effectiveModel.baseUrl, pluginMetadataSnapshot?.owners)
-        .endpointClass;
+    : resolveProviderEndpoint(effectiveModel.baseUrl, pluginMetadataSnapshot?.owners).endpointClass;
   const providerOwner =
     routeFacts?.providerOwner ??
     (fallbackEndpointClass &&
