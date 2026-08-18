@@ -507,9 +507,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         : nothing}
       <openclaw-app-topbar
         .basePath=${context.basePath}
-        .searchDisabled=${false}
         .navDrawerOpen=${navDrawerOpen}
-        .onboarding=${onboarding}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>

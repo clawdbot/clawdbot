@@ -6,6 +6,7 @@ import { TerminalSessionManager } from "./session-manager.js";
 import {
   agentTerminalOwner,
   baseOpenRequest as baseRequest,
+  expectTerminalOpen,
   type FakeTerminalPty,
   makeFakePty,
 } from "./session-manager.test-helpers.js";
@@ -612,16 +613,54 @@ describe("TerminalSessionManager", () => {
 describe("TerminalSessionManager agent ownership", () => {
   const agentOwner = agentTerminalOwner("agent:main:main");
 
+  it.each([
+    ["none", "close", false],
+    ["none", "disconnect", false],
+    ["resize", "close", true],
+    ["resize", "disconnect", true],
+    ["agent read", "close", true],
+    ["attach", "close", true],
+  ] as const)(
+    "%s adoption then %s leaves the UI-created shared terminal alive=%s",
+    async (adoption, removal, survives) => {
+      const fake = makeFakePty();
+      const manager = new TerminalSessionManager({
+        emit: vi.fn(),
+        spawn: async () => fake,
+        maxSessions: 1,
+      });
+      const outcome = expectTerminalOpen(
+        await manager.open(baseRequest({ owner: agentOwner, viewerConnId: "viewer-1" })),
+      );
+
+      expect(manager.close("stranger", outcome.sessionId)).toBe(false);
+      if (adoption === "resize") {
+        manager.resize("viewer-1", outcome.sessionId, 120, 40);
+      } else if (adoption === "agent read") {
+        manager.snapshotAgent(agentOwner.agentSessionKey, outcome.sessionId);
+      } else if (adoption === "attach") {
+        manager.attach("viewer-2", outcome.sessionId);
+      }
+      if (removal === "close") {
+        expect(manager.close("viewer-1", outcome.sessionId)).toBe(true);
+      } else {
+        manager.handleDisconnect("viewer-1");
+      }
+      expect([manager.size, fake.killed]).toEqual([survives ? 1 : 0, !survives]);
+      if (!survives && removal === "close") {
+        expect((await manager.open(baseRequest())).ok).toBe(true);
+      }
+      manager.disposeAll();
+    },
+  );
+
   it("continues live offsets after output buffered before the first viewer", async () => {
     vi.useFakeTimers();
     try {
       const emit = vi.fn();
       const fake = makeFakePty();
       const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
-      const outcome = await manager.open(baseRequest({ owner: agentOwner }));
-      if (!outcome.ok) {
-        throw new Error("expected open");
-      }
+      const outcome = expectTerminalOpen(await manager.open(baseRequest({ owner: agentOwner })));
 
       fake.emitData("before");
       await vi.advanceTimersByTimeAsync(4);
@@ -646,10 +685,7 @@ describe("TerminalSessionManager agent ownership", () => {
       const emit = vi.fn();
       const fake = makeFakePty();
       const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
-      const outcome = await manager.open(baseRequest({ owner: agentOwner }));
-      if (!outcome.ok) {
-        throw new Error("expected open");
-      }
+      const outcome = expectTerminalOpen(await manager.open(baseRequest({ owner: agentOwner })));
 
       expect(manager.attach("viewer-1", outcome.sessionId)?.sessionId).toBe(outcome.sessionId);
       expect(manager.write("viewer-1", outcome.sessionId, "human\n")).toBe(true);
@@ -686,10 +722,9 @@ describe("TerminalSessionManager agent ownership", () => {
     const emit = vi.fn();
     const stageUpload = vi.fn(async () => ({ path: "/tmp/node/report.pdf", size: 4 }));
     const manager = new TerminalSessionManager({ emit, spawn: async () => makeFakePty() });
-    const outcome = await manager.open(baseRequest({ owner: agentOwner, stageUpload }));
-    if (!outcome.ok) {
-      throw new Error("expected open");
-    }
+    const outcome = expectTerminalOpen(
+      await manager.open(baseRequest({ owner: agentOwner, stageUpload })),
+    );
     const file = { name: "report.pdf", contentBase64: "dGVzdA==" };
 
     // A connection that never attached as a viewer cannot upload.
@@ -710,10 +745,7 @@ describe("TerminalSessionManager agent ownership", () => {
       const emit = vi.fn();
       const fake = makeFakePty();
       const manager = new TerminalSessionManager({ emit, spawn: async () => fake });
-      const outcome = await manager.open(baseRequest({ owner: agentOwner }));
-      if (!outcome.ok) {
-        throw new Error("expected open");
-      }
+      const outcome = expectTerminalOpen(await manager.open(baseRequest({ owner: agentOwner })));
 
       expect(manager.attach("viewer-1", outcome.sessionId)).toBeDefined();
       expect(manager.attach("viewer-2", outcome.sessionId)).toBeDefined();
@@ -753,13 +785,9 @@ describe("TerminalSessionManager agent ownership", () => {
           owner: "agent:agent:main:main",
         }),
       ]);
-      expect(manager.close("stranger", outcome.sessionId, { terminateAgentOwned: true })).toBe(
-        false,
-      );
+      expect(manager.close("stranger", outcome.sessionId)).toBe(false);
       expect(manager.attach("viewer-2", outcome.sessionId)).toBeDefined();
-      expect(manager.close("viewer-2", outcome.sessionId, { terminateAgentOwned: true })).toBe(
-        true,
-      );
+      expect(manager.closeAgent(agentOwner.agentSessionKey, outcome.sessionId)).toBe(true);
       expect(manager.size).toBe(0);
       expect(fake.killed).toBe(true);
     } finally {
@@ -784,10 +812,7 @@ describe("TerminalSessionManager agent ownership", () => {
       });
 
       try {
-        const outcome = await manager.open(baseRequest({ owner: agentOwner }));
-        if (!outcome.ok) {
-          throw new Error("expected open");
-        }
+        const outcome = expectTerminalOpen(await manager.open(baseRequest({ owner: agentOwner })));
         manager.attach("viewer-slow", outcome.sessionId);
         manager.attach("viewer-healthy", outcome.sessionId);
 
@@ -836,10 +861,7 @@ describe("TerminalSessionManager agent ownership", () => {
     });
 
     try {
-      const outcome = await manager.open(baseRequest({ owner: agentOwner }));
-      if (!outcome.ok) {
-        throw new Error("expected open");
-      }
+      const outcome = expectTerminalOpen(await manager.open(baseRequest({ owner: agentOwner })));
       manager.attach("viewer-slow", outcome.sessionId);
       manager.attach("viewer-healthy", outcome.sessionId);
 
@@ -864,10 +886,7 @@ describe("TerminalSessionManager agent ownership", () => {
       getBufferedAmount: () => Number.MAX_SAFE_INTEGER,
       spawn: async () => fake,
     });
-    const outcome = await manager.open(baseRequest({ owner: agentOwner }));
-    if (!outcome.ok) {
-      throw new Error("expected open");
-    }
+    const outcome = expectTerminalOpen(await manager.open(baseRequest({ owner: agentOwner })));
     manager.attach("viewer-1", outcome.sessionId);
 
     fake.emitData("pressure");

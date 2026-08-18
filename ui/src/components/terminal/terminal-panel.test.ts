@@ -382,7 +382,7 @@ describe("OpenClawTerminalPanel", () => {
     expect(requests.some(({ method }) => method === "terminal.input")).toBe(false);
   });
 
-  it("terminates a session-scoped terminal cancelled after its open response", async () => {
+  it("closes a session-scoped terminal cancelled after its open response", async () => {
     const { open, panel, requests } = await startPanelWithPendingOpen("agent:main:chat");
     await panel.updateComplete;
     panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
@@ -392,7 +392,7 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.close",
-        params: { sessionId: "session-1", terminate: true },
+        params: { sessionId: "session-1" },
       });
     });
   });

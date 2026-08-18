@@ -541,7 +541,7 @@ export class TerminalPanelSessionController
         // The tab's close button was clicked while the open RPC was in flight.
         // The server session is live and its sink registered; close it now or
         // it survives invisibly (eating the session cap) until disconnect.
-        void boot.connection.close(result.sessionId, { terminate: true });
+        void boot.connection.close(result.sessionId);
         if (this.tabs.includes(boot.tab)) {
           boot.tab.cancelled = "lifecycle";
           this.dropFailedTab(boot.tab);

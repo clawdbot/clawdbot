@@ -194,7 +194,7 @@ describe("TerminalConnection", () => {
     },
   );
 
-  it("terminates a session-scoped open when its response is unusable", async () => {
+  it("closes a session-scoped open when its response is unusable", async () => {
     const { client, conn } = makeHarness();
     const { shell: _dropped, ...incomplete } = sessionResult();
     client.nextResponse = incomplete;
@@ -205,7 +205,7 @@ describe("TerminalConnection", () => {
 
     expect(client.requests.at(-1)).toMatchObject({
       method: "terminal.close",
-      params: { sessionId: "s1", terminate: true },
+      params: { sessionId: "s1" },
     });
   });
 
@@ -559,8 +559,6 @@ describe("TerminalConnection", () => {
       "terminal.close",
     ]);
     expect(client.requests.at(-1)?.params).toEqual({ sessionId: "s1" });
-    await conn.close("s2", { terminate: true });
-    expect(client.requests.at(-1)?.params).toEqual({ sessionId: "s2", terminate: true });
   });
 
   it.each([

@@ -259,6 +259,9 @@ export class TerminalSessionManager {
       id: sessionId,
       owner: request.owner,
       viewers: request.viewerConnId ? new Set([request.viewerConnId]) : new Set(),
+      ...(request.owner.kind === "agent" && request.viewerConnId
+        ? { unadoptedViewerConnId: request.viewerConnId }
+        : {}),
       agentId: request.agentId,
       cwd: request.cwd,
       shell: request.shell,
@@ -405,7 +408,7 @@ export class TerminalSessionManager {
   }
 
   /** Closes one session on operator request. */
-  close(connId: string, sessionId: string, options?: { terminateAgentOwned?: boolean }): boolean {
+  close(connId: string, sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return false;
@@ -414,14 +417,13 @@ export class TerminalSessionManager {
       if (!session.viewers.has(connId)) {
         return false;
       }
-      // Closing an agent-owned browser tab normally detaches only that view.
-      // Termination is reserved for discarding a fresh shared PTY that this
-      // initiating viewer could not adopt after the open response.
-      if (!options?.terminateAgentOwned) {
-        return this.removeViewer(session, connId);
+      // Only the initiating viewer can discard a fresh UI-created shared PTY.
+      // Any authorized interaction clears this one-shot cancellation window.
+      if (session.unadoptedViewerConnId === connId) {
+        this.finalize(session, "closed", {});
+        return true;
       }
-      this.finalize(session, "closed", {});
-      return true;
+      return this.removeViewer(session, connId);
     }
     if (session.owner?.kind !== "conn" || session.owner.connId !== connId || session.closed) {
       return false;
@@ -484,6 +486,7 @@ export class TerminalSessionManager {
       return undefined;
     }
     if (session.owner?.kind === "agent") {
+      this.markSharedSessionAdopted(session);
       // Emit pending bytes to existing viewers before the new viewer's replay
       // snapshot. This prevents the newcomer from receiving those bytes twice.
       session.output.prepareViewerAttach();
@@ -655,6 +658,10 @@ export class TerminalSessionManager {
         continue;
       }
       if (session.owner?.kind === "agent") {
+        if (session.unadoptedViewerConnId === connId) {
+          this.finalize(session, "disconnected", {}, { silent: true });
+          continue;
+        }
         this.removeViewer(session, connId);
         continue;
       }
@@ -803,7 +810,11 @@ export class TerminalSessionManager {
     if (session.owner?.kind === "conn") {
       return session.owner.connId === connId ? session : undefined;
     }
-    return session.owner?.kind === "agent" && session.viewers.has(connId) ? session : undefined;
+    if (session.owner?.kind !== "agent" || !session.viewers.has(connId)) {
+      return undefined;
+    }
+    this.markSharedSessionAdopted(session);
+    return session;
   }
 
   /** Agents may operate only PTYs created by their exact trusted session key. */
@@ -820,7 +831,12 @@ export class TerminalSessionManager {
     ) {
       return undefined;
     }
+    this.markSharedSessionAdopted(session);
     return session;
+  }
+
+  private markSharedSessionAdopted(session: TerminalSession): void {
+    delete session.unadoptedViewerConnId;
   }
 
   private sessionConnIds(session: TerminalSession): string[] {

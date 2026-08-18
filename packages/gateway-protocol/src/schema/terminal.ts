@@ -76,11 +76,7 @@ export const TerminalResizeParamsSchema = closedObject({
 export type TerminalResizeParams = Static<typeof TerminalResizeParamsSchema>;
 
 /** Closes a connection-owned session or detaches from an agent-owned session. */
-export const TerminalCloseParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-  // Cleanup for a newly opened shared session that its initiating viewer never adopted.
-  terminate: Type.Optional(Type.Boolean()),
-});
+export const TerminalCloseParamsSchema = closedObject({ sessionId: NonEmptyString });
 export type TerminalCloseParams = Static<typeof TerminalCloseParamsSchema>;
 
 /**

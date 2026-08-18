@@ -28,6 +28,8 @@ export type TerminalSession = {
   owner: TerminalOwner | null;
   /** Operator connections co-attached to an agent-owned session. */
   viewers: Set<string>;
+  /** Initial UI viewer may discard this shared PTY until either side adopts it. */
+  unadoptedViewerConnId?: string;
   agentId: string;
   cwd: string;
   shell: string;

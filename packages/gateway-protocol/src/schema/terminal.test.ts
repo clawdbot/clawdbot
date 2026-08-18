@@ -62,7 +62,8 @@ describe("terminal protocol", () => {
     ).toBe(false);
   });
 
-  it("accepts an explicit close termination request", () => {
-    expect(validateTerminalCloseParams({ sessionId: "terminal-1", terminate: true })).toBe(true);
+  it("rejects extra terminal close fields", () => {
+    expect(validateTerminalCloseParams({ sessionId: "terminal-1" })).toBe(true);
+    expect(validateTerminalCloseParams({ sessionId: "terminal-1", terminate: true })).toBe(false);
   });
 });
