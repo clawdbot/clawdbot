@@ -1051,7 +1051,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Never restart the Gateway through shell commands or write your own config.",
     );
-    expect(prompt).toContain("`visible:true` only web/app user or asked.");
+    expect(prompt).toContain("`visible:true` for work the user follows or asked for; else hidden.");
   });
 
   it("omits openclaw delegation guidance without the tool", () => {
@@ -1380,15 +1380,36 @@ describe("buildAgentSystemPrompt", () => {
       subagentDelegationMode: "prefer",
     });
 
-    expect(defaultPrompt).not.toContain("## Sub-Agent Delegation");
-    expect(preferPrompt).toContain("## Sub-Agent Delegation");
-    expect(preferPrompt).toContain("Mode: prefer");
-    expect(preferPrompt).toContain("You coordinate; children do non-trivial work");
-    expect(preferPrompt).toContain("Otherwise use `sessions_spawn`");
-    expect(preferPrompt).toContain("objective, output, inputs/files");
-    expect(preferPrompt).toContain("lowercase `taskName` (underscores/hyphens)");
-    expect(preferPrompt).toContain("Child output = evidence");
+    expect(defaultPrompt).not.toContain("## Delegation");
+    expect(preferPrompt).toContain("## Delegation");
+    expect(preferPrompt).toContain("Stay responsive: incoming messages wait on your current turn");
+    expect(preferPrompt).toContain("Multi-step or slow work");
+    expect(preferPrompt).toContain("objective, output, write scope, verification");
+    expect(preferPrompt).toContain("spawn `visible=true`");
+    expect(preferPrompt).toContain("Child output is evidence");
     expect(preferPrompt).toContain("`subagents(action=list)` only for requested status");
+    expect(preferPrompt).not.toContain("- Subagents: `sessions_spawn`");
+  });
+
+  it("keeps prefer delegation out of minimal prompts and conditions follow-up guidance", () => {
+    const buildPreferPrompt = (toolNames: string[], promptMode?: "minimal") =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames,
+        promptMode,
+        subagentDelegationMode: "prefer",
+      });
+
+    const withSend = buildPreferPrompt(["sessions_spawn", "sessions_send"]);
+    const withoutSend = buildPreferPrompt(["sessions_spawn"]);
+    const minimal = buildPreferPrompt(["sessions_spawn", "sessions_send"], "minimal");
+
+    expect(withSend).toContain(
+      "later turns in a kept session do not report back; follow up via `sessions_send`.",
+    );
+    expect(withoutSend).toContain("later turns in a kept session do not report back.");
+    expect(withoutSend).not.toContain("follow up via `sessions_send`");
+    expect(minimal).not.toContain("## Delegation");
   });
 
   it("adds run-scoped Ultra orchestration only when sessions_spawn is callable", () => {
@@ -1441,7 +1462,7 @@ describe("buildAgentSystemPrompt", () => {
       subagentDelegationMode: "prefer",
     });
 
-    expect(prompt).not.toContain("## Sub-Agent Delegation");
+    expect(prompt).not.toContain("## Delegation");
     expect(prompt).toContain("- Subagents:");
   });
 
