@@ -169,6 +169,20 @@ describe("model fallback candidate facts", () => {
       }
     });
 
+    it("keeps a model-configured CLI runtime runnable and exempt from provider cooldown", () => {
+      // The runner reaches its CLI-runtime branch and lets the route bypass
+      // stale provider cooldowns. If the gate stopped short of that branch, an
+      // open primary could not be skipped for a healthy configured CLI
+      // fallback and would be probed again.
+      const readiness = resolveCandidateTransportReadiness({
+        cfg,
+        candidate: FALLBACK,
+        resolveAgentHarnessRuntimeOverride: () => CLI_BACKEND_PROVIDER,
+      });
+      expect(readiness.reachesTransportWithoutPreflight).toBe(true);
+      expect(readiness.skipsProviderAuthCooldown).toBe(true);
+    });
+
     it("keeps a direct CLI route runnable and exempt from provider cooldown", () => {
       // The runner deliberately lets CLI routes bypass stale provider auth
       // cooldowns because they own their own auth. If the gate disagreed, an

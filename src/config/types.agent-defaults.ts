@@ -7,7 +7,6 @@ import type {
   AgentToolModelConfig,
   AgentRuntimePolicyConfig,
   AgentSandboxConfig,
-  ModelCircuitBreakerConfig,
 } from "./types.agents-shared.js";
 import type {
   BlockStreamingChunkConfig,
@@ -63,8 +62,6 @@ export type AgentModelListConfig = {
   primary?: string;
   /** Ordered provider/model fallback refs. */
   fallbacks?: string[];
-  /** Opt-in route circuit breaker for this fallback chain. */
-  circuitBreaker?: ModelCircuitBreakerConfig;
 };
 
 export type AgentContextPruningConfig = {

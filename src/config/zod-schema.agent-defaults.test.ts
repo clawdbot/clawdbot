@@ -545,4 +545,34 @@ describe("agent defaults schema", () => {
       "tools.swarm",
     );
   });
+
+  // The route circuit is process-global, so its switch is honored only on
+  // agents.defaults.model. Accepting it on any other model chain would parse
+  // cleanly and then do nothing, which is worse than a config error.
+  it("accepts the route circuit breaker only on agents.defaults.model", () => {
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
+        model: { primary: "openai/gpt-5.5", circuitBreaker: { enabled: true } },
+      }),
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        subagents: { model: { primary: "openai/gpt-5.5", circuitBreaker: { enabled: true } } },
+      }),
+      "subagents.model",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        model: { primary: "openai/gpt-5.5", circuitBreaker: { enabled: true } },
+      }),
+      "model",
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        model: { primary: "openai/gpt-5.5", circuitBreaker: { unknownKey: true } },
+      }),
+      "model",
+    );
+  });
 });

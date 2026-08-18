@@ -7,7 +7,7 @@ import type {
 } from "./types.sandbox.js";
 
 /** Opt-in route circuit breaker for a model fallback chain. */
-export type ModelCircuitBreakerConfig = {
+type ModelCircuitBreakerConfig = {
   /**
    * Bypass a route that keeps failing with transient provider errors, but
    * only while another configured route can still reach transport. Off by

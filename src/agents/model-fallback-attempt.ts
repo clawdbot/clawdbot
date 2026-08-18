@@ -436,6 +436,13 @@ export function resolveCandidatePreTransportReadiness(
   ) {
     return reaches(false);
   }
+  // A model-configured CLI runtime owns its transport and auth, so stale
+  // provider profile state must not block it. It only needs the harness
+  // prepared when a harness is actually registered for that id, and both of
+  // those lookups are read-only.
+  if (!getRegisteredAgentHarness(runtime) && isCliAgentRuntime(runtime, params.cfg)) {
+    return reaches(true);
+  }
   // Anything past here needs the harness prepared before its readiness is known.
   return { reachesTransportWithoutPreflight: false, skipsProviderAuthCooldown: false };
 }
