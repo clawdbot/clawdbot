@@ -1,3 +1,4 @@
+import { emitAgentAuditEvent } from "../../../infra/agent-events.js";
 /**
  * Projects stream state into the stable embedded-attempt result contract.
  */
@@ -9,6 +10,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { buildRuntimeSkillSelectionMarker } from "../../../skills/runtime-skill-selection.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
@@ -380,6 +382,23 @@ export function completeEmbeddedAttemptResult(
   const heartbeatToolResponse = getHeartbeatToolResponse();
   const messagingToolSourceReplyPayloads = getMessagingToolSourceReplyPayloads();
   const hasToolMediaBlockReplyNow = hasToolMediaBlockReply();
+  const skillSelection = buildRuntimeSkillSelectionMarker({
+    agentId: attempt.agentId,
+    sessionKey: attempt.sessionKey,
+    sessionId: attempt.sessionId,
+    runId: attempt.runId,
+    prompt: attempt.prompt,
+    systemPromptReport: state.systemPromptReport,
+    skillsPrompt: attempt.skillsSnapshot?.prompt,
+  });
+  emitAgentAuditEvent({
+    runId: attempt.runId,
+    stream: "skill_selection",
+    agentId: attempt.agentId,
+    sessionKey: attempt.sessionKey,
+    sessionId: attempt.sessionId,
+    data: skillSelection,
+  });
   const hasTerminalOutput = hasAttemptTerminalState({
     clientToolCalls,
     yieldDetected: state.yieldDetected,

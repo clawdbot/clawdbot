@@ -3,7 +3,7 @@ import type { ExecutionIdentityAdmissionToken } from "./execution-identity-admis
 
 export const AUDIT_EVENT_SCHEMA_VERSION = 1 as const;
 
-type AuditEventKind = "agent_run" | "tool_action" | "message";
+type AuditEventKind = "agent_run" | "tool_action" | "skill_selection" | "message";
 
 type AuditEventStatus =
   | "started"
@@ -12,6 +12,9 @@ type AuditEventStatus =
   | "cancelled"
   | "timed_out"
   | "blocked"
+  | "deterministic"
+  | "heuristic"
+  | "none"
   | "unknown";
 
 type AuditMessageDirection = "inbound" | "outbound";
@@ -105,6 +108,26 @@ export type ToolActionAuditEventInput = AuditEventInputBase &
     kind: "tool_action";
     toolCallId?: string;
     toolName: string;
+  };
+
+type SkillSelectionAuditLifecycle =
+  | {
+      action: "skill.selection.explicit_trigger" | "skill.selection.natural_prompt";
+      status: "deterministic" | "heuristic";
+      errorCode?: never;
+    }
+  | {
+      action: "overlay.selection.explicit_trigger" | "overlay.selection.natural_prompt";
+      status: "deterministic" | "heuristic";
+      errorCode?: never;
+    }
+  | { action: "skill.selection.none"; status: "none"; errorCode?: never };
+
+export type SkillSelectionAuditEventInput = AuditEventInputBase &
+  AgentAuditAttribution &
+  SkillSelectionAuditLifecycle & {
+    kind: "skill_selection";
+    toolName?: string;
   };
 
 type MessageAuditEventInputBase = {
@@ -245,6 +268,7 @@ export type MessageAuditEventInput = InboundMessageAuditEventInput | OutboundMes
 export type AuditEventInput =
   | AgentRunAuditEventInput
   | ToolActionAuditEventInput
+  | SkillSelectionAuditEventInput
   | MessageAuditEventInput;
 
 export function isOutboundMessageProgressInput(
@@ -299,6 +323,10 @@ export type ToolActionAuditEventRecord = AgentAuditEventRecordBase & {
   kind: "tool_action";
 } & ToolActionAuditLifecycle;
 
+export type SkillSelectionAuditEventRecord = AgentAuditEventRecordBase & {
+  kind: "skill_selection";
+} & SkillSelectionAuditLifecycle;
+
 type MessageAuditEventRecordBase = AuditEventRecordBase & {
   kind: "message";
   actorId: string;
@@ -335,6 +363,7 @@ export type OutboundMessageAuditEventRecord = MessageAuditEventRecordBase &
 export type AuditEventRecord =
   | AgentRunAuditEventRecord
   | ToolActionAuditEventRecord
+  | SkillSelectionAuditEventRecord
   | InboundMessageAuditEventRecord
   | OutboundMessageAuditEventRecord;
 

@@ -19,6 +19,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   AuditEventInput,
   AgentRunFinishedAuditTerminal,
+  SkillSelectionAuditEventInput,
   ToolActionAuditEventInput,
 } from "./audit-event-types.js";
 import { createAuditEventWriter, type AuditEventWriter } from "./audit-event-writer.js";
@@ -62,6 +63,21 @@ function legacyAuditSourceId(params: {
   // Preserve the original store-owned identity byte-for-byte so replayed
   // run/tool events still deduplicate after the versioned contract refactor.
   return `${params.runId}:${params.sourceSequence}:${params.occurredAt}:${params.action}`;
+}
+
+function auditSkillSelectionName(value: unknown): string | undefined {
+  const name = nonEmptyString(value)?.trim();
+  return name && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name) ? name : undefined;
+}
+
+function auditSkillSelectionSource(value: unknown): "explicit_trigger" | "natural_prompt" | "none" {
+  const label = normalizeOptionalLowercaseString(value)?.replace(/[^a-z0-9_-]/gu, "");
+  return label === "explicit_trigger" || label === "natural_prompt" ? label : "none";
+}
+
+function auditSkillSelectionConfidence(value: unknown): "deterministic" | "heuristic" | "none" {
+  const label = normalizeOptionalLowercaseString(value)?.replace(/[^a-z0-9_-]/gu, "");
+  return label === "deterministic" || label === "heuristic" ? label : "none";
 }
 
 // Audit is projection-only: session/run correlation cannot establish identity.
@@ -108,11 +124,84 @@ type AgentAuditProjection = {
 
 function projectAgentEvent(event: AgentEventPayload): AgentAuditProjection | undefined {
   const runId = nonEmptyString(event.runId);
-  const phase = nonEmptyString(event.data.phase);
-  if (!runId || !phase) {
+  if (!runId) {
     return undefined;
   }
   const provenance = projectExplicitAttribution(event);
+  if (event.stream === "skill_selection" && event.data?.kind === "skill_selection") {
+    const selectedSkill = auditSkillSelectionName(event.data.selectedSkill);
+    const selectedOverlay = auditSkillSelectionName(event.data.selectedOverlay);
+    const selectedName = selectedSkill ?? selectedOverlay;
+    const selectionSource = selectedName
+      ? auditSkillSelectionSource(event.data.selectionSource) === "explicit_trigger"
+        ? "explicit_trigger"
+        : "natural_prompt"
+      : "none";
+    const selectionConfidence = auditSkillSelectionConfidence(event.data.selectionConfidence);
+    const action: SkillSelectionAuditEventInput["action"] = selectedSkill
+      ? selectionSource === "explicit_trigger"
+        ? "skill.selection.explicit_trigger"
+        : "skill.selection.natural_prompt"
+      : selectedOverlay
+        ? selectionSource === "explicit_trigger"
+          ? "overlay.selection.explicit_trigger"
+          : "overlay.selection.natural_prompt"
+        : "skill.selection.none";
+    const common = {
+      sourceId: legacyAuditSourceId({
+        runId,
+        sourceSequence: event.seq,
+        occurredAt: event.ts,
+        action,
+      }),
+      sourceSequence: event.seq,
+      occurredAt: event.ts,
+      kind: "skill_selection" as const,
+      actorType: provenance.actorType,
+      actorId: provenance.agentId,
+      agentId: provenance.agentId,
+      ...(provenance.sessionKey ? { sessionKey: provenance.sessionKey } : {}),
+      ...(provenance.sessionId ? { sessionId: provenance.sessionId } : {}),
+      runId,
+    };
+    let input: SkillSelectionAuditEventInput;
+    if (selectedSkill) {
+      const skillAction =
+        selectionSource === "explicit_trigger"
+          ? "skill.selection.explicit_trigger"
+          : "skill.selection.natural_prompt";
+      input = {
+        ...common,
+        action: skillAction,
+        status: selectionConfidence === "none" ? "heuristic" : selectionConfidence,
+        toolName: selectedSkill,
+      };
+    } else if (selectedOverlay) {
+      const overlayAction =
+        selectionSource === "explicit_trigger"
+          ? "overlay.selection.explicit_trigger"
+          : "overlay.selection.natural_prompt";
+      input = {
+        ...common,
+        action: overlayAction,
+        status: selectionConfidence === "none" ? "heuristic" : selectionConfidence,
+        toolName: selectedOverlay,
+      };
+    } else {
+      input = {
+        ...common,
+        action: "skill.selection.none",
+        status: "none",
+      };
+    }
+    return {
+      input,
+    };
+  }
+  const phase = nonEmptyString(event.data.phase);
+  if (!phase) {
+    return undefined;
+  }
   if (event.stream === "lifecycle" && phase === "start") {
     const occurredAt = asDateTimestampMs(event.data.startedAt) ?? event.ts;
     const action = "agent.run.started" as const;

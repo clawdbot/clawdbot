@@ -63,6 +63,8 @@ type AuditCliEvent = {
   agentId?: string;
   runId?: string;
   toolName?: string;
+  selectedSkill?: string;
+  selectedOverlay?: string;
 };
 
 function parseAuditTimestamp(value: string | undefined, flag: string): number | undefined {
@@ -121,7 +123,7 @@ function short(value: string | undefined, maxChars: number): string {
 }
 
 function formatAuditRows(events: readonly AuditCliEvent[]): string[] {
-  const rows = ["TIME\tKIND\tDIRECTION\tCHANNEL\tSTATUS\tAGENT\tRUN\tACTION"];
+  const rows = ["TIME\tKIND\tDIRECTION\tCHANNEL\tSTATUS\tAGENT\tRUN\tACTION\tSELECTED"];
   for (const event of events) {
     rows.push(
       [
@@ -133,6 +135,11 @@ function formatAuditRows(events: readonly AuditCliEvent[]): string[] {
         short(event.agentId, 18),
         short(event.runId, 18),
         event.toolName ? `${event.action}:${short(event.toolName, 28)}` : event.action,
+        event.selectedSkill
+          ? `skill:${short(event.selectedSkill, 28)}`
+          : event.selectedOverlay
+            ? `overlay:${short(event.selectedOverlay, 28)}`
+            : "-",
       ].join("\t"),
     );
   }
