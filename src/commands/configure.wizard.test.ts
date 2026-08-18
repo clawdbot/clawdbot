@@ -388,6 +388,7 @@ describe("runConfigureWizard", () => {
     });
     vi.mocked(maybeInstallDaemon).mockImplementationOnce(async () => {
       events.push("daemon");
+      return "succeeded";
     });
 
     await runConfigureWizard(
