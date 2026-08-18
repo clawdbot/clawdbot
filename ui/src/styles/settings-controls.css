@@ -107,8 +107,8 @@ select.settings-select:not([multiple]) {
   font-size: var(--control-ui-input-text-size);
 }
 
-/* Native controls own their box. Web Awesome selects are styled by the full
-   settings workspace stylesheet. */
+/* Native controls own their box. Web Awesome selects are styled by their
+   component-owned stylesheet. */
 .settings-input,
 select.settings-select {
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
