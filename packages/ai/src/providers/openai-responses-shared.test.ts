@@ -375,6 +375,23 @@ describe("Responses reasoning effort", () => {
     expect(params.reasoning).toMatchObject({ effort: "high", summary: "auto" });
   });
 
+  it("preserves map-only canonical effort mappings in Responses payloads", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      provider: "custom-openai-compatible",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: {
+        supportsReasoningEffort: true,
+        reasoningEffortMap: { high: "xhigh" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "high" });
+
+    expect(params.reasoning).toMatchObject({ effort: "xhigh", summary: "auto" });
+  });
+
   it("falls back when a compat mapping is not listed as supported", () => {
     const params = {} as ResponseCreateParamsStreaming;
     const compatModel = {

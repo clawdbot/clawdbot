@@ -187,6 +187,24 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   // Fallback maps emit provider-native payload labels; keep their case for exact compat lists.
   const normalized = mapped === undefined ? requested : mapped.trim();
   const supported = resolveOpenAISupportedReasoningEfforts(params.model);
+  const compat = params.model.compat;
+  const hasDisabledReasoningEffort =
+    compat !== null &&
+    typeof compat === "object" &&
+    (compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false;
+  const hasExplicitSupportedEfforts =
+    compat !== null &&
+    typeof compat === "object" &&
+    Array.isArray((compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts);
+  if (
+    mapped !== undefined &&
+    normalized.length > 0 &&
+    !hasDisabledReasoningEffort &&
+    !hasExplicitSupportedEfforts &&
+    !isDisabledReasoningEffort(normalized)
+  ) {
+    return normalized as OpenAIApiReasoningEffort;
+  }
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
     return normalized as OpenAIApiReasoningEffort;
   }

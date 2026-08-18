@@ -101,6 +101,26 @@ describe("OpenAI reasoning effort support", () => {
     ).toBe("none");
   });
 
+  it("preserves map-only provider-native values mapped from canonical efforts", () => {
+    const model = {
+      provider: "example",
+      id: "custom-reasoning",
+      compat: {
+        reasoningEffortMap: {
+          high: "xhigh",
+        },
+      },
+    };
+
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "high",
+        fallbackMap: model.compat.reasoningEffortMap,
+      }),
+    ).toBe("xhigh");
+  });
+
   it("preserves provider-native compat values mapped from canonical efforts", () => {
     const model = {
       provider: "example",
@@ -213,6 +233,25 @@ describe("OpenAI reasoning effort support", () => {
 
     expect(resolveOpenAISupportedReasoningEfforts(model)).toEqual([]);
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBeUndefined();
+  });
+
+  it("does not let map-only compat bypass disabled reasoning effort payloads", () => {
+    const model = {
+      provider: "xai",
+      id: "grok-4.20-0309-reasoning",
+      compat: {
+        supportsReasoningEffort: false,
+        reasoningEffortMap: { high: "xhigh" },
+      },
+    };
+
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "high",
+        fallbackMap: model.compat.reasoningEffortMap,
+      }),
+    ).toBeUndefined();
   });
 
   it("passes disabled reasoning when xAI compat explicitly supports none", () => {
