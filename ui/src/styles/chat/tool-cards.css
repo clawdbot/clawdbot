@@ -1160,11 +1160,11 @@
   flex-direction: column;
   gap: 0;
   max-height: min(420px, 58vh);
-  margin: 6px 0 0;
+  margin: 0;
   padding-left: 0;
   border-left: 0;
   overflow-y: auto;
-  mask-image: linear-gradient(to bottom, transparent 0, var(--text) 0, var(--text) 100%, transparent 100%);
+  mask-image: none;
 }
 
 .chat-activity-group__body.has-scroll-bottom:not(.has-scroll-top) {
