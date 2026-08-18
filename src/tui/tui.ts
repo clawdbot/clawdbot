@@ -1746,15 +1746,10 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     const connectedGeneration = ++connectionGeneration;
-    const ownsConnection = () =>
-      connectedGeneration === connectionGeneration && state.isConnected && !exitRequested;
-    state.isConnected = true;
+    const ownsConnection = () => connectedGeneration === connectionGeneration && !exitRequested;
+    state.isConnected = false;
     remediationShown = false;
-    const reconnected = connectionLineage.connect();
-    if (reconnected) {
-      reconnectStreamingWatchdog();
-    }
-    setConnectionStatus(isLocalMode ? "local ready" : "connected");
+    setConnectionStatus("subscribing to session events");
     // A reconnect may already have restored a live run's busy status. Only
     // claim the status line when startup owns it, then release that exact state.
     if (!isTuiBusyActivityStatus(state.activityStatus)) {
@@ -1788,6 +1783,11 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       }
       if (!ownsConnection()) {
         return;
+      }
+      state.isConnected = true;
+      const reconnected = connectionLineage.connect();
+      if (reconnected) {
+        reconnectStreamingWatchdog();
       }
       await refreshAgents();
       if (!ownsConnection()) {

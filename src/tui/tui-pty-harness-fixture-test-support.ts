@@ -580,6 +580,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
 
         async getGatewayStatus() {
           record("getGatewayStatus");
+          this.reconnectSessionSubscription();
           this.emitDisconnect();
           return gatewayStatus;
         }
