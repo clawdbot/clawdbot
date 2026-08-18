@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "title": "OpenClaw release validation missions",
+  "subsystems": [
+    {
+      "id": "pairing",
+      "title": "Pairing",
+      "taxonomyIds": ["gateway.client-pairing", "channels.dm-pairing"],
+      "docs": ["docs/gateway/pairing.md", "docs/channels/pairing.md"],
+      "instructions": {
+        "clean": ["Connect a new client or sender and complete its pairing approval.", "Reconnect after approval and confirm it does not ask to pair again."],
+        "copied": ["Confirm an already-approved client or sender remains trusted after upgrade.", "Pair one new client or sender and confirm both old and new identities work." ]
+      },
+      "passEvidence": ["The approval is visible and the paired identity can reconnect and act."],
+      "safety": ["Use an identity you control; redact pairing codes from notes."]
+    },
+    {
+      "id": "channels",
+      "title": "Channels",
+      "taxonomyIds": ["channels.channel-setup", "channels.conversation-routing-and-delivery"],
+      "docs": ["docs/channels/index.md"],
+      "instructions": {
+        "clean": ["Choose the channel you know best and configure it from a clean state.", "Send a direct message and a threaded or group reply when the channel supports them."],
+        "copied": ["With the source gateway stopped, prove the inherited channel can receive and reply.", "Remove that channel configuration only from the copied fixture, configure it again, and repeat the round trip."]
+      },
+      "passEvidence": ["Inbound and outbound messages arrive once, in the expected conversation or thread."],
+      "safety": ["Only one gateway may own copied channel credentials at a time."]
+    },
+    {
+      "id": "control-ui",
+      "title": "Control UI",
+      "taxonomyIds": ["control-ui.webchat-conversations", "control-ui.operator-console"],
+      "docs": ["docs/web/control-ui.md"],
+      "instructions": {
+        "clean": ["Open the Control UI and start a real conversation asking the agent to explore a substantial codebase.", "Drive many tool calls, spawn subagents, cross a compaction boundary, reload, and continue."],
+        "copied": ["Open an existing conversation and verify its history before sending new work.", "Continue through tools, subagents, compaction, reload, and reconnect." ]
+      },
+      "passEvidence": ["The conversation remains responsive and continuous across tools, compaction, reload, and reconnect."],
+      "safety": ["Use a disposable workspace for write-capable exploration."]
+    },
+    {
+      "id": "tui",
+      "title": "TUI",
+      "taxonomyIds": ["tui.gateway-tui-launch", "tui.gateway-connection", "tui.session-lifecycle"],
+      "docs": ["docs/cli/tui.md"],
+      "instructions": {
+        "clean": ["Launch the TUI through OCM, send a message, use a picker or shortcut, and switch sessions."],
+        "copied": ["Launch the TUI and open existing history, then send a new message and reconnect." ]
+      },
+      "passEvidence": ["History, input, streaming, tool cards, shortcuts, and reconnect behave coherently."],
+      "safety": []
+    },
+    {
+      "id": "onboarding",
+      "title": "Onboarding",
+      "taxonomyIds": ["cli.onboarding-and-auth-setup", "cli.plugin-and-channel-setup"],
+      "docs": ["docs/start/getting-started.md"],
+      "instructions": {
+        "clean": ["Complete onboarding on the current host; use a VPS as a separate run when available.", "Restart through OCM and confirm the configured model and channel remain usable."],
+        "copied": ["Run the supported configuration flow without overwriting preserved settings.", "Reconfigure one intentionally removed surface and restart." ]
+      },
+      "passEvidence": ["A competent user can finish setup and reach a working conversation without manual file repair."],
+      "safety": ["Never point onboarding at the source gateway state directory."]
+    },
+    {
+      "id": "slash-commands",
+      "title": "Slash commands",
+      "taxonomyIds": ["tui.slash-commands", "channels.channel-actions-commands-and-approvals"],
+      "docs": [],
+      "instructions": {
+        "clean": ["Exercise status, session, model, and compaction commands from one supported client."],
+        "copied": ["Run the same commands in an existing conversation and confirm they target the upgraded gateway." ]
+      },
+      "passEvidence": ["Each command produces a visible result or a clear actionable error."],
+      "safety": []
+    },
+    {
+      "id": "memory",
+      "title": "Memory",
+      "taxonomyIds": ["session-memory.personal-memory-recall", "session-memory.memory-files-dreaming"],
+      "docs": ["docs/concepts/memory.md"],
+      "instructions": {
+        "clean": ["Teach the agent a unique canary fact, start a later session, and ask it to recall the fact."],
+        "copied": ["Recall one pre-upgrade memory, add a new canary, restart, and recall both." ]
+      },
+      "passEvidence": ["Pre-existing and newly written memory remain distinguishable and retrievable."],
+      "safety": ["Use invented canaries, not personal secrets."]
+    },
+    {
+      "id": "subagents",
+      "title": "Subagents",
+      "taxonomyIds": ["agent-runtime.subagent-turns-delivery", "agent-runtime.external-runtimes-and-subagents"],
+      "docs": [],
+      "instructions": {
+        "clean": ["Delegate at least two independent subtasks and wait for their results."],
+        "copied": ["Repeat delegation in an existing session and verify parent-child results survive reconnect." ]
+      },
+      "passEvidence": ["Children start, report progress, return results to the correct parent, and terminate cleanly."],
+      "safety": []
+    },
+    {
+      "id": "agents",
+      "title": "Agents (top-level)",
+      "taxonomyIds": ["agent-runtime.agent-turn-execution", "session-memory.session-routing"],
+      "docs": [],
+      "instructions": {
+        "clean": ["Create a second top-level agent, give it a distinct workspace, and start a session."],
+        "copied": ["Open an existing agent, create another one, and verify sessions remain attributed correctly." ]
+      },
+      "passEvidence": ["Agent identity, workspace, model, and sessions stay isolated and correctly routed."],
+      "safety": []
+    },
+    {
+      "id": "cron",
+      "title": "Cron",
+      "taxonomyIds": ["automation.agent-cron-tool-reminders", "automation.cron-jobs"],
+      "docs": ["docs/automation/cron-jobs.md"],
+      "instructions": {
+        "clean": ["Create a near-term one-shot job and a recurring job, then observe one delivery."],
+        "copied": ["Verify existing jobs are still listed, let one run, then create and remove a new job." ]
+      },
+      "passEvidence": ["Jobs persist, fire once at the intended time, record an outcome, and can be removed."],
+      "safety": ["Use a private destination and remove test jobs after proof."]
+    },
+    {
+      "id": "sessions",
+      "title": "Sessions",
+      "taxonomyIds": ["session-memory.transcript-persistence", "session-memory.cross-client-history-and-session-parity"],
+      "docs": ["docs/concepts/session.md"],
+      "instructions": {
+        "clean": ["Create sessions from two clients, list them, reopen one, restart the gateway, and continue."],
+        "copied": ["Open a pre-upgrade session, continue it, restart, and verify old plus new turns remain ordered." ]
+      },
+      "passEvidence": ["Session identity, transcript ordering, and continuation survive client and gateway restarts."],
+      "safety": []
+    },
+    {
+      "id": "context-engine",
+      "title": "Context Engine",
+      "taxonomyIds": ["session-memory.context-engine", "session-memory.core-prompts-and-context"],
+      "docs": [],
+      "instructions": {
+        "clean": ["Run a task that needs workspace instructions, skills, memory, and several tool results."],
+        "copied": ["Continue a context-heavy existing session and verify preserved instructions still govern behavior." ]
+      },
+      "passEvidence": ["Relevant context is present, bounded, ordered deterministically, and applied by the model."],
+      "safety": []
+    },
+    {
+      "id": "skill-workshop",
+      "title": "Skill Workshop",
+      "taxonomyIds": ["control-ui.skills-nodes", "plugins.lifecycle-skills"],
+      "docs": [],
+      "instructions": {
+        "clean": ["Create or install a small disposable skill, invoke it, edit it, and invoke the revision."],
+        "copied": ["Invoke one preserved skill, then create or revise a disposable skill and invoke it in a new session." ]
+      },
+      "passEvidence": ["The skill is visible, loads completely, changes take effect at the documented lifecycle boundary, and invocation succeeds."],
+      "safety": ["Do not publish the disposable skill."]
+    },
+    {
+      "id": "mcp",
+      "title": "MCP",
+      "taxonomyIds": ["plugins.tool-plugin-mcp-tools", "tools.mcp-direct-invoke"],
+      "docs": [],
+      "instructions": {
+        "clean": ["Configure one familiar MCP server, discover its tools, and complete a real tool call."],
+        "copied": ["Verify a preserved MCP server reconnects, then invoke one tool and inspect its result." ]
+      },
+      "passEvidence": ["Discovery, schemas, invocation, and returned content are correct and actionable."],
+      "safety": ["Prefer a read-only or disposable MCP target."]
+    },
+    {
+      "id": "models",
+      "title": "Models",
+      "taxonomyIds": ["agent-runtime.model-and-runtime-selection", "openai.model-and-auth"],
+      "docs": ["docs/concepts/models.md"],
+      "instructions": {
+        "clean": ["Configure a model, make a real turn, switch models, and make another turn."],
+        "copied": ["Verify the preserved default model works, switch models, restart, and confirm the intended selection." ]
+      },
+      "passEvidence": ["Catalog loading, auth, selection, persistence, and real responses work without hidden fallback."],
+      "safety": ["Record model identifiers but never credentials."]
+    },
+    {
+      "id": "approvals",
+      "title": "Approvals",
+      "taxonomyIds": ["gateway.approvals-and-remote-execution", "security.approval-policy-approval-denial"],
+      "docs": ["docs/tools/exec-approvals.md"],
+      "instructions": {
+        "clean": ["Trigger a harmless operation requiring approval, deny it once, then trigger and approve it."],
+        "copied": ["Verify preserved approval policy, then exercise both denial and approval paths." ]
+      },
+      "passEvidence": ["The request is visible, denial prevents execution, approval executes exactly once, and the agent receives the outcome."],
+      "safety": ["Use a reversible harmless command."]
+    },
+    {
+      "id": "compaction",
+      "title": "Compaction",
+      "taxonomyIds": ["session-memory.token-management", "session-memory.compaction-pruning-token-pressure"],
+      "docs": [],
+      "instructions": {
+        "clean": ["Build a long tool-heavy conversation, trigger compaction, and ask questions about early and recent facts."],
+        "copied": ["Continue a long existing conversation through compaction and verify continuity before and after restart." ]
+      },
+      "passEvidence": ["Compaction completes visibly, the conversation continues, and essential goals plus recent state survive."],
+      "safety": ["Use synthetic content rather than sensitive transcripts."]
+    },
+    {
+      "id": "codex-harness",
+      "title": "Codex harness",
+      "taxonomyIds": ["openai.native-codex-harness"],
+      "docs": [],
+      "instructions": {
+        "clean": ["Run a medium coding task through the Codex harness with tools, progress, and a final artifact."],
+        "copied": ["Resume or begin a Codex-harness task after upgrade and verify tools, thread identity, and compaction." ]
+      },
+      "passEvidence": ["The task completes with correct thread identity, tool results, progress, and a verifiable artifact."],
+      "safety": ["Use a disposable worktree."]
+    },
+    {
+      "id": "openclaw-harness",
+      "title": "OpenClaw harness",
+      "taxonomyIds": ["agent-runtime.external-runtimes-and-subagents", "session-memory.context-engine"],
+      "docs": [],
+      "instructions": {
+        "clean": ["Run the same medium coding-task shape through the OpenClaw harness, including tools, subagents, and compaction."],
+        "copied": ["Run or resume the task after upgrade and compare continuity, progress, and artifact quality with the Codex harness." ]
+      },
+      "passEvidence": ["The task completes without dead ends and produces a verifiable artifact with coherent progress and context."],
+      "safety": ["Use a disposable worktree."]
+    }
+  ]
+}
