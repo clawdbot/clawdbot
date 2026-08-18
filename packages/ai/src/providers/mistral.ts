@@ -14,6 +14,7 @@ import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
+  notifyProviderHttpResponse,
   notifyProviderStreamOpened,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
@@ -141,6 +142,17 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         throw new Error(`No API key for provider: ${model.provider}`);
       }
 
+      const boundedFetcher = createBoundedMistralFetcher(
+        MISTRAL_STREAM_BODY_MAX_BYTES,
+        getAiTransportHost().buildModelFetch(model) ?? fetch,
+      );
+      let mistralResponse: Response | undefined;
+      const responseCapturingFetcher: Fetcher = async (input, init) => {
+        const response =
+          init == null ? await boundedFetcher(input) : await boundedFetcher(input, init);
+        mistralResponse = response;
+        return response;
+      };
       // Intentionally per-request: avoids shared SDK mutable state across concurrent consumers.
       const mistral = new Mistral({
         apiKey,
@@ -153,12 +165,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         // every `chat.stream` / `complete` call routes through
         // `HTTPClient.request` → `this.fetcher(req)`).
         // Mistral accepts HTTPClient.fetcher, so compose guarded egress with the byte cap.
-        httpClient: new HTTPClient({
-          fetcher: createBoundedMistralFetcher(
-            MISTRAL_STREAM_BODY_MAX_BYTES,
-            getAiTransportHost().buildModelFetch(model) ?? fetch,
-          ),
-        }),
+        httpClient: new HTTPClient({ fetcher: responseCapturingFetcher }),
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
@@ -181,7 +188,11 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         headers,
         signal: options?.signal,
       });
-      await notifyProviderStreamOpened({ options, model });
+      if (mistralResponse) {
+        await notifyProviderHttpResponse({ options, response: mistralResponse, model });
+      } else {
+        await notifyProviderStreamOpened({ options, model });
+      }
       stream.push({ type: "start", partial: output });
       await consumeChatStream(model, output, stream, mistralStream);
 
