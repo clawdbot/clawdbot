@@ -224,6 +224,65 @@ export async function startGatewayStabilityRpcServer(
   return { authTokens, calls, url: `ws://${host}:${address.port}` };
 }
 
+/** Mock Gateway that answers one agent turn with the requested terminal status. */
+export async function startAgentTurnGateway(params: {
+  status: "ok" | "error";
+  text: string;
+}): Promise<{ url: string; token: string }> {
+  const token = "agent-turn-token";
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  activeServers.add(wss);
+  wss.on("connection", (ws) => {
+    sendMinimalGatewayConnectChallenge(ws);
+    ws.on("message", (data) => {
+      const frame = parseMinimalGatewayRequestFrame(data);
+      if (frame.type !== "req" || !frame.id) {
+        return;
+      }
+      if (frame.method === "connect") {
+        expect(frame.params?.auth?.token).toBe(token);
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({
+            methods: ["agent"],
+            auth: { role: "operator", scopes: ["operator.admin"] },
+          }),
+        );
+        return;
+      }
+      if (frame.method !== "agent") {
+        return;
+      }
+      const runId = "agent-turn-run";
+      sendMinimalGatewayResponse(ws, frame.id, {
+        runId,
+        status: "accepted",
+        sessionKey: "agent:main:main",
+      });
+      setImmediate(() => {
+        sendMinimalGatewayResponse(ws, frame.id!, {
+          runId,
+          status: params.status,
+          summary: params.status === "ok" ? "completed" : "failed",
+          result: {
+            payloads: [
+              {
+                text: params.text,
+                ...(params.status === "error" ? { isError: true } : {}),
+              },
+            ],
+            meta: {},
+          },
+        });
+      });
+    });
+  });
+  await once(wss, "listening");
+  const address = wss.address() as AddressInfo;
+  return { url: `ws://127.0.0.1:${address.port}`, token };
+}
+
 /** Closes every mock Gateway started by these helpers; call from the suite afterEach. */
 export async function closeActiveGatewayServers(): Promise<void> {
   await Promise.all(Array.from(activeServers, closeMinimalGatewayServer));
