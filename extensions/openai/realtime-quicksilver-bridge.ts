@@ -76,11 +76,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   private socket: OpenAIQuicksilverSocket | undefined;
   private readonly lifecycle: RealtimeVoiceSessionLifecycle;
-  private readonly inboundTelephonyResampler = createStreamingPcmResampler(
+  private inboundTelephonyResampler = createStreamingPcmResampler(
     8_000,
     OPENAI_QUICKSILVER_SAMPLE_RATE,
   );
-  private readonly outboundTelephonyResampler = createStreamingPcmResampler(
+  private outboundTelephonyResampler = createStreamingPcmResampler(
     OPENAI_QUICKSILVER_SAMPLE_RATE,
     8_000,
   );
@@ -445,6 +445,20 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     if (event.kind === "transcript-delta" || event.kind === "transcript-done") {
+      if (
+        event.kind === "transcript-done" &&
+        event.role === "assistant" &&
+        this.config.audioFormat?.encoding === "g711_ulaw"
+      ) {
+        const tail = pcmToMulaw(this.outboundTelephonyResampler.flush());
+        this.outboundTelephonyResampler = createStreamingPcmResampler(
+          OPENAI_QUICKSILVER_SAMPLE_RATE,
+          8_000,
+        );
+        if (tail.length > 0) {
+          this.config.onAudio(tail);
+        }
+      }
       this.config.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
       this.config.onEvent?.({
         direction: "server",
@@ -551,6 +565,14 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   private resetTerminalState(): void {
     this.activeDelegations.clear();
+    this.inboundTelephonyResampler = createStreamingPcmResampler(
+      8_000,
+      OPENAI_QUICKSILVER_SAMPLE_RATE,
+    );
+    this.outboundTelephonyResampler = createStreamingPcmResampler(
+      OPENAI_QUICKSILVER_SAMPLE_RATE,
+      8_000,
+    );
   }
 
   private closeSocket(reason: string, socket = this.socket): void {

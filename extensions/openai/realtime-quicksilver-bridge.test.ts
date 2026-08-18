@@ -460,7 +460,28 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       type: "output_audio.delta",
       audio: Buffer.alloc(960).toString("base64"),
     });
-    expect(harness.onAudio).toHaveBeenCalledWith(Buffer.alloc(155, 0xff));
+    harness.socket.serverEvent({
+      type: "turn.done",
+      turn: { role: "assistant", transcript: "first response" },
+    });
+    harness.socket.serverEvent({
+      type: "output_audio.delta",
+      audio: Buffer.alloc(960).toString("base64"),
+    });
+    harness.socket.serverEvent({
+      type: "turn.done",
+      turn: { role: "assistant", transcript: "second response" },
+    });
+
+    expect(harness.onAudio.mock.calls.map(([audio]) => audio)).toEqual([
+      Buffer.alloc(155, 0xff),
+      Buffer.alloc(5, 0xff),
+      Buffer.alloc(155, 0xff),
+      Buffer.alloc(5, 0xff),
+    ]);
+    expect(harness.onAudio.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      harness.onEvent.mock.invocationCallOrder.at(-1) ?? 0,
+    );
   });
 
   it("uses session context for forced consult results without a provider delegation", async () => {
