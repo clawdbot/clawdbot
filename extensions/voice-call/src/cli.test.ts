@@ -227,6 +227,39 @@ describe("voice-call CLI status fallback", () => {
     expect(loadActiveCallsFromStoreMock).not.toHaveBeenCalled();
   });
 
+  it("redacts credential-bearing gateway URLs from operational errors", async () => {
+    callGatewayFromCliMock.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "gateway closed (1008): policy wss://operator:hunter2secret@gw.example.ts.net:18789",
+        ),
+        {
+          name: "GatewayTransportError",
+          kind: "closed",
+          code: 1008,
+          connectionDetails: {
+            url: "wss://operator:hunter2secret@gw.example.ts.net:18789?token=tok123",
+          },
+        },
+      ),
+    );
+    const ensureRuntime = vi.fn();
+    const program = buildProgram({}, {}, ensureRuntime);
+
+    let thrown: unknown;
+    await program
+      .parseAsync(["voicecall", "status", "--json"], { from: "user" })
+      .catch((err: unknown) => {
+        thrown = err;
+      });
+
+    const text = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(text).toContain("Gateway connection at wss://***:***@gw.example.ts.net:18789");
+    expect(text).not.toContain("hunter2secret");
+    expect(text).not.toContain("tok123");
+    expect(ensureRuntime).not.toHaveBeenCalled();
+  });
+
   it("rejects non-decimal tail options through the registered command", async () => {
     const program = buildProgram({});
     await expect(

@@ -4,6 +4,7 @@ import {
   callGatewayFromCli,
   isGatewayClientRequestError,
   isGatewayTransportError,
+  redactSensitiveUrlLikeString,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   addTimerTimeoutGraceMs,
@@ -55,31 +56,27 @@ function isGatewayCredentialFailure(err: unknown): err is Error {
 
 function gatewayOperationalError(err: unknown): Error {
   const message = formatErrorMessage(err);
-  if (isGatewayClientRequestError(err)) {
-    return new Error(
-      `Gateway responded but voicecall failed: ${message}\nThe running Gateway owns the voice-call runtime; check \`openclaw gateway status\` or restart it.`,
-    );
-  }
-  if (isGatewayCredentialFailure(err)) {
-    return new Error(
-      `Gateway requires credentials: ${message}\nConfigure gateway.auth or pair this device with \`openclaw devices approve --latest\`.`,
-    );
-  }
-  if (isGatewayTransportError(err)) {
-    const url = err.connectionDetails.url;
-    if (err.kind === "timeout") {
-      const timeout = err.timeoutMs === undefined ? "the configured timeout" : `${err.timeoutMs}ms`;
-      return new Error(
-        `Gateway at ${url} did not answer within ${timeout}: ${message}\nIt may be starting or wedged; check \`openclaw gateway status\`.`,
-      );
+  const detail = (() => {
+    if (isGatewayClientRequestError(err)) {
+      return `Gateway responded but voicecall failed: ${message}\nThe running Gateway owns the voice-call runtime; check \`openclaw gateway status\` or restart it.`;
     }
-    return new Error(
-      `Gateway connection at ${url} failed: ${message}\nCheck gateway.auth and \`openclaw gateway status\`, then retry.`,
-    );
-  }
-  return new Error(
-    `Gateway voicecall request failed: ${message}\nCheck \`openclaw gateway status\`, then retry.`,
-  );
+    if (isGatewayCredentialFailure(err)) {
+      return `Gateway requires credentials: ${message}\nConfigure gateway.auth or pair this device with \`openclaw devices approve --latest\`.`;
+    }
+    if (isGatewayTransportError(err)) {
+      const url = err.connectionDetails.url;
+      if (err.kind === "timeout") {
+        const timeout =
+          err.timeoutMs === undefined ? "the configured timeout" : `${err.timeoutMs}ms`;
+        return `Gateway at ${url} did not answer within ${timeout}: ${message}\nIt may be starting or wedged; check \`openclaw gateway status\`.`;
+      }
+      return `Gateway connection at ${url} failed: ${message}\nCheck gateway.auth and \`openclaw gateway status\`, then retry.`;
+    }
+    return `Gateway voicecall request failed: ${message}\nCheck \`openclaw gateway status\`, then retry.`;
+  })();
+  // Configured gateway URLs may embed userinfo/tokens, and close reasons are
+  // remote-controlled text; redact once where the text becomes operator-visible.
+  return new Error(redactSensitiveUrlLikeString(detail));
 }
 
 export function isUnknownMethod(err: unknown, method: VoiceCallGatewayMethod): boolean {

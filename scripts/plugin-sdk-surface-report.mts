@@ -296,7 +296,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
       // +2: structural Gateway transport and request-error guards for plugin CLI routing.
-      4330,
+      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
+      4331,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -378,7 +379,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
       // +2: structural Gateway transport and request-error guards for plugin CLI routing.
-      2574,
+      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
+      2575,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
