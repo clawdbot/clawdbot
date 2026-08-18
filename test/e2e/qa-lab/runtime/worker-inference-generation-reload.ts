@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -76,6 +77,73 @@ async function readTrace(tracePath: string): Promise<TraceEvent[]> {
         .map((line) => JSON.parse(line) as TraceEvent),
     )
     .catch(() => []);
+}
+
+function classifyAuthorization(value: string | undefined): Generation | "unknown" {
+  const credential = value?.replace(/^Bearer\s+/iu, "");
+  for (const generation of ["A", "B", "C"] as const) {
+    if (credential === `qa-worker-runtime-${generation}`) {
+      return generation;
+    }
+  }
+  return "unknown";
+}
+
+async function startAuthInspectingProxy(targetBaseUrl: string) {
+  const authGenerations: Array<Generation | "unknown"> = [];
+  const server = createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      }
+      const body = Buffer.concat(chunks);
+      if (request.method === "POST") {
+        authGenerations.push(classifyAuthorization(request.headers.authorization));
+      }
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(request.headers)) {
+        if (value === undefined || ["connection", "content-length", "host"].includes(name)) {
+          continue;
+        }
+        headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+      }
+      const upstream = await fetch(new URL(request.url ?? "/", targetBaseUrl), {
+        method: request.method,
+        headers,
+        ...(body.length > 0 ? { body } : {}),
+      });
+      const responseHeaders: Record<string, string> = {};
+      upstream.headers.forEach((value, name) => {
+        if (!["connection", "content-length", "transfer-encoding"].includes(name)) {
+          responseHeaders[name] = value;
+        }
+      });
+      response.writeHead(upstream.status, responseHeaders);
+      response.end(Buffer.from(await upstream.arrayBuffer()));
+    })().catch((error) => {
+      response.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+      response.end(error instanceof Error ? error.message : String(error));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("worker auth inspection proxy did not bind");
+  }
+  return {
+    authGenerations,
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    async stop() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
 }
 
 function buildGenerationConfig(params: {
@@ -232,18 +300,30 @@ async function waitForTurn(operator: GatewayClient, runId: string): Promise<void
   }
 }
 
+async function readHistoryReplyCounts(operator: GatewayClient): Promise<Record<string, number>> {
+  const history = await operator.request<{ messages?: unknown[] }>("chat.history", {
+    sessionKey: SESSION_KEY,
+    limit: 100,
+  });
+  return Object.fromEntries(
+    [GENERATION_A_REPLY, GENERATION_B_REPLY, GENERATION_C_REPLY].map((reply) => [
+      reply,
+      (history.messages ?? []).filter(
+        (message) =>
+          (message as { role?: unknown }).role === "assistant" &&
+          wireMessageText(message) === reply,
+      ).length,
+    ]),
+  );
+}
+
 async function waitForHistoryReply(operator: GatewayClient, reply: string): Promise<void> {
-  await waitFor(`worker history reply ${reply}`, async () => {
-    const history = await operator.request<{ messages?: unknown[] }>("chat.history", {
-      sessionKey: SESSION_KEY,
-      limit: 100,
-    });
-    return history.messages?.some(
-      (message) =>
-        (message as { role?: unknown }).role === "assistant" && wireMessageText(message) === reply,
-    )
-      ? true
-      : undefined;
+  await waitFor(`one worker history reply ${reply}`, async () => {
+    const count = (await readHistoryReplyCounts(operator))[reply] ?? 0;
+    if (count > 1) {
+      throw new Error(`worker history persisted ${count} copies of ${reply}`);
+    }
+    return count === 1 ? true : undefined;
   });
 }
 
@@ -319,6 +399,7 @@ async function runProof(options: ProducerOptions) {
     "test/e2e/qa-lab/runtime/fixtures/worker-inference-generation-provider",
   );
   const mock = await startQaMockOpenAiServer({ modelRefs: [MODEL_REF] });
+  const authProxy = await startAuthInspectingProxy(mock.baseUrl);
   let gateway: WireGateway | undefined;
   let operator: GatewayClient | undefined;
   let worker: PairedNodeWorkerHost | undefined;
@@ -333,7 +414,7 @@ async function runProof(options: ProducerOptions) {
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
       useRepoCli: true,
-      providerBaseUrl: `${mock.baseUrl}/v1`,
+      providerBaseUrl: `${authProxy.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: MODEL_REF,
       alternateModel: DEFAULT_MOCK_MODEL_REF,
@@ -346,7 +427,7 @@ async function runProof(options: ProducerOptions) {
           pluginDir,
           tracePath,
           barrierPath,
-          mockProviderBaseUrl: `${mock.baseUrl}/v1`,
+          mockProviderBaseUrl: `${authProxy.baseUrl}/v1`,
         }),
     });
     await waitFor("generation A provider registration", async () => {
@@ -433,6 +514,19 @@ async function runProof(options: ProducerOptions) {
     ) {
       throw new Error(`unexpected mock-openai worker requests: ${JSON.stringify(requestFacts)}`);
     }
+    if (JSON.stringify(authProxy.authGenerations) !== JSON.stringify(["A", "B", "C"])) {
+      throw new Error(
+        `worker inference used unexpected runtime credential generations: ${JSON.stringify(authProxy.authGenerations)}`,
+      );
+    }
+    const replyCounts = await readHistoryReplyCounts(operator);
+    if (
+      [GENERATION_A_REPLY, GENERATION_B_REPLY, GENERATION_C_REPLY].some(
+        (reply) => replyCounts[reply] !== 1,
+      )
+    ) {
+      throw new Error(`worker history reply counts were not exact: ${JSON.stringify(replyCounts)}`);
+    }
 
     verdict = {
       status: "pass",
@@ -443,6 +537,8 @@ async function runProof(options: ProducerOptions) {
       generationA: { reply: GENERATION_A_REPLY, stages: stagesA },
       generationB: { reply: GENERATION_B_REPLY, stages: stagesB },
       generationC: { reply: GENERATION_C_REPLY, stages: stagesC },
+      runtimeCredentialGenerations: authProxy.authGenerations,
+      replyCounts,
       requestFacts,
       tracePath,
     };
@@ -460,6 +556,7 @@ async function runProof(options: ProducerOptions) {
     worker?.stop() ?? Promise.resolve(),
     gateway?.stop() ?? Promise.resolve(),
     published ? closeWireServer(published.server) : Promise.resolve(),
+    authProxy.stop(),
     mock.stop(),
     fs.rm(root, { recursive: true, force: true }),
   ]);

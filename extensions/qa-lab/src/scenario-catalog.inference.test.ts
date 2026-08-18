@@ -83,6 +83,9 @@ describe("QA inference scenario catalog", () => {
       'const OWNERSHIP_STAGES = ["factory", "policy", "wrapper", "execution"]',
     );
     expect(script).toContain("hotPublishGeneration");
+    expect(script).toContain("startAuthInspectingProxy");
+    expect(script).toContain("runtimeCredentialGenerations");
+    expect(script).toContain("replyCounts[reply] !== 1");
     expect(script).not.toContain("createWorkerInferenceExecutor");
     expect(fixture).toContain('from "openclaw/plugin-sdk/llm"');
     expect(fixture).toContain("prepareRuntimeAuth");
