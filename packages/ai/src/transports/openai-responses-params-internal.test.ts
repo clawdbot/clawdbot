@@ -78,8 +78,8 @@ describe("buildOpenAIResponsesParams reasoning summary", () => {
       reasoningSummary: null,
     });
 
-    expect(params.reasoning).toMatchObject({ summary: null });
-    expect(params.reasoning?.effort).toBeDefined();
+    // gpt-5.5 omitted-effort default is high (native Codex defaults medium).
+    expect(params.reasoning).toMatchObject({ effort: "high", summary: null });
   });
 
   it("defaults omitted reasoning summary to auto", () => {
