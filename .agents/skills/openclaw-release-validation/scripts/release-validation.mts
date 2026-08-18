@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export type GithubRelease = {
@@ -123,7 +125,12 @@ export async function getOrCreateCampaignIssue({
   createIssue: (input: { title: string; body: string }) => Promise<CampaignIssue>;
 }): Promise<{ number: number; url: string; created: boolean }> {
   const marker = campaignMarker(releaseTag);
-  const matches = (await listIssues()).filter((issue) => issue.body.includes(marker));
+  let matches = (await listIssues()).filter((issue) => issue.body.includes(marker));
+  if (matches.length === 0) {
+    // Newly created issues can take a moment to appear in GitHub's list API.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    matches = (await listIssues()).filter((issue) => issue.body.includes(marker));
+  }
   if (matches.length > 1) {
     throw new Error(`multiple release-validation issues contain ${marker}`);
   }
@@ -134,7 +141,18 @@ export async function getOrCreateCampaignIssue({
 
   const created = await createIssue({
     title: `Release validation: ${releaseTag}`,
-    body: `${marker}\n\nShared human validation ledger for ${releaseTag}.\n`,
+    body: [
+      marker,
+      "",
+      `# OpenClaw ${releaseTag} validation`,
+      "",
+      "Shared ledger for clean-state and copied-state upgrade journeys.",
+      "",
+      "Each tester should add one comment containing the exact candidate commit, fixture type, source gateway version/commit when applicable, subsystem results and notes, and a yes/no promotion vote.",
+      "",
+      "Failures and blockers count as useful completed coverage. Redact credentials, pairing codes, private endpoints, and secret-bearing logs.",
+      "",
+    ].join("\n"),
   });
   return { number: created.number, url: created.url, created: true };
 }
@@ -447,4 +465,132 @@ export function loadScenarioManifest(path = DEFAULT_SCENARIO_MANIFEST): Scenario
     seen.add(subsystem.id);
   }
   return candidate as ScenarioManifest;
+}
+
+const GITHUB_REPOSITORY = "openclaw/openclaw";
+
+function ghJson<T>(args: string[]): T {
+  return JSON.parse(
+    execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }),
+  ) as T;
+}
+
+async function runCampaignCommand(version?: string): Promise<void> {
+  const releaseTag =
+    version ??
+    selectLatestBetaRelease(
+      ghJson<GithubRelease[]>([
+        "release",
+        "list",
+        "--repo",
+        GITHUB_REPOSITORY,
+        "--limit",
+        "100",
+        "--json",
+        "tagName,isDraft,isPrerelease,publishedAt",
+      ]),
+    );
+  if (!OPENCLAW_BETA_TAG.test(releaseTag)) {
+    throw new Error(`expected an OpenClaw beta tag, got ${releaseTag}`);
+  }
+
+  const result = await getOrCreateCampaignIssue({
+    releaseTag,
+    listIssues: async () => {
+      const listed = ghJson<CampaignIssue[]>([
+        "issue",
+        "list",
+        "--repo",
+        GITHUB_REPOSITORY,
+        "--state",
+        "all",
+        "--limit",
+        "200",
+        "--json",
+        "number,url,body",
+      ]);
+      return listed
+        .filter((issue) => issue.body.includes(campaignMarker(releaseTag)))
+        .map((issue) => {
+          const current = ghJson<{ number: number; html_url: string; body: string }>([
+            "api",
+            `repos/${GITHUB_REPOSITORY}/issues/${issue.number}`,
+          ]);
+          return { number: current.number, url: current.html_url, body: current.body };
+        });
+    },
+    createIssue: async ({ title, body }) => {
+      const url = execFileSync(
+        "gh",
+        ["issue", "create", "--repo", GITHUB_REPOSITORY, "--title", title, "--body", body],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+      ).trim();
+      const issueNumber = url.split("/").at(-1);
+      if (!issueNumber || !/^\d+$/u.test(issueNumber)) {
+        throw new Error(`gh issue create returned an unexpected URL: ${url}`);
+      }
+      return ghJson<CampaignIssue>([
+        "issue",
+        "view",
+        issueNumber,
+        "--repo",
+        GITHUB_REPOSITORY,
+        "--json",
+        "number,url,body",
+      ]);
+    },
+  });
+  process.stdout.write(`${JSON.stringify({ releaseTag, ...result }, null, 2)}\n`);
+}
+
+function runBoardCommand(fixture: FixtureKind): void {
+  const manifest = loadScenarioManifest();
+  const lines = [
+    `# ${manifest.title}`,
+    "",
+    `Fixture: ${fixture}`,
+    "",
+    ...manifest.subsystems.flatMap((scenario, index) => [
+      `- [ ] ${index + 1}/${manifest.subsystems.length} ${scenario.title}`,
+      ...scenario.instructions[fixture].map((instruction) => `  - ${instruction}`),
+      `  - Pass when: ${scenario.passEvidence.join(" ")}`,
+    ]),
+  ];
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+async function main(): Promise<void> {
+  const [command = "help", ...args] = process.argv.slice(2);
+  if (command === "campaign") {
+    const versionIndex = args.indexOf("--version");
+    await runCampaignCommand(versionIndex === -1 ? undefined : args[versionIndex + 1]);
+    return;
+  }
+  if (command === "board") {
+    const fixtureIndex = args.indexOf("--fixture");
+    const fixture = fixtureIndex === -1 ? "clean" : args[fixtureIndex + 1];
+    if (fixture !== "clean" && fixture !== "copied") {
+      throw new Error("--fixture must be clean or copied");
+    }
+    runBoardCommand(fixture);
+    return;
+  }
+  process.stdout.write(
+    [
+      "OpenClaw release-validation helpers",
+      "",
+      "  campaign [--version vYYYY.M.D-beta.N]  Get or create the shared release issue",
+      "  board [--fixture clean|copied]          Print the 19-mission local checklist",
+      "",
+    ].join("\n"),
+  );
+}
+
+const isDirectInvocation =
+  process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectInvocation) {
+  main().catch((error: unknown) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
 }
