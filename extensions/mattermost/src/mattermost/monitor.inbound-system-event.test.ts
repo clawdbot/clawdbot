@@ -524,6 +524,7 @@ async function emitMattermostChannelPost(
     senderId?: string;
     senderName?: string;
     createAt?: number;
+    type?: string;
   },
 ) {
   const senderId = params.senderId ?? "user-1";
@@ -541,6 +542,7 @@ async function emitMattermostChannelPost(
         message: params.message,
         root_id: params.rootId,
         create_at: params.createAt ?? 1_714_000_000_000,
+        type: params.type,
       }),
     },
     broadcast: {
@@ -1662,7 +1664,7 @@ describe("mattermost inbound user posts", () => {
     expect(runtimeCore.channel.session.recordInboundSession).not.toHaveBeenCalled();
   });
 
-  it("does not debounce denied and allowed senders into the same turn", async () => {
+  it("does not debounce denied senders or system posts into an allowed turn", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     const config: OpenClawConfig = {
@@ -1703,6 +1705,13 @@ describe("mattermost inbound user posts", () => {
       senderName: "mallory",
     });
     await emitMattermostChannelPost(socket, {
+      id: "post-system",
+      message: "system text",
+      senderId: "allowed-user",
+      senderName: "alice",
+      type: "system_join_channel",
+    });
+    await emitMattermostChannelPost(socket, {
       id: "post-allowed",
       message: "allowed text",
       senderId: "allowed-user",
@@ -1720,6 +1729,7 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.SenderId).toBe("allowed-user");
     expect(ctx?.BodyForAgent).toBe("allowed text");
     expect(ctx?.Body).not.toContain("denied text");
+    expect(ctx?.Body).not.toContain("system text");
   });
 
   it("flushes pending group text before authorizing a bare abort without a mention", async () => {

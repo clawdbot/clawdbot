@@ -261,7 +261,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return `mattermost:${account.accountId}:${channelId}:${threadId ? `thread:${threadId}` : "channel"}:${entry.post.user_id}`;
     },
     shouldDebounce: (entry) => {
-      if (entry.post.file_ids?.length) {
+      // Typed posts are dropped downstream; batching would let their text or type affect a user post.
+      if (normalizeOptionalString(entry.post.type) !== undefined || entry.post.file_ids?.length) {
         return false;
       }
       const text = normalizeOptionalString(entry.post.message) ?? "";
