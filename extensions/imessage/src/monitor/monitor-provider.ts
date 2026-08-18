@@ -56,6 +56,7 @@ import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
+import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
@@ -96,7 +97,6 @@ import {
   isStaleIMessageBacklog,
 } from "./inbound-dedupe.js";
 import {
-  buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
@@ -941,12 +941,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       sendPolicy !== "deny" &&
       (configuredTypingMode === undefined || configuredTypingMode === "instant");
     const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
+    const earlyDirectTypingService =
+      resolveIMessageDirectChatService(imessageCfg.service, decision.chatGuid) ?? "auto";
     const earlyDirectTypingTarget = shouldStartDirectTyping
-      ? buildDirectIMessageReplyTarget({
-          cfg,
-          accountId: decision.route.accountId,
-          sender: decision.sender,
-        })
+      ? `${earlyDirectTypingService}:${decision.sender}`
       : undefined;
     let stopEarlyDirectTyping: (() => void) | undefined;
     if (earlyDirectTypingTarget) {
