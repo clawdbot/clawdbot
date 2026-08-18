@@ -5,6 +5,7 @@ import type {
   SessionOwner,
 } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -26,6 +27,7 @@ import {
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
+  resolveProjectedSessionContextTokens,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
@@ -328,7 +330,6 @@ export function buildGatewaySessionRow(params: {
   );
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
-  const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
     !skipTranscriptUsage &&
     resolveEstimatedSessionCostUsd({
@@ -339,8 +340,7 @@ export function buildGatewaySessionRow(params: {
       rowContext,
     }) === undefined;
   const transcriptUsage =
-    !skipTranscriptUsage &&
-    (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
+    !skipTranscriptUsage && (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
@@ -414,27 +414,6 @@ export function buildGatewaySessionRow(params: {
         entry,
         rowContext: params.rowContext,
       }) ?? asNonNegativeFiniteNumber(transcriptUsage?.estimatedCostUsd));
-  const contextTokens = lightweight
-    ? (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ))
-    : (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(transcriptUsage?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ));
-
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
@@ -469,6 +448,29 @@ export function buildGatewaySessionRow(params: {
     modelCatalog: thinkingModelCatalog,
     rowContext,
     providerPolicySource: lightweight ? "active" : undefined,
+  });
+  const resolvedCurrentContextTokens = resolvePositiveNumber(
+    resolveContextTokensForModel({
+      cfg,
+      provider: rowModelProvider,
+      model: rowModel,
+      allowAsyncLoad: false,
+    }),
+  );
+  const authoredContextTokens = resolvePositiveNumber(
+    resolveAuthoredModelContextTokens({
+      cfg,
+      provider: rowModelProvider,
+      model: rowModel,
+    }),
+  );
+  const contextTokens = resolveProjectedSessionContextTokens({
+    entry,
+    provider: rowModelProvider,
+    model: rowModel,
+    agentHarnessId: thinkingProjection.agentRuntime.id,
+    resolvedContextTokens: resolvedCurrentContextTokens,
+    authoredContextTokens,
   });
   const fastModeState = resolveFastModeState({
     cfg,

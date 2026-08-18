@@ -12,6 +12,7 @@ import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../.
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
+import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import {
   renderSettingsEmpty,
@@ -902,7 +903,11 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
     </div>`;
   }
   return html`
-    <article class="sidebar-markdown" style="max-width: 100%; overflow-wrap: anywhere;">
+    <article
+      class="sidebar-markdown"
+      style="max-width: 100%; overflow-wrap: anywhere;"
+      @click=${handleMarkdownCodeBlockClick}
+    >
       ${unsafeHTML(toSanitizedMarkdownHtml(content))}
     </article>
   `;

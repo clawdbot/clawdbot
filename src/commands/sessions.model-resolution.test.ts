@@ -24,6 +24,7 @@ type SessionsJsonPayload = {
     modelProvider?: string | null;
     model?: string | null;
     agentRuntime?: { id: string; source: string };
+    contextTokens?: number | null;
   }>;
 };
 
@@ -197,6 +198,155 @@ describe("sessionsCommand model resolution", () => {
           id: "codex",
           source: "session",
         });
+      },
+    );
+  });
+
+  it("projects current runtime and context after a same-model harness change", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
+          },
+        },
+      },
+    }));
+    await withSqliteStore(
+      "sessions-current-runtime-context",
+      {
+        "agent:main:main": {
+          sessionId: "stale-openclaw-window",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "openclaw",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        },
+      },
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        const session = payload.sessions?.find((row) => row.key === "agent:main:main");
+
+        expect(session?.agentRuntime).toEqual({ id: "codex", source: "model" });
+        expect(session?.contextTokens).toBe(1_000_000);
+      },
+    );
+  });
+
+  it("keeps matching runtime telemetry below a higher native window", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: { models: [{ id: "gpt-5.6-sol", contextWindow: 1_000_000 }] },
+        },
+      },
+    }));
+    await withSqliteStore(
+      "sessions-matching-runtime-context",
+      {
+        "agent:main:main": {
+          sessionId: "matching-codex-window",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        },
+      },
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        expect(payload.sessions?.[0]?.contextTokens).toBe(272_000);
+      },
+    );
+  });
+
+  it("keeps no-snapshot context resolution scoped to the selected provider", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "provider-a/shared-model" },
+          models: {
+            "provider-a/shared-model": {},
+            "provider-b/shared-model": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          "provider-a": { models: [{ id: "shared-model", contextTokens: 128_000 }] },
+          "provider-b": { models: [{ id: "shared-model", contextTokens: 900_000 }] },
+        },
+      },
+    }));
+    await withSqliteStore(
+      "sessions-provider-scoped-context",
+      {
+        "agent:main:main": {
+          sessionId: "provider-a-context",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "provider-a",
+          model: "shared-model",
+        },
+      },
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        expect(payload.sessions?.[0]?.contextTokens).toBe(128_000);
+      },
+    );
+  });
+
+  it("preserves a locked runtime window above current configuration", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: { models: [{ id: "gpt-5.6-sol", contextTokens: 272_000 }] },
+        },
+      },
+    }));
+    await withSqliteStore(
+      "sessions-locked-runtime-context",
+      {
+        "agent:main:main": {
+          sessionId: "locked-codex-window",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          contextTokens: 1_000_000,
+          modelSelectionLocked: true,
+        },
+      },
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        expect(payload.sessions?.[0]?.agentRuntime).toEqual({ id: "codex", source: "session" });
+        expect(payload.sessions?.[0]?.contextTokens).toBe(1_000_000);
       },
     );
   });

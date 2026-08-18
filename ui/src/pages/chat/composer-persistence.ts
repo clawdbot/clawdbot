@@ -54,15 +54,12 @@ export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
 
 export { INTERRUPTED_SETTINGS_WAIT_ERROR } from "../../lib/chat/outbox-store-codec.ts";
 export {
-  listStoredChatOutboxes,
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
 } from "../../lib/chat/outbox-store.ts";
-export type {
-  ChatComposerScope,
-  StoredChatOutbox,
-  StoredChatOutboxScope,
-} from "../../lib/chat/outbox-store.ts";
+export { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+export type { ChatComposerScope, StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+export type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
 
 type ChatComposerPersistenceState = {
   settings?: { gatewayUrl?: string | null };

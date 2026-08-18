@@ -247,7 +247,7 @@
           "type": "string"
         },
         "visible": {
-          "description": "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+          "description": "Persistent sidebar UI session; use for work the user will watch or return to, or when they ask for a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
           "type": "boolean"
         },
         "worktree": {

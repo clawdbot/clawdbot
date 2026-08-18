@@ -470,7 +470,7 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+      "Persistent sidebar UI session; use for work the user will watch or return to, or when they ask for a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     );
     expect(schema.properties?.cwd?.description).toContain(
       "outside configured agent workspaces require operator.admin",

@@ -86,7 +86,7 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
-  terminalSessions: Pick<TerminalSessionManager, "closeAgentSessions">;
+  terminalSessions: Pick<TerminalSessionManager, "closeTaskSessions">;
 }) {
   // The worker always runs retention maintenance. audit.enabled only controls
   // producer subscriptions, so disabling collection cannot strand expired rows.
@@ -431,7 +431,7 @@ export function startGatewayEventSubscriptions(params: {
       params.broadcast("task", payload, { dropIfSlow: true });
       const taskId = terminalTaskId(event);
       if (taskId) {
-        params.terminalSessions.closeAgentSessions(taskId);
+        params.terminalSessions.closeTaskSessions(taskId);
       }
     },
   };

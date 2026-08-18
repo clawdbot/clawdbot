@@ -260,7 +260,7 @@ async function resolveCliSkillsPrompt(params: {
     workspaceDir: params.workspaceDir,
   });
   if (!sandboxWorkspace) {
-    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries } =
+    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
       resolveEmbeddedRunSkillEntries({
         workspaceDir: params.workspaceDir,
         config: params.config,
@@ -274,6 +274,7 @@ async function resolveCliSkillsPrompt(params: {
       workspaceDir: params.workspaceDir,
       config: params.config,
       agentId: params.agentId,
+      preserveEntryOrder,
     });
   }
 
@@ -299,17 +300,18 @@ async function resolveCliSkillsPrompt(params: {
         ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
         : {}),
     },
-    effectiveWorkspace: sandboxWorkspace.workspaceDir,
+    skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
     skillsSnapshot: params.skillsSnapshot,
   });
-  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-    workspaceDir: skillsWorkspaceDir,
-    config: params.config,
-    agentId: params.agentId,
-    eligibility: skillsEligibility,
-    skillsSnapshot: skillsSnapshotForRun,
-    workspaceOnly,
-  });
+  const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: skillsWorkspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      eligibility: skillsEligibility,
+      skillsSnapshot: skillsSnapshotForRun,
+      workspaceOnly,
+    });
   const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
     entries: shouldLoadSkillEntries ? skillEntries : undefined,
     skillsWorkspaceDir,
@@ -322,6 +324,7 @@ async function resolveCliSkillsPrompt(params: {
     config: params.config,
     agentId: params.agentId,
     eligibility: skillsEligibility,
+    preserveEntryOrder,
   });
 }
 

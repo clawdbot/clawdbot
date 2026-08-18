@@ -90,6 +90,9 @@ function sessionTitle(session: GatewaySessionRow, recentUserText: string | null)
 }
 
 function sessionCaptureStatus(session: GatewaySessionRow): WorkboardStatus {
+  if (session.status === "queued") {
+    return "todo";
+  }
   if (session.hasActiveRun === true || session.status === "running") {
     return "running";
   }

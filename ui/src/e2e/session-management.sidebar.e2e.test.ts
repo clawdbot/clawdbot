@@ -213,7 +213,8 @@ suite.define(() => {
       await completedChild.hover();
       await expect.poll(() => actionOpacity(childMenuButton)).toBe("1");
       await expect.poll(() => actionPointerEvents(childMenuButton)).toBe("auto");
-      await childMenuButton.click();
+      await childMenuButton.focus();
+      await page.keyboard.press("Enter");
       const childMenu = page.getByRole("menu", { name: "Actions for Verify tests" });
       await childMenu.waitFor({ state: "visible" });
       await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();

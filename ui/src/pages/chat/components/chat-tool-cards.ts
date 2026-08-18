@@ -288,9 +288,9 @@ function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): strin
 }
 
 const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
-  command: "terminal",
+  command: "squareTerminal",
   read: "fileText",
-  edit: "penLine",
+  edit: "pencil",
   write: "fileCode",
   search: "search",
   fetch: "globe",
@@ -317,6 +317,26 @@ export function syncToolDisclosureOverflow(event: Event): void {
     "chat-tool-disclosure--overflowing",
     Boolean(content && content.scrollWidth > content.clientWidth),
   );
+}
+
+export function toggleToolDisclosureKeepingScroll(event: Event, toggle: () => void): void {
+  const target = event.currentTarget;
+  const row = target instanceof Element ? target.closest<HTMLElement>(".chat-virtual-row") : null;
+  const scroller = row?.closest<HTMLElement>(".chat-thread");
+  const rowTop = row?.getBoundingClientRect().top;
+  toggle();
+  if (!row || !scroller || rowTop === undefined) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    // ResizeObserver runs after rAF. Wait one more frame so TanStack applies
+    // its end-anchor delta before we restore this disclosure row's position.
+    requestAnimationFrame(() => {
+      if (row.isConnected) {
+        scroller.scrollTop += row.getBoundingClientRect().top - rowTop;
+      }
+    });
+  });
 }
 
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
@@ -771,7 +791,7 @@ export function renderToolCard(
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const isRunning = outcome === "running";
-  const expanded = opts.expanded || isRunning;
+  const expanded = opts.expanded;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
   const workspaceFilePath =
     view.kind === "read" || view.kind === "edit" || view.kind === "write"
@@ -794,7 +814,8 @@ export function renderToolCard(
               type="button"
               aria-expanded=${String(expanded)}
               aria-label=${resolveToolRowText(card, opts.runActive)}
-              @click=${() => opts.onToggleExpanded(card.id)}
+              @click=${(event: MouseEvent) =>
+                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id))}
             ></button>
             <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
             <span class="chat-tool-disclosure__content"
@@ -818,7 +839,7 @@ export function renderToolCard(
             @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                opts.onToggleExpanded(card.id);
+                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id));
               }
             }}
           >

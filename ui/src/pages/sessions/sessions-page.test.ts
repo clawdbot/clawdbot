@@ -578,6 +578,54 @@ describe("sessions page lifecycle", () => {
     expect(page.selectedKeys).toEqual(new Set());
   });
 
+  it("adopts a managed snapshot that arrives under the bulk-delete lock after its tail refresh", async () => {
+    const deleted = deferred<{
+      deleted: string[];
+      errors: string[];
+      preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
+    }>();
+    const deleteMany = vi.fn(() => deleted.promise);
+    const managed = createManagedSessions({ deleteMany });
+    const context = createContext(
+      createGateway({} as GatewayBrowserClient).gateway,
+      managed.sessions,
+    );
+    const page = await createRenderedPage(context, {
+      count: 1,
+      sessions: [{ key: "before" }],
+    } as SessionsListResult);
+    const query = vi.mocked(managed.subscribeList).mock.calls[0]?.[0];
+    if (!query) {
+      throw new Error("Expected a managed query subscription");
+    }
+    managed.refreshList.mockClear();
+    page.selectedKeys = new Set(["before"]);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+
+    const deleting = page.deleteSelected();
+    await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledOnce());
+    const duringResult = {
+      count: 1,
+      sessions: [{ key: "arrived-during-mutation" }],
+    } as SessionsListResult;
+    managed.publish(query, {
+      result: duringResult,
+      agentId: "main",
+      loading: false,
+      error: null,
+    });
+    expect(page.result?.sessions.map((row) => row.key)).toEqual(["before"]);
+
+    deleted.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+    await deleting;
+
+    expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
+    expect(deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      managed.refreshList.mock.invocationCallOrder[0]!,
+    );
+    expect(page.result?.sessions.map((row) => row.key)).toEqual(["arrived-during-mutation"]);
+  });
+
   it("does not delete a selection after the gateway changes during confirmation", async () => {
     const confirmation = deferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);

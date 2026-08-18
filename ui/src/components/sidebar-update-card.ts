@@ -73,6 +73,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) refreshRequired = false;
   @property({ attribute: false }) onRefresh: () => void = () => undefined;
   @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
+  @property({ attribute: false }) onReviewUpdate: () => void = () => undefined;
   @state() private dismissedUpdateKey: string | null = null;
   @state() private holdingCampaignId: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
@@ -297,6 +298,15 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
                 ${icons.x}
               </button>
             `}
+        ${statusBanner
+          ? html`<button
+              class="sidebar-update-card__review"
+              type="button"
+              @click=${this.onReviewUpdate}
+            >
+              ${t("updates.reviewUpdate")}
+            </button>`
+          : nothing}
       </div>
     `;
   }

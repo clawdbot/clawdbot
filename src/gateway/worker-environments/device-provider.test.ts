@@ -50,7 +50,7 @@ function connectedNode(deviceId = DEVICE_ID, available = true): NodeWorkerSuperv
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: available ? "available" : "full" },
+    workerHost: { enabled: true, capacity: { total: 2, available: available ? 2 : 0 } },
     commands: ["system.run"],
   };
 }

@@ -1,4 +1,7 @@
-import type { RuntimeTargetIssue } from "../../packages/gateway-protocol/src/schema/environments.js";
+import type {
+  RuntimeTargetIssue,
+  WorkerSlotSummary,
+} from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 
@@ -25,8 +28,9 @@ export type NodeListNode = {
   caps?: string[];
   commands?: string[];
   computerUse?: ComputerUseCapabilityDescriptor;
-  /** Connected node currently advertises full worker session hosting. */
+  /** Connected node currently has capacity to host another worker session turn. */
   sessionHost?: boolean;
+  workerSlots?: WorkerSlotSummary;
   workerBundle?: NodeWorkerBundleStatus;
   issues?: readonly RuntimeTargetIssue[];
   nodePluginTools?: NodePluginToolDescriptor[];

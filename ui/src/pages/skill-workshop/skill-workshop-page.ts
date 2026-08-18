@@ -96,9 +96,15 @@ function renderSkillWorkshopPage(
             state.skillWorkshopStatusFilter,
             state.skillWorkshopQuery,
           );
-          const selectedIndex = visibleProposals.findIndex(
+          const selectedProposal = state.skillWorkshopProposals.find(
             (proposal) => proposal.key === state.skillWorkshopSelectedKey,
           );
+          const isSelectedProposal = (proposal: (typeof visibleProposals)[number]) =>
+            proposal.key === state.skillWorkshopSelectedKey ||
+            (state.skillWorkshopStatusFilter === "applied" &&
+              selectedProposal?.status === "applied" &&
+              proposal.slug === selectedProposal?.slug);
+          const selectedIndex = visibleProposals.findIndex(isSelectedProposal);
           const selectProposal = (key: string) => {
             state.skillWorkshopFilePreviewKey = null;
             void selectSkillWorkshopProposal(state, context, key).finally(requestUpdate);
@@ -118,10 +124,7 @@ function renderSkillWorkshopPage(
             }
           };
           const selectVisibleFallback = (proposals: typeof visibleProposals) => {
-            if (
-              proposals.length === 0 ||
-              proposals.some((proposal) => proposal.key === state.skillWorkshopSelectedKey)
-            ) {
+            if (proposals.length === 0 || proposals.some(isSelectedProposal)) {
               return;
             }
             const firstProposal = proposals[0];

@@ -374,7 +374,13 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
      */
-    worktree?: { id: string; branch: string; repoRoot: string };
+    worktree?: {
+      id: string;
+      branch: string;
+      repoRoot: string;
+      /** Durable skill workspace prepared when this session runs from a managed worktree. */
+      canonicalWorkspaceDir?: string;
+    };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
@@ -574,6 +580,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     agentHarnessId?: string;
     fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
+    /** Origin of the persisted context window; absent on legacy/unproven rows. */
+    contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];

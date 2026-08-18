@@ -2,6 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -66,6 +67,7 @@ export function startAgentRunExecution(params: {
   resolvedSessionKey?: string;
   requestedSessionKey?: string;
   resolvedSessionId?: string;
+  storePath?: string;
   agentId?: string;
   activeSessionAgentId: string;
   delivery: AgentDeliveryPhaseResult;
@@ -290,6 +292,13 @@ export function startAgentRunExecution(params: {
               modelRun: params.request.modelRun === true,
               promptMode: params.request.promptMode,
               extraSystemPrompt: params.request.extraSystemPrompt,
+              gitCoauthorAttribution: prepareGitCoauthorAttribution({
+                agentId: params.activeSessionAgentId,
+                config: params.cfgForAgent ?? params.cfg,
+                currentProfileId: params.client?.authenticatedUserProfile?.profileId,
+                sessionKey: params.resolvedSessionKey,
+                storePath: params.storePath,
+              }),
               bootstrapContextMode: params.request.bootstrapContextMode,
               bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
               toolsAllow: params.restoredCronContinuation?.toolsAllow,
@@ -343,7 +352,15 @@ export function startAgentRunExecution(params: {
               cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
               abortSignal: prepared.activeRunAbort.controller.signal,
               lifecycleGeneration: params.lifecycleGeneration,
-              onExecutionStarted: () => prepared.activeRunAbort.markExecutionStarted(),
+              onExecutionStarted: () => {
+                if (prepared.activeRunAbort.markExecutionStarted() && params.resolvedSessionKey) {
+                  emitSessionsChanged(params.context, {
+                    sessionKey: params.resolvedSessionKey,
+                    agentId: params.agentId,
+                    reason: "agent.run.started",
+                  });
+                }
+              },
               onActiveModelSelected: createAgentRunModelSelectionHandler({
                 context: params.context,
                 runId: params.runId,
@@ -398,6 +415,7 @@ export function startAgentRunExecution(params: {
             context: params.context,
             taskTrackingMode: prepared.dispatchTaskTrackingMode,
             restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
+            canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
           },
           executionIdentitySpawnFacts,
         ),

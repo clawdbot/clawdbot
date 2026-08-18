@@ -8,11 +8,25 @@ import {
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
-const { copyToClipboard } = vi.hoisted(() => ({
-  copyToClipboard: vi.fn(async () => true),
-}));
+const writeText = vi.fn(async (_text: string) => undefined);
 
-vi.mock("../lib/clipboard.ts", () => ({ copyToClipboard }));
+let clipboardDescriptor: PropertyDescriptor | undefined;
+let mutationObserverDescriptor: PropertyDescriptor | undefined;
+let resizeObserverDescriptor: PropertyDescriptor | undefined;
+let showModalDescriptor: PropertyDescriptor | undefined;
+let closeDescriptor: PropertyDescriptor | undefined;
+
+function restoreProperty(
+  target: object,
+  key: PropertyKey,
+  descriptor: PropertyDescriptor | undefined,
+) {
+  if (descriptor) {
+    Object.defineProperty(target, key, descriptor);
+    return;
+  }
+  Reflect.deleteProperty(target, key);
+}
 
 const markdown = `Open agent:main:dashboard:table
 
@@ -63,19 +77,40 @@ function interactiveOwner(): {
     scrollLeft: { configurable: true, value: 0, writable: true },
     scrollWidth: { configurable: true, value: 300 },
   });
-  owner.addEventListener("click", handleMarkdownTableInteraction);
   enhanceMarkdownTables(owner);
   return { owner, shell, viewport };
+}
+
+function markdownTableInteractionEvent(target: Element): Event {
+  const event = new MouseEvent("click", { bubbles: true });
+  Object.defineProperty(event, "target", { value: target });
+  return event;
 }
 
 describe("Markdown table interactions", () => {
   beforeEach(() => {
     TestMutationObserver.instances = [];
     TestResizeObserver.instances = [];
-    vi.stubGlobal("MutationObserver", TestMutationObserver);
-    vi.stubGlobal("ResizeObserver", TestResizeObserver);
-    copyToClipboard.mockClear();
-    copyToClipboard.mockResolvedValue(true);
+    clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    mutationObserverDescriptor = Object.getOwnPropertyDescriptor(globalThis, "MutationObserver");
+    resizeObserverDescriptor = Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver");
+    showModalDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal");
+    closeDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
+    Object.defineProperty(globalThis, "MutationObserver", {
+      configurable: true,
+      writable: true,
+      value: TestMutationObserver,
+    });
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: TestResizeObserver,
+    });
+    writeText.mockClear();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
       configurable: true,
       value: vi.fn(function (this: HTMLDialogElement) {
@@ -93,7 +128,11 @@ describe("Markdown table interactions", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    vi.unstubAllGlobals();
+    restoreProperty(navigator, "clipboard", clipboardDescriptor);
+    restoreProperty(globalThis, "MutationObserver", mutationObserverDescriptor);
+    restoreProperty(globalThis, "ResizeObserver", resizeObserverDescriptor);
+    restoreProperty(HTMLDialogElement.prototype, "showModal", showModalDescriptor);
+    restoreProperty(HTMLDialogElement.prototype, "close", closeDescriptor);
     document.body.replaceChildren();
   });
 
@@ -131,23 +170,55 @@ describe("Markdown table interactions", () => {
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
   });
 
-  it("copies TSV and restores focus after the table dialog closes", async () => {
+  it("copies TSV and updates the copy label", async () => {
     vi.useFakeTimers();
     const { owner } = interactiveOwner();
     const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
-    copy.click();
-    expect(copyToClipboard).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
+
+    handleMarkdownTableInteraction(markdownTableInteractionEvent(copy));
+
+    expect(writeText).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
     await vi.advanceTimersByTimeAsync(0);
     expect(copy.getAttribute("aria-label")).toBe("Copied!");
+    expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(copy.getAttribute("aria-label")).toBe("Copy table");
+    expect(copy.querySelector("svg rect")).not.toBeNull();
+  });
 
+  it("restores focus after the table dialog closes", () => {
+    const { owner } = interactiveOwner();
     const expand = owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!;
     expand.focus();
-    expand.click();
+
+    handleMarkdownTableInteraction(markdownTableInteractionEvent(expand));
+
     const dialog = document.querySelector<HTMLDialogElement>(".markdown-table-dialog")!;
     expect(dialog.hasAttribute("open")).toBe(true);
     expect(dialog.querySelector("table")?.textContent).toContain("Alpha");
 
-    dialog.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    vi.spyOn(dialog, "getBoundingClientRect").mockReturnValue({
+      bottom: 500,
+      height: 400,
+      left: 100,
+      right: 500,
+      top: 100,
+      width: 400,
+      x: 100,
+      y: 100,
+      toJSON: () => ({}),
+    });
+    dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 50, clientY: 50 }));
+    expect(document.querySelector(".markdown-table-dialog")).toBeNull();
+    expect(document.activeElement).toBe(expand);
+
+    // Reopen through the handler like every other interaction here: the file
+    // runs in the isolated lane, so no shared-graph document listener exists
+    // to service a raw click().
+    handleMarkdownTableInteraction(markdownTableInteractionEvent(expand));
+    const reopenedDialog = document.querySelector<HTMLDialogElement>(".markdown-table-dialog")!;
+
+    reopenedDialog.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
     expect(document.activeElement).toBe(expand);
   });

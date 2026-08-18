@@ -352,6 +352,7 @@ describe("probeGatewayStatus", () => {
 
     expect(probeGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
+      config,
       auth: {
         token: "temp-token",
         password: undefined,

@@ -150,7 +150,6 @@ extensions/memory-core/src/memory/manager-search.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
 extensions/memory-core/src/tools.test.ts
-extensions/memory-core/src/tools.ts
 extensions/memory-lancedb/index.test.ts
 extensions/memory-wiki/src/chatgpt-import.ts
 extensions/memory-wiki/src/cli.ts
@@ -209,7 +208,6 @@ extensions/qa-lab/src/runtime-tool-fixture.ts
 extensions/qa-lab/src/scorecard-taxonomy.ts
 extensions/qa-lab/src/suite-launch.runtime.test.ts
 extensions/qa-lab/src/suite-launch.runtime.ts
-extensions/qa-lab/src/test-file-scenario-runner.test.ts
 extensions/qa-lab/web/src/app.ts
 extensions/signal/src/client-container.test.ts
 extensions/signal/src/client-container.ts
@@ -881,8 +879,6 @@ ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
-ui/src/pages/chat/components/chat-session-workspace.ts
-ui/src/pages/chat/components/chat-sidebar.ts
 ui/src/pages/chat/components/chat-tool-cards.ts
 ui/src/pages/chat/composer-persistence.test.ts
 ui/src/pages/chat/composer-persistence.ts

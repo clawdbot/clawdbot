@@ -13,6 +13,7 @@ import {
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
   resolveAllowAlwaysPatternCoverage,
+  resolveExecApprovalsFromFile,
   updateExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -674,13 +675,33 @@ async function dispatchInvoke(
     return;
   }
   if (command === "system.execApprovals.get") {
+    let includeResolvedDefaults = false;
+    try {
+      if (frame.paramsJSON != null) {
+        const params = decodeParams<unknown>(frame.paramsJSON);
+        if (
+          !isRecord(params) ||
+          (params.includeResolvedDefaults !== undefined &&
+            typeof params.includeResolvedDefaults !== "boolean")
+        ) {
+          throw new Error("INVALID_REQUEST: includeResolvedDefaults must be boolean");
+        }
+        includeResolvedDefaults = params.includeResolvedDefaults === true;
+      }
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+      return;
+    }
     try {
       const snapshot = await ensureExecApprovalsSnapshot();
-      const payload: ExecApprovalsSnapshot = {
+      const payload = {
         path: snapshot.path,
         exists: snapshot.exists,
         hash: snapshot.hash,
         file: redactExecApprovals(snapshot.file),
+        ...(includeResolvedDefaults
+          ? { resolvedDefaults: resolveExecApprovalsFromFile({ file: snapshot.file }).defaults }
+          : {}),
       };
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {

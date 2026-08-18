@@ -1158,7 +1158,6 @@ describe("update-startup", () => {
 
     expect(checkUpdateStatus).toHaveBeenCalledWith({
       root: "/opt/openclaw",
-      timeoutMs: 2500,
       fetchGit: true,
       includeRegistry: false,
       useDetachedDevUpstream: true,
@@ -1344,7 +1343,6 @@ describe("update-startup", () => {
 
     expect(checkUpdateStatus).toHaveBeenCalledWith({
       root: "/opt/openclaw",
-      timeoutMs: 2500,
       fetchGit: true,
       includeRegistry: false,
       useDetachedDevUpstream: true,
@@ -1682,6 +1680,80 @@ describe("update-startup", () => {
     expect(checkUpdateStatus).toHaveBeenCalledTimes(3);
     stop();
     process.env.NODE_ENV = previousNodeEnv;
+  });
+
+  it("returns cleanup before slow dev git discovery schedules a campaign", async () => {
+    const remoteFetchDelayMs = 65_653;
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(checkUpdateStatus).mockImplementation(({ fetchGit, timeoutMs }) => {
+      const isRemoteFetch = fetchGit === true;
+      const effectiveTimeoutMs = timeoutMs ?? (isRemoteFetch ? 120_000 : 6000);
+      const remoteFetchFinished = isRemoteFetch && effectiveTimeoutMs >= remoteFetchDelayMs;
+      const status = {
+        root: "/opt/openclaw",
+        installKind: "git" as const,
+        packageManager: "pnpm" as const,
+        git: {
+          root: "/opt/openclaw",
+          sha: "current-sha",
+          tag: null,
+          branch: "main",
+          upstream: "origin/main",
+          upstreamSource: "tracking" as const,
+          upstreamSha: remoteFetchFinished ? "upstream-sha" : null,
+          commitAtMs: null,
+          dirty: false,
+          ahead: remoteFetchFinished ? 0 : null,
+          behind: remoteFetchFinished ? 2 : null,
+          fetchOk: isRemoteFetch ? remoteFetchFinished : null,
+        },
+      } satisfies UpdateCheckResult;
+      if (!isRemoteFetch) {
+        return Promise.resolve(status);
+      }
+      return new Promise<UpdateCheckResult>((resolve) => {
+        setTimeout(() => resolve(status), Math.min(effectiveTimeoutMs, remoteFetchDelayMs));
+      });
+    });
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    let stop: (() => void) | undefined;
+
+    try {
+      stop = scheduleGatewayUpdateCheck({
+        cfg: { update: { channel: "dev", auto: { enabled: true } } },
+        log: { info: vi.fn() },
+        isNixMode: false,
+        activeWorkInspectors: idleActiveWorkInspectors(),
+      });
+
+      expect(stop).toEqual(expect.any(Function));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
+      expect(checkUpdateStatus).toHaveBeenNthCalledWith(1, {
+        root: "/opt/openclaw",
+        timeoutMs: 2500,
+        fetchGit: false,
+        includeRegistry: false,
+      });
+      expect(checkUpdateStatus).toHaveBeenNthCalledWith(2, {
+        root: "/opt/openclaw",
+        fetchGit: true,
+        includeRegistry: false,
+        useDetachedDevUpstream: true,
+      });
+      expect(getUpdateSchedule()?.campaign).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(remoteFetchDelayMs);
+      expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
+      expect(getUpdateSchedule()?.install?.git).toMatchObject({
+        status: "behind",
+        commitsBehind: 2,
+      });
+    } finally {
+      stop?.();
+      process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 
   it("defers stable auto-update until rollout window is due", async () => {

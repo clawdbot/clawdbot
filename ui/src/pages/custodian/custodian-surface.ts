@@ -4,6 +4,15 @@ import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  handleMarkdownCodeBlockClick,
+  initializeMarkdownCodeBlocks,
+} from "../../components/markdown-code-blocks.ts";
+import {
+  enhanceMarkdownTables,
+  handleMarkdownTableInteraction,
+  releaseMarkdownTables,
+} from "../../components/markdown-tables.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -33,6 +42,7 @@ class CustodianSurface extends OpenClawLightDomElement {
   private subscribedStore: CustodianSessionStore | null = null;
   private storeCleanup: (() => void) | null = null;
   private lastMessageId: number | null = null;
+  private markdownHost: HTMLElement | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -40,6 +50,10 @@ class CustodianSurface extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback(): void {
+    if (this.markdownHost) {
+      releaseMarkdownTables(this.markdownHost);
+      this.markdownHost = null;
+    }
     this.storeCleanup?.();
     this.storeCleanup = null;
     this.subscribedStore = null;
@@ -66,10 +80,19 @@ class CustodianSurface extends OpenClawLightDomElement {
   }
 
   override updated(): void {
+    const transcript = this.querySelector<HTMLElement>(".custodian__messages");
+    if (transcript) {
+      // Caretaker turns render through the assistant bubble, so they carry the
+      // same interactive code-block and table markup the chat thread emits.
+      // Without this lifecycle those controls render but never do anything.
+      this.markdownHost = transcript;
+      initializeMarkdownCodeBlocks(transcript);
+      enhanceMarkdownTables(transcript);
+    }
     const messageId = this.store.messages.at(-1)?.id ?? null;
     if (messageId !== this.lastMessageId) {
       this.lastMessageId = messageId;
-      const lastMessage = this.querySelector(".custodian__messages")?.lastElementChild;
+      const lastMessage = transcript?.lastElementChild;
       if (lastMessage instanceof HTMLElement) {
         lastMessage.scrollIntoView?.({ block: "nearest" });
       }
@@ -145,7 +168,14 @@ class CustodianSurface extends OpenClawLightDomElement {
           ? "custodian-surface--empty-error"
           : ""}"
       >
-        <div class="custodian__messages" aria-live="polite">
+        <div
+          class="custodian__messages"
+          aria-live="polite"
+          @click=${(event: MouseEvent) => {
+            handleMarkdownCodeBlockClick(event);
+            handleMarkdownTableInteraction(event);
+          }}
+        >
           ${this.channelOnboardingError
             ? eventNudgeState.renderCustodianChannelOnboardingError({
                 retrying: this.channelOnboardingRetrying,

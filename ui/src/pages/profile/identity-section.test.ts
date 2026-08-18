@@ -16,6 +16,7 @@ const PROFILE: UserProfile = {
   createdAt: 1,
   updatedAt: 2,
   emails: ["ada@example.test", "ada@work.test"],
+  githubIdentity: null,
   hasAvatar: true,
 };
 
@@ -24,11 +25,15 @@ function createProps(overrides: Partial<IdentitySectionProps> = {}): IdentitySec
     profile: PROFILE,
     avatarUrl: "/api/users/profile-1/avatar?v=2",
     displayName: "Ada Lovelace",
+    githubUsername: "",
     busy: null,
     error: null,
     onDisplayNameInput: vi.fn(),
     onSaveDisplayName: vi.fn(),
     onAvatarSelect: vi.fn(),
+    onGitHubUsernameInput: vi.fn(),
+    onSaveGitHubIdentity: vi.fn(),
+    onClearGitHubIdentity: vi.fn(),
     ...overrides,
   };
 }
@@ -58,7 +63,7 @@ describe("renderIdentitySection", () => {
       [...container.querySelectorAll(".settings-row__title")].map((node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Avatar", "Display name", "Linked emails"]);
+    ).toEqual(["Avatar", "Display name", "Linked emails", "GitHub"]);
     expect(container.textContent).toContain("ada@example.test, ada@work.test");
   });
 
@@ -123,6 +128,81 @@ describe("renderIdentitySection", () => {
     expect(input?.accept).toBe("image/png,image/jpeg,image/webp");
     expect(input?.value).toBe("");
     expect(onAvatarSelect).toHaveBeenCalledWith(file);
+  });
+
+  it("links, changes, and disconnects the public GitHub identity", () => {
+    const onGitHubUsernameInput = vi.fn();
+    const onSaveGitHubIdentity = vi.fn();
+    const onClearGitHubIdentity = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderIdentitySection(
+        createProps({
+          githubUsername: "octocat",
+          profile: {
+            ...PROFILE,
+            githubIdentity: {
+              login: "octocat",
+              profileUrl: "https://github.com/octocat",
+              avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+            },
+          },
+          onGitHubUsernameInput,
+          onSaveGitHubIdentity,
+          onClearGitHubIdentity,
+        }),
+      ),
+      container,
+    );
+
+    const account = container.querySelector<HTMLAnchorElement>(".settings-account");
+    expect(account?.href).toBe("https://github.com/octocat");
+    expect(account?.target).toBe("_blank");
+    expect(account?.rel).toContain("noopener");
+    expect(account?.querySelector("img")?.src).toBe(
+      "https://avatars.githubusercontent.com/u/583231?v=4",
+    );
+    const input = container.querySelector<HTMLInputElement>(".identity-github-form input");
+    input!.value = "octo-renamed";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    container
+      .querySelector<HTMLFormElement>(".identity-github-form")
+      ?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Disconnect")
+      ?.click();
+
+    expect(onGitHubUsernameInput).toHaveBeenCalledWith("octo-renamed");
+    expect(onSaveGitHubIdentity).toHaveBeenCalledOnce();
+    expect(onClearGitHubIdentity).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain("public GitHub co-author credit");
+    expect(container.textContent).toContain("never a private email");
+    expect(container.textContent).toContain("account you control");
+  });
+
+  it("disables relinking an unchanged canonical GitHub login", () => {
+    const container = document.createElement("div");
+    render(
+      renderIdentitySection(
+        createProps({
+          githubUsername: " OctoCat ",
+          profile: {
+            ...PROFILE,
+            githubIdentity: {
+              login: "octocat",
+              profileUrl: "https://github.com/octocat",
+              avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLButtonElement>('.identity-github-form button[type="submit"]')
+        ?.disabled,
+    ).toBe(true);
   });
 
   it("reports mutation errors without inventing another settings surface", () => {

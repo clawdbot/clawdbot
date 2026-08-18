@@ -19,6 +19,7 @@ import "./modal-dialog.ts";
 type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
+  canGrant: boolean;
   errors: ReadonlyMap<string, string>;
   nowMs: number;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
@@ -112,7 +113,7 @@ class ExecApproval extends OpenClawLightDomContentsElement {
   private handleKeydown(event: KeyboardEvent, active: ExecApprovalRequest): void {
     // A held chord auto-repeats: once a decision settles and the queue
     // advances, the repeat would apply the same decision to the next request.
-    if (event.defaultPrevented || event.repeat || this.props?.busy) {
+    if (event.defaultPrevented || event.repeat || this.props?.busy || !this.props?.canGrant) {
       return;
     }
     const decision = shortcutDecision(event);
@@ -168,6 +169,7 @@ class ExecApproval extends OpenClawLightDomContentsElement {
           ${renderExecApprovalCard({
             approval: active,
             busy: props.busy,
+            canGrant: props.canGrant,
             error: props.errors.get(active.id) ?? null,
             nowMs: props.nowMs,
             variant: "modal",

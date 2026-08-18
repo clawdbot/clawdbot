@@ -3,7 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -1003,6 +1012,53 @@ describe("runReplyAgent active steering", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledOnce();
     active.complete();
+  });
+
+  it("unconfirmed steer commit aborts only the captured operation, never a same-key successor", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session-a",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const activeAbortByUser = vi.spyOn(active, "abortByUser");
+    let successor: ReplyOperation | undefined;
+    let successorAbortByUser: MockInstance<ReplyOperation["abortByUser"]> | undefined;
+    state.queueEmbeddedAgentMessageMock.mockImplementationOnce(() => {
+      active.complete();
+      successor = createReplyOperation({
+        sessionKey: "main",
+        sessionId: "session-b",
+        resetTriggered: false,
+      });
+      successor.setPhase("running");
+      successorAbortByUser = vi.spyOn(successor, "abortByUser");
+      return {
+        queued: true,
+        sessionId: "session-a",
+        target: "embedded_run",
+        gatewayHealth: "live",
+        transcriptCommit: "unconfirmed",
+        errorMessage: "receipt unavailable",
+      };
+    });
+    const { run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    if (!successor || !successorAbortByUser) {
+      throw new Error("expected same-key successor operation");
+    }
+    try {
+      expect(successorAbortByUser).not.toHaveBeenCalled();
+      expect(activeAbortByUser).toHaveBeenCalledOnce();
+    } finally {
+      successor.complete();
+    }
   });
 
   it("admits an ordinary rejected steering turn with durable recovery state", async () => {
@@ -5068,7 +5124,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("does not persist cumulative CLI usage as a fresh context snapshot", async () => {
+  it("marks prior context usage stale when CLI usage is only cumulative", async () => {
     const sessionEntry = makeSessionEntry({
       totalTokens: 42_000,
       totalTokensFresh: true,
@@ -5113,7 +5169,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(stored.fallbackNotice).toBeUndefined();
     expect(stored.modelProvider).toBe("claude-cli");
     expect(stored.model).toBe("claude-opus-4-7");
-    expect(stored.totalTokens).toBeUndefined();
+    expect(stored.totalTokens).toBe(42_000);
     expect(stored.totalTokensFresh).toBe(false);
   });
 

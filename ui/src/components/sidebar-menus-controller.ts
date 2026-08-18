@@ -100,10 +100,10 @@ interface SidebarMenusControllerHost
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
-  readonly sessionCreatorFilterActive: boolean;
-  sessionCreatorFilterId: string | null;
+  readonly sessionOwnerFilterActive: boolean;
+  sessionOwnerFilterId: string | null;
   sessionInvolvingMeFilterActive: boolean;
-  readonly sessionCreatorOptions: readonly SessionOwnerOption[];
+  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
   readSessionMutationAccess(request: {
     method: string;

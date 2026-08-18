@@ -650,6 +650,36 @@ describe("refreshChat", () => {
     });
   });
 
+  it("reconciles queued history over a prior terminal session row", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: row("main", {
+            hasActiveRun: true,
+            status: "queued",
+            updatedAt: 11,
+          }),
+        },
+      },
+      sessionKey: "main",
+      sessionsResult: createSessionsResult([
+        row("main", { hasActiveRun: false, status: "failed", updatedAt: 10 }),
+      ]),
+    });
+
+    await refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: true,
+      status: "queued",
+      updatedAt: 11,
+    });
+  });
+
   it.each([
     {
       name: "drains a restored queue after history proves the selected session is idle",
@@ -6635,13 +6665,23 @@ describe("handleSendChat", () => {
       chatMessage: "retry without disconnecting",
     });
 
-    await handleSendChat(host);
+    vi.useFakeTimers();
+    try {
+      await handleSendChat(host);
 
-    expect(host.connected).toBe(true);
-    expect(host.chatQueue[0]).toMatchObject({ sendAttempts: 0, sendState: "waiting-reconnect" });
-    await waitForFast(() => expect(sendAttempts).toBe(2));
-    expect(sendRunIds[1]).toBe(sendRunIds[0]);
-    await waitForFast(() => expect(listStoredChatOutboxes(host)).toStrictEqual([]));
+      expect(host.connected).toBe(true);
+      expect(host.chatQueue[0]).toMatchObject({
+        sendAttempts: 0,
+        sendState: "waiting-reconnect",
+      });
+      expect(sendAttempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sendAttempts).toBe(2);
+      expect(sendRunIds[1]).toBe(sendRunIds[0]);
+      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries reconnect history after a retryable response without a socket close", async () => {
@@ -6678,13 +6718,19 @@ describe("handleSendChat", () => {
     host.client = clientWithRequest(request);
     host.connected = true;
 
-    await retryReconnectableQueuedChatSends(host);
+    vi.useFakeTimers();
+    try {
+      await retryReconnectableQueuedChatSends(host);
 
-    expect(historyAttempts).toBe(1);
-    expect(sendAttempts).toBe(0);
-    await waitForFast(() => expect(sendAttempts).toBe(1));
-    expect(historyAttempts).toBeGreaterThanOrEqual(2);
-    await waitForFast(() => expect(listStoredChatOutboxes(host)).toStrictEqual([]));
+      expect(historyAttempts).toBe(1);
+      expect(sendAttempts).toBe(0);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sendAttempts).toBe(1);
+      expect(historyAttempts).toBeGreaterThanOrEqual(2);
+      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("persists queueable local commands entered while disconnected", async () => {

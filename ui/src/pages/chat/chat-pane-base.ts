@@ -65,7 +65,7 @@ import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { closeSlot, isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
-  // Transfer a queued stream frame to Lit before parking; visibility resumes it.
+  // The first Lit update must render even while hidden; later hidden work parks.
   // Disconnect releases the waiter so reconnect can schedule in its new lifecycle.
   private hiddenUpdateResume: (() => void) | undefined;
   private readonly handleVisibilityChange = () =>
@@ -77,7 +77,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     super.connectedCallback();
   }
   protected override async scheduleUpdate() {
-    while (this.isConnected && document.visibilityState === "hidden") {
+    while (this.hasUpdated && this.isConnected && document.visibilityState === "hidden") {
       await new Promise<void>((resolve) => {
         this.hiddenUpdateResume = resolve;
       });
@@ -354,7 +354,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
   >();
   protected headerRenameInitialLabel: string | null = null;
-  protected headerRenameInitialValue = "";
   protected headerRenameSessionKey = "";
   protected headerCopiedTimer: number | null = null;
   protected composerPrefillAttentionTimer: number | null = null;

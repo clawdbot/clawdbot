@@ -91,7 +91,7 @@ type CronProps = {
   form: CronFormState;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
-  editingJobId: string | null;
+  editingJob: CronJob | null;
   createOpen: boolean;
   listTab: CronListTab;
   detailTab: CronDetailTab;
@@ -418,7 +418,7 @@ function renderToggleRow(
 // ── Main render ──
 
 export function renderCron(props: CronProps) {
-  const mode: CronPanelMode = props.editingJobId ? "job" : props.createOpen ? "create" : "overview";
+  const mode: CronPanelMode = props.editingJob ? "job" : props.createOpen ? "create" : "overview";
   return html`
     ${mode === "overview" ? renderListView(props) : renderDetailView(props, mode)}
     ${renderSuggestionList("cron-agent-suggestions", props.agentSuggestions)}
@@ -930,8 +930,7 @@ function renderSuggestions(props: CronProps) {
 // ── Detail view ──
 
 function renderDetailView(props: CronProps, mode: CronPanelMode) {
-  const selectedJob =
-    mode === "job" ? props.jobs.find((job) => job.id === props.editingJobId) : undefined;
+  const selectedJob = mode === "job" ? (props.editingJob ?? undefined) : undefined;
   const hasDetailTabs = mode === "job" && Boolean(selectedJob);
   const showHistory = mode === "job" && props.detailTab === "history";
   const children = [

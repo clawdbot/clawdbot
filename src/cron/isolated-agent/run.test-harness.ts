@@ -839,7 +839,21 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resetRunExecutionMocks();
   resetRunOutcomeMocks();
   resetRunSessionMocks();
-  setSessionRuntimeModelMock.mockReturnValue(undefined);
+  setSessionRuntimeModelMock.mockImplementation(
+    (
+      entry: { modelProvider?: string; model?: string },
+      runtime: { provider: string; model: string },
+    ) => {
+      const provider = runtime.provider.trim();
+      const model = runtime.model.trim();
+      if (!provider || !model) {
+        return false;
+      }
+      entry.modelProvider = provider;
+      entry.model = model;
+      return true;
+    },
+  );
   logWarnMock.mockReset();
   hasUsableWebSearchProviderMock.mockReset();
   hasUsableWebSearchProviderMock.mockImplementation(

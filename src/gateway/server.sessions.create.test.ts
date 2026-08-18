@@ -1245,7 +1245,14 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
     await rollbackStarted;
     let successorSettled = false;
     const successorPromise = directSessionReq<{
-      entry: { worktree?: { id: string; branch: string; repoRoot: string } };
+      entry: {
+        worktree?: {
+          id: string;
+          branch: string;
+          repoRoot: string;
+          canonicalWorkspaceDir?: string;
+        };
+      };
       worktree: { id: string; path: string; branch: string };
     }>("sessions.create", { key, agentId: "main", worktree: true }, { client: adminClient }).then(
       (result) => {
@@ -1279,6 +1286,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       id: successorWorktree.id,
       branch: successorWorktree.branch,
       repoRoot: workspace,
+      canonicalWorkspaceDir: workspace,
     });
 
     const adoptedFailure = await directSessionReq(
@@ -2018,7 +2026,10 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
   const findSpy = vi.spyOn(managedWorktrees, "findLiveById").mockReturnValue(record);
   try {
     const created = await directSessionReq<{
-      entry: { spawnedCwd?: string };
+      entry: {
+        spawnedCwd?: string;
+        worktree?: { canonicalWorkspaceDir?: string };
+      };
       worktree: { id: string; path: string };
     }>(
       "sessions.create",
@@ -2031,6 +2042,7 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
       expect.objectContaining({ repoRoot: selectedWorkspace }),
     );
     expect(created.payload?.entry.spawnedCwd).toBe(worktreePath);
+    expect(created.payload?.entry.worktree?.canonicalWorkspaceDir).toBe(selectedWorkspace);
 
     const mismatched = await directSessionReq(
       "sessions.create",
@@ -3037,8 +3049,8 @@ test("sessions.create rejects spawnDepth without parentSessionKey", async () => 
 });
 
 test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
-  await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "per-channel-peer" };
+  await createSessionStoreDir();
 
   const created = await directSessionReq<{
     entry?: { parentSessionKey?: string };
@@ -3049,8 +3061,8 @@ test("sessions.create leaves dashboard sessions unparented under per-channel-pee
 });
 
 test("sessions.create leaves dashboard sessions unparented under global session scope", async () => {
-  await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "main", scope: "global" };
+  await createSessionStoreDir();
 
   const created = await directSessionReq<{
     entry?: { parentSessionKey?: string };
@@ -3061,8 +3073,8 @@ test("sessions.create leaves dashboard sessions unparented under global session 
 });
 
 test("sessions.create does not parent the main session to itself", async () => {
-  await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "main" };
+  await createSessionStoreDir();
 
   const created = await directSessionReq<{
     key?: string;

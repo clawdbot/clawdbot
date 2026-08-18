@@ -76,6 +76,12 @@ import {
   trimToUndefined,
   type ExplicitGatewayAuth,
 } from "./credentials.js";
+import {
+  gatewayEdgeAuthValueForTarget,
+  normalizeEdgeAuthHeadersConfig,
+  resolveEdgeAuthHeaders,
+  type EdgeAuthHeadersConfig,
+} from "./edge-auth.js";
 import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
 import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 import {
@@ -820,6 +826,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   url: string;
   token?: string;
   password?: string;
+  edgeAuthHeaders?: Readonly<Record<string, string>>;
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
   timeoutMs: number | null;
@@ -837,6 +844,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     url,
     token,
     password,
+    edgeAuthHeaders,
     tlsFingerprint,
     preauthHandshakeTimeoutMs,
     timeoutMs,
@@ -919,6 +927,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       url,
       token,
       password,
+      edgeAuthHeaders,
       tlsFingerprint,
       preauthHandshakeTimeoutMs,
       instanceId: opts.instanceId ?? randomUUID(),
@@ -1158,6 +1167,15 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     }
   }
   const tlsFingerprint = bootstrap.tlsFingerprint;
+  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
+    gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
+  );
+  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
+    config: context.config,
+    value: edgeAuthConfig,
+    targetUrl: url,
+    env: process.env,
+  });
   if (useStoredDeviceAuth) {
     if (!storedAuth?.token) {
       throw new GatewayCredentialsRequiredError({
@@ -1199,6 +1217,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     url,
     token,
     password,
+    edgeAuthHeaders,
     tlsFingerprint,
     timeoutMs,
     startupTimeoutMs,

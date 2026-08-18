@@ -235,6 +235,14 @@ function entryMetaLine(entry: DeviceInventoryEntry): string {
   if (entry.node?.workerBundle?.status === "installed") {
     parts.push(t("devices.inventory.workerVersion", { version: entry.node.workerBundle.version }));
   }
+  if (entry.node?.workerSlots) {
+    parts.push(
+      t("devices.inventory.workerSlots", {
+        available: String(entry.node.workerSlots.available),
+        total: String(entry.node.workerSlots.total),
+      }),
+    );
+  }
   if (entry.connected && entry.presence?.lastInputSeconds != null) {
     parts.push(formatInputRecency(entry.presence.lastInputSeconds));
   } else if (!entry.connected && entry.lastSeenAtMs) {

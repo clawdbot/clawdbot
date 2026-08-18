@@ -94,7 +94,9 @@ export function describeSessionTrailingState(
   return [
     session.forkSource ? t("sessionsView.forkedSession") : "",
     pullRequestState === "none" ? "" : pullRequestStateLabel(pullRequestState),
-    session.hasActiveRun ? t("sessionsView.activeRun") : "",
+    session.hasActiveRun
+      ? t(session.status === "queued" ? "sessionsView.statusQueued" : "sessionsView.activeRun")
+      : "",
     session.unread ? t("sessionsView.unread") : "",
   ]
     .filter(Boolean)

@@ -17,6 +17,7 @@ import {
   pollLocatorText,
   projectProofArtifactDir,
   waitForCommittedChatRoute,
+  waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -478,9 +479,8 @@ suite.define(() => {
       }, WORKSPACE);
       await gateway.setMethodResponse("agents.list", mainAgentList(WORKSPACE, false));
       await page.reload();
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
-      const storedWorktree = (await readMainPreference(page))?.worktree;
-      expect(storedWorktree).toBe(false);
+      await expect.poll(async () => (await readMainPreference(page))?.worktree).toBe(false);
+      await expect.poll(() => placeTrigger.count()).toBe(0);
     });
   });
 
@@ -781,11 +781,14 @@ suite.define(() => {
       // A failed lookup disables the worktree toggle, so restoring the stored
       // choice would strand the draft behind a control the user cannot clear.
       // The draft drops it and stays submittable; storage keeps the preference.
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => placeTrigger.count()).toBe(0);
       await expect.poll(() => start.isDisabled()).toBe(false);
+      await waitForCommittedNewSessionDraft(page, "keep both remembered choices", 0);
 
       await page.reload();
-      await page.locator(".new-session-page__message").fill("keep both remembered choices");
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("keep both remembered choices");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");

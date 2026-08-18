@@ -499,7 +499,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
         toSidebarSession: navigationState.toSidebarSession,
-        ownerId: this.activeSessionCreatorId,
+        ownerId: this.activeSessionOwnerId,
         catalogOpenTarget: this.catalogOpenTarget,
         terminalAvailable: this.terminalAvailable,
       },
@@ -572,6 +572,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .refreshRequired=${this.refreshRequired}
               .onRefresh=${this.onRefresh}
               .onHoldUpdate=${this.onHoldUpdate}
+              .onReviewUpdate=${this.onReviewUpdate}
             ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}

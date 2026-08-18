@@ -147,9 +147,10 @@ Every learned skill receives these controls:
 
 - **Security scan at apply:** Workshop reruns the scanner immediately before the
   live write. A critical finding quarantines the proposal instead of applying it.
-- **Workspace-only writes:** creates and updates can target only writable skills
-  in the selected workspace. Bundled, plugin, managed, personal-agent, system,
-  and extra-root skills remain outside the write boundary.
+- **Workshop-owned writes:** creates target the selected workspace. Updates can
+  target only skill directories owned by an applied Workshop `create` proposal.
+  Handwritten workspace skills, plus bundled, plugin, managed, personal-agent,
+  system, and extra-root skills, remain read-only.
 - **Hash binding:** update proposals bind to the current live skill and go stale
   if that target changes before apply.
 - **Read before update:** the reviewer must read the complete current skill
@@ -157,8 +158,9 @@ Every learned skill receives these controls:
 - **Rollback metadata:** apply records the prior skill and support-file contents
   before the live write.
 - **Collection review:** once a day in `auto` mode, an isolated model session
-  reads the writable workspace skills and makes one complete keep, rewrite,
-  create, or drop decision for the collection.
+  reads the workspace skills. Externally owned skills must be kept; only
+  Workshop-owned paths can be rewritten or dropped. Collection-created skills
+  receive automatically applied `create` proposal records.
 - **Collection backup:** review validates and scans every rewrite before changing
   the workspace, keeps one recoverable collection backup, and restores it if a
   write fails.
@@ -212,7 +214,7 @@ with model fallbacks disabled. Provider pricing and data-handling terms apply to
 the additional run.
 
 Daily collection review also uses the configured agent model. It receives the
-names and descriptions of eligible writable workspace skills, then reads each
+names, descriptions, and ownership state of eligible workspace skills, then reads each
 complete skill before making one atomic collection change. Disabled and
 agent-filtered skills stay untouched. Shared workspaces use the union of each
 agent's allowed skills only when provider, model, and resolved auth identity

@@ -10,6 +10,7 @@ import {
   abortReplyRunBySessionId,
   expireStaleReplyRunBySessionId,
   forceClearReplyOperation,
+  hasReplyOperationExecutionStarted,
   isReplyRunEvidenceStaleBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
@@ -765,8 +766,11 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
  * Terminal reply operations and aborted handles retain their lane for cleanup,
  * but must not keep session activity projections in the running state.
  */
-export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
-  const replyPhase = resolveReplyRunPhaseForSessionId(sessionId);
+export function resolveEmbeddedAgentRunProgressState(
+  sessionId: string,
+): "queued" | "running" | undefined {
+  const replyOperation = resolveActiveReplyOperationForSessionId(sessionId);
+  const replyPhase = replyOperation?.phase;
   const replyInProgress =
     replyPhase !== undefined &&
     replyPhase !== "completed" &&
@@ -786,7 +790,17 @@ export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
   }
   // Reply operations and embedded handles are independent lifecycle owners.
   // A retained terminal owner must not hide a newer live owner for the session.
-  return replyInProgress || handleInProgress;
+  if (
+    handleInProgress ||
+    (replyInProgress && replyOperation && hasReplyOperationExecutionStarted(replyOperation))
+  ) {
+    return "running";
+  }
+  return replyInProgress ? "queued" : undefined;
+}
+
+export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
+  return resolveEmbeddedAgentRunProgressState(sessionId) !== undefined;
 }
 
 export function resolveEmbeddedAgentReplyRunPhase(

@@ -54,9 +54,11 @@ export {
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.registry.js";
 export {
+  hasReplyOperationExecutionStarted,
   isReplyRunAbortableForSignal,
   isReplyRunEvidenceStale,
   isReplyRunSuccessorAdmissionBlocked,
+  markReplyOperationExecutionStarted,
   registerReplyOperationSuccessorBarrier,
   retainReplyOperationUntilComplete,
   runAfterReplyOperationClear,

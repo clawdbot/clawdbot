@@ -84,6 +84,7 @@ export class CodexAppServerEventProjector {
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
   private contextTokens: number | undefined;
+  private contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
   private readonly responseCompletions = new CodexResponseCompletionProjection();
   private completedCompactionCount = 0;
   private lastTranscriptTimestamp = 0;
@@ -95,6 +96,7 @@ export class CodexAppServerEventProjector {
     private readonly options: CodexAppServerEventProjectorOptions = {},
   ) {
     this.contextTokens = options.initialContextTokens;
+    this.contextTokensSource = options.initialContextTokens === undefined ? undefined : "resolved";
     this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId);
     this.nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       params,
@@ -276,7 +278,16 @@ export class CodexAppServerEventProjector {
           this.tokenUsage,
           (usage) => (this.tokenUsage = usage),
           (data) => {
-            this.contextTokens = data.modelContextWindow ?? this.contextTokens;
+            if (data.modelContextWindow !== undefined) {
+              this.contextTokens = data.modelContextWindow;
+              // Codex reports the effective thread window. When OpenClaw supplied an
+              // authored cap, retain that fact so removing the cap cannot make the
+              // constrained observation look like uncapped native telemetry.
+              this.contextTokensSource =
+                this.params.authoredContextTokenCap === undefined
+                  ? "runtime"
+                  : "runtime-configured";
+            }
             this.emitAgentEvent({ stream: "codex_app_server.usage", data });
           },
         );
@@ -339,6 +350,7 @@ export class CodexAppServerEventProjector {
       aborted: this.aborted,
       tokenUsage: this.tokenUsage,
       contextTokens: this.contextTokens,
+      contextTokensSource: this.contextTokensSource,
       completedCompactionCount: this.completedCompactionCount,
       activeItemCount: this.activeItemIds.size,
       completedItemCount: this.completedItemIds.size,

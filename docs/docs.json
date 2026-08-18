@@ -1088,6 +1088,7 @@
                 "pages": [
                   "install/backups",
                   "install/updating",
+                  "install/update-troubleshooting",
                   {
                     "group": "Migrating",
                     "pages": [

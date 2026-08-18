@@ -254,24 +254,40 @@ export async function applySessionEntryLifecycleMutation(params: {
     }
     throw error;
   };
-  const projected = await runExclusiveSqliteSessionWrite(resolved, async () => {
+  let projected!: ProjectedLifecycleMutation;
+  let committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    return await projectSessionEntryLifecycleMutation(database, {
+    projected = await projectSessionEntryLifecycleMutation(database, {
       ...(params.allowCanonicalRepair ? { allowCanonicalRepair: true } : {}),
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
       removals,
       upserts,
     });
+    return projected.deletePlans.length === 0
+      ? commitProjectedLifecycleMutation([], false)
+      : undefined;
   });
-  let materializedRemovalPlans: MaterializedSessionStateDeletePlan[] = [];
-  let removalArchiveMaterializationFailed = false;
-  try {
-    materializedRemovalPlans = await materializeSessionStateDeletePlans(projected.deletePlans);
-  } catch (error) {
-    removalArchiveMaterializationFailed = true;
-    captureArtifactCleanupError(error);
+  if (!committed) {
+    let materializedRemovalPlans: MaterializedSessionStateDeletePlan[] = [];
+    let removalArchiveMaterializationFailed = false;
+    try {
+      materializedRemovalPlans = await materializeSessionStateDeletePlans(projected.deletePlans);
+    } catch (error) {
+      removalArchiveMaterializationFailed = true;
+      captureArtifactCleanupError(error);
+    }
+    committed = await runExclusiveSqliteSessionWrite(resolved, async () =>
+      commitProjectedLifecycleMutation(
+        materializedRemovalPlans,
+        removalArchiveMaterializationFailed,
+      ),
+    );
   }
-  const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
+
+  function commitProjectedLifecycleMutation(
+    removalPlans: MaterializedSessionStateDeletePlan[],
+    materializationFailed: boolean,
+  ) {
     let beforeCount = 0;
     const removedSessionKeys: string[] = [];
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
@@ -280,10 +296,7 @@ export async function applySessionEntryLifecycleMutation(params: {
       params.beforeCommitInTransaction?.();
       beforeCount = readSessionEntryCount(transactionDb);
       const validatedRemovals = projected.removals.filter((removal) => {
-        if (
-          removalArchiveMaterializationFailed &&
-          removal.removal.archiveRemovedTranscript === true
-        ) {
+        if (materializationFailed && removal.removal.archiveRemovedTranscript === true) {
           return false;
         }
         const entry = readProjectedRemovalEntry(
@@ -314,7 +327,7 @@ export async function applySessionEntryLifecycleMutation(params: {
       });
       archivedTranscripts = deleteMaterializedSessionStatePlans(
         transactionDb,
-        materializedRemovalPlans,
+        removalPlans,
         undefined,
         new Set(validatedRemovals.map((removal) => removal.sessionKey)),
       );
@@ -433,7 +446,8 @@ export async function applySessionEntryLifecycleMutation(params: {
     }, toDatabaseOptions(resolved));
     emitCommittedLifecycleIdentityMutations({ projected, removedSessionKeys });
     return { archivedTranscripts, beforeCount, maintenancePlans, removedSessionKeys };
-  });
+  }
+
   const { archivedTranscripts: maintenanceArchivedTranscripts, ...maintenance } =
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,

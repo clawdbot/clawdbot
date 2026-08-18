@@ -241,9 +241,18 @@ export class VoiceCallWebhookServer {
       this.logger.info(
         `Call finalization requested reason=stream-disconnect-grace-expired callId=${call.callId} providerCallId=${providerCallId}`,
       );
-      void this.manager.endCall(call.callId).catch((err: unknown) => {
-        this.logger.warn(`Failed to auto-end call ${call.callId}: ${String(err)}`);
-      });
+      void this.manager
+        .endCall(call.callId)
+        .then((result) => {
+          if (!result.success) {
+            this.logger.warn(
+              `Failed to auto-end call ${call.callId}: ${result.error ?? "unknown error"}`,
+            );
+          }
+        })
+        .catch((err: unknown) => {
+          this.logger.warn(`Failed to auto-end call ${call.callId}: ${String(err)}`);
+        });
     });
   }
 

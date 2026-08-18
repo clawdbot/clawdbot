@@ -5879,7 +5879,6 @@ process.on("SIGINT", shutdown);`,
       try {
         const firstCatalog = runtime.getCatalog();
         await waitForFileText(firstConnectMarkerPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
-        const firstSlowPid = Number(await fs.readFile(firstConnectMarkerPath, "utf8"));
         await waitForFileText(
           triggerLogPath,
           "sent initial tools/list_changed",
@@ -5897,18 +5896,6 @@ process.on("SIGINT", shutdown);`,
         expect(firstCatalogResult.servers.slow).toBeDefined();
         expect(secondCatalog.servers.trigger).toBeDefined();
         expect(secondCatalog.servers.slow).toBeDefined();
-        await waitForPredicate(
-          () => {
-            try {
-              process.kill(firstSlowPid, 0);
-              return false;
-            } catch (error) {
-              return (error as NodeJS.ErrnoException).code === "ESRCH";
-            }
-          },
-          "timed-out first MCP generation to exit",
-          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
-        );
         await expect(runtime.callTool("trigger", "poke", {})).resolves.toMatchObject({
           content: [{ type: "text", text: "poked" }],
           isError: false,

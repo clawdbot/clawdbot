@@ -301,11 +301,18 @@ vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
   buildSkillSnapshot: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/loading/workspace-skill-loader.js", () => ({
-  filterWorkspaceSkills: (entries: unknown[]) => entries,
-  loadVisibleSkills: vi.fn(() => []),
-  loadWorkspaceSkills: vi.fn(() => []),
-}));
+vi.mock("../skills/loading/workspace-skill-loader.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../skills/loading/workspace-skill-loader.js")
+  >("../skills/loading/workspace-skill-loader.js");
+  return {
+    filterWorkspaceSkills: (entries: unknown[]) => entries,
+    loadMergedWorkspaceSkills: vi.fn(() => []),
+    loadVisibleSkills: vi.fn(() => []),
+    loadWorkspaceSkills: vi.fn(() => []),
+    normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
+  };
+});
 
 vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),

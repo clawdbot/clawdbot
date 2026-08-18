@@ -37,10 +37,10 @@ import {
   resolveUiKnownSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import { showToast } from "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
-import { deleteStoredChatSessionSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { OpenClawApp } from "./app-root.ts";
@@ -167,8 +167,11 @@ class OpenClawShell
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
   private outboxStoreUnsubscribe: (() => void) | null = null;
+  private lastDeletedSessions: ApplicationContext["sessions"]["state"]["deletedSessions"] | null =
+    null;
   readonly outboxStoreImport = createIdleImport(
-    () => import("../lib/chat/outbox-store.ts").then((module): OutboxStoreRuntime => module),
+    () =>
+      import("../lib/chat/outbox-store-projection.ts").then((module): OutboxStoreRuntime => module),
     (runtime) => this.installOutboxStoreRuntime(runtime),
   );
   private lastNativeNavState: NativeNavState | undefined;
@@ -320,7 +323,7 @@ class OpenClawShell
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
         (sessions) => {
-          this.invalidateDeletedSessionSnapshots(sessions.state);
+          this.observeDeletedSessions(sessions.state);
           this.recoverDeletedActiveSession(sessions.state);
         },
       )
@@ -415,6 +418,7 @@ class OpenClawShell
     this.activeSessionKey = "";
     this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
+    this.lastDeletedSessions = null;
     this.shellGateway.reset();
     this.disposeSidebarWorkboard();
     for (const timer of this.settingsPreloadTimers.values()) {
@@ -476,20 +480,19 @@ class OpenClawShell
     this.shellNavigation.recoverDeletedActiveSession(sessionState);
   }
 
-  private invalidateDeletedSessionSnapshots(
-    sessionState: ApplicationContext["sessions"]["state"],
-  ): void {
+  observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void {
     const context = this.context;
-    if (!context || sessionState.deletedSessions.length === 0) {
+    const deletedSessions = sessionState.deletedSessions;
+    if (!context || Object.is(deletedSessions, this.lastDeletedSessions)) {
       return;
     }
-    void deleteStoredChatSessionSnapshots(
-      {
-        assistantAgentId: context.gateway.snapshot.assistantAgentId,
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
-      },
-      sessionState.deletedSessions,
+    this.lastDeletedSessions = deletedSessions;
+    if (deletedSessions.length === 0) {
+      return;
+    }
+    void import("../lib/chat/composer-draft-retirement.runtime.ts").then(
+      ({ retireDeletedComposerDrafts }) => retireDeletedComposerDrafts(context, deletedSessions),
+      () => showToast({ message: t("sessionsView.draftCleanupFailed") }),
     );
   }
 

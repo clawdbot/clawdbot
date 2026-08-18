@@ -9,7 +9,7 @@ import {
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
-async function selectCreator(sidebar: SidebarLifecycleState, creatorId: string) {
+async function selectOwner(sidebar: SidebarLifecycleState, ownerId: string) {
   const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
   if (!trigger) {
     throw new Error("expected session sort trigger");
@@ -23,7 +23,7 @@ async function selectCreator(sidebar: SidebarLifecycleState, creatorId: string) 
   menu.dispatchEvent(
     new CustomEvent("wa-select", {
       bubbles: true,
-      detail: { item: { value: `creator:${creatorId}` } },
+      detail: { item: { value: `owner:${ownerId}` } },
     }),
   );
   await sidebar.updateComplete;
@@ -57,7 +57,7 @@ describe("AppSidebar session ownership filtering", () => {
       type: "agent",
       id: "agent:roboclaw:discord:channel:456",
     };
-    result.creators = [
+    result.owners = [
       { type: "human", id: "profile:channel:opaque", label: "Channel Keeper" },
       { type: "agent", id: "research", label: "Research" },
     ];
@@ -72,7 +72,7 @@ describe("AppSidebar session ownership filtering", () => {
     await sidebar.updateComplete;
 
     const menu = sidebar.querySelector(".sidebar-session-sort-menu");
-    expect(menu?.querySelector('[value="creator:profile:channel:opaque"]')).not.toBeNull();
+    expect(menu?.querySelector('[value="owner:profile:channel:opaque"]')).not.toBeNull();
     expect(menu?.textContent).toContain("Channel Keeper");
     expect(
       sidebar.querySelector(
@@ -89,15 +89,15 @@ describe("AppSidebar session ownership filtering", () => {
         '[data-session-key="agent:main:session-principal"] openclaw-session-owner-chip',
       ),
     ).toBeNull();
-    expect(menu?.querySelector('[value="creator:discord:channel:123"]')).toBeNull();
-    expect(menu?.querySelector('[value="creator:agent:roboclaw:discord:channel:456"]')).toBeNull();
+    expect(menu?.querySelector('[value="owner:discord:channel:123"]')).toBeNull();
+    expect(menu?.querySelector('[value="owner:agent:roboclaw:discord:channel:456"]')).toBeNull();
 
-    result.creators = undefined;
+    result.owners = undefined;
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
     const unavailableMenu = sidebar.querySelector(".sidebar-session-sort-menu");
-    expect(unavailableMenu?.querySelector('[value^="creator:"]') ?? null).toBeNull();
+    expect(unavailableMenu?.querySelector('[value^="owner:"]') ?? null).toBeNull();
     expect(unavailableMenu?.textContent ?? "").not.toContain("Channel Keeper");
   });
 
@@ -115,7 +115,7 @@ describe("AppSidebar session ownership filtering", () => {
     const ada = result.sessions.find((row) => row.key.endsWith(":ada"));
     const bob = result.sessions.find((row) => row.key.endsWith(":bob"));
     if (!ada || !bob) {
-      throw new Error("expected creator rows");
+      throw new Error("expected owner rows");
     }
     ada.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
     ada.owner = {
@@ -131,7 +131,7 @@ describe("AppSidebar session ownership filtering", () => {
       assignedAt: 11,
     };
     bob.category = "Operations";
-    result.creators = [
+    result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
     ];
@@ -141,7 +141,7 @@ describe("AppSidebar session ownership filtering", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelectorAll("openclaw-session-owner-chip")).toHaveLength(2);
-    await selectCreator(sidebar, "profile-ada");
+    await selectOwner(sidebar, "profile-ada");
 
     expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-key="agent:main:bob"]')).toBeNull();
@@ -174,7 +174,7 @@ describe("AppSidebar session ownership filtering", () => {
       assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
       assignedAt: 10,
     };
-    result.creators = [
+    result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
     ];
@@ -221,7 +221,7 @@ describe("AppSidebar session ownership filtering", () => {
 
     expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).not.toBeNull();
     expect(sidebar.textContent).toContain("External unowned session");
-    await selectCreator(sidebar, "profile-bob");
+    await selectOwner(sidebar, "profile-bob");
 
     expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).not.toBeNull();
     expect(sidebar.textContent).not.toContain("External unowned session");
@@ -249,11 +249,11 @@ describe("AppSidebar session ownership filtering", () => {
     const ada = result.sessions.find((row) => row.key.endsWith(":ada"));
     const bob = result.sessions.find((row) => row.key.endsWith(":bob"));
     if (!ada || !bob) {
-      throw new Error("expected creator rows");
+      throw new Error("expected owner rows");
     }
     ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
-    result.creators = [
+    result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
     ];
@@ -291,7 +291,7 @@ describe("AppSidebar session ownership filtering", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    await selectCreator(sidebar, "profile-ada");
+    await selectOwner(sidebar, "profile-ada");
     expect(sidebar.querySelector(`[data-session-key="${unloadedSessionKey}"]`)).not.toBeNull();
   });
 
@@ -312,7 +312,7 @@ describe("AppSidebar session ownership filtering", () => {
     unread.unread = true;
     other.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
     other.owner = { actor: other.createdActor };
-    result.creators = [
+    result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
     ];
@@ -349,7 +349,7 @@ describe("AppSidebar session ownership filtering", () => {
       owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
       childSessions: [childKey],
     };
-    result.creators = [
+    result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
     ];

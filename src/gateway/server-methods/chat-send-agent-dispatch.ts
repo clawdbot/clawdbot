@@ -311,6 +311,13 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId) => {
+                  if (activeRunAbort.markExecutionStarted()) {
+                    emitSessionsChanged(context, {
+                      sessionKey,
+                      agentId,
+                      reason: "chat.run.started",
+                    });
+                  }
                   agentRunStarted = replyDispatch.captureAgentTranscriptStart();
                   emitServerTiming(
                     "agent-run-started",

@@ -1390,10 +1390,30 @@ function normalizeOptionalEnvValue(value: string | undefined): string | undefine
 }
 
 function createExplicitLiveFallbackModel(provider: string, id: string): Model {
+  const thinkingProfile = resolveEffectiveThinkingProfile({
+    provider,
+    context: {
+      provider,
+      modelId: id,
+      agentRuntime: "openclaw",
+      reasoning: true,
+    },
+  });
+  const supportsXhigh = thinkingProfile?.levels.some((level) => level.id === "xhigh") ?? false;
+  const supportsMax = thinkingProfile?.levels.some((level) => level.id === "max") ?? false;
   return {
     ...createGatewayLiveTestModel(provider, id),
     contextWindow: EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW,
     maxTokens: 4_096,
+    reasoning: thinkingProfile?.levels.some((level) => level.id !== "off") ?? false,
+    ...(supportsXhigh || supportsMax
+      ? {
+          thinkingLevelMap: {
+            ...(supportsXhigh ? { xhigh: "xhigh" } : {}),
+            ...(supportsMax ? { max: "max" } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -3910,11 +3930,83 @@ describe("OpenAI Ultra wire capture", () => {
       }
     }
   });
+
+  it("preserves model-specific capture endpoints in the provider override", () => {
+    const capture = (baseUrl: string): OpenAIUltraWireCapture => ({
+      baseUrl,
+      close: () => Promise.resolve(),
+      observations: [],
+    });
+    const candidates = [
+      {
+        ...createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
+        baseUrl: "https://sol.test/v1",
+      },
+      {
+        ...createGatewayLiveTestModel("openai", "gpt-5.6-terra"),
+        baseUrl: "https://terra.test/v1",
+      },
+    ];
+    const capturesByModel = new Map<string, OpenAIUltraWireCapture>([
+      ["gpt-5.6-sol", capture("http://127.0.0.1:4101/v1")],
+      ["gpt-5.6-terra", capture("http://127.0.0.1:4102/v1")],
+    ]);
+
+    const override = buildOpenAIUltraWireProviderOverride({
+      candidates,
+      capturesByModel,
+      cfg: {},
+    });
+
+    expect(override.baseUrl).toBe("http://127.0.0.1:4101/v1");
+    expect(
+      Object.fromEntries(override.models?.map((model) => [model.id, model.baseUrl]) ?? []),
+    ).toEqual({
+      "gpt-5.6-sol": "http://127.0.0.1:4101/v1",
+      "gpt-5.6-terra": "http://127.0.0.1:4102/v1",
+    });
+  });
+
+  it("uses the configured or official route for explicit fallback models", () => {
+    const candidate = createExplicitLiveFallbackModel("openai", "gpt-5.6-sol");
+
+    expect(candidate.reasoning).toBe(true);
+    expect(candidate.thinkingLevelMap).toMatchObject({ xhigh: "xhigh", max: "max" });
+    expect(
+      resolveOpenAIUltraUpstreamBaseUrl({
+        candidate,
+        cfg: {
+          models: {
+            providers: { openai: { baseUrl: "https://proxy.test/v1", models: [] } },
+          },
+        },
+      }),
+    ).toBe("https://proxy.test/v1");
+    expect(resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: {} })).toBe(
+      "https://api.openai.com/v1",
+    );
+  });
 });
 
+const OPENAI_LIVE_DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+function resolveOpenAIUltraUpstreamBaseUrl(params: {
+  candidate: Model;
+  cfg: OpenClawConfig;
+}): string {
+  const providerConfig = params.cfg.models?.providers?.openai;
+  const configuredModel = providerConfig?.models?.find((model) => model.id === params.candidate.id);
+  return (
+    params.candidate.baseUrl?.trim() ||
+    configuredModel?.baseUrl?.trim() ||
+    providerConfig?.baseUrl?.trim() ||
+    OPENAI_LIVE_DEFAULT_BASE_URL
+  );
+}
+
 function buildOpenAIUltraWireProviderOverride(params: {
-  baseUrl: string;
   candidates: Array<Model>;
+  capturesByModel: ReadonlyMap<string, OpenAIUltraWireCapture>;
   cfg: OpenClawConfig;
 }): ModelProviderConfig {
   const discovered = buildLiveProviderConfigs({
@@ -3929,10 +4021,14 @@ function buildOpenAIUltraWireProviderOverride(params: {
     base: params.cfg.models?.providers?.openai,
     discovered,
   });
+  const firstCapture = params.capturesByModel.values().next().value;
   return {
     ...merged,
-    baseUrl: params.baseUrl,
-    models: merged.models?.map((model) => Object.assign({}, model, { baseUrl: params.baseUrl })),
+    baseUrl: firstCapture?.baseUrl ?? merged.baseUrl,
+    models: merged.models?.map((model) => {
+      const capture = params.capturesByModel.get(model.id);
+      return capture ? Object.assign({}, model, { baseUrl: capture.baseUrl }) : model;
+    }),
   };
 }
 
@@ -4547,17 +4643,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       "OPENCLAW_LIVE_GATEWAY_THINKING=ultra requires an explicit GPT-5.6 OpenAI model list",
     );
   }
-  const ultraUpstreamBaseUrls = new Set(
-    ultraCandidates.map((model) => model.baseUrl?.trim()).filter(Boolean),
-  );
-  if (ultraCandidates.length > 0 && ultraUpstreamBaseUrls.size !== 1) {
-    throw new Error(
-      `Ultra wire capture requires one explicit OpenAI base URL; found ${JSON.stringify([
-        ...ultraUpstreamBaseUrls,
-      ])}`,
-    );
-  }
-  const [ultraUpstreamBaseUrl] = [...ultraUpstreamBaseUrls];
   const previousEnv = snapshotLiveEnv([
     "OPENCLAW_DISABLE_BONJOUR",
     "OPENCLAW_LOG_LEVEL",
@@ -4569,7 +4654,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   let cleanupTempAgentDir: string | undefined;
   let cleanupToolProbePath: string | undefined;
   let cleanupTempDir: string | undefined;
-  let ultraWireCapture: OpenAIUltraWireCapture | undefined;
+  const ultraWireCapturesByModel = new Map<string, OpenAIUltraWireCapture>();
+  const ultraWireCapturesByUpstream = new Map<string, OpenAIUltraWireCapture>();
   let server: GatewayServer | undefined;
   let client: GatewayClient | undefined;
 
@@ -4637,15 +4723,23 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     };
     let providerOverrides = params.providerOverrides;
     if (ultraCandidates.length > 0) {
-      if (!ultraUpstreamBaseUrl) {
-        throw new Error("Ultra wire capture requires an explicit OpenAI base URL");
+      for (const candidate of ultraCandidates) {
+        const upstreamBaseUrl = resolveOpenAIUltraUpstreamBaseUrl({
+          candidate,
+          cfg: sanitizedCfg,
+        });
+        let capture = ultraWireCapturesByUpstream.get(upstreamBaseUrl);
+        if (!capture) {
+          capture = await startOpenAIUltraWireCapture(upstreamBaseUrl);
+          ultraWireCapturesByUpstream.set(upstreamBaseUrl, capture);
+        }
+        ultraWireCapturesByModel.set(candidate.id, capture);
       }
-      ultraWireCapture = await startOpenAIUltraWireCapture(ultraUpstreamBaseUrl);
       providerOverrides = {
         ...params.providerOverrides,
         openai: buildOpenAIUltraWireProviderOverride({
-          baseUrl: ultraWireCapture.baseUrl,
           candidates: ultraCandidates,
+          capturesByModel: ultraWireCapturesByModel,
           cfg: sanitizedCfg,
         }),
       };
@@ -4732,6 +4826,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
       const strictUltraProof = isOpenAIGpt56UltraTarget(model, params.thinkingLevel);
       const skippedBeforeModel = skippedCount;
+      const ultraWireCapture = ultraWireCapturesByModel.get(model.id);
       const wireObservationStart = ultraWireCapture?.observations.length ?? 0;
       const thinkingLevel = resolveGatewayLiveModelThinkingLevel({
         model,
@@ -5425,7 +5520,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           await server.close({ reason: "live test complete" });
         }
       } finally {
-        await ultraWireCapture?.close();
+        await Promise.all(
+          [...ultraWireCapturesByUpstream.values()].map((capture) => capture.close()),
+        );
       }
     } finally {
       try {

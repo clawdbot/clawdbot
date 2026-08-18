@@ -623,6 +623,7 @@ export async function executeNodeHostCommand(
           unavailableReason,
           allowedDecisions,
           nodeId: target.nodeId,
+          processContinuationAvailable: params.processContinuationAvailable,
         });
       }
     }

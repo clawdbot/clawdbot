@@ -374,7 +374,6 @@ export async function createVoiceCallRuntime(params: {
     const realtimeHandler = new RealtimeCallHandler(
       realtimeConfig,
       manager,
-      provider,
       resolveCallRegistration,
       config.serve.path,
       webhookServer.getStreamDisconnectLifecycle(),

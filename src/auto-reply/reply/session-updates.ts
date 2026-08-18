@@ -172,6 +172,7 @@ export async function ensureSkillSnapshot(params: {
   sessionId?: string;
   isFirstTurnInSession: boolean;
   workspaceDir: string;
+  executionSkillsDir?: string;
   cfg: OpenClawConfig;
   execOverrides?: ExecPolicyOverrides;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
@@ -223,6 +224,7 @@ export async function ensureSkillSnapshot(params: {
   const resolveSnapshot = (snapshot: SessionEntry["skillsSnapshot"]) =>
     resolveReusableWorkspaceSkillSnapshot({
       workspaceDir,
+      ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
       config: cfg,
       agentId: sessionAgentId,
       skillFilter,

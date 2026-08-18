@@ -17,6 +17,7 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
 type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
   busy: boolean;
+  canGrant: boolean;
   error: string | null;
   nowMs: number;
   variant: "inline" | "modal";
@@ -165,6 +166,8 @@ export function approvalTitle(active: ExecApprovalRequest): string {
 export function renderExecApprovalCard(props: ExecApprovalCardProps) {
   const active = props.approval;
   const decisions = resolveApprovalDecisions(active);
+  const reviewOnlyMessage = t("execApproval.reviewOnly");
+  const grantError = !props.canGrant && props.error === reviewOnlyMessage;
   const rawSeverity = active.pluginSeverity?.trim().toLowerCase();
   const severity =
     active.kind === "exec" || rawSeverity === "warning" || rawSeverity === "warn"
@@ -202,7 +205,17 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
     ${active.kind === "exec" && !decisions.includes("allow-always")
       ? html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`
       : nothing}
-    ${props.error ? html`<div class="exec-approval-error">${props.error}</div>` : nothing}
+    ${!props.canGrant
+      ? html`<div
+          class=${grantError ? "exec-approval-error" : "exec-approval-warning"}
+          role=${grantError ? "alert" : "note"}
+        >
+          ${reviewOnlyMessage}
+        </div>`
+      : nothing}
+    ${props.error && !grantError
+      ? html`<div class="exec-approval-error" role="alert">${props.error}</div>`
+      : nothing}
     <div class="exec-approval-actions">
       ${decisions.map((decision) => {
         const label = decisionLabel(decision);
@@ -210,8 +223,10 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
           class=${decisionClass(decision)}
           type="button"
           aria-label=${label}
-          ?disabled=${props.busy}
-          title=${props.variant === "modal" ? `${label} (${decisionShortcut(decision)})` : label}
+          ?disabled=${props.busy || !props.canGrant}
+          title=${props.variant === "modal" && props.canGrant
+            ? `${label} (${decisionShortcut(decision)})`
+            : label}
           @click=${() => props.onDecision(active.id, decision)}
         >
           <span>${label}</span>

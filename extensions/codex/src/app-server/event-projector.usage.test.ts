@@ -27,6 +27,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
 
     expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
       contextTokens: 1_050_000,
+      contextTokensSource: "resolved",
     });
   });
 
@@ -69,6 +70,23 @@ describe("CodexAppServerEventProjector usage projection", () => {
     });
     expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
       contextTokens: 875_900,
+      contextTokensSource: "runtime",
+    });
+  });
+
+  it("marks native telemetry constrained by an authored context cap", async () => {
+    const params = await createParams();
+    const projector = await createProjector({ ...params, authoredContextTokenCap: 272_000 });
+
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: { modelContextWindow: 272_000 },
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
+      contextTokens: 272_000,
+      contextTokensSource: "runtime-configured",
     });
   });
 

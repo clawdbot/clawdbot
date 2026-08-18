@@ -77,19 +77,6 @@ describe("exec GitHub identity", () => {
     }
   });
 
-  it("preserves ambient service tokens for unconfigured local gateway exec", () => {
-    setTestEnvValue("GH_TOKEN", "ambient-token");
-    setTestEnvValue("GITHUB_TOKEN", "ambient-fallback");
-    const prepared = prepareGitHubToolEnvironment({ config: {}, agentId: "main" });
-
-    for (const host of ["gateway", "node", "sandbox"] as const) {
-      const result = prepare(host, prepared, false);
-      expect(result.env.GH_TOKEN).toBe(host === "gateway" ? "ambient-token" : undefined);
-      expect(result.env.GITHUB_TOKEN).toBe(host === "gateway" ? "ambient-fallback" : undefined);
-      expect(result.requestedEnv).toBeUndefined();
-    }
-  });
-
   it.each([
     { previewName: "GH_TOKEN", otherName: "GITHUB_TOKEN" },
     { previewName: "GITHUB_TOKEN", otherName: "GH_TOKEN" },

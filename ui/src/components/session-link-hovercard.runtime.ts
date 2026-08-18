@@ -553,6 +553,9 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
       this.mountPreview(anchor, target, "vertical");
       return;
     }
+    // Position outside the complete row, including its trailing actions. Anchoring
+    // to the link alone lets the card cover those controls and makes them unclickable.
+    const positionAnchor = anchor.parentElement!;
     // Sidebar rows share their hover surface with the progress hovercard: an active
     // progress card owns the row, so the preview opens only without one. A card that
     // appears while the preview is open is not reconciled until the next hover.
@@ -564,7 +567,7 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
       return;
     }
     if (!progressCards || known === null) {
-      this.mountPreview(anchor, target, "horizontal");
+      this.mountPreview(positionAnchor, target, "horizontal");
       return;
     }
     void progressCards
@@ -576,13 +579,13 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
           this.activeTarget?.sessionKey === target.sessionKey &&
           this.hovercard.held;
         if (!progressCard && stillActive) {
-          this.mountPreview(anchor, target, "horizontal");
+          this.mountPreview(positionAnchor, target, "horizontal");
         }
       });
   }
 
   private mountPreview(
-    anchor: HTMLAnchorElement,
+    anchor: HTMLElement,
     target: SessionPreviewTarget,
     placement: "horizontal" | "vertical",
   ): void {

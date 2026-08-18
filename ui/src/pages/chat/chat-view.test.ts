@@ -682,6 +682,7 @@ function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     disabledReason: null,
     error: null,
     runError: null,
+    approvalCanGrant: false,
     sessions: null,
     canvasPluginSurfaceUrl: null,
     embedSandboxMode: "scripts",
@@ -892,7 +893,7 @@ describe("chat Swarm progress", () => {
 });
 
 describe("inline approval card", () => {
-  it("renders between the transcript and composer and forwards its decision id", () => {
+  it("renders between the transcript and composer and enforces its grant projection", () => {
     const onApprovalDecision = vi.fn();
     const inlineApproval = {
       id: "approval-inline",
@@ -910,6 +911,7 @@ describe("inline approval card", () => {
     const container = renderChatView({
       inlineApproval,
       approvalNowMs: 1_000,
+      approvalCanGrant: false,
       approvalErrors: new Map([["approval-inline", "Approval failed: gateway unavailable"]]),
       onApprovalDecision,
     });
@@ -928,7 +930,23 @@ describe("inline approval card", () => {
     expect(container.querySelector(".exec-approval-error")?.textContent).toBe(
       "Approval failed: gateway unavailable",
     );
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
+      ).every((button) => button.disabled),
+    ).toBe(true);
     container.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
+    expect(onApprovalDecision).not.toHaveBeenCalled();
+
+    const authorizedContainer = renderChatView({
+      inlineApproval,
+      approvalCanGrant: true,
+      onApprovalDecision,
+    });
+    authorizedContainer.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
     expect(onApprovalDecision).toHaveBeenCalledWith("approval-inline", "allow-once");
   });
 });

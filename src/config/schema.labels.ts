@@ -160,6 +160,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.sshHostKeyPolicy": "Remote Gateway SSH Host-Key Policy",
   "gateway.remote.token": "Remote Gateway Token",
   "gateway.remote.password": "Remote Gateway Password",
+  "gateway.remote.edgeAuth": "Remote Gateway Edge Auth Headers",
   "gateway.remote.tlsFingerprint": "Remote Gateway TLS Fingerprint",
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
