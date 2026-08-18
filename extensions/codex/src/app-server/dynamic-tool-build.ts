@@ -21,7 +21,6 @@ import {
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
-import { buildHostnameAllowlistPolicyFromSuffixAllowlist } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
@@ -476,12 +475,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   // Resolve policy before hiding the managed tool. Hosted search follows the
   // same effective policy, while only one search implementation is exposed.
   const webSearchAllowed = normalizedTools.some((tool) => tool.name === "web_search");
-  webFetchHostnameAllowlistRef.value =
-    webSearchPlan.kind === "native-hosted" && webSearchAllowed
-      ? buildHostnameAllowlistPolicyFromSuffixAllowlist(
-          params.config?.tools?.web?.search?.openaiCodex?.allowedDomains,
-        )?.hostnameAllowlist
-      : undefined;
+  webFetchHostnameAllowlistRef.value = webSearchAllowed
+    ? webSearchPlan.webFetchHostnameAllowlist
+    : undefined;
   input.onWebSearchPolicyResolved?.(webSearchAllowed);
   const exposedTools = webSearchPlan.suppressManagedWebSearch
     ? normalizedTools.filter((tool) => tool.name !== "web_search")
