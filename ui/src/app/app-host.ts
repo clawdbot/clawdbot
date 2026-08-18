@@ -65,7 +65,6 @@ import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
   CUSTODIAN_PANEL_ELEMENT,
-  DEBUG_OVERLAY_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   preloadOptionalElement,
@@ -133,7 +132,6 @@ class OpenClawShell
   @state() routeState: ShellRouteState = {};
   @state() nativeHistoryState: NativeHistoryState = readNativeHistoryState();
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
-  readonly debugOverlayElement = DEBUG_OVERLAY_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
