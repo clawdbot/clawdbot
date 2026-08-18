@@ -24,7 +24,19 @@ import { buildCliSpeechProvider } from "./speech-provider.js";
 const TEST_CFG = {} as OpenClawConfig;
 const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
 const VALID_MPEG_FRAME_HEADER = [0xff, 0xfb, 0x90, 0x64] as const;
+const FREE_FORMAT_MPEG_FRAME_HEADER = [0xff, 0xfb, 0x00, 0x64] as const;
 const EMPTY_ID3V2_HEADER = [...Buffer.from("ID3"), 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+const EMPTY_ID3V24_HEADER_WITH_FOOTER = [
+  ...Buffer.from("ID3"),
+  0x04,
+  0x00,
+  0x10,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+];
+const EMPTY_ID3V24_FOOTER = [...Buffer.from("3DI"), ...EMPTY_ID3V24_HEADER_WITH_FOOTER.slice(3)];
 
 function createCliFixture(): { dir: string; script: string } {
   const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-tts-test-"));
@@ -274,12 +286,22 @@ describe("buildCliSpeechProvider", () => {
 
   it.each([
     {
-      transport: "stdout",
+      source: "ID3-tagged stdout",
       audio: [...EMPTY_ID3V2_HEADER, ...VALID_MPEG_FRAME_HEADER],
       writeFile: false,
     },
-    { transport: "templated file", audio: VALID_MPEG_FRAME_HEADER, writeFile: true },
-  ])("converts detected MP3 bytes from $transport to configured WAV", async (testCase) => {
+    {
+      source: "ID3v2.4 footer stdout",
+      audio: [
+        ...EMPTY_ID3V24_HEADER_WITH_FOOTER,
+        ...EMPTY_ID3V24_FOOTER,
+        ...VALID_MPEG_FRAME_HEADER,
+      ],
+      writeFile: false,
+    },
+    { source: "free-format stdout", audio: FREE_FORMAT_MPEG_FRAME_HEADER, writeFile: false },
+    { source: "untagged frame file", audio: VALID_MPEG_FRAME_HEADER, writeFile: true },
+  ])("converts detected MP3 bytes from $source to configured WAV", async (testCase) => {
     const fixture = createRawAudioFixture(testCase.audio);
     try {
       const result = await synthesize({

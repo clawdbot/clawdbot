@@ -148,7 +148,7 @@ function hasMpegFrameHeader(buffer: Buffer, offset: number): boolean {
     (mpegHeader & 0xe0) === 0xe0 &&
     (mpegHeader & 0x18) !== 0x08 &&
     (mpegHeader & 0x06) !== 0 &&
-    (mpegFormat & 0xf0) !== 0 &&
+    // Bitrate index zero is valid MPEG free format; only 0xf is forbidden.
     (mpegFormat & 0xf0) !== 0xf0 &&
     (mpegFormat & 0x0c) !== 0x0c
   );
