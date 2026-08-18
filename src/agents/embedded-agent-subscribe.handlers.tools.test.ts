@@ -3560,6 +3560,15 @@ describe("messaging tool media URL tracking", () => {
   it("commits internal-ui source replies from successful message sends", async () => {
     const { ctx } = createTestContext();
     ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
+      },
+    });
 
     const startEvt: ToolExecutionStartEvent = {
       toolName: "message",
@@ -3597,6 +3606,31 @@ describe("messaging tool media URL tracking", () => {
         sourceReplyFinal: true,
       },
     ]);
+  });
+
+  it("commits core delivery from the private receipt after middleware replaces details", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
+      },
+    });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-private-core-delivery",
+      args: { action: "send", message: "visible after redaction" },
+      isError: false,
+      result: { details: { redacted: true } },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["visible after redaction"]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
   });
 
   it("does not commit dry-run or external message sends as internal-ui source replies", async () => {
