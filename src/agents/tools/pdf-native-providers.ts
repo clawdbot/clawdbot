@@ -5,6 +5,7 @@
 
 import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
+import { redactToolPayloadText } from "../../logging/redact.js";
 import {
   postJsonRequest,
   readProviderJsonResponse,
@@ -25,6 +26,16 @@ type PdfInput = {
 const NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS = 120_000;
 const NATIVE_PDF_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const NATIVE_PDF_ERROR_BODY_MAX_CHARS = 400;
+
+// Standalone Bearer tokens below the shared redactor's 18-character prose floor are
+// still credentials on this authenticated error surface, so mask them regardless of
+// length and scheme casing. The lookahead keeps already-hinted tokens
+// (`Bearer abc…wxyz`) untouched.
+const SHORT_BEARER_TOKEN_PATTERN = /\b(Bearer)\s+[-A-Za-z0-9._~+/=]{1,17}(?![-A-Za-z0-9._~+/=…])/gi;
+
+function redactNativePdfErrorText(text: string): string {
+  return redactToolPayloadText(text).replace(SHORT_BEARER_TOKEN_PATTERN, "$1 ***");
+}
 
 type NativePdfProviderRequestConfig = {
   headers?: Record<string, string>;
@@ -70,8 +81,12 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
         maxBytes: NATIVE_PDF_ERROR_BODY_MAX_BYTES,
         maxChars: NATIVE_PDF_ERROR_BODY_MAX_CHARS,
       });
+      // The error body and reason phrase are provider-controlled: an edge or proxy
+      // can reflect the request's API-key headers (x-api-key / x-goog-api-key) into
+      // either, so redact credential material before it reaches error messages,
+      // logs, and transcripts.
       throw new Error(
-        `${params.failureLabel} (${response.status} ${response.statusText})${body ? `: ${body}` : ""}`,
+        `${params.failureLabel} (${response.status} ${redactNativePdfErrorText(response.statusText)})${body ? `: ${redactNativePdfErrorText(body)}` : ""}`,
       );
     }
 

@@ -223,6 +223,76 @@ describe("native PDF provider API calls", () => {
     expect(canceled).toBe(true);
   });
 
+  it("redacts a reflected x-api-key credential from Anthropic API error bodies", async () => {
+    const needle = "sk-ant-api03-vX7qP2mN9wKzR4tY8uI0oP3aS6dF7gH1jL5k";
+    mockFetchResponse(
+      textResponse(`upstream echoed x-api-key: ${needle}`, {
+        status: 401,
+        statusText: "Unauthorized",
+      }),
+    );
+
+    const error = await pdfNativeProviders
+      .anthropicAnalyzePdf(makeAnthropicAnalyzeParams({ apiKey: needle }))
+      .catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected Anthropic PDF request to throw an Error");
+    }
+    expect(error.message).not.toContain(needle);
+    expect(error.message).toContain("Anthropic PDF request failed (401");
+    expect(error.message).toContain("sk-ant…jL5k");
+  });
+
+  it("redacts a reflected x-goog-api-key credential from Gemini API error bodies", async () => {
+    const needle = "AIzaSyD4iE0xmpl3K3yF0rG00gl3Pr0b3XYZ1234";
+    mockFetchResponse(
+      textResponse(`upstream echoed x-goog-api-key: ${needle}`, {
+        status: 401,
+        statusText: "Unauthorized",
+      }),
+    );
+
+    const error = await pdfNativeProviders
+      .geminiAnalyzePdf(makeGeminiAnalyzeParams({ apiKey: needle }))
+      .catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected Gemini PDF request to throw an Error");
+    }
+    expect(error.message).not.toContain(needle);
+    expect(error.message).toContain("Gemini PDF request failed (401");
+    expect(error.message).toContain("AIzaSy…1234");
+  });
+
+  it("masks a short reflected Bearer credential in the response reason phrase", async () => {
+    mockFetchResponse(textResponse("", { status: 401, statusText: "reflected Bearer abc" }));
+
+    const error = await pdfNativeProviders
+      .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
+      .catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected Anthropic PDF request to throw an Error");
+    }
+    expect(error.message).not.toContain("Bearer abc");
+    expect(error.message).toContain("Anthropic PDF request failed (401 reflected Bearer ***)");
+  });
+
+  it("masks a lowercase reflected bearer credential in the response reason phrase", async () => {
+    mockFetchResponse(textResponse("", { status: 401, statusText: "reflected bearer abc" }));
+
+    const error = await pdfNativeProviders
+      .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
+      .catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected Anthropic PDF request to throw an Error");
+    }
+    expect(error.message).not.toContain("bearer abc");
+    expect(error.message).toContain("Anthropic PDF request failed (401 reflected bearer ***)");
+  });
+
   it("anthropicAnalyzePdf throws when response has no text", async () => {
     mockFetchResponse(
       jsonResponse({
