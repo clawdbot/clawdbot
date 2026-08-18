@@ -112,7 +112,9 @@ const ungroupedSessions = [
 ];
 
 const mode = readMode();
-const outputDir = path.resolve(readOption("output-dir") ?? "proof-shots");
+const outputDir = path.resolve(
+  readOption("output-dir") ?? ".artifacts/control-ui-e2e/session-toolbar-proof",
+);
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 if (!canRunPlaywrightChromium(executablePath)) {
   throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
