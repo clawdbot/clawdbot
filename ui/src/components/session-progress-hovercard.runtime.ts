@@ -11,9 +11,9 @@ import {
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { renderSessionHovercard } from "./session-hovercard.ts";
-import { getSidebarSessionRow } from "./sidebar-session-row-registry.ts";
 
 const OPEN_DELAY_MS = 350;
 let nextHovercardId = 0;
@@ -251,7 +251,9 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (!row || !trigger || !sessionKey || !gateway || !this.open) {
       return;
     }
-    const sidebarRow = getSidebarSessionRow(gateway, sessionKey);
+    const sidebarRow = row
+      .closest<AppSidebarSessionNavigationElement>("openclaw-app-sidebar")
+      ?.findSidebarSessionByKey(sessionKey);
     const pullRequests = this.activePullRequestKey
       ? this.pullRequests?.get(this.activePullRequestKey)
       : undefined;

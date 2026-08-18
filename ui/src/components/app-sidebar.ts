@@ -7,7 +7,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
@@ -67,10 +66,6 @@ import {
 } from "./lobster-pet-contract.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
-import {
-  publishSidebarSessionRows,
-  unpublishSidebarSessionRows,
-} from "./sidebar-session-row-registry.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
 const sidebarChromeImport = createIdleImport(() =>
@@ -143,7 +138,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private narrationLoad: Promise<void> | null = null;
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
   private projectedSessionRows: SidebarRecentSession[] | undefined;
-  private publishedSessionRowsGateway: ApplicationGateway | null = null;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
   private readonly nativeGatewaysChanged = () => this.requestUpdate();
   private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
@@ -224,7 +218,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
     this.narration?.disconnect();
     this.catalogRendererImport.dispose();
-    this.unpublishSessionRows();
     super.disconnectedCallback();
   }
 
@@ -232,7 +225,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     super.willUpdate(changed);
     this.sessionNavigationState = super.getSessionNavigationState();
     this.projectedSessionRows = super.selectedAgentSessionRows(this.sessionNavigationState);
-    this.publishSessionRows(this.projectedSessionRows);
     const chip = this.activeChipAgent();
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
@@ -241,24 +233,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         ? [chip.activeId]
         : chip.agents.map((agent) => agent.id);
     this.ensureAgentIdentities(identityIds);
-  }
-
-  private publishSessionRows(rows: readonly SidebarRecentSession[]): void {
-    const gateway = this.context?.gateway ?? null;
-    if (this.publishedSessionRowsGateway && this.publishedSessionRowsGateway !== gateway) {
-      unpublishSidebarSessionRows(this.publishedSessionRowsGateway, this);
-    }
-    this.publishedSessionRowsGateway = gateway;
-    if (gateway) {
-      publishSidebarSessionRows(gateway, this, rows);
-    }
-  }
-
-  private unpublishSessionRows(): void {
-    if (this.publishedSessionRowsGateway) {
-      unpublishSidebarSessionRows(this.publishedSessionRowsGateway, this);
-      this.publishedSessionRowsGateway = null;
-    }
   }
 
   ensureAgentIdentities(agentIds: readonly string[]): void {
