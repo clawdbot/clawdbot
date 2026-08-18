@@ -16,7 +16,7 @@ import type {
 } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
-export function resolvePaneAgent(state: SessionScopeHostWithKey): string {
+function resolvePaneAgent(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
