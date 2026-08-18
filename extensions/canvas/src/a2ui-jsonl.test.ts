@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildA2UITextJsonl, validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
+import {
+  buildA2UITextJsonl,
+  validateNativeA2UIJsonl,
+  validateSupportedA2UIJsonl,
+} from "./a2ui-jsonl.js";
 
 const BASIC_CATALOG = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
 
@@ -37,6 +41,20 @@ describe("Canvas A2UI JSONL validation", () => {
       messageCount: 4,
       messages,
     });
+  });
+
+  it("keeps native Canvas pushes on v0.8", () => {
+    expect(validateNativeA2UIJsonl(buildA2UITextJsonl("hello"))).toMatchObject({
+      version: "v0.8",
+    });
+    expect(() =>
+      validateNativeA2UIJsonl(
+        JSON.stringify({
+          version: "v0.9",
+          createSurface: { surfaceId: "main", catalogId: BASIC_CATALOG },
+        }),
+      ),
+    ).toThrow("OpenClaw currently supports v0.8 only for native Canvas pushes");
   });
 
   it.each([

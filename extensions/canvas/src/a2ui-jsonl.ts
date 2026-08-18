@@ -138,3 +138,12 @@ function validateA2UIJsonl(jsonl: string) {
 export function validateSupportedA2UIJsonl(jsonl: string) {
   return validateA2UIJsonl(jsonl);
 }
+
+/** Keeps native Canvas pushes on the renderer generation shipped by node clients. */
+export function validateNativeA2UIJsonl(jsonl: string) {
+  const parsed = validateA2UIJsonl(jsonl);
+  if (parsed.version !== "v0.8") {
+    throw new Error("OpenClaw currently supports v0.8 only for native Canvas pushes");
+  }
+  return parsed;
+}

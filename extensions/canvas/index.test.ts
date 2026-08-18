@@ -305,6 +305,13 @@ describe("Canvas plugin entry", () => {
 
   it.each([
     ["malformed pushJSONL", "canvas.a2ui.pushJSONL", { jsonl: "{not-json}" }],
+    [
+      "versioned A2UI v0.9 pushJSONL",
+      "canvas.a2ui.pushJSONL",
+      {
+        jsonl: JSON.stringify({ version: "v0.9", deleteSurface: { surfaceId: "main" } }),
+      },
+    ],
     ["malformed legacy push JSONL fallback", "canvas.a2ui.push", { jsonl: "{not-json}" }],
   ])("rejects %s at the final Canvas node policy", async (_label, command, params) => {
     const { nodeInvokePolicies } = registerCanvas();
@@ -318,30 +325,6 @@ describe("Canvas plugin entry", () => {
 
     expect(result).toMatchObject({ ok: false, code: "INVALID_A2UI_JSONL" });
     expect(invokeNode).not.toHaveBeenCalled();
-  });
-
-  it("dispatches A2UI v0.9 JSONL unchanged through the final Canvas node policy", async () => {
-    const { nodeInvokePolicies } = registerCanvas();
-    const policy = nodeInvokePolicies[0];
-    if (!policy) {
-      throw new Error("Canvas node invoke policy was not registered");
-    }
-    const invokeNode = vi.fn(async () => ({ ok: true as const }));
-    const jsonl = JSON.stringify({
-      version: "v0.9",
-      deleteSurface: { surfaceId: "main" },
-    });
-
-    const result = await policy.handle(
-      createNodeInvokeContext({
-        command: "canvas.a2ui.pushJSONL",
-        params: { jsonl },
-        invokeNode,
-      }),
-    );
-
-    expect(result).toEqual({ ok: true });
-    expect(invokeNode).toHaveBeenCalledOnce();
   });
 
   it("dispatches A2UI v0.8 JSONL unchanged through the final Canvas node policy", async () => {

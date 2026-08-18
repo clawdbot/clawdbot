@@ -9,7 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { validateSupportedA2UIJsonl } from "./src/a2ui-jsonl.js";
+import { validateNativeA2UIJsonl } from "./src/a2ui-jsonl.js";
 import { canvasA2UIBoardWidgetKind } from "./src/board-widget.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui-shared.js";
@@ -131,7 +131,7 @@ export default definePluginEntry({
         if (usesJsonl) {
           const jsonl = typeof params.jsonl === "string" ? params.jsonl : "";
           try {
-            validateSupportedA2UIJsonl(jsonl);
+            validateNativeA2UIJsonl(jsonl);
           } catch (error) {
             return {
               ok: false,
