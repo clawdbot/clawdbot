@@ -2042,17 +2042,24 @@ button.chat-reply-preview--message:disabled {
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
-  padding: 7px 10px 14px;
+  padding: 7px 10px 10px;
   overflow-x: auto;
+  overflow-y: hidden;
   border-radius: 9px 9px 0 0;
+  background: var(--panel-strong);
+  scrollbar-width: none;
   white-space: nowrap;
+}
+
+.task-suggestion__instruction-body code::-webkit-scrollbar {
+  display: none;
 }
 
 .task-suggestion__instruction-body pre {
   position: relative;
   z-index: 1;
   max-height: 9rem;
-  margin-top: -7px;
+  margin-top: -5px;
   padding: 12px 13px;
   overflow: auto;
   border-radius: 10px;
