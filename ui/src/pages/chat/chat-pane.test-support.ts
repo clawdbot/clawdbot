@@ -93,6 +93,7 @@ export type TestChatPane = HTMLElement & {
   syncSessionSuggestionTarget: (agentId: string, session: GatewaySessionRow | undefined) => void;
   handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
   handleSessionTypingEvent: (event: SessionTypingEvent) => void;
+  clearTypingActorForSessionMessage: (payload: unknown) => void;
   typingActors: Map<string, { label: string; expiresAt: number }>;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (

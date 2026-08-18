@@ -1787,41 +1787,109 @@ button.chat-reply-preview--message:disabled {
 }
 
 .agent-chat__typing-indicator {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: max-content minmax(0, auto);
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   min-width: 0;
-  color: var(--muted);
-  font-size: 11px;
-  font-style: italic;
+  width: fit-content;
+  margin: 14px 16px 0 4px;
+  padding-bottom: 26px;
 }
 
 .agent-chat__typing-avatars {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
   flex: 0 0 auto;
 }
 
-.agent-chat__typing-indicator .chat-author-avatar {
-  flex-basis: 18px;
-  width: 18px;
-  height: 18px;
+.agent-chat__typing-indicator .chat-avatar {
+  flex-basis: 36px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: none;
+  margin-bottom: 0;
 }
 
-.agent-chat__typing-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.agent-chat__typing-avatars
+  > :is(.chat-avatar, .chat-avatar-slot)
+  + :is(.chat-avatar, .chat-avatar-slot) {
+  margin-left: -7px;
 }
 
-.agent-chat__typing-indicator--outside {
+.agent-chat__typing-avatars > :is(.chat-avatar, .chat-avatar-slot) {
+  box-shadow: 0 0 0 2px var(--bg);
+  border-radius: 50%;
+}
+
+.agent-chat__typing-bubble {
+  --chat-typing-bubble-bg: var(--bg-muted);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   box-sizing: border-box;
-  width: calc(100% - 36px);
-  max-width: var(--chat-thread-max-width, 48rem);
-  margin: 0 auto -2px;
-  padding-inline: 8px;
+  width: 50px;
+  height: 30px;
+  padding-inline: 12px;
+  border-radius: 15px;
+  background: var(--chat-typing-bubble-bg);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--bg) 28%, transparent);
+}
+
+.agent-chat__typing-tail {
+  position: absolute;
+  left: -6px;
+  bottom: 1px;
+  width: 12px;
+  height: 12px;
+  overflow: visible;
+  fill: var(--chat-typing-bubble-bg);
+}
+
+:root[data-theme-mode="light"] .agent-chat__typing-bubble {
+  --chat-typing-bubble-bg: color-mix(in srgb, var(--text) 9%, var(--bg));
+}
+
+.agent-chat__typing-bubble > span {
+  position: relative;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: chatTypingDot 1s ease-in-out infinite;
+}
+
+.agent-chat__typing-bubble > span:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.agent-chat__typing-bubble > span:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+@keyframes chatTypingDot {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.55;
+  }
+
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__typing-bubble > span {
+    animation: none;
+    opacity: 0.8;
+  }
 }
 
 @media (max-width: 640px) {

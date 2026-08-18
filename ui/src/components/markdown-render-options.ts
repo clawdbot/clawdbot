@@ -1,4 +1,5 @@
 type MarkdownCodeBlockChrome = "copy" | "none";
+type MarkdownTableInteractions = "enabled" | "none";
 type MarkdownRenderMode = "document" | "message";
 
 export type MarkdownRenderOptions = {
@@ -9,6 +10,7 @@ export type MarkdownRenderOptions = {
   progressBars?: boolean;
   mode?: MarkdownRenderMode;
   sessionLinks?: boolean;
+  tableInteractions?: MarkdownTableInteractions;
 };
 
 export type MarkdownRenderEnv = Required<MarkdownRenderOptions>;
@@ -24,5 +26,6 @@ export function normalizeMarkdownRenderOptions(
     progressBars: options.progressBars ?? false,
     mode: options.mode ?? "message",
     sessionLinks: options.sessionLinks ?? false,
+    tableInteractions: options.tableInteractions ?? "none",
   };
 }

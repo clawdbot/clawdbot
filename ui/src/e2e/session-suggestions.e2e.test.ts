@@ -100,7 +100,8 @@ suite.define(() => {
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     const composer = page.locator(".agent-chat__composer-combobox textarea");
     const modelTrigger = page.locator(".chat-controls__model-trigger");
-    const outsideTypingIndicator = page.locator(".agent-chat__typing-indicator--outside");
+    const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
+    const typingIndicator = typingRow.locator(".agent-chat__typing-indicator");
     await gateway.waitForRequest("session.suggestions.list");
     await expect(composer).toBeEnabled();
     await modelTrigger.waitFor();
@@ -108,7 +109,7 @@ suite.define(() => {
     if (idleModelBox === null) {
       throw new Error("Expected the model trigger before remote typing");
     }
-    await expect(outsideTypingIndicator).toHaveCount(0);
+    await expect(typingIndicator).toHaveCount(0);
     await gateway.emitGatewayEvent("session.typing", {
       sessionKey: "main",
       sessionId: "session-main",
@@ -117,22 +118,30 @@ suite.define(() => {
       typing: true,
       ts: Date.now(),
     });
-    await expect(page.locator(".agent-chat__typing-text")).toHaveText("Owner is typing…");
-    const [typingModelBox, typingIndicatorBox, composerShellBox] = await Promise.all([
+    await expect(typingIndicator.locator(".sr-only")).toHaveText("Owner is typing…");
+    const [typingModelBox, typingRowBox, composerShellBox] = await Promise.all([
       modelTrigger.boundingBox(),
-      outsideTypingIndicator.boundingBox(),
+      typingRow.boundingBox(),
       page.locator(".agent-chat__composer-shell").boundingBox(),
     ]);
-    if (typingModelBox === null || typingIndicatorBox === null || composerShellBox === null) {
-      throw new Error("Expected the composer layout after remote typing");
+    if (typingModelBox === null || typingRowBox === null || composerShellBox === null) {
+      throw new Error("Expected the transcript typing row and stable composer layout");
     }
     expect(Math.abs(typingModelBox.x - idleModelBox.x)).toBeLessThanOrEqual(0.5);
     // The #122809 regression shifted the picker by a full indicator row
     // (~20px); allow subpixel/rounding jitter seen on CI renderers (2.41px).
     expect(Math.abs(typingModelBox.y - idleModelBox.y)).toBeLessThanOrEqual(4);
-    expect(typingIndicatorBox.y + typingIndicatorBox.height).toBeLessThanOrEqual(
-      composerShellBox.y + 1,
-    );
+    expect(typingRowBox.y + typingRowBox.height).toBeLessThanOrEqual(composerShellBox.y + 1);
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey: "main",
+      agentId: "main",
+      message: {
+        role: "user",
+        content: "Owner finished typing",
+        __openclaw: { senderId: "owner", senderName: "Owner" },
+      },
+    });
+    await expect(typingIndicator).toHaveCount(0);
     await composer.fill("Try the focused change");
     const typing = await gateway.waitForRequest("session.typing");
     expect(typing.params).toMatchObject({ sessionId: "session-main" });

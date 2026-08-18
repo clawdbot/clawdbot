@@ -549,7 +549,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.web.search.openaiCodex.mode":
     'Native Codex web search preference: "cached" (default; unrestricted Codex turns resolve it to live) or "live".',
   "tools.web.search.openaiCodex.allowedDomains":
-    "Optional domain allowlist passed to the native Codex web_search tool.",
+    "Domain allowlist for native Codex web_search. On native-hosted-search turns, it also gates managed web_fetch; managed-provider turns are unchanged.",
   "tools.web.search.openaiCodex.contextSize":
     'Native Codex search context size hint: "low", "medium", or "high".',
   "tools.web.search.openaiCodex.userLocation.country":

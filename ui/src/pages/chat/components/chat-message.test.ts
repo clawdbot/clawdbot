@@ -902,6 +902,7 @@ describe("grouped chat rendering", () => {
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,
+      tableInteractions: "enabled",
     });
   });
 
@@ -1021,6 +1022,7 @@ describe("grouped chat rendering", () => {
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,
+      tableInteractions: "enabled",
     });
   });
 
@@ -1564,6 +1566,7 @@ describe("grouped chat rendering", () => {
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,
+      tableInteractions: "enabled",
     });
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");

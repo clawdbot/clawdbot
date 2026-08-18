@@ -492,10 +492,15 @@ describe("Codex app-server dynamic tool build", () => {
         },
       },
     } as never;
-    setOpenClawCodingToolsFactoryForTests(() => [
-      createRuntimeDynamicTool("web_search"),
-      createRuntimeDynamicTool("message"),
-    ]);
+    let receivedOptions: Record<string, unknown> | undefined;
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      receivedOptions = options as Record<string, unknown>;
+      return [
+        createRuntimeDynamicTool("web_search"),
+        createRuntimeDynamicTool("web_fetch"),
+        createRuntimeDynamicTool("message"),
+      ];
+    });
     let webSearchAllowed = false;
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
@@ -504,8 +509,47 @@ describe("Codex app-server dynamic tool build", () => {
       },
     });
 
-    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["web_fetch", "message"]);
+    expect(
+      (receivedOptions?.webFetchHostnameAllowlistRef as { value?: string[] } | undefined)?.value,
+    ).toEqual(["example.com", "*.example.com"]);
     expect(webSearchAllowed).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "a managed search provider is selected",
+      search: { provider: "brave", openaiCodex: { allowedDomains: ["example.com"] } },
+      toolsAllow: undefined,
+    },
+    {
+      name: "the native search allowlist is empty",
+      search: { openaiCodex: { allowedDomains: [] } },
+      toolsAllow: undefined,
+    },
+    {
+      name: "effective tool policy disables hosted search",
+      search: { openaiCodex: { allowedDomains: ["example.com"] } },
+      toolsAllow: ["web_fetch"],
+    },
+  ])("leaves web_fetch unrestricted when $name", async ({ search, toolsAllow }) => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = toolsAllow;
+    params.config = { tools: { web: { search } } } as never;
+    let receivedOptions: Record<string, unknown> | undefined;
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      receivedOptions = options as Record<string, unknown>;
+      return [createRuntimeDynamicTool("web_search"), createRuntimeDynamicTool("web_fetch")];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(
+      (receivedOptions?.webFetchHostnameAllowlistRef as { value?: string[] } | undefined)?.value,
+    ).toBeUndefined();
   });
 
   it("forwards client caps alongside channel authority context", async () => {
