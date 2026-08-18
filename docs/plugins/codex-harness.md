@@ -736,6 +736,28 @@ permissions, see [Permission modes](/tools/permission-modes). For every
 app-server field, auth order, environment isolation, and timeout behavior,
 see [Codex harness reference](/plugins/codex-harness-reference).
 
+### Native approval audit evidence
+
+With `tools.exec.mode: "ask"` and the Codex user reviewer, native command and
+file prompts use OpenClaw's two-phase operator approval route. The prompt shows
+only decisions that the native request can preserve. For example, a command
+that permits one execution but not session trust offers allow-once and deny;
+byte-bound script approvals also remain one-shot. File prompts support both
+one-shot and session approval.
+
+Terminal operator decisions reuse the Gateway's authoritative approval row and
+its exact execution binding. When execution identity collection is enabled,
+inspect the admitted run with
+[`openclaw audit --run <run-id> --explain`](/cli/audit). The resulting receipt
+can report allow-once, allow-always, denial, no-route, expiry, or cancellation
+without exposing command text, patch content, paths, or native request ids.
+
+Codex auto-review, full-access policy, and native hook or OpenClaw policy
+decisions do not create an operator approval row. Missing or stale native turn
+context is rejected before routing. These cases therefore do not produce an
+enforced operator-approval receipt; audit inspection does not reconstruct one
+from later tool events.
+
 ## Commands and diagnostics
 
 The `codex` plugin registers `/codex` as a slash command on any channel that

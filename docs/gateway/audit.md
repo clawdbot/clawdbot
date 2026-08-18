@@ -30,6 +30,14 @@ inspection adapts their existing first-answer-wins rows directly into decision
 receipts; it does not copy approvals into the audit ledger or the generic
 decision-fact table.
 
+This includes operator-routed native Codex command and file prompts. The Codex
+bridge carries the admitted agent, session key, run, tool, context, and
+execution binding into the same approval owner, then returns only the approved
+native scope. Auto-review, full-access policy, native hook decisions, and
+requests rejected before operator routing have no operator-owned row and remain
+unsupported as operator-approval evidence; later tool events never manufacture
+one.
+
 Shared outbound delivery is another owner-native source. Queue admission and
 platform-send start use a lazy progress companion, while terminal message rows
 remain in the activity ledger. Run inspection merges both sources directly;
