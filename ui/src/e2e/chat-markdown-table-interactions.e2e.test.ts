@@ -94,10 +94,44 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         .toContain("Service\tOwner\tRegion\tStatus\tVersion\tDeploy\tIncidents\tNotes");
 
       await expand.focus();
+      const inlineTable = shell.locator("table");
+      const inlineHeader = inlineTable.locator("th").first();
+      const inlineCell = inlineTable.locator("td").first();
       await expand.click();
       const dialog = page.locator("dialog.markdown-table-dialog");
       await expect.poll(() => dialog.getAttribute("open")).toBe("");
-      expect(await dialog.locator("table").textContent()).toContain("Gateway");
+      const fullscreenTable = dialog.locator("table");
+      const fullscreenHeader = fullscreenTable.locator("th").first();
+      const fullscreenCell = fullscreenTable.locator("td").first();
+      expect(await fullscreenTable.textContent()).toContain("Gateway");
+      const tableProperties = [
+        "backgroundColor",
+        "borderCollapse",
+        "borderTopWidth",
+        "boxShadow",
+      ] as const;
+      const cellProperties = [
+        "backgroundColor",
+        "borderRightWidth",
+        "borderBottomColor",
+        "overflowWrap",
+        "whiteSpace",
+        "wordBreak",
+      ] as const;
+      const readStyles = async (locator: typeof inlineTable, properties: readonly string[]) =>
+        locator.evaluate((element, propertyNames) => {
+          const styles = getComputedStyle(element);
+          return Object.fromEntries(propertyNames.map((property) => [property, styles[property]]));
+        }, properties);
+      expect(await readStyles(fullscreenTable, tableProperties)).toEqual(
+        await readStyles(inlineTable, tableProperties),
+      );
+      expect(await readStyles(fullscreenHeader, cellProperties)).toEqual(
+        await readStyles(inlineHeader, cellProperties),
+      );
+      expect(await readStyles(fullscreenCell, cellProperties)).toEqual(
+        await readStyles(inlineCell, cellProperties),
+      );
       if (captureProof) {
         await page.screenshot({
           animations: "disabled",

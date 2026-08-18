@@ -147,10 +147,9 @@
 
 .markdown-table {
   position: relative;
-  width: fit-content;
+  width: 100%;
   max-width: 100%;
   margin-top: 0.75em;
-  padding-top: 40px;
 }
 
 .markdown-table :where(table) {
@@ -198,11 +197,10 @@
 }
 
 .markdown-table__actions {
-  position: absolute;
-  z-index: 1;
-  top: 0;
-  right: 0;
   display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-block: 4px 8px;
 }
 
 .markdown-table__actions button,
@@ -213,14 +211,14 @@
   padding: 10px;
   border: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--text);
   cursor: var(--cursor-action);
   place-items: center;
 }
 
 .markdown-table__actions button:hover,
 .markdown-table-dialog__close:hover {
-  color: var(--text);
+  color: var(--text-strong);
 }
 
 .markdown-table__actions button:focus-visible,
@@ -232,31 +230,38 @@
 
 .markdown-table__actions svg,
 .markdown-table-dialog__close svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  min-width: 16px;
+  max-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  max-height: 16px;
 }
 
 .markdown-table-dialog {
-  width: max-content;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100dvh - 32px);
-  padding: 48px 28px 28px;
+  width: calc(100vw - 64px);
+  max-width: 1200px;
+  max-height: calc(100dvh - 64px);
+  padding: 20px 28px;
   border: 0;
-  background: transparent;
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--bg) 96%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
   overflow: auto;
 }
 
 .markdown-table-dialog::backdrop {
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(3px);
 }
 
-.markdown-table-dialog > table {
-  width: max-content;
-  min-width: max-content;
+.markdown-table-dialog.chat-text > table {
+  width: 100%;
+  min-width: 0;
   margin: 0;
   max-width: none;
-  overflow: visible;
+  table-layout: auto;
 }
 
 .markdown-table-dialog__close {
@@ -316,10 +321,8 @@
   font-weight: 500;
 }
 
-.chat-thread .chat-bubble .chat-text :where(table) {
+:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table) {
   display: table;
-  width: max-content;
-  min-width: 100%;
   margin: 0;
   border: 0;
   border-collapse: collapse;
@@ -328,11 +331,16 @@
   overflow: visible;
 }
 
-.chat-thread .chat-bubble .chat-text :where(table, thead, tbody, tr, th, td) {
+.chat-thread .chat-bubble .chat-text :where(table) {
+  width: max-content;
+  min-width: 100%;
+}
+
+:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table, thead, tbody, tr, th, td) {
   background: transparent;
 }
 
-.chat-thread .chat-bubble .chat-text :where(th, td) {
+:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th, td) {
   padding-block: 12px;
   border-right: 0;
   border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
@@ -341,20 +349,22 @@
   word-break: normal;
 }
 
-.chat-thread .chat-bubble .chat-text :where(th:first-child, td:first-child) {
+:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th:first-child, td:first-child) {
   padding-inline-start: 0;
 }
 
-.chat-thread .chat-bubble .chat-text :where(th) {
+:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th) {
   border-bottom-color: var(--border-strong);
   background: transparent;
+  white-space: nowrap;
 }
 
-.chat-thread .chat-bubble .chat-text :where(tbody tr) {
+:is(.markdown-table, .markdown-table-dialog.chat-text) :where(tbody tr) {
   transition: none;
 }
 
-.chat-thread .chat-bubble .chat-text :where(tbody tr:nth-child(even), tbody tr:hover) {
+:is(.markdown-table, .markdown-table-dialog.chat-text)
+  :where(tbody tr:nth-child(even), tbody tr:hover) {
   background: transparent;
 }
 
