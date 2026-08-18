@@ -72,7 +72,10 @@ import {
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  claimGatewayToolCallerContinuation,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
@@ -1122,7 +1125,7 @@ export function createSessionsSendTool(opts?: {
             ? ({ status: "skipped", mode: "announce" } as const)
             : ({ status: "pending", mode: "announce" } as const);
 
-          const startA2AFlow = (
+          const startA2AFlow = async (
             roundOneReply?: string,
             waitRunId?: string,
             flowTargetSessionKey = resolvedKey,
@@ -1136,32 +1139,49 @@ export function createSessionsSendTool(opts?: {
               flowTargetSessionKey === fallbackA2ASessionKey
                 ? fallbackBaselineReply
                 : baselineReply;
+            const continuation =
+              authority?.operationalRunInstance && handoffContext
+                ? await claimGatewayToolCallerContinuation(
+                    authority,
+                    `sessions-send-a2a:${crypto.randomUUID()}`,
+                  )
+                : undefined;
+            if (authority?.operationalRunInstance && handoffContext && !continuation) {
+              log.warn("sessions_send announce flow authority closed before continuation", {
+                runId: waitRunId ?? "unknown",
+              });
+              return;
+            }
             // This detached flow can outlive the tool request that launched it.
-            // Own a fresh root so parent release cannot retire later nested turns.
-            void runWithGatewayIndependentRootWorkContinuation(() =>
-              runWithoutOwnedSessionTranscriptWrites(() =>
-                runSessionsSendA2AFlow({
-                  callGateway: gatewayCall,
-                  targetSessionKey: flowTargetSessionKey,
-                  targetAgentId,
-                  displayKey: flowDisplayKey,
-                  message,
-                  announceTimeoutMs,
-                  // Cron runs are isolated jobs; target replies must not become new
-                  // requester turns, but the target-side announce still runs.
-                  maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-                  requesterSessionKey: replyRequesterSessionKey,
-                  requesterAgentId,
-                  requesterChannel,
-                  baseline: flowBaseline,
-                  roundOneReply,
-                  waitRunId,
-                  notifyRequesterOnWaitFailure,
-                  authority,
-                  handoffContext,
-                }),
-              ),
-            ).catch((err: unknown) => {
+            // Own both Gateway work and delegated-run authority until every nested turn settles.
+            void runWithGatewayIndependentRootWorkContinuation(async () => {
+              try {
+                await runWithoutOwnedSessionTranscriptWrites(() =>
+                  runSessionsSendA2AFlow({
+                    callGateway: gatewayCall,
+                    targetSessionKey: flowTargetSessionKey,
+                    targetAgentId,
+                    displayKey: flowDisplayKey,
+                    message,
+                    announceTimeoutMs,
+                    // Cron runs are isolated jobs; target replies must not become new
+                    // requester turns, but the target-side announce still runs.
+                    maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                    requesterSessionKey: replyRequesterSessionKey,
+                    requesterAgentId,
+                    requesterChannel,
+                    baseline: flowBaseline,
+                    roundOneReply,
+                    waitRunId,
+                    notifyRequesterOnWaitFailure,
+                    authority: continuation?.identity ?? authority,
+                    handoffContext,
+                  }),
+                );
+              } finally {
+                continuation?.release();
+              }
+            }).catch((err: unknown) => {
               log.warn("sessions_send announce flow admission failed", {
                 runId: waitRunId ?? "unknown",
                 error: formatErrorMessage(err),
@@ -1196,7 +1216,7 @@ export function createSessionsSendTool(opts?: {
             runId = start.runId;
             const watchField = registerWatchIfRequested(start.a2aSessionKey ?? resolvedKey);
             if (!start.activeRunQueue) {
-              startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
+              await startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
             }
             return jsonResult({
               runId,
@@ -1238,7 +1258,7 @@ export function createSessionsSendTool(opts?: {
 
           if (result.status === "timeout") {
             if (isPendingErrorAgentWaitTimeout(result)) {
-              startA2AFlow(undefined, runId);
+              await startA2AFlow(undefined, runId);
               return jsonResult({
                 runId,
                 status: "timeout",
@@ -1250,7 +1270,7 @@ export function createSessionsSendTool(opts?: {
               });
             }
             if (!isTerminalAgentWaitTimeout(result)) {
-              startA2AFlow(undefined, runId, resolvedKey, displayKey, true);
+              await startA2AFlow(undefined, runId, resolvedKey, displayKey, true);
               return jsonResult({
                 runId,
                 status: "accepted",
@@ -1283,7 +1303,7 @@ export function createSessionsSendTool(opts?: {
             ? { status: "ok" as const, delivery, reply }
             : { status: "no_reply" as const, message: NO_REPLY_MESSAGE };
           if (reply) {
-            startA2AFlow(reply);
+            await startA2AFlow(reply);
           }
           return jsonResult({ runId, sessionKey: displayKey, ...response, ...watchField });
         },

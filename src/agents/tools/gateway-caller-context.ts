@@ -6,7 +6,12 @@ import type { GatewayContextResolver } from "../../gateway/server-methods/types.
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
 import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import type { AdmittedRunContext, OperationalRunInstanceRef } from "../admitted-run-context.js";
+import {
+  claimAdmittedRunContinuation,
+  closeAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+  type OperationalRunInstanceRef,
+} from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -91,6 +96,63 @@ export function createAdmittedGatewayToolCallerIdentity(
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
   return gatewayToolCallerStorage.getStore();
+}
+
+/** Transfers bounded follow-up work to a fresh authority before its parent can close. */
+export async function claimGatewayToolCallerContinuation(
+  identity: GatewayToolCallerIdentity,
+  runId: string,
+): Promise<Readonly<{ identity: GatewayToolCallerIdentity; release: () => void }> | undefined> {
+  const parent = identity.operationalRunInstance;
+  if (!parent) {
+    return undefined;
+  }
+  let continuation: AdmittedRunContext | undefined;
+  const claim = () => (continuation = claimAdmittedRunContinuation(parent, runId));
+  try {
+    if (identity.workerTurnExecutionIdentityCapability) {
+      continuation = await identity.workerTurnExecutionIdentityCapability.run((worker) => {
+        if (
+          worker.agentId !== identity.agentId ||
+          worker.sessionKey !== identity.sessionKey ||
+          worker.operationalRunInstance.instanceId !== parent.instanceId ||
+          worker.operationalRunInstance.runId !== parent.runId
+        ) {
+          throw new Error("worker continuation authority disagrees with the active tool caller");
+        }
+        return claim();
+      });
+    } else {
+      continuation = claim();
+    }
+  } catch (error) {
+    if (continuation) {
+      closeAdmittedRunDelegatedAuthority(continuation);
+    }
+    throw error;
+  }
+  if (!continuation) {
+    return undefined;
+  }
+  const claimedContinuation = continuation;
+  const continuationIdentity: GatewayToolCallerIdentity = Object.freeze({
+    agentId: identity.agentId,
+    sessionKey: identity.sessionKey,
+    operationalRunInstance: claimedContinuation.operationalRunInstance,
+    ...(identity.turnSourceChannel ? { turnSourceChannel: identity.turnSourceChannel } : {}),
+    ...(identity.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
+    ...(identity.turnSourceTo ? { turnSourceTo: identity.turnSourceTo } : {}),
+    ...(identity.turnSourceAccountId ? { turnSourceAccountId: identity.turnSourceAccountId } : {}),
+    ...(identity.turnSourceThreadId !== undefined
+      ? { turnSourceThreadId: identity.turnSourceThreadId }
+      : {}),
+  });
+  return Object.freeze({
+    identity: continuationIdentity,
+    release: () => {
+      closeAdmittedRunDelegatedAuthority(claimedContinuation);
+    },
+  });
 }
 
 export async function withGatewayToolCallerIdentity<T>(

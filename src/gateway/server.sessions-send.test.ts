@@ -29,6 +29,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import { runSessionsSendAuthorityClosureScenario } from "./server.sessions-send.authority-race.test-support.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommandMock,
@@ -262,6 +263,13 @@ describe("sessions_send gateway loopback", () => {
       }
     },
   );
+
+  it("rejects a handoff whose source authority closes during target admission", async () => {
+    await runSessionsSendAuthorityClosureScenario({
+      createOpenClawTools,
+      dir: tempDirs.make("openclaw-sessions-send-authority-race-"),
+    });
+  });
 
   it("rejects a missing explicit key without creating or running a session", async () => {
     const dir = tempDirs.make("openclaw-sessions-send-missing-");

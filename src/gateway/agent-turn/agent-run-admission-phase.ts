@@ -520,6 +520,13 @@ export async function prepareAgentRunDispatch(params: {
     // Transcript persistence can yield. Revalidate the exact live admission
     // before its durable turn is allowed to cross the acceptance boundary.
     params.assertGatewayWorkAdmissionAllowed();
+    if (
+      trustedSessionHandoff &&
+      runtimeIdentity &&
+      params.context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) !== true
+    ) {
+      throw new TypeError("session handoff source authority is no longer active");
+    }
   } catch (err) {
     releasePreparedAgentRunUserTurn(userTurn);
     activeRunAbort.cleanup({ force: true });

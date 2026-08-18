@@ -11,6 +11,7 @@ import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spa
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
+  getActiveAgentRunDelegatedAuthority,
   getAgentRunLifecycleGeneration,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
@@ -74,6 +75,23 @@ export function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext):
   lease.foregroundClosed = true;
   releaseAgentRunDelegatedAuthority(lease.authority);
   return true;
+}
+
+/** Claims a host-owned continuation only while the exact parent execution is live. */
+export function claimAdmittedRunContinuation(
+  parent: OperationalRunInstanceRef,
+  runId: string,
+): AdmittedRunContext | undefined {
+  if (!getActiveAgentRunDelegatedAuthority(parent)) {
+    return undefined;
+  }
+  const context = Object.freeze({ operationalRunInstance: createOperationalRunInstanceRef(runId) });
+  bindAdmittedRunDelegatedAuthority(context);
+  if (!getActiveAgentRunDelegatedAuthority(parent)) {
+    closeAdmittedRunDelegatedAuthority(context);
+    return undefined;
+  }
+  return context;
 }
 
 type AdmittedRunBeforeToolCallRecovery = Readonly<{

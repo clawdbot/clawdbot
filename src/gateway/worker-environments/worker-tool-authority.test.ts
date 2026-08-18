@@ -88,8 +88,6 @@ describe("resolveWorkerToolAuthority", () => {
   it("records the post-permission surface used by a read-only worker", () => {
     expect(authority({ permissionMode: "read-only" })).toEqual([
       "read",
-      "exec",
-      "process",
       "sessions_spawn",
       "sessions_send",
     ]);

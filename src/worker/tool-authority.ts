@@ -43,7 +43,15 @@ export type WorkerToolAuthority = {
   allowedToolNames: WorkerToolName[];
 };
 
-const READ_ONLY_WORKER_TOOL_DENY = new Set<WorkerToolName>(["write", "edit", "apply_patch"]);
+// A denied exec tool is not delegable authority; process can control commands started elsewhere.
+// Remove both from the actual read-only surface so a name-only child cap cannot restore them.
+const READ_ONLY_WORKER_TOOL_DENY = new Set<WorkerToolName>([
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+]);
 
 /** Resolve the concrete worker surface after session permission mode is applied. */
 export function resolveWorkerPermissionToolAuthority(params: {
