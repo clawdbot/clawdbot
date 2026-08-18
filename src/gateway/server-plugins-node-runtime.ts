@@ -1,7 +1,6 @@
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
-import type { GatewayContextResolver } from "./server-methods/types.js";
+import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 
 export function hasInProcessGatewayContext(
   resolveGatewayContext?: GatewayContextResolver,
