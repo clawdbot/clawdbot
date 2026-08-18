@@ -83,7 +83,9 @@ export async function synthesizeVoiceReplyAudio(params: {
     };
   }
   const streamFailure =
-    streamResult && !streamResult.success ? streamResult.attempts?.at(-1) : undefined;
+    streamResult && !streamResult.success
+      ? streamResult.attempts?.findLast((attempt) => attempt.outcome === "failed")
+      : undefined;
 
   const result = await runtime.tts.textToSpeech({
     text: speakText,
