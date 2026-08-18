@@ -305,4 +305,31 @@ describePosix("scripts/pr worktree containment", () => {
       expectCanonicalCheckoutUnchanged(fixture);
     });
   }
+
+  it("refuses and preserves an ignored file colliding with the transition target", () => {
+    const fixture = createReviewFixture();
+    const worktree = join(fixture.root, ".worktrees", "pr-42");
+    const result = runShell(fixture, [
+      "review_init 42",
+      "review_checkout_pr 42",
+      "source_sha=$(git rev-parse HEAD)",
+      "target_sha=$(git rev-parse origin/main)",
+      'jq -cn --arg source "$source_sha" --arg target "$target_sha" \'{version:1,pr:42,source:$source,target:$target,mode:"detached",branch:null}\' > .local/review-transition.json',
+      'git restore --source="$target_sha" --staged --worktree -- transition-a.txt',
+      'printf "main-only.txt\\n" >> "$(git rev-parse --git-path info/exclude)"',
+      'printf "foreign ignored\\n" > main-only.txt',
+      "git check-ignore -q main-only.txt",
+      "review_init 42",
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("ignored file 'main-only.txt' would be overwritten");
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(fixture.prASha);
+    expect(git(worktree, "status", "--short", "--ignored", "--", "main-only.txt")).toBe(
+      "!! main-only.txt",
+    );
+    expect(readFileSync(join(worktree, "main-only.txt"), "utf8")).toBe("foreign ignored\n");
+    expect(existsSync(join(worktree, ".local", "review-transition.json"))).toBe(true);
+    expectCanonicalCheckoutUnchanged(fixture);
+  });
 });

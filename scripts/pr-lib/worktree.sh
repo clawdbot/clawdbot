@@ -60,6 +60,27 @@ require_no_foreign_untracked() {
   [ "${#foreign[@]}" -eq 0 ] || refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
 }
 
+require_no_ignored_transition_paths() {
+  local pr="$1"
+  local source="$2"
+  local target="$3"
+  local file ignored
+  while IFS= read -r -d '' file; do
+    case "$file" in
+      .local|.local/*)
+        refuse_review_transition "$pr" "the journaled transition touches the reserved .local artifact namespace."
+        return 1
+        ;;
+    esac
+    if IFS= read -r -d '' ignored < <(
+      git ls-files --others --ignored --exclude-standard -z -- ":(literal)$file"
+    ); then
+      refuse_review_transition "$pr" "ignored file '$ignored' would be overwritten by the journaled transition."
+      return 1
+    fi
+  done < <(git diff --name-only --no-renames -z "$source" "$target")
+}
+
 validate_review_transition_state() {
   local pr="$1"
   local source="$2"
@@ -73,6 +94,7 @@ validate_review_transition_state() {
     refuse_review_transition "$pr" "the journaled transition state is ambiguous."
     return 1
   fi
+  require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
 
   # A path changed from source is owned only when its index mode and blob match target.
   local file
@@ -177,6 +199,7 @@ checkout_pr_worktree_target() {
   local source target mode=detached
   source=$(git rev-parse HEAD) || return 1
   target=$(git rev-parse "$target_ref^{commit}") || return 1
+  require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
   [ -z "$branch" ] || mode=branch
   write_review_transition_journal "$pr" "$source" "$target" "$mode" "$branch" || return 1
   recover_review_transition "$pr"
