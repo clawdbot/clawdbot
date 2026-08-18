@@ -1,6 +1,7 @@
 import type {
   SkillWorkshopActionBusy,
   SkillWorkshopActionNotice,
+  SkillWorkshopAppliedDiffMode,
   SkillWorkshopMode,
   SkillWorkshopProposal,
   SkillWorkshopStatusFilter,
@@ -16,6 +17,7 @@ export type SkillWorkshopProps = {
   inspectingKey: string | null;
   proposals: SkillWorkshopProposal[];
   selectedKey: string | null;
+  appliedDiffMode: SkillWorkshopAppliedDiffMode;
   statusFilter: SkillWorkshopStatusFilter;
   query: string;
   filePreviewKey: string | null;
@@ -38,6 +40,7 @@ export type SkillWorkshopProps = {
   onQueueWidthChange: (width: number) => void;
   onModeChange: (mode: SkillWorkshopMode) => void;
   onSelect: (key: string) => void;
+  onAppliedDiffModeChange: (mode: SkillWorkshopAppliedDiffMode) => void;
   onPrev: () => void;
   onNext: () => void;
   onApply: (key: string) => void;

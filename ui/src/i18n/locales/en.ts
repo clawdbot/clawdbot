@@ -3494,6 +3494,15 @@ export const en: TranslationMap = {
       yesterday: "Yesterday",
       earlier: "Earlier this week",
     },
+    diff: {
+      changes: "Changes",
+      fullBody: "Full body",
+      viewLabel: "Revision view",
+      unchanged: "This revision left the skill body unchanged.",
+      loadingPrevious: "Loading the previous revision\u2026",
+      previousUnavailable: "The previous revision is unavailable, so this is the full body.",
+      tooLarge: "This comparison is too large to show here. Switch to Full body to read it.",
+    },
     applied: {
       history: "History",
       revision: "{count} revision",
