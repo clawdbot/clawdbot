@@ -38,12 +38,12 @@ export type ChatComposerScope = {
   hello?: { snapshot?: unknown } | null;
 };
 
-export type StoredComposerMainAlias = {
+type StoredComposerMainAlias = {
   key: string;
   agentId: string;
 };
 
-export type ComposerStorageTarget = {
+type ComposerStorageTarget = {
   key: string;
   legacyKey: string;
   gatewayOwner: string;
@@ -68,7 +68,7 @@ type StoredComposerRetirementTarget = {
   retireBeforeRevision: number;
 };
 
-export type StoredComposerRetirement = {
+type StoredComposerRetirement = {
   scope: StoredChatOutboxScope;
   minimumRevision: number;
   retireBeforeRevision: number;
