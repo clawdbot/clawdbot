@@ -783,6 +783,8 @@ describe("normalizeVoiceCallConfig", () => {
       files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     });
     expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
+    expect(normalized.realtime.instructions).toContain("openclaw_end_call");
+    expect(normalized.realtime.instructions).toContain("speak any final words first");
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toStrictEqual([]);
   });
