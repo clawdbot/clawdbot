@@ -7,7 +7,9 @@ import {
 import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asFiniteNumber,
   asNonArrayRecord,
+  asNullableRecord,
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -91,6 +93,26 @@ function normalizeMutationConfidence(
   });
 }
 
+// Top-level mutation confidence is strictly clamped to [0, 1] by
+// readFiniteNumberParam; nested claims must obey the same contract, otherwise
+// an out-of-range value is persisted into page frontmatter and skews
+// wiki_search ranking (score += Math.round(confidence * 10)) for every later
+// query. Fail closed at the mutation boundary.
+function normalizeMutationClaims(claims: unknown): WikiClaim[] | undefined {
+  if (!Array.isArray(claims)) {
+    return undefined;
+  }
+  for (const [index, entry] of claims.entries()) {
+    const confidence = asFiniteNumber(asNullableRecord(entry)?.confidence);
+    if (confidence !== undefined && (confidence < 0 || confidence > 1)) {
+      throw new Error(
+        `claims[${index}].confidence must be a number between 0 and 1; received ${confidence}.`,
+      );
+    }
+  }
+  return normalizeWikiClaims(claims);
+}
+
 function normalizeMemoryWikiMutationOp(
   op: MemoryWikiMutationInputOp,
 ): ApplyMemoryWikiMutation["op"] {
@@ -135,7 +157,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       title: params.title,
       body: params.body,
       sourceIds: params.sourceIds,
-      ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
+      ...(Array.isArray(params.claims) ? { claims: normalizeMutationClaims(params.claims) } : {}),
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
       ...(typeof confidence === "number" ? { confidence } : {}),
@@ -152,7 +174,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     op: "update_metadata",
     lookup: params.lookup,
     ...(params.sourceIds ? { sourceIds: params.sourceIds } : {}),
-    ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
+    ...(Array.isArray(params.claims) ? { claims: normalizeMutationClaims(params.claims) } : {}),
     ...(params.contradictions ? { contradictions: params.contradictions } : {}),
     ...(params.questions ? { questions: params.questions } : {}),
     ...(confidence !== undefined ? { confidence } : {}),

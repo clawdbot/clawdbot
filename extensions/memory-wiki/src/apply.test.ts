@@ -54,6 +54,36 @@ describe("applyMemoryWikiMutation", () => {
     });
   });
 
+  it("rejects out-of-range claim confidence at the mutation boundary", () => {
+    expect(() =>
+      normalizeMemoryWikiMutationInput({
+        op: "update_metadata",
+        lookup: "entity.alpha",
+        claims: [{ text: "Alpha fact", confidence: 999 }],
+      }),
+    ).toThrow('claims[0].confidence must be a number between 0 and 1; received 999.');
+
+    expect(() =>
+      normalizeMemoryWikiMutationInput({
+        op: "update_metadata",
+        lookup: "entity.alpha",
+        claims: [{ text: "Alpha fact", confidence: -0.5 }],
+      }),
+    ).toThrow("between 0 and 1");
+
+    // In-range values keep flowing through unchanged.
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "update_metadata",
+        lookup: "entity.alpha",
+        claims: [{ text: "Alpha fact", confidence: 0.8 }],
+      }),
+    ).toMatchObject({
+      op: "update_metadata",
+      claims: [{ text: "Alpha fact", confidence: 0.8 }],
+    });
+  });
+
   it("rejects out-of-range string confidence in wiki mutations", () => {
     expect(() =>
       normalizeMemoryWikiMutationInput({
