@@ -355,7 +355,8 @@ export function renderApplicationShell(host: ShellViewHost) {
   const uiSettings = loadSettings();
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
-  const chatLikeRoute = isSessionRouteId(activeRoute) || activeRoute === "new-session";
+  const sessionRoute = isSessionRouteId(activeRoute);
+  const chatLikeRoute = sessionRoute || activeRoute === "new-session";
   const custodianRoute = activeRoute === "custodian";
   if (!settingsTakeover) {
     Object.assign(host.navigationSidebar, {
@@ -643,12 +644,12 @@ export function renderApplicationShell(host: ShellViewHost) {
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
         .agentId=${selectedAgentId}
-        .sessionKey=${isSessionRouteId(activeRoute) ? host.activeSessionKey : null}
+        .sessionKey=${sessionRoute ? host.activeSessionKey : null}
         .suppressed=${settingsTakeover}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
-      ${isSessionRouteId(activeRoute)
+      ${sessionRoute
         ? nothing
         : html`
             <openclaw-browser-panel
