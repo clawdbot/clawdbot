@@ -1318,16 +1318,21 @@ export async function processGatewayAllowlist(
         `Exec denied (gateway id=${approvalId}, approval-state-write-failed): ${params.command}`,
       );
     };
+    const sendApprovalRequestFailedFollowup = async () => {
+      if (!params.signal?.aborted) {
+        await sendExecApprovalFollowupResult(
+          followupTarget,
+          `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
+        );
+      }
+    };
+    let gatewayInvocationStarted = false;
 
     void (async () => {
       let approvalDecision: Awaited<ReturnType<typeof resolveApprovalForExecution>>;
       try {
         approvalDecision = await resolveApprovalForExecution(
-          () =>
-            void sendExecApprovalFollowupResult(
-              followupTarget,
-              `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
-            ),
+          () => void sendApprovalRequestFailedFollowup(),
         );
       } catch {
         await denyApprovalStateWriteFailure();
@@ -1395,6 +1400,7 @@ export async function processGatewayAllowlist(
 
           let run: Awaited<ReturnType<typeof runExecProcess>>;
           try {
+            gatewayInvocationStarted = true;
             run = await runExecProcess({
               command: params.command,
               execCommand: approvalDecision.execCommandOverride,
@@ -1480,7 +1486,17 @@ export async function processGatewayAllowlist(
         approvalFollowupText,
       });
       await sendExecApprovalFollowupResult(followupTarget, summary);
-    })();
+    })().catch(async (error: unknown): Promise<void> => {
+      // Once dispatch starts, a delivery failure cannot mean execution was denied.
+      if (
+        gatewayInvocationStarted ||
+        params.signal?.aborted ||
+        isExecApprovalRunAbortedError(error)
+      ) {
+        return;
+      }
+      await sendApprovalRequestFailedFollowup();
+    });
 
     return {
       pendingResult: buildExecApprovalPendingToolResult({
