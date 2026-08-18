@@ -103,7 +103,6 @@ let tempControlUiRoot: string | undefined;
 let suiteConfigRootSeq = 0;
 let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
-let minimalGatewayPreparedRuntimeConfigFingerprint: string | undefined;
 let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
 // Gateway tests exercise RPC/server behavior, not production bind auto-detection by default.
@@ -318,7 +317,6 @@ export async function writeSessionStore(params: {
     );
   }
   clearSessionStoreCacheForTest();
-  await refreshMinimalGatewayPreparedRuntime();
 }
 
 async function setupGatewayTestHome() {
@@ -480,7 +478,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetAgentEventsForTest();
   const mod = await getServerModule();
   await mod.resetPreparedModelCatalogForTest();
-  minimalGatewayPreparedRuntimeConfigFingerprint = undefined;
   agentDiscoveryMock.enabled = false;
   agentDiscoveryMock.discoverCalls = 0;
   agentDiscoveryMock.models = [];
@@ -528,10 +525,9 @@ async function resetGatewayTestRuntimeOnly() {
     drainSystemEvents(sessionKey);
   }
   resetAgentEventsForTest({ preserveListeners: true });
-  await refreshMinimalGatewayPreparedRuntime({ force: true });
 }
 
-async function refreshMinimalGatewayPreparedRuntime(options?: { force?: boolean }): Promise<void> {
+export async function prepareGatewayReplyRuntimeForTest(): Promise<void> {
   if (process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1") {
     return;
   }
@@ -539,17 +535,11 @@ async function refreshMinimalGatewayPreparedRuntime(options?: { force?: boolean 
     import("../agents/prepared-model-runtime.js"),
     import("../config/io.js"),
   ]);
-  const config = configRuntime.getRuntimeConfig();
-  const configFingerprint = JSON.stringify(config);
-  if (!options?.force && minimalGatewayPreparedRuntimeConfigFingerprint === configFingerprint) {
-    return;
-  }
-  await preparedRuntime.refreshPreparedModelRuntimeSnapshots(config, {
+  await preparedRuntime.refreshPreparedModelRuntimeSnapshots(configRuntime.getRuntimeConfig(), {
     gatewayLifecycle: true,
     catalogMode: "static",
     allowGatewaySubagentBinding: true,
   });
-  minimalGatewayPreparedRuntimeConfigFingerprint = configFingerprint;
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -701,7 +691,6 @@ export async function startTestGatewayServer(port: number, opts?: GatewayServerO
     };
   }
   const server = await mod.startGatewayServer(port, resolvedOpts);
-  await refreshMinimalGatewayPreparedRuntime({ force: true });
   activeSuiteGatewayServerCount += 1;
   const originalClose = server.close.bind(server);
   let closed = false;
@@ -1255,7 +1244,9 @@ export async function rpcReq<T extends Record<string, unknown>>(
   // observes the updated test fixture state.
   resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
-  await refreshMinimalGatewayPreparedRuntime();
+  if (method === "agent") {
+    await prepareGatewayReplyRuntimeForTest();
+  }
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   const responsePromise = onceMessage<{
