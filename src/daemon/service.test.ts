@@ -288,6 +288,27 @@ describe("startGatewayService", () => {
     expect(result.state.running).toBe(true);
   });
 
+  it("rejects an unknown post-start service inspection", async () => {
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "run"],
+      })),
+      isLoaded: vi
+        .fn<GatewayService["isLoaded"]>()
+        .mockResolvedValueOnce(false)
+        .mockRejectedValueOnce(new Error("post-start inspection failed")),
+      readRuntime: vi
+        .fn<GatewayService["readRuntime"]>()
+        .mockResolvedValueOnce({ status: "stopped" })
+        .mockResolvedValueOnce({ status: "running" }),
+    });
+
+    await expect(startGatewayService(service, { env: {}, stdout: process.stdout })).rejects.toThrow(
+      "Service status inspection failed after start: Error: post-start inspection failed",
+    );
+    expect(service.start).toHaveBeenCalledTimes(1);
+  });
+
   it("reports an explicit post-start process failure instead of claiming success", async () => {
     const service = createService({
       readCommand: vi.fn(async () => ({

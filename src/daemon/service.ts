@@ -272,6 +272,9 @@ export async function startGatewayService(
     throw err;
   }
 
+  if (nextState.loadState.status === "unknown") {
+    throw new Error(`Service status inspection failed after start: ${nextState.loadState.detail}`);
+  }
   const runtime = nextState.runtime;
   const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
   const newFailedExit =
