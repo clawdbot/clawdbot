@@ -747,6 +747,67 @@ describe("grouped chat rendering", () => {
     expect(badge?.getAttribute("aria-label")).toBe("4 consecutive identical messages collapsed");
   });
 
+  it.each([
+    { markdown: "Final paragraph", owner: "p" },
+    { markdown: "- first\n- final", owner: "li:last-child" },
+    { markdown: "> quoted ending", owner: "blockquote p" },
+  ])(
+    "attaches a duplicate marker to the terminal textual owner in $owner",
+    ({ markdown: markdownText, owner }) => {
+      const container = document.createElement("div");
+      markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
+      renderAssistantMessageEntries(container, [
+        {
+          key: "assistant-duplicate",
+          message: createAssistantMessage(markdownText, { timestamp: 1 }),
+          duplicateCount: 3,
+        },
+      ]);
+
+      const target = expectElement(container, owner, HTMLElement);
+      expect(target.querySelector(":scope > .chat-duplicate-count")?.textContent).toBe("×3");
+    },
+  );
+
+  it.each([
+    { label: "fence", markdown: "Paragraph\n\n```ts\nconst value = 1;\n```", terminal: "pre" },
+    {
+      label: "compact details",
+      markdown: "<details><summary>More</summary>body</details>",
+      terminal: "details",
+    },
+    {
+      label: "block details",
+      markdown: "<details>\n<summary>More</summary>\n\nbody\n</details>",
+      terminal: "details",
+    },
+    {
+      label: "table",
+      markdown: "| Name | Value |\n| --- | --- |\n| one | two |",
+      terminal: ".markdown-table",
+    },
+  ])(
+    "keeps a duplicate marker outside terminal $label content",
+    ({ markdown: markdownText, terminal }) => {
+      const container = document.createElement("div");
+      markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
+      renderAssistantMessageEntries(container, [
+        {
+          key: "assistant-duplicate",
+          message: createAssistantMessage(markdownText, { timestamp: 1 }),
+          duplicateCount: 3,
+        },
+      ]);
+
+      const chatText = expectElement(container, ".chat-text", HTMLDivElement);
+      const terminalBlock = expectElement(chatText, terminal, HTMLElement);
+      expect(terminalBlock.querySelector(".chat-duplicate-count")).toBeNull();
+      expect(chatText.querySelector(":scope > .chat-duplicate-count")?.textContent).toBe("×3");
+      expect(chatText.querySelector("summary")?.textContent ?? "").not.toContain("×3");
+      expect(chatText.querySelector("td:last-child")?.textContent ?? "").not.toContain("×3");
+    },
+  );
+
   it("does not render the stale assistant read-aloud footer action", () => {
     const container = document.createElement("div");
     renderAssistantMessage(

@@ -341,15 +341,29 @@ export function renderMarkdownText(
 function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
   const template = document.createElement("template");
   template.innerHTML = rendered;
-  const candidates = template.content.querySelectorAll(
-    "p, li, td, th, summary, h1, h2, h3, h4",
-  );
-  const target = candidates.item(candidates.length - 1) ?? template.content;
+  const terminalBlock = template.content.lastElementChild;
+  const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
 
   const badge = document.createElement("span");
   badge.className = "chat-duplicate-count";
   badge.setAttribute("aria-label", suffix.label);
   badge.textContent = `×${suffix.count}`;
-  target.append(document.createTextNode("\u00a0"), badge);
+  (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
   return template.innerHTML;
+}
+
+function duplicateSuffixTextOwner(block: Element): Element | null {
+  if (/^(?:P|H[1-6])$/u.test(block.tagName)) {
+    return block;
+  }
+  if (!/^(?:BLOCKQUOTE|LI|OL|UL)$/u.test(block.tagName)) {
+    // Fences, details, raw blocks, and table shells own interactive or copied
+    // content. Keep the status marker after the whole terminal block.
+    return null;
+  }
+  const terminalChild = block.lastElementChild;
+  if (!terminalChild) {
+    return block.textContent?.trim() ? block : null;
+  }
+  return duplicateSuffixTextOwner(terminalChild);
 }
