@@ -2621,8 +2621,8 @@ button.chat-pr__diff {
   min-height: 28px;
   padding: 3px 10px;
   border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
