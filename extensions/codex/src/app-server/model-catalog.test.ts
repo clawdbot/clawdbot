@@ -1,37 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadCodexAppServerModelCatalog } from "./model-catalog.js";
+import { listAllCodexAppServerModels } from "./models.js";
+
+vi.mock("./models.js", () => ({
+  listAllCodexAppServerModels: vi.fn(),
+}));
+
+const listModelsMock = vi.mocked(listAllCodexAppServerModels);
+
+const catalogParams = {
+  config: {},
+  agentId: "main",
+  agentDir: "/tmp/main-agent",
+  workspaceDir: "/tmp/workspace",
+};
 
 describe("Codex app-server model catalog", () => {
+  beforeEach(() => {
+    listModelsMock.mockReset();
+  });
+
   it("projects picker models onto the ChatGPT Codex route", async () => {
-    expect(
-      await loadCodexAppServerModelCatalog(
+    listModelsMock.mockResolvedValue({
+      models: [
         {
-          config: {},
-          agentId: "main",
-          agentDir: "/tmp/main-agent",
-          workspaceDir: "/tmp/workspace",
+          id: "gpt-5.6-terra",
+          model: "gpt-5.6-terra",
+          displayName: "GPT-5.6 Terra",
+          inputModalities: ["text", "image", "unknown"],
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
         },
-        undefined,
-        async () => ({
-          models: [
-            {
-              id: "gpt-5.6-terra",
-              model: "gpt-5.6-terra",
-              displayName: "GPT-5.6 Terra",
-              inputModalities: ["text", "image", "unknown"],
-              supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-            },
-            {
-              id: "gpt-5.6-luna",
-              model: "gpt-5.6-luna",
-              displayName: "GPT-5.6 Luna",
-              inputModalities: ["text"],
-              supportedReasoningEfforts: [],
-            },
-          ],
-        }),
-      ),
-    ).toEqual([
+        {
+          id: "gpt-5.6-luna",
+          model: "gpt-5.6-luna",
+          displayName: "GPT-5.6 Luna",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+    expect(await loadCodexAppServerModelCatalog(catalogParams, undefined)).toEqual([
       {
         provider: "openai",
         id: "gpt-5.6-terra",
@@ -57,5 +65,23 @@ describe("Codex app-server model catalog", () => {
         input: ["text"],
       },
     ]);
+    expect(listModelsMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ timeoutMs: 2500 }),
+    );
+  });
+
+  it("returns no rows without a live call when discovery is disabled", async () => {
+    expect(
+      await loadCodexAppServerModelCatalog(catalogParams, { discovery: { enabled: false } }),
+    ).toEqual([]);
+    expect(listModelsMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds the live call with the configured discovery timeout", async () => {
+    listModelsMock.mockResolvedValue({ models: [] });
+    await loadCodexAppServerModelCatalog(catalogParams, { discovery: { timeoutMs: 750 } });
+    expect(listModelsMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ timeoutMs: 750 }),
+    );
   });
 });
