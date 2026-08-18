@@ -3,7 +3,7 @@ const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const UNHANDLED_COUNT_RE = /Vitest caught (\d+) unhandled errors? during the test run\./u;
 const UNHANDLED_ORIGIN_RE = /This error originated in "([^"\r\n]+)" test file\./u;
 
-export type VitestUnhandledErrors = {
+type VitestUnhandledErrors = {
   count: number;
   errorFirstLine?: string;
   origin?: string;
@@ -87,7 +87,7 @@ export function createVitestUnhandledErrorDetector() {
   return { observe, finish };
 }
 
-export function formatVitestUnhandledErrorSummary(result: VitestUnhandledErrors): string {
+function formatVitestUnhandledErrorSummary(result: VitestUnhandledErrors): string {
   const details = [result.origin, result.errorFirstLine].filter((value) => value !== undefined);
   const suffix = details.length > 0 ? `: ${details.join(" — ")}` : "";
   return `[vitest] UNHANDLED ERRORS (${result.count})${suffix}`;
