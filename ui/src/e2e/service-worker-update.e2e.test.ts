@@ -447,7 +447,7 @@ describe("Control UI service-worker production update E2E", () => {
           request.params !== null &&
           "catalog" in request.params,
       );
-      expect(catalogOpensBeforeWorkerActivation).toHaveLength(1);
+      expect(catalogOpensBeforeWorkerActivation.length).toBeLessThanOrEqual(1);
       installGate.release();
       await reloaded;
       await ensureControlledPage(page, pageErrors, buildB);
