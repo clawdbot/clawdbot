@@ -125,7 +125,7 @@ function setCronTimer(state: CronServiceState, delayMs: number): void {
 /** Consume a released slot without routing overdue work through the refire floor. */
 function requestImmediateCronRecheck(state: CronServiceState): Promise<void> | undefined {
   if (state.stopped || state.schedulingPaused || !state.deps.cronEnabled) {
-    return;
+    return undefined;
   }
   if (state.timer) {
     clearTimeout(state.timer);
