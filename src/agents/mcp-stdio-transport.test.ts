@@ -145,6 +145,45 @@ describe("OpenClawStdioClientTransport", () => {
     await closing;
   });
 
+  it("reaps the process group when the leader exits on its own", async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    // Leader exits spontaneously: close() never ran, so the group was never
+    // killed, and same-group descendants would leak without the reap.
+    child.exitCode = 1;
+    child.emit("close", 1);
+
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
+  });
+
+  it("does not double-kill the group when close() already reaped it", async () => {
+    vi.useFakeTimers();
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const closing = transport.close();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { detached: true });
+
+    child.exitCode = 0;
+    child.emit("close", 0);
+    await closing;
+
+    // close()'s tree kill already ran; the close event must not fire another.
+    expect(signalProcessTreeMock).not.toHaveBeenCalled();
+  });
+
   it("force-closes an in-flight repeated graceful shutdown before returning", async () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();

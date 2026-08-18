@@ -41,6 +41,7 @@ export class OpenClawStdioClientTransport implements Transport {
   private readonly stderrStream: PassThrough | null = null;
   private process?: ChildProcess;
   private closingProcess?: ChildProcess;
+  private treeReaped = false;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
@@ -91,6 +92,13 @@ export class OpenClawStdioClientTransport implements Transport {
       child.on("spawn", () => resolve());
       child.on("close", () => {
         this.process = undefined;
+        // A leader that exits on its own leaves same-process-group descendants
+        // orphaned and running; reap the group once (close()/forceClose() mark
+        // treeReaped when they already killed it, so this never double-kills).
+        if (child.pid && !this.treeReaped) {
+          this.treeReaped = true;
+          signalProcessTree(child.pid, "SIGKILL", { detached: true });
+        }
         this.onclose?.();
       });
       child.stdin?.on("error", (error: Error) => this.onerror?.(error));
@@ -151,6 +159,7 @@ export class OpenClawStdioClientTransport implements Transport {
       }
       await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
       if (processToClose.exitCode === null && processToClose.pid) {
+        this.treeReaped = true;
         killProcessTree(processToClose.pid, { detached: true });
         await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
         if (processToClose.exitCode === null && processToClose.pid) {
@@ -173,6 +182,7 @@ export class OpenClawStdioClientTransport implements Transport {
       const closePromise = new Promise<void>((resolve) => {
         processToClose.once("close", () => resolve());
       });
+      this.treeReaped = true;
       signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
       await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
     }
