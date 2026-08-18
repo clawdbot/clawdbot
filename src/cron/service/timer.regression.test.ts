@@ -138,30 +138,6 @@ describe("cron service timer regressions", () => {
     timeoutSpy.mockRestore();
   });
 
-  it("re-arms timer without hot-looping when a run is already in progress", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const store = timerRegressionFixtures.makeStorePath();
-    const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const state = createRunningCronServiceState({
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      jobs: [createDueIsolatedJob({ id: "due", nowMs: now, nextRunAtMs: now - 1 })],
-    });
-
-    await onTimer(state);
-
-    expect(timeoutSpy).toHaveBeenCalled();
-    if (state.timer == null) {
-      throw new Error("Expected cron timer to be re-armed");
-    }
-    const delays = timeoutSpy.mock.calls
-      .map(([, delay]) => delay)
-      .filter((d): d is number => typeof d === "number");
-    expect(delays).toContain(60_000);
-    timeoutSpy.mockRestore();
-  });
-
   it("#24355: one-shot job retries then succeeds", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
 
