@@ -7,8 +7,9 @@
 import { describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
 import { createNodePluginTools } from "../agents/node-plugin-tools.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
-import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
