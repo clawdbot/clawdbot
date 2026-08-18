@@ -129,7 +129,13 @@ function resolveMcpLoopbackTools(
     mode === "exact"
       ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
       : applyPolicyToolsAllow(scoped.tools, params.toolsAllow);
-  replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, tools);
+  replaceWithEffectiveToolAllowlist(
+    sessionsSendToolPolicy.allow,
+    tools.flatMap((tool) => {
+      const name = readMcpLoopbackToolName(tool);
+      return name ? [{ name }] : [];
+    }),
+  );
   // CLI-native tools do not appear in the loopback catalog. Carry only named
   // capability equivalents; an unknown native name narrows the child instead
   // of accidentally granting a same-named OpenClaw or plugin tool.

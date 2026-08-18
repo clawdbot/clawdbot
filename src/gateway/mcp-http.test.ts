@@ -1250,6 +1250,12 @@ describe("mcp loopback server", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sourceReplyOnly: true,
       toolsAllow: ["message"],
+      cliToolAvailability: { native: ["Read", "Bash"], openClaw: ["message"] },
+      trustedSessionHandoff: true,
+      sessionHandoffRequester: {
+        messageProvider: "discord",
+        senderId: "bound-sender",
+      },
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
