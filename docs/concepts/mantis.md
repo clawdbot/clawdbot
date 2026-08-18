@@ -201,9 +201,12 @@ in.
 
 ### Telegram Desktop recorder
 
-The Telegram Desktop recorder gives Mantis native visual evidence without
-driving OpenClaw or Telegram messages. The caller supplies `--user-driver`,
-starts and drives the SUT, then tells the recorder which message to show.
+The Telegram Desktop recorder is an operator/skill-driven tool: it records
+native Telegram Desktop without driving OpenClaw or Telegram messages. The
+caller (for example the Telegram userbot E2E skill) supplies `--user-driver`,
+starts and drives the SUT, then tells the recorder which message to show. The
+`Mantis Telegram Desktop Proof` workflow still runs its container-based
+runner; moving that workflow onto the recorder is a separate change.
 
 Start a fresh authorized desktop and begin recording:
 

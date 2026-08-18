@@ -22,6 +22,9 @@ describe("Mantis Telegram Desktop image bake", () => {
     expect(script).toContain('assert_selected_image "$log_dir/variant.log" "$ami_id" promoted');
     expect(script).toContain('if [[ "$default_image" == "$ami_id" ]]');
     expect(script).toContain("Crabbox coordinator admin is required with --run");
+    expect(script).toContain(
+      "Could not verify Crabbox coordinator admin access; refusing to start paid leases",
+    );
     expect(script).not.toContain("ADMIN_TOKEN is required");
   });
 

@@ -141,12 +141,20 @@ if ! crabbox_resolved="$(command -v "$crabbox_bin")"; then
   printf 'Crabbox executable not found: %s\n' "$crabbox_bin" >&2
   exit 2
 fi
-# Admin probe before any paid lease: image create/promote are admin-only and the
-# CLI rejects non-admin logins with this exact message before contacting the
-# coordinator. A GitHub admin owner passes without any admin token env.
-admin_probe="$("$crabbox_resolved" image fsr-status ami-00000000000000000 --provider aws 2>&1 || true)"
-if [[ "$admin_probe" == *"admin command requires"* ]]; then
+# Admin probe before any paid lease. image create/promote are admin-only. The
+# probe asks the coordinator about a non-existent AMI: only an admin login gets
+# through to the coordinator, which answers "not found"; a non-admin login is
+# refused by the CLI before any request. Anything else (outage, auth, contract
+# drift) fails closed rather than paying for leases first.
+admin_probe_status=0
+admin_probe="$("$crabbox_resolved" image fsr-status ami-00000000000000000 --provider aws 2>&1)" || admin_probe_status=$?
+if [[ "$admin_probe_status" -eq 0 || "$admin_probe" == *"not found"* ]]; then
+  :
+elif [[ "$admin_probe" == *"admin command requires"* ]]; then
   printf 'Crabbox coordinator admin is required with --run (CRABBOX_GITHUB_ADMIN_OWNERS or CRABBOX_COORDINATOR_ADMIN_TOKEN).\n' >&2
+  exit 2
+else
+  printf 'Could not verify Crabbox coordinator admin access; refusing to start paid leases. Probe output:\n%s\n' "$admin_probe" >&2
   exit 2
 fi
 if ! command -v jq >/dev/null 2>&1; then
