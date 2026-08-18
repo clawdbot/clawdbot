@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
@@ -56,14 +57,22 @@ export type SetupInferenceTestPlan = {
 export function configureCodexCliPreparedAuth(
   cfg: OpenClawConfig,
   homeScope: "agent" | "user",
-): OpenClawConfig {
+): Result<OpenClawConfig, string> {
   const entry = cfg.plugins?.entries?.codex;
   const pluginConfig = entry?.config ?? {};
   const appServer =
     pluginConfig.appServer && typeof pluginConfig.appServer === "object"
       ? pluginConfig.appServer
       : {};
-  return {
+  // Prepared sign-in owns a local stdio app-server; silently rewriting an
+  // explicit remote transport would move the credential boundary onto this host.
+  const transport = "transport" in appServer ? appServer.transport : undefined;
+  if (typeof transport === "string" && transport !== "stdio") {
+    return err(
+      `Codex setup needs a local stdio app-server for prepared sign-in, but plugins.entries.codex.config.appServer.transport is "${transport}". Remove that transport override to let setup manage a local Codex, or finish Codex sign-in on the remote app-server host and retry.`,
+    );
+  }
+  return ok({
     ...cfg,
     plugins: {
       ...cfg.plugins,
@@ -78,7 +87,7 @@ export function configureCodexCliPreparedAuth(
         },
       },
     },
-  };
+  });
 }
 
 export async function extractRunWinnerError(

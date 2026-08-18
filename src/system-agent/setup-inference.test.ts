@@ -5421,7 +5421,7 @@ describe("activateSetupInference Codex configuration", () => {
         entries: {
           " CODEX ": {
             config: {
-              appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+              appServer: { mode: "guardian" },
               supervision: { enabled: false },
             },
           },
@@ -5440,10 +5440,40 @@ describe("activateSetupInference Codex configuration", () => {
       codex: {
         enabled: true,
         config: {
-          appServer: { transport: "stdio", url: "ws://127.0.0.1:4500", homeScope: "user" },
+          appServer: { mode: "guardian", transport: "stdio", homeScope: "user" },
           supervision: { enabled: false },
         },
       },
+    });
+  });
+
+  it("refuses prepared Codex auth over an explicit remote app-server transport", async () => {
+    const config = {
+      plugins: {
+        entries: {
+          codex: {
+            config: {
+              appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const { result, persistedConfig, transformConfig } = await runCodexSetupWithFinalConfig({
+      currentConfig: config,
+      sourceConfig: config,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "unavailable",
+      error: expect.stringContaining('appServer.transport is "websocket"'),
+    });
+    expect(transformConfig).not.toHaveBeenCalled();
+    expect(persistedConfig.plugins?.entries?.codex?.config?.appServer).toEqual({
+      transport: "websocket",
+      url: "ws://127.0.0.1:4500",
     });
   });
 

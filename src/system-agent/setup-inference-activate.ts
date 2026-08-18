@@ -255,10 +255,14 @@ async function activateSetupInferenceUnredacted(
         }
       }
       const normalizedCodexConfig = normalizePluginTargetConfig(ensured.cfg, "codex");
-      const enabledCodex = enablePluginInConfig(
-        configureCodexCliPreparedAuth(normalizedCodexConfig, codexCliApiKey ? "agent" : "user"),
-        "codex",
+      const preparedAuth = configureCodexCliPreparedAuth(
+        normalizedCodexConfig,
+        codexCliApiKey ? "agent" : "user",
       );
+      if (!preparedAuth.ok) {
+        return { ok: false, status: "unavailable", error: preparedAuth.error };
+      }
+      const enabledCodex = enablePluginInConfig(preparedAuth.value, "codex");
       if (!enabledCodex.enabled) {
         return {
           ok: false,
@@ -622,9 +626,9 @@ async function activateSetupInferenceUnredacted(
           (await import("../agents/prepared-model-runtime.js"))
             .refreshPreparedModelRuntimeSnapshots;
         await refreshPreparedModelRuntimeSnapshots(codexReloadedRuntimeConfig);
-      } catch {
+      } catch (error) {
         throw new SetupInferenceActivationIndeterminateError(
-          "Inference activation committed, but the prepared model catalog could not be refreshed. Restart the Gateway before using the new inference route.",
+          `Inference activation committed, but the prepared model catalog could not be refreshed (${error instanceof Error ? error.message : String(error)}). Restart the Gateway before using the new inference route.`,
         );
       }
     }
