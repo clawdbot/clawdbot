@@ -91,6 +91,14 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
     "test/vitest/vitest.extension-discord.config.ts",
     DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   ],
+  // Codex extension shard: 168 serial files run ~6min total with silent
+  // stretches beyond 300s under the default reporter (measured 61s import +
+  // 293s testing while the worker burned ~95% CPU); the 300s CI window kills
+  // healthy runs and flips with incidental flake output (#125825).
+  [
+    "test/vitest/vitest.extension-codex.config.ts",
+    DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  ],
   [GATEWAY_CORE_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [GATEWAY_SERVER_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
 ]);
@@ -509,13 +517,28 @@ export function resolveRunVitestSpawnEnv(
   }
   const defaultTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(argv);
   const hasTimeout = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
-  const timeoutMs = hasTimeout
+  const envTimeoutMs = hasTimeout
     ? parsePositiveInt(baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
+    : null;
+  // Per-config entries in VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS are measured
+  // silence floors for healthy lanes; a global env value (CI sets one for
+  // every shard) may widen a mapped lane's window but must not shrink it
+  // below its floor, or the watchdog kills legitimately quiet runs
+  // (#125825). Unmapped configs keep the env value verbatim.
+  const configArg = resolveVitestConfigArg(argv);
+  const configFloorMs = configArg === null ? null : resolveVitestConfigNoOutputTimeoutMs(configArg);
+  // An explicitly disabled or unparsable env value (e.g. "0") stays verbatim.
+  const timeoutMs = hasTimeout
+    ? envTimeoutMs === null || configFloorMs === null
+      ? envTimeoutMs
+      : Math.max(envTimeoutMs, configFloorMs)
     : defaultTimeoutMs;
   const hasHeartbeat = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
     ...baseEnv,
-    ...(!hasTimeout ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) } : {}),
+    ...(timeoutMs !== null && timeoutMs !== envTimeoutMs
+      ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(timeoutMs) }
+      : {}),
     ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
       ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }
       : {}),
