@@ -350,7 +350,9 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("sessions.assignOwner")).toBe(methods.indexOf("sessions.move") + 1);
     expect(methods.indexOf("progressCard.get")).toBe(methods.indexOf("sessions.assignOwner") + 1);
     expect(methods.indexOf("progressCard.put")).toBe(methods.indexOf("progressCard.get") + 1);
-    expect(methods.indexOf("users.setGitHubIdentity")).toBe(methods.indexOf("diagnostics.lanes") + 1);
+    expect(methods.indexOf("users.setGitHubIdentity")).toBe(
+      methods.indexOf("diagnostics.lanes") + 1,
+    );
     expect(methods.indexOf("users.clearGitHubIdentity")).toBe(
       methods.indexOf("users.setGitHubIdentity") + 1,
     );
