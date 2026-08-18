@@ -163,7 +163,9 @@ for (const name of orphanNames) {
   if (lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
     try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
   }
-  fs.unlinkSync(orphanPath);
+  // The orphan's own watchdog can resume and unlink first; a lease that is already gone
+  // is the outcome we wanted, so it must not fail this sweep.
+  try { fs.unlinkSync(orphanPath); } catch (error) { if (!error || error.code !== "ENOENT") throw error; }
 }
 writeLease();
 const watchdog = childProcess.spawn(
@@ -290,10 +292,16 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       }
       watchdogFs.unlinkSync(watchedLeasePath);
     } catch (error) {
-      if (error && error.code === "ENOENT") return;
-      // This is the lease's last resumer, so it retries with backoff until the sweep completes
-      // or the lease file is gone. Any attempt cap would just re-create the permanent freeze
-      // for a longer stall; whoever removes the lease retires this watchdog on the next tick.
+      // Only the lease disappearing or being unusable retires this watchdog. A missing ps also throws
+      // ENOENT, and treating that as "someone else finished" would exit with the workers
+      // still stopped, which is the freeze this loop exists to prevent.
+      if (error && error.code === "ENOENT" && error.path === watchedLeasePath) return;
+      // An unreadable lease is terminal: the pids to resume live in that file, so retrying
+      // cannot recover them and would leave this detached process alive forever.
+      if (error instanceof SyntaxError) return;
+      // Otherwise this is the lease's last resumer, so it retries with backoff until the sweep
+      // completes or the lease file is gone. Any attempt cap would just re-create the permanent
+      // freeze for a longer stall; whoever removes the lease retires this watchdog next tick.
       setTimeout(check, retryDelayMs);
       retryDelayMs = Math.min(retryDelayMs * 2, 60000);
     }
@@ -444,5 +452,7 @@ for (const entry of input.processes) {
 if (input.watchdog !== null && processIdentity(input.watchdog.pid) === input.watchdog.start) {
   try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
 }
-fs.unlinkSync(leasePath);
+// The watchdog stays alive across the whole resume loop now, so it can win the unlink race.
+// Everything is thawed either way; a missing lease must not fail the sync.
+try { fs.unlinkSync(leasePath); } catch (error) { if (!error || error.code !== "ENOENT") throw error; }
 `;
