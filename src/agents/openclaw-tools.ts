@@ -445,12 +445,11 @@ export function createOpenClawTools(
       allowlist: explicitFactoryAllowlist,
       denylist: explicitFactoryDenylist,
     });
-  const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest;
   const sessionLookupToolOptions = {
     agentSessionKey: options?.agentSessionKey,
     sandboxed: options?.sandboxed,
     config: resolvedConfig,
-    callGateway: effectiveCallGateway,
+    callGateway: embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest,
     sessionLinkBase: resolveControlUiSessionLinkBase(resolvedConfig),
   };
   const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
@@ -461,11 +460,6 @@ export function createOpenClawTools(
         agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
       })
     : null;
-  const includeAskUserTool = shouldIncludeAskUserToolForOpenClawTools({
-    config: resolvedConfig,
-    agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-    pluginToolDenylist: options?.pluginToolDenylist,
-  });
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const tools: AnyAgentTool[] = [
     createDashboardTool({
@@ -603,7 +597,11 @@ export function createOpenClawTools(
         ]),
     ...collectPresentOpenClawTools([progressCardTool]),
     ...swarmToolGroups.structuredOutput,
-    ...(includeAskUserTool
+    ...(shouldIncludeAskUserToolForOpenClawTools({
+      config: resolvedConfig,
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      pluginToolDenylist: options?.pluginToolDenylist,
+    })
       ? [
           createAskUserTool({
             agentId: sessionAgentId,
