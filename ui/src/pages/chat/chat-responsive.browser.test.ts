@@ -1354,9 +1354,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             <div class="chat-group assistant chat-group--with-footer">
               <div class="chat-group-messages">
                 <div class="chat-bubble">
-                  <div class="chat-tool-card__preview" data-content-kind="mcp-app">
-                    <div class="chat-tool-card__preview-panel">
-                      <mcp-app-view style="display:block;width:100%;height:320px"></mcp-app-view>
+                  <div class="chat-tool-card__widget-host">
+                    <div class="chat-tool-card__preview" data-content-kind="mcp-app">
+                      <div class="chat-tool-card__preview-panel">
+                        <mcp-app-view style="display:block;width:100%;height:320px"></mcp-app-view>
+                      </div>
                     </div>
                   </div>
                 </div>
