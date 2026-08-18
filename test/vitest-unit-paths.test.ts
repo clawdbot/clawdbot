@@ -30,6 +30,7 @@ describe("isUnitConfigTestFile", () => {
     expect(isUnitConfigTestFile("src/plugin-sdk/facade-runtime.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/plugins/loader.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/infra/stable-node-path.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/state/openclaw-database-verify.process.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("test/format-error.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("test/extension-test-boundary.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/agents/embedded-agent-runner.test.ts")).toBe(false);

@@ -1523,6 +1523,16 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes the database verifier source-child test through the isolated project", () => {
+    expectSingleVitestRunPlan(
+      buildVitestRunPlans(["src/state/openclaw-database-verify.process.test.ts"]),
+      {
+        config: "test/vitest/vitest.cli-process.config.ts",
+        includePatterns: ["src/state/openclaw-database-verify.process.test.ts"],
+      },
+    );
+  });
+
   it("adds the CLI process project for broad CLI targets", () => {
     const plans = buildVitestRunPlans(["src/cli"]);
 

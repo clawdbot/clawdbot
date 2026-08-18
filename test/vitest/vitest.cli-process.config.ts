@@ -1,7 +1,7 @@
 import type { ViteUserConfig } from "vitest/config";
 import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
-// CLI process tests run serially in isolated forks so child startup deadlines
-// measure the CLI rather than contention from the shared CLI test graph.
+// Source-child process tests run serially in isolated forks so child startup
+// deadlines measure the child rather than contention from shared test graphs.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createCliProcessVitestConfig(

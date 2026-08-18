@@ -1,10 +1,11 @@
-// CLI process tests launch real Node+tsx children and must not contend with the
-// shared CLI module graph. Keep the owned list explicit so full and focused runs agree.
+// Source-child process tests launch real Node+tsx children and must not contend with
+// shared module graphs. Keep the owned list explicit so full and focused runs agree.
 export const cliProcessTestFiles = [
   "src/cli/acp-cli-exit.process.test.ts",
   "src/cli/gateway-backed-exit.process.test.ts",
   "src/cli/help-exit.process.test.ts",
   "src/cli/hooks-cli.process.test.ts",
+  "src/state/openclaw-database-verify.process.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);
