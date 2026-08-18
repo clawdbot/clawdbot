@@ -18,6 +18,7 @@ import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type {
+  GatewayInstanceAgentDispatchOptions,
   GatewayInstanceRuntime,
   GatewayRecoveryRuntime,
 } from "./server-instance-runtime.types.js";
@@ -25,6 +26,10 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { registerGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import {
+  cancelSubagentCompletionToolHandoff,
+  registerSubagentCompletionToolHandoff,
+} from "./subagent-completion-tool-handoff.js";
 
 const loadOutboundMessageRuntime = createLazyRuntimeModule(
   () => import("../infra/outbound/message.js"),
@@ -92,20 +97,49 @@ export function createGatewayInstanceRuntime(
     dispatchAgent: async <T>(
       payload: AgentRunRequest,
       timeoutMs?: number,
-      dispatchOptions?: { allowModelOverride?: boolean; scopes?: string[] },
+      dispatchOptions: GatewayInstanceAgentDispatchOptions = {},
     ) => {
       assertDispatchAvailable("agent");
-      const agentTurns = dispatchOptions
+      const delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
+        ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
+        : undefined;
+      const needsDedicatedPrincipal = Boolean(
+        dispatchOptions.allowModelOverride === true ||
+        dispatchOptions.allowSyntheticModelOverride === true ||
+        dispatchOptions.allowSyntheticCronRunContinuation === true ||
+        dispatchOptions.internalDeliveryMediaUrls ||
+        dispatchOptions.internalDeliverySuppressText === true ||
+        delegatedToolPolicyHandoffId ||
+        dispatchOptions.scopes ||
+        dispatchOptions.syntheticScopes,
+      );
+      const agentTurns = needsDedicatedPrincipal
         ? createInternalAgentTurnFacade({
             client: createSyntheticPluginRuntimeClient({
-              allowModelOverride: dispatchOptions.allowModelOverride,
-              scopes: dispatchOptions.scopes,
+              allowModelOverride:
+                dispatchOptions.allowModelOverride === true ||
+                dispatchOptions.allowSyntheticModelOverride === true,
+              cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
+              internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
+              internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
+              delegatedToolPolicyHandoffId,
+              scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
             }),
             getContext: options.getContext,
             getMethodRegistry: options.getMethodRegistry,
           })
         : recoveryAgentTurns;
-      return await agentTurns.dispatch<T>(payload, timeoutMs);
+      try {
+        return await agentTurns.dispatch<T>(payload, {
+          expectFinal: dispatchOptions.expectFinal,
+          onAccepted: dispatchOptions.onAccepted,
+          onSignalAbort: dispatchOptions.onSignalAbort,
+          signal: dispatchOptions.signal,
+          timeoutMs,
+        });
+      } finally {
+        cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
+      }
     },
     waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number) => {
       assertDispatchAvailable("agent.wait");
