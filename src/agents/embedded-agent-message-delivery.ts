@@ -72,10 +72,13 @@ function visitPluginEnvelope(
 
 const PLUGIN_SIGNALS = {
   dryRun: (record: Record<string, unknown>) =>
-    record.dryRun === true || normalizeStatus(record.status) === "dry_run",
+    record.dryRun === true ||
+    normalizeStatus(record.deliveryStatus) === "dry_run" ||
+    normalizeStatus(record.status) === "dry_run",
   partial: (record: Record<string, unknown>) =>
     record.sentBeforeError === true ||
     record.visibleReplySent === true ||
+    normalizeStatus(record.deliveryStatus) === "partial_failed" ||
     normalizeStatus(record.status) === "partial_failed",
   conversation: (record: Record<string, unknown>) =>
     [
@@ -88,6 +91,7 @@ const PLUGIN_SIGNALS = {
     const id = normalizeStatus(record.messageId);
     return (
       (id !== undefined && NON_DELIVERY_IDS.has(id)) ||
+      normalizeStatus(record.deliveryStatus) === "suppressed" ||
       normalizeStatus(record.status) === "suppressed"
     );
   },
@@ -117,6 +121,7 @@ const PLUGIN_SIGNALS = {
       .filter((id): id is string => Boolean(id));
     return (
       ids.some((id) => !NON_DELIVERY_IDS.has(id)) ||
+      normalizeStatus(record.deliveryStatus) === "sent" ||
       normalizeStatus(record.status) === "sent" ||
       normalizeStatus(record.text) === "sent"
     );
