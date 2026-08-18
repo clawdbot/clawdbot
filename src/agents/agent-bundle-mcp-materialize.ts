@@ -20,7 +20,7 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { projectMcpCallToolResultContent } from "./mcp-content.js";
+import { projectMcpCallToolResult } from "./mcp-content.js";
 import { isMcpToolAllowed } from "./mcp-tool-filter.js";
 import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -100,38 +100,10 @@ function toAgentToolResult(params: {
   toolName: string;
   result: CallToolResult;
 }): AgentToolResult<unknown> {
-  const content = projectMcpCallToolResultContent(params.result);
-  const normalizedContent: AgentToolResult<unknown>["content"] =
-    content.length > 0
-      ? content
-      : ([
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                status: params.result.isError === true ? "error" : "ok",
-                server: params.serverName,
-                tool: params.toolName,
-              },
-              null,
-              2,
-            ),
-          },
-        ] as AgentToolResult<unknown>["content"]);
-  const details: Record<string, unknown> = {
+  return projectMcpCallToolResult(params.result, {
     mcpServer: params.serverName,
     mcpTool: params.toolName,
-  };
-  if (params.result.structuredContent !== undefined) {
-    details.structuredContent = params.result.structuredContent;
-  }
-  if (params.result.isError === true) {
-    details.status = "error";
-  }
-  return {
-    content: normalizedContent,
-    details,
-  };
+  });
 }
 
 function toJsonAgentToolResult(params: {

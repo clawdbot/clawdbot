@@ -36,7 +36,7 @@ function replaceNodePluginTools(
 
 function createCodeModeHarness(tools: AnyAgentTool[]) {
   const catalogRef = createToolSearchCatalogRef();
-  const config = { tools: { codeMode: true } } as never;
+  const config = { tools: { codeMode: { enabled: true, timeoutMs: 120_000 } } } as never;
   const ctx = {
     config,
     runtimeConfig: config,
@@ -366,7 +366,7 @@ describe("createNodePluginTools", () => {
       `,
     );
 
-    expect(details.status).toBe("completed");
+    expect(details.status, JSON.stringify(details)).toBe("completed");
     expect(details.value).toEqual({
       api: expect.stringContaining("query: string;"),
       called: {
@@ -390,6 +390,33 @@ describe("createNodePluginTools", () => {
       },
       { scopes: ["operator.write"], signal: expect.any(AbortSignal) },
     );
+  });
+
+  it("makes empty MCP application results visible", async () => {
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      tools: [
+        {
+          pluginId: "node-mcp",
+          name: "docs_fail",
+          description: "Fail without content",
+          parameters: { type: "object", properties: {} },
+          command: "mcp.tools.call.v1",
+          mcp: { server: "docs", tool: "fail" },
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({
+      payload: { content: [], isError: true },
+    });
+
+    const tool = expectDefined(createNodePluginTools({})[0], "node MCP tool");
+    const result = await tool.execute("empty-error", {});
+
+    expect(result.content).toEqual([
+      { type: "text", text: "MCP tool failed without returning content." },
+    ]);
+    expect(isToolResultError(result)).toBe(true);
   });
 
   it("disambiguates gateway-node and node-node MCP server collisions", async () => {
@@ -434,7 +461,7 @@ describe("createNodePluginTools", () => {
       `,
     );
 
-    expect(details.status).toBe("completed");
+    expect(details.status, JSON.stringify(details)).toBe("completed");
     expect(details.value).toEqual({
       files: [
         "mcp/index.d.ts",

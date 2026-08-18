@@ -1683,7 +1683,7 @@ src/agents/agent-bundle-lsp-runtime.ts	4
 src/agents/agent-bundle-mcp-combined.ts	2
 src/agents/agent-bundle-mcp-manager-api.ts	2
 src/agents/agent-bundle-mcp-manager-lifecycle.ts	1
-src/agents/agent-bundle-mcp-materialize.ts	4
+src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	9
 src/agents/agent-command-restart-recovery.ts	4
