@@ -149,12 +149,16 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
     }
   });
 
-  it("directs late-only changes to the full body without showing zero totals", async () => {
+  it.each([
+    { label: "late-only", changedIndex: 650, hasVisibleChange: false },
+    { label: "visible-only", changedIndex: 500, hasVisibleChange: true },
+  ])("directs $label changes to the full body without exact totals", async (scenario) => {
     const previous = appliedProposal("proposal-long-v1", "2026-08-16T10:00:00.000Z");
     const latest = appliedProposal("proposal-long-v2", "2026-08-17T10:00:00.000Z");
     const previousLines = Array.from({ length: 700 }, (_, index) => `Procedure line ${index}`);
     const latestLines = [...previousLines];
-    latestLines[650] = "Changed procedure outside preview";
+    const changedText = `Changed procedure at line ${scenario.changedIndex}`;
+    latestLines[scenario.changedIndex] = changedText;
     const context = await browser.newContext({
       locale: "en-US",
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
@@ -193,19 +197,20 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
 
       const notice = page.locator(".sw-diff__notice");
       await notice.waitFor();
-      expect(await notice.textContent()).toContain("The changed region is outside this preview.");
+      expect(await notice.textContent()).toContain("This comparison is truncated.");
       expect(await notice.textContent()).toContain("Switch to Full body");
       expect(await page.locator(".sw-diff__stat").count()).toBe(0);
+      expect((await page.locator(".sw-diff__row--add").count()) > 0).toBe(
+        scenario.hasVisibleChange,
+      );
       await page.screenshot({
         animations: "disabled",
         fullPage: true,
-        path: path.join(artifactDir, "03-late-change.png"),
+        path: path.join(artifactDir, `03-${scenario.label}-change.png`),
       });
 
       await page.getByRole("button", { name: "Full body", exact: true }).click();
-      await expect
-        .poll(() => page.locator(".sw-body-card").textContent())
-        .toContain("Changed procedure outside preview");
+      await expect.poll(() => page.locator(".sw-body-card").textContent()).toContain(changedText);
     } finally {
       await context.close();
     }

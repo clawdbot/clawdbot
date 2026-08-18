@@ -3500,10 +3500,8 @@ export const en: TranslationMap = {
       loadingPrevious: "Loading the previous revision\u2026",
       previousUnavailable: "The previous revision is unavailable, so this is the full body.",
       tooLarge: "This comparison is too large to show here. Switch to Full body to read it.",
-      outsidePreview:
-        "The changed region is outside this preview. Statistics are incomplete. Switch to Full body to review it.",
-      partialPreview:
-        "Some changed regions are outside this preview. Statistics are incomplete. Switch to Full body to review every change.",
+      truncated:
+        "This comparison is truncated. Changes and statistics may be incomplete. Switch to Full body to review the complete revision.",
     },
     applied: {
       history: "History",

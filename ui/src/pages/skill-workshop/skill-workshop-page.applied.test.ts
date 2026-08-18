@@ -208,30 +208,36 @@ describe("Skill Workshop applied history", () => {
   });
 
   it.each([
-    ["late-only", null, "The changed region is outside this preview."],
-    ["partial", 500, "Some changed regions are outside this preview."],
-  ])("labels %s revision comparisons as incomplete", async (_label, visibleIndex, message) => {
-    const previousBody = Array.from({ length: 700 }, (_, index) => `line ${index}`);
-    const latestBody = [...previousBody];
-    if (visibleIndex !== null) {
-      latestBody[visibleIndex] = "changed inside preview";
-    }
-    latestBody[650] = "changed outside preview";
-    const proposals = appliedProposals();
-    proposals[2]!.body = previousBody.join("\n");
-    proposals[3]!.body = latestBody.join("\n");
+    { label: "late-only", changedIndexes: [650], hasVisibleChange: false },
+    { label: "visible-only", changedIndexes: [500], hasVisibleChange: true },
+    { label: "visible-and-late", changedIndexes: [500, 650], hasVisibleChange: true },
+  ])(
+    "labels $label revision comparisons as incomplete",
+    async ({ changedIndexes, hasVisibleChange }) => {
+      const previousBody = Array.from({ length: 700 }, (_, index) => `line ${index}`);
+      const latestBody = [...previousBody];
+      for (const changedIndex of changedIndexes) {
+        latestBody[changedIndex] = `changed line ${changedIndex}`;
+      }
+      const proposals = appliedProposals();
+      proposals[2]!.body = previousBody.join("\n");
+      proposals[3]!.body = latestBody.join("\n");
 
-    const page = await mountAppliedPage(inspectRequest(), proposals);
-    await vi.waitFor(
-      () => {
-        expect(page.querySelector(".sw-diff__notice")?.textContent).toContain(message);
-      },
-      { interval: 1 },
-    );
+      const page = await mountAppliedPage(inspectRequest(), proposals);
+      await vi.waitFor(
+        () => {
+          expect(page.querySelector(".sw-diff__notice")?.textContent).toContain(
+            "This comparison is truncated.",
+          );
+        },
+        { interval: 1 },
+      );
 
-    expect(page.querySelector(".sw-diff__stat")).toBeNull();
-    expect(page.querySelector(".sw-body-card")?.textContent).toContain("Full body");
-  });
+      expect(page.querySelector(".sw-diff__stat")).toBeNull();
+      expect(page.querySelector(".sw-diff__row--add") !== null).toBe(hasVisibleChange);
+      expect(page.querySelector(".sw-body-card")?.textContent).toContain("Full body");
+    },
+  );
 
   it("shows the oldest revision as a full body with no diff toggle", async () => {
     const page = await mountAppliedPage(inspectRequest(), appliedProposals());

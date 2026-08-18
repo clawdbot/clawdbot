@@ -26,7 +26,6 @@ export function renderAppliedRevisionDiff(previousBody: string, body: string) {
   if (result.kind === "complete" && result.lines.length === 0) {
     return html`<p class="sw-muted">${t("skillWorkshop.diff.unchanged")}</p>`;
   }
-  const hasVisibleChange = result.lines.some((line) => line.kind === "add" || line.kind === "del");
   return html`
     <div class="sw-diff">
       ${result.kind === "complete"
@@ -34,13 +33,7 @@ export function renderAppliedRevisionDiff(previousBody: string, body: string) {
             <span class="sw-diff__stat-add">+${result.stat.added}</span>
             <span class="sw-diff__stat-del">-${result.stat.removed}</span>
           </p>`
-        : html`<p class="sw-muted sw-diff__notice">
-            ${t(
-              hasVisibleChange
-                ? "skillWorkshop.diff.partialPreview"
-                : "skillWorkshop.diff.outsidePreview",
-            )}
-          </p>`}
+        : html`<p class="sw-muted sw-diff__notice">${t("skillWorkshop.diff.truncated")}</p>`}
       <div class="sw-diff__rows">${result.lines.map(renderDiffRow)}</div>
     </div>
   `;
