@@ -39,7 +39,11 @@ const statusSummaryMocks = vi.hoisted(() => ({
     },
   } as TaskRegistrySummary,
   inspectableTasks: [] as TaskRecord[],
-  listInspectableTasksReadOnly: vi.fn(() => statusSummaryMocks.inspectableTasks),
+  taskRegistryReadOnlyState: "ready" as "ready" | "migration-required",
+  inspectTasksReadOnly: vi.fn(() => ({
+    state: statusSummaryMocks.taskRegistryReadOnlyState,
+    tasks: statusSummaryMocks.inspectableTasks,
+  })),
   getInspectableTaskRegistrySummary: vi.fn(
     (_tasks?: TaskRecord[]) => statusSummaryMocks.taskRegistrySummary,
   ),
@@ -163,7 +167,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  listInspectableTasksReadOnly: statusSummaryMocks.listInspectableTasksReadOnly,
+  inspectTasksReadOnly: statusSummaryMocks.inspectTasksReadOnly,
   getInspectableTaskRegistrySummary: statusSummaryMocks.getInspectableTaskRegistrySummary,
   getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
 }));
@@ -235,6 +239,7 @@ describe("getStatusSummary", () => {
         cron: 0,
       },
     };
+    statusSummaryMocks.taskRegistryReadOnlyState = "ready";
     statusSummaryMocks.inspectableTasks = [];
     statusSummaryMocks.taskAuditFindings = [
       {
@@ -488,12 +493,23 @@ describe("getStatusSummary", () => {
 
     await getStatusSummary();
 
-    expect(statusSummaryMocks.listInspectableTasksReadOnly).toHaveBeenCalledTimes(1);
+    expect(statusSummaryMocks.inspectTasksReadOnly).toHaveBeenCalledTimes(1);
     expect(statusSummaryMocks.getInspectableTaskRegistrySummary).toHaveBeenCalledWith(
       inspectableTasks,
     );
     expect(statusSummaryMocks.getInspectableTaskAuditFindings).toHaveBeenCalledWith(
       inspectableTasks,
+    );
+  });
+
+  it("reports task schema migration state without failing status", async () => {
+    statusSummaryMocks.taskRegistryReadOnlyState = "migration-required";
+
+    const summary = await getStatusSummary();
+
+    expect(summary.tasks.total).toBe(0);
+    expect(summary.tasks.warning).toBe(
+      "Task history is unavailable until Gateway startup or openclaw doctor --fix repairs the state database.",
     );
   });
 
