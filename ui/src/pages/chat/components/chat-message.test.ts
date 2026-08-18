@@ -898,7 +898,7 @@ describe("grouped chat rendering", () => {
 
     expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: false,
-      codeBlockChrome: "none",
+      codeBlockChrome: "copy",
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,
@@ -1948,7 +1948,7 @@ describe("grouped chat rendering", () => {
     expect(notice?.querySelector("img[onerror]")).toBeNull();
     expect(notice?.dataset.chatRowKey).toBe("notice:command");
     expect(markdownRenderMock).toHaveBeenCalledWith(expect.any(String), {
-      codeBlockChrome: "none",
+      codeBlockChrome: "copy",
     });
   });
 

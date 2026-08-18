@@ -292,7 +292,7 @@ export function renderGroupedMessage(
   const markdown = extractedText?.trim() ? extractedText : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
-    codeBlockChrome: role === "user" ? "none" : "copy",
+    codeBlockChrome: "copy",
     fileLinks: true,
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,

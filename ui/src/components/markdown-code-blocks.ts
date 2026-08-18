@@ -20,6 +20,7 @@ import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
 
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
+const JSON_COLLAPSE_LINE_THRESHOLD = 40;
 const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
 const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
@@ -102,29 +103,6 @@ export function handleMarkdownCodeBlockCopy(event: Event): void {
   if (!(target instanceof Element)) {
     return;
   }
-  const jsonNodeToggle = target.closest<HTMLButtonElement>(".code-block-json-node-toggle");
-  if (jsonNodeToggle) {
-    const node = jsonNodeToggle.closest<HTMLElement>(".code-block-json-node");
-    if (!node) {
-      return;
-    }
-    const expanded = node.classList.toggle("is-expanded");
-    jsonNodeToggle.setAttribute("aria-expanded", String(expanded));
-    return;
-  }
-  const jsonTab = target.closest<HTMLButtonElement>(".code-block-json-tab");
-  if (jsonTab) {
-    const wrapper = jsonTab.closest<HTMLElement>(".code-block-wrapper");
-    const mode = jsonTab.dataset.jsonMode;
-    if (!wrapper || (mode !== "tree" && mode !== "raw")) {
-      return;
-    }
-    wrapper.classList.toggle("is-json-raw", mode === "raw");
-    for (const tab of wrapper.querySelectorAll<HTMLButtonElement>(".code-block-json-tab")) {
-      tab.setAttribute("aria-selected", String(tab === jsonTab));
-    }
-    return;
-  }
   const button = target.closest<HTMLElement>(".code-block-copy");
   if (!button) {
     return;
@@ -204,48 +182,6 @@ function renderCodeBlockHeader(lang: string, copyButton: string): string {
   return `<div class="code-block-header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${copyButton}</div></div>`;
 }
 
-function renderJsonPrimitive(value: unknown): string {
-  if (value === null) {
-    return '<span class="code-block-json-value code-block-json-value--null">null</span>';
-  }
-  if (typeof value === "string") {
-    return `<span class="code-block-json-value code-block-json-value--string">${escapeMarkdownHtml(JSON.stringify(value))}</span>`;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return `<span class="code-block-json-value code-block-json-value--literal">${String(value)}</span>`;
-  }
-  return `<span class="code-block-json-value">${escapeMarkdownHtml(String(value))}</span>`;
-}
-
-function renderJsonNode(value: object, depth: number, expanded: boolean): string {
-  const entries = Array.isArray(value)
-    ? value.map((item, index) => [String(index), item] as const)
-    : Object.entries(value as Record<string, unknown>);
-  const opening = Array.isArray(value) ? "[" : "{";
-  const closing = Array.isArray(value) ? "]" : "}";
-  const count = entries.length;
-  const summary = Array.isArray(value) ? `[ ${count} items ]` : `{ ${count} keys }`;
-  const rows = entries
-    .map(([key, item], index) => {
-      const comma = index < entries.length - 1 ? "," : "";
-      const label = Array.isArray(value)
-        ? ""
-        : `<span class="code-block-json-key">${escapeMarkdownHtml(JSON.stringify(key))}</span><span class="code-block-json-colon">: </span>`;
-      if (item !== null && typeof item === "object") {
-        return `<li>${label}${renderJsonNode(item, depth + 1, depth === 0)}${comma}</li>`;
-      }
-      return `<li>${label}${renderJsonPrimitive(item)}${comma}</li>`;
-    })
-    .join("");
-  return `<span class="code-block-json-node${expanded ? " is-expanded" : ""}"><button type="button" class="code-block-json-node-toggle" aria-expanded="${String(expanded)}"><span class="code-block-json-node-summary">${escapeMarkdownHtml(summary)}</span><span class="code-block-json-node-opening">${opening}</span></button><span class="code-block-json-node-content"><ul>${rows}</ul><span class="code-block-json-bracket">${closing}</span></span></span>`;
-}
-
-function renderJsonTree(value: unknown): string {
-  return value !== null && typeof value === "object"
-    ? renderJsonNode(value, 0, true)
-    : renderJsonPrimitive(value);
-}
-
 export function renderMarkdownCodeBlock(
   text: string,
   lang: string,
@@ -274,12 +210,10 @@ export function renderMarkdownCodeBlock(
         (trimmed.startsWith("[") && trimmed.endsWith("]"))));
 
   if (isJson) {
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      const jsonHeader = `<div class="code-block-header"><span class="code-block-lang">json</span><div class="code-block-actions"><div class="code-block-json-tabs" role="tablist"><button type="button" class="code-block-json-tab" data-json-mode="tree" role="tab" aria-selected="true">Tree</button><button type="button" class="code-block-json-tab" data-json-mode="raw" role="tab" aria-selected="false">Raw</button></div>${copyButton}</div></div>`;
-      return `<div class="code-block-wrapper code-block-wrapper--json">${jsonHeader}<div class="code-block-json-tree">${renderJsonTree(parsed)}</div><div class="code-block-json-raw">${codeBlock}</div></div>`;
-    } catch {
-      // Invalid JSON remains a highlighted code fence.
+    const lineCount = markdownCodeBlockCopyText(text).split("\n").length;
+    if (lineCount > JSON_COLLAPSE_LINE_THRESHOLD) {
+      const label = escapeMarkdownHtml(t("chat.codeBlock.jsonLines", { count: String(lineCount) }));
+      return `<details class="json-collapse code-block-wrapper"><summary class="code-block-header"><span>${label}</span>${copyButton}</summary>${codeBlock}</details>`;
     }
   }
 
