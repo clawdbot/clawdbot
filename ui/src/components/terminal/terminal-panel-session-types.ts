@@ -4,6 +4,7 @@ import type {
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
 import type { ReactiveControllerHost } from "lit";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
@@ -33,6 +34,14 @@ export type TerminalPanelCatalogReference = {
   hostId: string;
   threadId: string;
 };
+
+export function resolveTerminalPanelOwnerSessionKey(
+  sessionKey: string | null,
+  catalog?: TerminalPanelCatalogReference,
+): string | undefined {
+  const key = sessionKey?.trim();
+  return !catalog && key && !parseCatalogSessionKey(key) ? key : undefined;
+}
 
 /** Explicit terminal work retained until it either runs or reports a visible failure. */
 export type TerminalPanelAction =

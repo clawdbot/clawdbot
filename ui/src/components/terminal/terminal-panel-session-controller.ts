@@ -14,6 +14,7 @@ import {
 import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
 import {
   forceTerminalRender,
+  resolveTerminalPanelOwnerSessionKey,
   shellBasename,
   TERMINAL_FONT_FAMILY,
   TERMINAL_OUTPUT_ENCODER,
@@ -89,8 +90,6 @@ export class TerminalPanelSessionController
       },
     });
   }
-
-  hostConnected(): void {}
 
   private updateControllerState<Key extends keyof TerminalPanelSessionControllerState>(
     key: Key,
@@ -521,7 +520,7 @@ export class TerminalPanelSessionController
     this.openRetry.remember(catalog, agentId);
     this.host.terminalPanelErrorText = null;
     // Freeze the selection for this tab; later agent changes affect only new tabs.
-    const ownerSessionKey = !catalog ? this.host.sessionKey?.trim() || undefined : undefined;
+    const ownerSessionKey = resolveTerminalPanelOwnerSessionKey(this.host.sessionKey, catalog);
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalPanelSessionTab | undefined;
     try {

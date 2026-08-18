@@ -13,7 +13,6 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
@@ -644,10 +643,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
         .agentId=${selectedAgentId}
-        .sessionKey=${isSessionRouteId(activeRoute) &&
-        !parseCatalogSessionKey(host.activeSessionKey)
-          ? host.activeSessionKey
-          : null}
+        .sessionKey=${isSessionRouteId(activeRoute) ? host.activeSessionKey : null}
         .suppressed=${settingsTakeover}
         .sessionBottomOnly=${isSessionRouteId(activeRoute)}
         .themeMode=${resolveTerminalThemeMode()}
