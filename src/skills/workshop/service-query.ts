@@ -19,7 +19,11 @@ import {
   readSkillProposalRollback,
 } from "./store.js";
 import { withSkillProposalCommitLock } from "./target-lock.js";
-import type { SkillProposalManifest, SkillProposalReadResult } from "./types.js";
+import type {
+  SkillProposalManifest,
+  SkillProposalReadResult,
+  SkillProposalRecord,
+} from "./types.js";
 
 type SkillProposalScopeOptions = {
   agentId?: string;
@@ -55,9 +59,9 @@ export async function listSkillProposals(
     if (proposal.kind !== "create" || proposal.status !== "pending") {
       continue;
     }
-    const read = await readSkillProposal(proposal.id, store, scope);
-    if (read) {
-      await reconcilePendingCreateProposal(read, options);
+    const record = await readSkillProposalRecord(proposal.id, store, scope);
+    if (record) {
+      await reconcilePendingCreateProposal(record, options);
     }
   }
   return await readSkillProposalManifest(store, scope);
@@ -185,13 +189,23 @@ export async function readRequiredProposal(
 async function reconcilePendingCreateProposal(
   read: SkillProposalReadResult,
   options: SkillProposalScopeOptions,
-): Promise<SkillProposalReadResult> {
+): Promise<SkillProposalReadResult>;
+async function reconcilePendingCreateProposal(
+  read: SkillProposalRecord,
+  options: SkillProposalScopeOptions,
+): Promise<SkillProposalRecord>;
+async function reconcilePendingCreateProposal(
+  value: SkillProposalReadResult | SkillProposalRecord,
+  options: SkillProposalScopeOptions,
+): Promise<SkillProposalReadResult | SkillProposalRecord> {
+  const recordOnly = "schema" in value;
+  const record = recordOnly ? value : value.record;
   const workspaceDir = options.workspaceDir;
-  if (!workspaceDir || read.record.kind !== "create" || read.record.status !== "pending") {
-    return read;
+  if (!workspaceDir || record.kind !== "create" || record.status !== "pending") {
+    return value;
   }
   const resolvedWorkspaceDir = path.resolve(workspaceDir);
-  const resolvedTarget = path.resolve(read.record.target.skillFile);
+  const resolvedTarget = path.resolve(record.target.skillFile);
   // Agent-scoped reads intentionally include proposals bound to earlier workspaces.
   // Only reconcile a target against the workspace that owns it.
   if (
@@ -199,28 +213,36 @@ async function reconcilePendingCreateProposal(
     resolvedTarget !== resolvedWorkspaceDir &&
     !isPathInside(resolvedWorkspaceDir, resolvedTarget)
   ) {
-    return read;
+    return value;
   }
   const store = storeOptions(options.env);
   const scope = proposalScope(options);
   const reconciled = await withSkillProposalCommitLock(
     workspaceDir,
-    read.record,
+    record,
     async () => {
-      const current = await readSkillProposal(read.record.id, store, scope, { reconcile: false });
-      if (!current || current.record.kind !== "create" || current.record.status !== "pending") {
-        return { read: current ?? read };
+      const current = recordOnly
+        ? await readSkillProposalRecord(record.id, store, scope, { reconcile: false })
+        : await readSkillProposal(record.id, store, scope, { reconcile: false });
+      const currentRecord = current ? ("schema" in current ? current : current.record) : null;
+      if (
+        !current ||
+        !currentRecord ||
+        currentRecord.kind !== "create" ||
+        currentRecord.status !== "pending"
+      ) {
+        return { value: current ?? value };
       }
-      assertInsideWorkspace(workspaceDir, current.record.target.skillFile, "skill file");
-      if (await readSkillProposalRollback(current.record.id, store)) {
-        return { read: current };
+      assertInsideWorkspace(workspaceDir, currentRecord.target.skillFile, "skill file");
+      if (await readSkillProposalRollback(currentRecord.id, store)) {
+        return { value: current };
       }
-      const targetContent = await readWorkspaceSkillFile(current.record.target.skillFile);
+      const targetContent = await readWorkspaceSkillFile(currentRecord.target.skillFile);
       if (targetContent === null) {
-        return { read: current };
+        return { value: current };
       }
       const transition = transitionPendingSkillProposalToStale({
-        record: current.record,
+        record: currentRecord,
         reason: "Target skill was created after proposal creation.",
         input: {
           workspaceDir,
@@ -230,11 +252,14 @@ async function reconcilePendingCreateProposal(
         },
       });
       return {
-        read: {
-          ...current,
-          record: transition.record,
-          revisionHash: hashSkillProposalRevision(transition.record),
-        },
+        value:
+          "schema" in current
+            ? transition.record
+            : {
+                ...current,
+                record: transition.record,
+                revisionHash: hashSkillProposalRevision(transition.record),
+              },
         transition,
       };
     },
@@ -248,7 +273,7 @@ async function reconcilePendingCreateProposal(
       ...(options.agentId ? { agentId: options.agentId } : {}),
     });
   }
-  return reconciled.read;
+  return reconciled.value;
 }
 
 async function hydrateProposalSupportFiles(

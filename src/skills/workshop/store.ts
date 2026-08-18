@@ -216,12 +216,15 @@ export async function readSkillProposalRecord(
   proposalId: string,
   options: SkillWorkshopStoreOptions = {},
   scope: SkillProposalLookupScope = {},
+  readOptions: { reconcile?: boolean } = {},
 ): Promise<SkillProposalRecord | null> {
   let stored = readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
   }
-  await reconcileInterruptedApply(proposalId, options);
+  if (readOptions.reconcile !== false) {
+    await reconcileInterruptedApply(proposalId, options);
+  }
   stored = readStoredProposal(proposalId, options);
   return stored && isStoredProposalVisible(stored.row, scope) ? stored.record : null;
 }

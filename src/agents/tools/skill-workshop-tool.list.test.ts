@@ -116,4 +116,38 @@ describe("skill_workshop list", () => {
     });
     expect(commitLockState.calls).toBe(51);
   });
+
+  it("lists pending create metadata without reading its draft", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-list-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      env: testState.env,
+    });
+    const created = await tool.execute("call-create", {
+      action: "create",
+      name: "Missing Draft",
+      description: "Proposal whose durable draft artifact is unavailable",
+      proposal_content: "# Missing Draft\n",
+    });
+    const proposalId = (created.details as { id: string }).id;
+
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+    await expect(
+      tool.execute("call-list-missing-workspace", { action: "list" }),
+    ).resolves.toMatchObject({
+      details: { proposals: [expect.objectContaining({ id: proposalId, status: "pending" })] },
+    });
+
+    await fs.rm(testState.statePath("skill-workshop", "proposals", proposalId, "PROPOSAL.md"));
+    await expect(
+      tool.execute("call-list-filtered", { action: "list", status: "applied" }),
+    ).resolves.toMatchObject({ details: { proposals: [] } });
+    await expect(
+      tool.execute("call-list-missing-draft", { action: "list" }),
+    ).resolves.toMatchObject({
+      details: { proposals: [expect.objectContaining({ id: proposalId, status: "pending" })] },
+    });
+  });
 });

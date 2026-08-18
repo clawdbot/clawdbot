@@ -1,6 +1,7 @@
 // Workshop service tests cover skill workshop generation, storage, and validation behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseByPath,
@@ -70,6 +71,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  __setFsSafeTestHooksForTest();
   resetSkillsRefreshStateForTest();
   await tempDirs.cleanup();
 });
@@ -606,6 +608,67 @@ describe("skill workshop proposals", () => {
     ).resolves.toBe(
       '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nLater body.\n',
     );
+  });
+
+  it("keeps inspected content coherent with a concurrent create-proposal revision", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Concurrent Revision",
+      description: "Keep inspection on one proposal revision",
+      content: "# Concurrent Revision\n\nFirst body.\n",
+    });
+    let releaseLock: (() => void) | undefined;
+    let markAcquired: (() => void) | undefined;
+    const acquired = new Promise<void>((resolve) => {
+      markAcquired = resolve;
+    });
+    const heldLock = withSkillCollectionLock(workspaceDir, async () => {
+      markAcquired?.();
+      await new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      });
+    });
+    await acquired;
+    const draftPath = await fs.realpath(
+      path.join(stateDir, "skill-workshop", "proposals", proposal.record.id, "PROPOSAL.md"),
+    );
+    let markDraftOpened: (() => void) | undefined;
+    const draftOpened = new Promise<void>((resolve) => {
+      markDraftOpened = resolve;
+    });
+    let sawDraftOpen = false;
+    __setFsSafeTestHooksForTest({
+      afterOpen: (filePath) => {
+        if (!sawDraftOpen && filePath === draftPath) {
+          sawDraftOpen = true;
+          markDraftOpened?.();
+        }
+      },
+    });
+    const inspection = inspectSkillProposal(proposal.record.id, { workspaceDir });
+
+    const revised = await (async () => {
+      try {
+        await draftOpened;
+        return await reviseSkillProposal({
+          workspaceDir,
+          proposalId: proposal.record.id,
+          expectedRevisionHash: proposal.revisionHash,
+          content: "# Concurrent Revision\n\nSecond body.\n",
+        });
+      } finally {
+        __setFsSafeTestHooksForTest();
+        releaseLock?.();
+        await heldLock;
+      }
+    })();
+
+    await expect(inspection).resolves.toMatchObject({
+      record: { proposedVersion: "v2" },
+      revisionHash: revised.revisionHash,
+      content: revised.content,
+    });
   });
 
   it("recovers run progress from canonical proposal records", async () => {
