@@ -6,8 +6,10 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
+import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
+import { loadWebMediaRaw } from "./web-media.js";
 
 const channelPluginMocks = vi.hoisted(() => ({
   getLoadedChannelPlugin: vi.fn<
@@ -207,6 +209,57 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result.readFile).toBeTypeOf("function");
     expect(result.localRoots).toContain("/Users/peter/Pictures");
+  });
+
+  it("blocks denied workspace attachments while preserving managed artifacts", async () => {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-sender-policy-"));
+    const stateDir = path.join(baseDir, "state");
+    const workspaceDir = path.join(baseDir, "workspace");
+    const workspaceFile = path.join(workspaceDir, "private.bin");
+    const managedFile = path.join(stateDir, "media", "tool-image-generation", "result.bin");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await fs.mkdir(path.dirname(managedFile), { recursive: true });
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(workspaceFile, "private");
+    await fs.writeFile(managedFile, "managed");
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read"],
+        toolsBySender: { "id:attacker": { deny: ["read"] } },
+      },
+      agents: { list: [{ id: "restricted", workspace: workspaceDir }] },
+    };
+
+    try {
+      const deniedAccess = resolveAgentScopedOutboundMediaAccess({
+        cfg,
+        agentId: "restricted",
+        messageProvider: "requestchat",
+        requesterSenderId: "attacker",
+        mediaSources: [workspaceFile],
+      });
+      await expect(
+        loadWebMediaRaw(
+          workspaceFile,
+          buildOutboundMediaLoadOptions({ mediaAccess: deniedAccess }),
+        ),
+      ).rejects.toThrow(/not under an allowed directory/i);
+
+      const managedAccess = resolveAgentScopedOutboundMediaAccess({
+        cfg,
+        agentId: "restricted",
+        messageProvider: "requestchat",
+        requesterSenderId: "attacker",
+        mediaSources: [managedFile],
+      });
+      const loaded = await loadWebMediaRaw(
+        managedFile,
+        buildOutboundMediaLoadOptions({ mediaAccess: managedAccess }),
+      );
+      expect(loaded.buffer.toString()).toBe("managed");
+    } finally {
+      await fs.rm(baseDir, { recursive: true, force: true });
+    }
   });
 
   it("honors plugin-owned group tool policy with channel metadata", () => {
