@@ -201,7 +201,11 @@ describe("dashboard tool", () => {
       expect(result.content[0]).toMatchObject({
         text: expect.stringMatching(/Control UI.*retry/i),
       });
-      expect(broadcastToConnIds).not.toHaveBeenCalled();
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
+        "board.command",
+        expect.any(Object),
+        new Set(),
+      );
     } finally {
       clearContext();
     }

@@ -428,6 +428,9 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   if (wait.status !== "ok") {
     return wait;
   }
+  if (wait.terminalReply?.disposition === "visible") {
+    return { ...wait, replyText: wait.terminalReply.text };
+  }
 
   const latestReply = await readLatestAssistantReplySnapshot({
     sessionKey: params.sessionKey,
@@ -436,9 +439,9 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
     stopAtTranscriptArtifact: true,
     callGateway: params.callGateway,
   });
-  const replyText =
-    (wait.terminalReply?.disposition === "visible" ? wait.terminalReply.text : undefined) ??
-    (hasUpdatedAssistantReplySnapshot(latestReply, params.baseline) ? latestReply.text : undefined);
+  const replyText = hasUpdatedAssistantReplySnapshot(latestReply, params.baseline)
+    ? latestReply.text
+    : undefined;
   return {
     ...wait,
     replyText,

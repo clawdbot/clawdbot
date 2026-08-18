@@ -239,9 +239,7 @@ function emitBoardCommand(params: {
     context.getClientConnIds?.(
       (client) => client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI,
     ) ?? new Set<string>();
-  if (connIds.size > 0) {
-    context.broadcastToConnIds("board.command", params, connIds);
-  }
+  context.broadcastToConnIds("board.command", params, connIds);
   return connIds.size;
 }
 

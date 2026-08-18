@@ -615,20 +615,6 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       expected: { status: "ok", replyText: undefined },
     },
     {
-      name: "prefers an authoritative visible terminal reply over suppressed history",
-      runId: "run-visible-terminal-reply",
-      messages: [forwardedRequest, messageToolMirror("suppressed mirror", {})],
-      wait: {
-        status: "ok",
-        terminalReply: { disposition: "visible", text: "authoritative reply" },
-      },
-      expected: {
-        status: "ok",
-        terminalReply: { disposition: "visible", text: "authoritative reply" },
-        replyText: "authoritative reply",
-      },
-    },
-    {
       name: "does not let an older turn's message-tool mirror suppress a fresh reply",
       runId: "run-after-older-source-reply",
       messages: [
@@ -704,6 +690,31 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       "agent.wait",
       "chat.history",
     ]);
+  });
+
+  it("returns an authoritative visible terminal reply without reading history", async () => {
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "ok",
+          terminalReply: { disposition: "visible", text: "authoritative reply" },
+        };
+      }
+      throw new Error("history unavailable");
+    });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-visible-terminal-reply",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      terminalReply: { disposition: "visible", text: "authoritative reply" },
+      replyText: "authoritative reply",
+    });
+    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
   });
 });
 
