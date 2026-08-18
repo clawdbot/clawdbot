@@ -119,7 +119,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   suggestionComposer?: boolean;
-  typingActors?: readonly { id: string; label: string }[];
   onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;

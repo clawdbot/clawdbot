@@ -56,9 +56,9 @@ import type {
   TranscriptAnnouncement,
   TranscriptRow,
 } from "./chat-transcript-controller.ts";
+import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
-import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 
 type ChatTranscriptProjection = {
   isDirectThread: boolean;
@@ -138,14 +138,6 @@ function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown
     return [item.key, ...item.groups];
   }
   return [item];
-}
-
-function isConversationTurn(item: ChatRenderItem): boolean {
-  if (item.kind === "group") {
-    const role = item.role.toLowerCase();
-    return role === "user" || role === "assistant";
-  }
-  return item.kind === "stream-run" && item.parts.some((part) => part.kind === "stream");
 }
 
 function trackTranscriptRenderDependencies(
@@ -585,15 +577,6 @@ export function projectChatTranscript(
     key: item.key,
     item,
   }));
-  const typingIndicator = renderChatTypingIndicator(props.typingActors);
-  if (typingIndicator) {
-    const lastTurnIndex = transcriptItems.findLastIndex(isConversationTurn);
-    transcriptRows.splice(lastTurnIndex + 1, 0, {
-      kind: "content",
-      key: "presence:typing",
-      content: typingIndicator,
-    });
-  }
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
@@ -618,6 +601,14 @@ export function projectChatTranscript(
       kind: "content",
       key: "background-tasks",
       content: backgroundTasks,
+    });
+  }
+  const typingIndicator = renderChatTypingIndicator(props.typingActors);
+  if (typingIndicator) {
+    transcriptRows.push({
+      kind: "content",
+      key: "presence:typing",
+      content: typingIndicator,
     });
   }
   trackTranscriptRenderDependencies(state, [
@@ -652,6 +643,7 @@ export function projectChatTranscript(
     props.userId,
     props.userName,
     props.userAvatar,
+    props.typingActors,
     props.basePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
     props.assistantAttachmentAuthToken,

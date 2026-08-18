@@ -170,7 +170,6 @@ describe("renderChatComposer controls", () => {
         actionLabel: "Unarchive",
         onAction,
       },
-      typingActors: [{ id: "ayaan", label: "Ayaan" }],
     });
 
     const banner = container.querySelector(".agent-chat__disabled-banner");
@@ -618,7 +617,6 @@ describe("renderChatComposer status", () => {
       gatewayQuestionPrompts: [],
       composerControls: html`<button type="button">Model</button>`,
       onRequestUpdate: vi.fn(),
-      typingActors: [{ id: "ayaan", label: "Ayaan" }],
     });
     composerProps.onDraftChange = (next) => {
       composerProps.draft = next;

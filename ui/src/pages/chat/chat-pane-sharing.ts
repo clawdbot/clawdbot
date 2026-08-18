@@ -1,3 +1,5 @@
+import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionSuggestion,
   SessionSuggestionEvent,
@@ -14,12 +16,11 @@ import type {
 } from "../../api/types.ts";
 import { hasMultiplePresenceIdentities } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -39,6 +40,15 @@ import {
 } from "./components/chat-session-sharing.ts";
 
 type HeaderScope = ChatPaneConnectionScope;
+
+function rawUserMessageSenderId(payload: unknown): string | undefined {
+  const event = recordOrNull(payload);
+  const message = recordOrNull(event?.message);
+  if (stringValue(message?.role)?.toLowerCase() !== "user") {
+    return undefined;
+  }
+  return stringValue(recordOrNull(message?.__openclaw)?.senderId);
+}
 
 export abstract class ChatPaneSharing extends ChatPaneBase {
   protected readonly clearSessionCompanion = async () => {
@@ -705,10 +715,9 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     ) {
       return;
     }
-    const message = normalizeMessage(
-      payload && typeof payload === "object" && "message" in payload ? payload.message : undefined,
-    );
-    const actorId = message.role === "user" ? message.sender?.id : undefined;
+    // Typing authority comes only from the structured ingress identity. A
+    // legacy senderLabel may look attributable but is display compatibility.
+    const actorId = rawUserMessageSenderId(payload);
     if (!actorId || !this.typingActors.delete(actorId)) {
       return;
     }
