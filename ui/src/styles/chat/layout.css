@@ -1828,6 +1828,7 @@ button.chat-reply-preview--message:disabled {
 
 .task-suggestion {
   position: relative;
+  grid-area: 1 / 1;
   display: grid;
   gap: 14px;
   padding: 14px 16px 17px;
@@ -1841,7 +1842,8 @@ button.chat-reply-preview--message:disabled {
 }
 
 .task-suggestion[hidden] {
-  display: none;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .task-suggestion[data-swap-direction="next"] {
