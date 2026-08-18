@@ -43,6 +43,7 @@ export const NODE_HOME = "/Users/peter";
 export const NODE_PICKED = "/Users/peter/Projects";
 export const NODE_UNC = "\\\\server\\share\\repo";
 export const EXEC_ONLY_PICKED = "C:\\Users\\peter\\repo";
+const LOCATOR_TEXT_READ_TIMEOUT_MS = 500;
 const LOCATOR_TEXT_POLL_TIMEOUT_MS = 10_000;
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -87,16 +88,9 @@ export const SESSION_LIST_DEFAULTS = {
 type LocatorTextPoll = ReturnType<typeof expect.poll<Promise<string | null>>>;
 
 export function pollLocatorText(locator: Locator): LocatorTextPoll {
-  return expect.poll(
-    () =>
-      locator.evaluateAll((elements) => {
-        if (elements.length > 1) {
-          throw new Error(`Expected at most one text target, found ${elements.length}`);
-        }
-        return elements[0]?.textContent ?? null;
-      }),
-    { timeout: LOCATOR_TEXT_POLL_TIMEOUT_MS },
-  );
+  return expect.poll(() => locator.textContent({ timeout: LOCATOR_TEXT_READ_TIMEOUT_MS }), {
+    timeout: LOCATOR_TEXT_POLL_TIMEOUT_MS,
+  });
 }
 
 export function createNewSessionPageE2eSuite() {
