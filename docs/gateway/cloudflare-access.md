@@ -30,9 +30,10 @@ browser / CLI / node  ->  Cloudflare Access (identity)  ->  Tunnel  ->  127.0.0.
 ```
 
 Access authenticates the request and injects identity headers. The Gateway does not
-re-authenticate the person; it trusts those headers because the only thing that can
-reach its loopback port is the local `cloudflared` process. That trust is why the
-`trustedProxies` and `allowLoopback` settings below are mandatory rather than optional.
+re-authenticate the person or verify the Access JWT signature; it checks the trusted
+proxy source and configured header presence, then trusts the user header. Because
+`allowLoopback` also lets other local processes present those headers, keep the Gateway
+port private to the host and run only trusted workloads there.
 
 ## Step 1: Route the tunnel to loopback
 
@@ -57,7 +58,8 @@ users. Note the two headers Access adds to authenticated requests, because the G
 consumes them in the next step:
 
 - `cf-access-authenticated-user-email` — the authenticated identity.
-- `cf-access-jwt-assertion` — the signed assertion proving Access performed the check.
+- `cf-access-jwt-assertion` — Access's signed assertion. OpenClaw checks only that this
+  header is present and non-blank; it does not verify the JWT signature.
 
 ## Step 3: Trust those headers in the Gateway
 
@@ -82,9 +84,11 @@ otherwise expects a non-loopback proxy.
 }
 ```
 
-Requiring `cf-access-jwt-assertion` matters. Without a required header that only Access
-can produce, any process able to reach the loopback port could assert an identity by
-setting the email header itself.
+Requiring `cf-access-jwt-assertion` adds a second presence check, not cryptographic
+verification. A local process that can connect to the Gateway can submit both headers,
+so do not treat this setting as a defense against untrusted local code. The security
+boundary is the locked-down loopback port plus Cloudflare Access and the tunnel being
+the only path for external traffic.
 
 ## Step 4: Decide how nodes and workers get in
 
