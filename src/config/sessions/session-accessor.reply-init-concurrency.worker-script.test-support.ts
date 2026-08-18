@@ -379,10 +379,12 @@ async function runSyncRawAppendRace(request) {
   try {
     // Open an already-populated transcript: the header is NOT deferred, so the
     // manager tracks a non-empty snapshot and takes the raw (non-message) append
-    // path. Pre-fix, that path passed no guard, so a foreign row landing before
-    // the append was silently folded into the post-append snapshot the manager
-    // then trusts -- absent from its fileEntries -- and a later rewrite deleted
-    // it. The guard must now revalidate on every append, not only the header fold.
+    // path. A foreign row lands after open() but before the manager's raw append;
+    // the append core rebases the stale declared parentId onto the current DB
+    // tail (the same active-branch rebase message appends already get), and the
+    // manager surfaces that rebase as effectiveParentId so it reloads instead of
+    // trusting a fileEntries view a later rewrite could otherwise silently drop
+    // the foreign row from.
     const manager = SessionManager.open({
       agentId: AGENT_ID,
       sessionId: request.sessionId,
@@ -397,17 +399,8 @@ async function runSyncRawAppendRace(request) {
     });
     await proceed;
     // Raw non-message append (model_change) after a foreign row raced the gap.
-    let appendRejected = false;
-    try {
-      manager.appendModelChange("openclaw", "sonnet-4.6");
-    } catch (error) {
-      if (error instanceof SqliteTranscriptMutationConflictError) {
-        appendRejected = true;
-      } else {
-        throw error;
-      }
-    }
-    result = { ok: true, appendRejected };
+    manager.appendModelChange("openclaw", "sonnet-4.6");
+    result = { ok: true, entryCount: manager.getEntries().length };
   } catch (error) {
     result = {
       ok: false,
@@ -417,6 +410,7 @@ async function runSyncRawAppendRace(request) {
   }
   return result;
 }
+
 
 process.on("message", (request) => {
   if (!request || typeof request !== "object") {

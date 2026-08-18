@@ -178,28 +178,22 @@ export class SessionManagerPersistence extends SessionManagerCore {
   }
 
   /**
-   * Snapshot guard for one record append, folding a still-deferred header when pending.
-   * `additive` message appends reconcile an adopted/rebound parent instead of trusting a captured
-   * snapshot, so they guard only while a header is deferred -- that first record must fold the
-   * header atomically and revalidate the tracked (empty) snapshot, but a later reply must not be
-   * rejected by a concurrent reset the rewrite would preserve anyway. Raw (non-message) and leaf
-   * appends capture and then trust the post-append snapshot, so they always revalidate here: a
-   * foreign row landing before the append -- never in this manager's `fileEntries` -- must fail
-   * the guard, else it is silently absorbed into the tracked snapshot and a later rewrite deletes
-   * it.
+   * Snapshot guard for one record append, folding a still-deferred header when pending. Every
+   * append kind -- raw, leaf, and message -- reconciles an adopted/rebound parent via the active-
+   * branch rebase in the append core (message appends additionally via `effectiveParentId`)
+   * rather than trusting a captured snapshot, so this only needs to guard while a header is still
+   * deferred: that first record must fold the header atomically and revalidate the tracked
+   * (empty) snapshot, but a later append must not be rejected by a concurrent foreign row the
+   * active-branch rebase would otherwise safely absorb.
    */
   private resolveAppendGuard(
     scope: NonNullable<SessionManagerPersistence["persistenceTarget"]>,
-    additive: boolean,
   ): PendingTranscriptHeader | undefined {
     const event = this.resolveDeferredSessionHeader(scope);
-    if (additive && !event) {
+    if (!event) {
       return undefined;
     }
-    return {
-      expectedSnapshot: this.persistedRowSnapshot ?? [],
-      ...(event ? { event } : {}),
-    };
+    return { event, expectedSnapshot: this.persistedRowSnapshot ?? [] };
   }
 
   private persistSqliteRecord(
@@ -234,7 +228,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         scope,
         entry,
         undefined,
-        this.resolveAppendGuard(scope, false),
+        this.resolveAppendGuard(scope),
       );
       requireTranscriptEventAppend(
         result,
@@ -247,20 +241,25 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return undefined;
     }
     if (entry.type !== "message") {
-      const { result, snapshot } = appendTranscriptEventWithSnapshotSync(
+      const { result, snapshot, effectiveParentId } = appendTranscriptEventWithSnapshotSync(
         scope,
         entry,
         options?.appendIntent === "active-branch"
           ? { appendIntent: options.appendIntent }
           : undefined,
-        this.resolveAppendGuard(scope, false),
+        this.resolveAppendGuard(scope),
       );
       requireTranscriptEventAppend(
         result,
         `Session transcript entry was not persisted: ${entry.id}`,
       );
       this.applyPersistedRowSnapshot(snapshot);
-      return undefined;
+      // Raw appends rebase the same way message appends do (active-branch tail rebase),
+      // but only messages returned that rebase to the caller until now. Surfacing it here
+      // lets appendEntry's existing effectiveParentId check reload when a concurrent
+      // foreign row moved the tail out from under this entry's declared parentId, instead
+      // of trusting a stale in-memory parent a later rewrite could silently drop.
+      return effectiveParentId === undefined ? undefined : { effectiveParentId };
     }
     const appendOptions = {
       cwd: this.cwd,
@@ -275,7 +274,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const { result, snapshot } = appendTranscriptMessageWithSnapshotSync(
       scope,
       appendOptions,
-      this.resolveAppendGuard(scope, true),
+      this.resolveAppendGuard(scope),
     );
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);

@@ -709,7 +709,7 @@ describe("session accessor cross-process concurrency", () => {
     }
   }, 15_000);
 
-  it("rejects a manager raw append when a foreign row lands before it", async () => {
+  it("rebases and reloads a manager raw append when a foreign row lands before it", async () => {
     const tempDir = tempDirs.make("openclaw-sync-raw-append-race-");
     const storePath = path.join(tempDir, "sessions.json");
     const sessionId = "sync-raw-append-race";
@@ -747,10 +747,12 @@ describe("session accessor cross-process concurrency", () => {
           // Header filtered out of getEntries(); one seed message remains.
           expect(ready).toEqual({ eventCount: 1 });
           // Foreign row lands after the manager's open() read but before its raw
-          // appendModelChange. Pre-fix, that append passed no guard, so the row
-          // was silently folded into the manager's post-append snapshot -- absent
-          // from its fileEntries -- and a later rewrite would delete it. The guard
-          // must now reject on every append, not only the header fold.
+          // appendModelChange, still declaring "seed-message" as its parent. The
+          // append core rebases that stale parentId onto the new tail (the same
+          // active-branch rebase message appends already get) instead of folding
+          // the foreign row into an unreconciled snapshot, and surfaces the rebase
+          // as effectiveParentId so the manager reloads rather than trusting a
+          // fileEntries view a later rewrite could otherwise drop the row from.
           await appendTranscriptMessage(scope, {
             cwd: tempDir,
             message: {
@@ -762,17 +764,21 @@ describe("session accessor cross-process concurrency", () => {
           });
         },
       );
-      expect(result).toEqual({ ok: true, appendRejected: true });
-      // Fix verified: the raw append fails closed, so the manager never commits
-      // its model_change against a contaminated snapshot and the foreign row
-      // survives untouched.
-      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-        expect.objectContaining({ type: "session", id: sessionId }),
+      expect(result).toEqual({ ok: true, entryCount: 3 });
+      // Fix verified: the raw append rebases onto the foreign row's id (surviving
+      // untouched) instead of the stale declared parent, and the manager's reload
+      // picks up all three post-rebase entries -- nothing is silently dropped.
+      const events = await loadTranscriptEvents(scope);
+      expect(events).toHaveLength(4);
+      expect(events[0]).toEqual(expect.objectContaining({ type: "session", id: sessionId }));
+      expect(events[1]).toEqual(
         expect.objectContaining({
           type: "message",
           id: "seed-message",
           message: expect.objectContaining({ role: "user", content: "seed" }),
         }),
+      );
+      expect(events[2]).toEqual(
         expect.objectContaining({
           type: "message",
           parentId: "seed-message",
@@ -781,7 +787,16 @@ describe("session accessor cross-process concurrency", () => {
             content: "foreign concurrent reply",
           }),
         }),
-      ]);
+      );
+      const foreignMessageId = (events[2] as { id: string }).id;
+      expect(events[3]).toEqual(
+        expect.objectContaining({
+          type: "model_change",
+          parentId: foreignMessageId,
+          provider: "openclaw",
+          modelId: "sonnet-4.6",
+        }),
+      );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

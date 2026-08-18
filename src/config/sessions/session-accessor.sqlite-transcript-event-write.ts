@@ -49,7 +49,7 @@ export async function appendTranscriptEvent(
       appendTranscriptEventInTransaction(
         database,
         resolved,
-        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options).event,
       );
     }, toDatabaseOptions(resolved));
   });
@@ -60,13 +60,20 @@ export async function appendTranscriptEvent(
  * inside the same write transaction immediately after a successful insert, so a caller
  * that needs the resulting row set (e.g. to track a last-known-good snapshot) reads it
  * atomically instead of racing a foreign commit that could land after this transaction
- * commits but before a separate out-of-transaction read.
+ * commits but before a separate out-of-transaction read. It also receives the append's
+ * effective (possibly rebased) parentId -- see resolveTranscriptEventAppendParent -- so a
+ * caller tracking an in-memory tree can detect a rebase and reconcile it, the same way
+ * appendTranscriptMessageInTransaction already surfaces effectiveParentId for messages.
  */
 function appendTranscriptEventSyncCore(
   scope: SessionTranscriptWriteScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions,
-  afterAppend?: (database: OpenClawAgentDatabase, resolved: { sessionId: string }) => void,
+  afterAppend?: (
+    database: OpenClawAgentDatabase,
+    resolved: { sessionId: string },
+    effectiveParentId: string | null | undefined,
+  ) => void,
   pendingHeader?: PendingTranscriptHeader,
 ): Result<boolean, TranscriptEventAppendError> {
   assertNonMessageTranscriptEvent(event);
@@ -116,14 +123,16 @@ function appendTranscriptEventSyncCore(
     if (pendingHeader) {
       foldPendingTranscriptHeaderInTransaction(database, resolved, pendingHeader);
     }
-    const appended = appendTranscriptEventInTransaction(
+    const { event: rebasedEvent, effectiveParentId } = resolveTranscriptEventAppendParent(
       database,
-      resolved,
-      resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+      resolved.sessionId,
+      event,
+      options,
     );
+    const appended = appendTranscriptEventInTransaction(database, resolved, rebasedEvent);
     result = ok(appended);
     if (appended) {
-      afterAppend?.(database, resolved);
+      afterAppend?.(database, resolved, effectiveParentId);
     }
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
@@ -148,6 +157,11 @@ export function appendTranscriptEventSync(
  * a separate out-of-transaction snapshot read: a foreign process committing between this
  * transaction's commit and that later read would otherwise be silently folded into the
  * tracked snapshot without ever appearing in the caller's in-memory entries.
+ *
+ * The returned `effectiveParentId` mirrors TranscriptMessageAppendResult.effectiveParentId:
+ * when an active-branch append's declared parentId is stale, this exposes the rebased
+ * parent the append actually landed under so the caller can reconcile its in-memory tree
+ * (reload) instead of trusting a divergent parentId it never observed.
  */
 export function appendTranscriptEventWithSnapshotSync(
   scope: SessionTranscriptWriteScope,
@@ -157,18 +171,25 @@ export function appendTranscriptEventWithSnapshotSync(
 ): {
   result: Result<boolean, TranscriptEventAppendError>;
   snapshot?: SqliteTranscriptSnapshotRow[];
+  effectiveParentId?: string | null;
 } {
   let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
+  let effectiveParentId: string | null | undefined;
   const result = appendTranscriptEventSyncCore(
     scope,
     event,
     options,
-    (database, resolved) => {
+    (database, resolved, appendEffectiveParentId) => {
       snapshot = readTranscriptEventRows(database, resolved.sessionId);
+      effectiveParentId = appendEffectiveParentId;
     },
     pendingHeader,
   );
-  return { result, ...(snapshot ? { snapshot } : {}) };
+  return {
+    result,
+    ...(snapshot ? { snapshot } : {}),
+    ...(effectiveParentId !== undefined ? { effectiveParentId } : {}),
+  };
 }
 
 function resolveTranscriptEventAppendParent(
@@ -176,7 +197,7 @@ function resolveTranscriptEventAppendParent(
   sessionId: string,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions,
-): TranscriptEvent {
+): { event: TranscriptEvent; effectiveParentId: string | null | undefined } {
   if (
     options.appendIntent !== "active-branch" ||
     !event ||
@@ -184,17 +205,20 @@ function resolveTranscriptEventAppendParent(
     Array.isArray(event) ||
     !("parentId" in event)
   ) {
-    return event;
+    return { event, effectiveParentId: undefined };
   }
   const parentId = event.parentId;
   if (parentId !== null && typeof parentId !== "string") {
-    return event;
+    return { event, effectiveParentId: undefined };
   }
   const effectiveParentId = resolveTranscriptMessageAppendParent(database, sessionId, {
     appendIntent: "active-branch",
     parentId,
   });
-  return effectiveParentId === parentId ? event : { ...event, parentId: effectiveParentId };
+  return {
+    event: effectiveParentId === parentId ? event : { ...event, parentId: effectiveParentId },
+    effectiveParentId,
+  };
 }
 
 function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
