@@ -166,10 +166,11 @@ target server during config edits.
   for private endpoints and mutual TLS.
 - `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
   limits the discovered MCP tools to matching names; `exclude` hides matching
-  names. Entries are exact MCP tool names or simple `*` globs. Servers with
+  names. Entries accept exact raw MCP tool names and exact names printed by
+  `mcp probe`; simple `*` globs match raw MCP tool names only. Servers with
   resources or prompts also generate utility tool names (`resources_list`,
   `resources_read`, `prompts_list`, `prompts_get`), and those names use the
-  same filter.
+  same raw-name filter.
 - `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
   This block is OpenClaw metadata for Codex app-server threads only; it does not
   affect ACP sessions, generic Codex harness config, or other runtime adapters.

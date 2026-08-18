@@ -88,3 +88,20 @@ export function buildSafeToolName(params: {
   }
   return candidate;
 }
+
+/** Assign the names that an unfiltered model-facing catalog will expose. */
+export function buildProjectedMcpToolNameSequence(params: {
+  safeServerName: string;
+  toolNames: Iterable<string>;
+}): string[] {
+  const reservedNames = new Set<string>();
+  return Array.from(params.toolNames, (toolName) => {
+    const projectedName = buildSafeToolName({
+      serverName: params.safeServerName,
+      toolName,
+      reservedNames,
+    });
+    reservedNames.add(normalizeLowercaseStringOrEmpty(projectedName));
+    return projectedName;
+  });
+}

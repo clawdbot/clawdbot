@@ -42,4 +42,44 @@ describe("isMcpToolAllowed", () => {
     expect(isMcpToolAllowed(filter, "search_docs")).toBe(false);
     expect(isMcpToolAllowed(filter, "read_file")).toBe(false);
   });
+
+  it("accepts exact projected names without broadening wildcard matching", () => {
+    const modelVisibleRawToolNames = new Set(["read_page", "docs__raw"]);
+
+    expect(
+      isMcpToolAllowed({ include: ["docs__read_page"] }, "read_page", {
+        projectedToolName: "docs__read_page",
+        modelVisibleRawToolNames,
+      }),
+    ).toBe(true);
+    expect(
+      isMcpToolAllowed({ include: ["docs__*"] }, "read_page", {
+        projectedToolName: "docs__read_page",
+        modelVisibleRawToolNames,
+      }),
+    ).toBe(false);
+    expect(
+      isMcpToolAllowed({ exclude: ["docs__read_page"] }, "read_page", {
+        projectedToolName: "docs__read_page",
+        modelVisibleRawToolNames,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps model-visible raw names ahead of projected aliases", () => {
+    const modelVisibleRawToolNames = new Set(["read", "docs__read"]);
+
+    expect(
+      isMcpToolAllowed({ include: ["docs__read"] }, "read", {
+        projectedToolName: "docs__read",
+        modelVisibleRawToolNames,
+      }),
+    ).toBe(false);
+    expect(
+      isMcpToolAllowed({ include: ["docs__read"] }, "docs__read", {
+        projectedToolName: "docs__docs__read",
+        modelVisibleRawToolNames,
+      }),
+    ).toBe(true);
+  });
 });

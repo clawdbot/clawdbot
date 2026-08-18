@@ -1,6 +1,7 @@
 /** Tests MCP server/tool name sanitization, truncation, and collision handling. */
 import { describe, expect, it } from "vitest";
 import {
+  buildProjectedMcpToolNameSequence,
   buildSafeToolName,
   normalizeReservedToolNames,
   sanitizeServerName,
@@ -69,5 +70,20 @@ describe("agent bundle MCP names", () => {
 
     expect(safeToolName.startsWith(`memory${TOOL_NAME_SEPARATOR}`)).toBe(true);
     expect(safeToolName.length).toBeLessThanOrEqual(64);
+  });
+
+  it("assigns projected names deterministically across collisions", () => {
+    expect(
+      buildProjectedMcpToolNameSequence({
+        safeServerName: "docs",
+        toolNames: ["read-page", "read.page"],
+      }),
+    ).toEqual(["docs__read-page", "docs__read-page-2"]);
+    expect(
+      buildProjectedMcpToolNameSequence({
+        safeServerName: "docs",
+        toolNames: ["resources_list", "resources_list"],
+      }),
+    ).toEqual(["docs__resources_list", "docs__resources_list-2"]);
   });
 });
