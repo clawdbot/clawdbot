@@ -1329,9 +1329,7 @@ export async function processGatewayAllowlist(
     let gatewayInvocationStarted = false;
 
     void (async () => {
-      const approvalDecision = await resolveApprovalForExecution(
-        sendApprovalRequestFailedFollowup,
-      );
+      const approvalDecision = await resolveApprovalForExecution(sendApprovalRequestFailedFollowup);
       if (approvalDecision.requestFailed) {
         return;
       }
