@@ -33,7 +33,10 @@ import {
   type ResponsesEncryptedContentAttempt,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
+import {
+  createOpenAIProviderAcceptanceHook,
+  createOpenAIResponseHook,
+} from "../transports/openai-transport-shared.js";
 import {
   transportAbortError,
   withProviderResponseHook,
@@ -520,7 +523,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             withProviderResponseHook({
               signal: firstEventAbort.signal,
               abort: firstEventAbort.abort,
-              hook: createOpenAIProviderAcceptanceHook(options, attemptResponse, model),
+              hook: createOpenAIResponseHook(options?.onResponse, attemptResponse, model),
             }),
             {
               provider: model.provider,

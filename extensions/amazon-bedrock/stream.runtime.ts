@@ -283,10 +283,12 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         if (response.$metadata.requestId) {
           responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
         }
-        await options?.onResponse?.(
-          { status: response.$metadata.httpStatusCode, headers: responseHeaders },
+        const status = response.$metadata.httpStatusCode;
+        await options?.onProviderAccepted?.(
+          { kind: "http_response", status, headers: responseHeaders },
           model,
         );
+        await options?.onResponse?.({ status, headers: responseHeaders }, model);
       }
 
       let sawMessageStop = false;
