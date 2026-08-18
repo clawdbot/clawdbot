@@ -25,6 +25,12 @@ thread's `/dashboard/<agent>/<sessionRef>` URL. An open Dashboards page updates
 as threads are renamed, archived, deleted, or switched between Chat and
 Dashboard, including after a Gateway reconnect.
 
+Use **Open full-screen dashboard** on a row to open its board as a standalone
+browser document with no sidebar, top bar, or chat. The close button returns to
+the previous page. Inside a session, use the fullscreen button beside the
+Chat / Split / Dashboard switch to enter or leave browser fullscreen while the
+board is visible.
+
 The Chat or Dashboard face preference is stored server-side per thread. It
 therefore follows you when you connect to the same gateway from another device.
 Opening a thread from the sidebar, Sessions, Tasks, Workboard, or Worktrees
