@@ -81,8 +81,9 @@ describe("createDiscordAvatarResolver", () => {
   it("uses a lazily fetched guild icon instead of the sender avatar", async () => {
     const guildLookup = deferred<{ icon: string }>();
     const guildDownload = deferred<{ path: string }>();
+    const fetchGuild = vi.fn(() => guildLookup.promise);
     const client = {
-      fetchGuild: vi.fn(() => guildLookup.promise),
+      fetchGuild,
     } as unknown as Client;
     mocks.saveRemoteMedia.mockReturnValueOnce(guildDownload.promise);
     const resolver = createDiscordAvatarResolver();
@@ -96,7 +97,7 @@ describe("createDiscordAvatarResolver", () => {
         guildId: "guild-1",
       }),
     ).toBeUndefined();
-    expect(client.fetchGuild).toHaveBeenCalledTimes(1);
+    expect(fetchGuild).toHaveBeenCalledTimes(1);
     expect(mocks.saveRemoteMedia).not.toHaveBeenCalled();
 
     guildLookup.resolve({ icon: "guild-hash" });
@@ -118,7 +119,7 @@ describe("createDiscordAvatarResolver", () => {
         }),
       ).toBe("/media/inbound/guild-icon.png"),
     );
-    expect(client.fetchGuild).toHaveBeenCalledTimes(1);
+    expect(fetchGuild).toHaveBeenCalledTimes(1);
   });
 
   it("swallows download failures and retries on the next message", async () => {
