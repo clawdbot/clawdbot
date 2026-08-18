@@ -93,6 +93,11 @@ For a Gateway already reachable on a trusted LAN or Tailnet, use direct mode:
 
 ## Gateway behind an identity-aware proxy
 
+To deploy this way from scratch — tunnel, Access application, Gateway trusted-proxy
+auth, and node routes — see [Cloudflare Tunnel and Access](/gateway/cloudflare-access).
+This section covers only the client side: how a CLI, TUI, or app authenticates to that
+edge.
+
 Use `gateway.remote.edgeAuth` when an identity-aware proxy must authenticate the
 WebSocket upgrade before traffic reaches the Gateway. Header values are
 `SecretInput` fields, so they can come from `env`, `file`, `exec`, or `store`
