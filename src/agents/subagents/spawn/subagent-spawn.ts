@@ -24,6 +24,7 @@ import {
   type SpawnBackendAdapter,
   summarizeSpawnError,
 } from "../../spawn-pipeline.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   completeCollectorLaunchCleanup,
   settleFailedQueuedSubagentLaunch,
@@ -111,6 +112,7 @@ export async function spawnSubagentDirect(
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
   const requesterSessionKey = ctx.agentSessionKey;
+  const gatewayContextResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   let requestedAgentId = params.agentId?.trim();
   const requestResolution = resolveSubagentSpawnRequest(params, ctx, {
     initial: requestedAgentId,
@@ -570,6 +572,7 @@ export async function spawnSubagentDirect(
           queuedLaunch,
           queued: params.collect === true,
           taskRowOwnership,
+          ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
           retainAttachmentsOnKeep: retainOnSessionKeep,
@@ -615,7 +618,9 @@ export async function spawnSubagentDirect(
               }),
             });
             try {
-              if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
+              if (
+                !startQueuedSubagentRun(childRunId, gatewayRunId, undefined, gatewayContextResolver)
+              ) {
                 throw new Error(
                   "collector registry row could not transition from queued to running",
                 );

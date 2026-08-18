@@ -38,6 +38,7 @@ import {
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
+  getGatewayContextResolver,
   withPluginRuntimePluginIdScope,
   withPluginRuntimePluginScope,
 } from "./runtime/gateway-request-scope.js";
@@ -169,6 +170,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       channelId: record.id,
       record,
       epoch,
+      resolveGatewayContext: getGatewayContextResolver(registryParams.runtime.subagent),
       isLive: () =>
         ownsLiveRegistrySlot() && isPluginRecordLifecycleEpochActive(registry, record, epoch),
     });

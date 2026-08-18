@@ -23,6 +23,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   annotateInterSessionPromptText,
@@ -353,6 +354,10 @@ export function startAgentRunExecution(params: {
               ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
               operationalRunInstance: prepared.operationalRunInstance,
               onAdmittedRunContext: (admittedRunContext) => {
+                bindGatewayContextResolver(
+                  admittedRunContext,
+                  params.context.recoveryRuntime?.resolveGatewayContext,
+                );
                 const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
                 if (!authority) {
                   throw new Error("agent run delegated authority was not admitted");

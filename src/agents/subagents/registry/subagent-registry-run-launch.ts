@@ -1,9 +1,11 @@
+import type { GatewayContextResolver } from "../../../gateway/server-plugin-in-process-dispatch.js";
 /** Owns subagent registration and queued collector launch transitions. */
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   createQueuedTaskRun,
   createRunningTaskRun,
@@ -87,6 +89,7 @@ export type RegisterSubagentRunParams = {
   /** Required when direct dispatch suppresses Gateway tracking. Out-of-process launches keep
       Gateway's existing best-effort CLI policy; other callers create a best-effort row here. */
   taskRowOwnership?: "required" | "gateway_best_effort";
+  gatewayContextResolver?: GatewayContextResolver;
 };
 
 export class SubagentLaunchManager extends SubagentRecoveryManager {
@@ -181,6 +184,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
     this.options.runs.set(runId, entry);
+    bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);
     const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);
     const registeredKillReconciliationSnapshots = new Map(
       [...killReconciliationSnapshots.keys()].map((candidate) => [
@@ -274,6 +278,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     runId: string,
     gatewayRunId?: string,
     lifecycleGeneration?: string,
+    gatewayContextResolver?: GatewayContextResolver,
   ): boolean => {
     const key = runId.trim();
     const entry = this.findRunByIdentity(key);
@@ -367,6 +372,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     try {
       this.options.persistOrThrow(previousRunId, nextRunId);
       if (terminalBeforeAcceptance) {
+        bindGatewayContextResolver(entry, gatewayContextResolver);
         return true;
       }
       persistedRunning = true;
@@ -392,6 +398,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       }
       throw error;
     }
+    bindGatewayContextResolver(entry, gatewayContextResolver);
     const cfg = this.options.getRuntimeConfig();
     void this.waitForSubagentCompletion(
       nextRunId,

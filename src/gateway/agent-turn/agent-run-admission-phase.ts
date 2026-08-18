@@ -360,6 +360,7 @@ export async function prepareAgentRunDispatch(params: {
         task: params.request.message.trim(),
         requester: params.client?.internal?.pluginSubagentRequester,
         pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
+        gatewayContextResolver: params.context.recoveryRuntime?.resolveGatewayContext,
       });
     } catch (err) {
       params.context.logGateway.warn(

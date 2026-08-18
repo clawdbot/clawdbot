@@ -193,6 +193,7 @@ export async function runSubagentAnnounceFlow(params: {
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   onBeforeDeleteChildSession?: () => boolean;
+  resolveGatewayContext?: import("../../../gateway/server-plugin-in-process-dispatch.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceFlowOutcome> {
   let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -589,6 +590,7 @@ export async function runSubagentAnnounceFlow(params: {
       directIdempotencyKey,
       onDeliveryResult: reportDeliveryResult,
       signal: params.signal,
+      resolveGatewayContext: params.resolveGatewayContext,
     });
     reportDeliveryResult(delivery);
     announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");

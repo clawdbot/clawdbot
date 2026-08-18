@@ -1,3 +1,4 @@
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
@@ -606,6 +607,7 @@ export const startSubagentAnnounceCleanupFlow = (
         params.persist(runId);
       }
     },
+    resolveGatewayContext: getGatewayContextResolver(entry),
   };
   runDetachedCleanupAttempt(context, {
     runId,

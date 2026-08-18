@@ -2,6 +2,7 @@ import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 export type GatewayApprovalEventPublisher = {
   publishRequested: (kind: ChannelApprovalKind, request: unknown) => number;
@@ -9,6 +10,8 @@ export type GatewayApprovalEventPublisher = {
 };
 
 export type GatewayRecoveryRuntime = {
+  /** Live routing owner for in-process work admitted by this Gateway instance. */
+  resolveGatewayContext?: () => GatewayRequestContext | undefined;
   dispatchAgent: <T = unknown>(
     params: AgentRunRequest,
     timeoutMs?: number,

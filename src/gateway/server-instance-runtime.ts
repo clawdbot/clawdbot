@@ -89,6 +89,8 @@ export function createGatewayInstanceRuntime(
   const approvalRouteMethods = new Set(["send"]);
 
   const recovery: GatewayRecoveryRuntime = {
+    resolveGatewayContext: () =>
+      closed || !options.isDispatchAvailable() ? undefined : options.getContext(),
     dispatchAgent: async <T>(
       payload: AgentRunRequest,
       timeoutMs?: number,

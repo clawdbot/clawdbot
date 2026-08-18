@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayContextResolver } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   buildChannelInboundEventContext,
   buildHostChannelInboundEventContext,
@@ -10,15 +11,26 @@ import {
   consumeChannelAdmissionEvidence,
   copyChannelParticipantAdmissionEvidence,
   readChannelContextAdmissionEvidence,
+  readChannelContextGatewayContextResolver,
   registerChannelAdmissionEvidenceOwner,
   type ChannelAdmissionEvidence,
 } from "./admission-evidence.js";
 import { resolveStableChannelMessageIngress } from "./runtime.js";
 
-async function buildAdmittedContext(participantId: string, allowFrom = [participantId]) {
+async function buildAdmittedContext(
+  participantId: string,
+  allowFrom = [participantId],
+  resolveGatewayContext?: GatewayContextResolver,
+) {
   const record = {};
   const epoch = {};
-  const owner = { channelId: "test", record, epoch, isLive: () => true };
+  const owner = {
+    channelId: "test",
+    record,
+    epoch,
+    isLive: () => true,
+    resolveGatewayContext,
+  };
   const dispose = registerChannelAdmissionEvidenceOwner(owner);
   const channelIngress = await resolveStableChannelMessageIngress({
     channelId: "test",
@@ -62,6 +74,22 @@ function inspectChannelContext(context: object) {
 }
 
 describe("channel admission evidence", () => {
+  it("keeps Gateway routing instance-bound when audit collection is disabled", async () => {
+    const gatewayContext = { owner: "gateway-a" } as never;
+    let live = true;
+    const source = await buildAdmittedContext("person:42", ["person:42"], () =>
+      live ? gatewayContext : undefined,
+    );
+    const copied = { ...source };
+
+    copyChannelParticipantAdmissionEvidence(source, copied);
+
+    expect(readChannelContextGatewayContextResolver(source)?.()).toBe(gatewayContext);
+    expect(readChannelContextGatewayContextResolver(copied)?.()).toBe(gatewayContext);
+    live = false;
+    expect(readChannelContextGatewayContextResolver(source)?.()).toBeUndefined();
+  });
+
   it("carries the resolver participant to one run admission without route inference", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {

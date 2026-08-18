@@ -50,7 +50,9 @@ async function callSubagentGatewayWithDispatchMode(
   );
   const allowModelOverride = authorization !== undefined;
   const deps = getSubagentSpawnDeps();
-  const hasInProcessGateway = deps.hasInProcessGatewayContext();
+  const gatewayCaller = getGatewayToolCallerIdentity();
+  const hasInProcessGateway =
+    deps.hasInProcessGatewayContext() || Boolean(gatewayCaller?.gatewayContextResolver?.());
   const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
   const scopes =
     params.scopes ??
@@ -62,7 +64,6 @@ async function callSubagentGatewayWithDispatchMode(
     params: authorizedParams,
     ...(scopes != null ? { scopes } : {}),
   };
-  const gatewayCaller = getGatewayToolCallerIdentity();
   if (
     hasInProcessGateway &&
     request.params != null &&
@@ -107,6 +108,9 @@ async function callSubagentGatewayWithDispatchMode(
             expectFinal: request.expectFinal,
             ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
             ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
+            ...(gatewayCaller?.gatewayContextResolver
+              ? { resolveGatewayContext: gatewayCaller.gatewayContextResolver }
+              : {}),
             ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
             ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
             ...(scopes != null ? { syntheticScopes: scopes } : {}),

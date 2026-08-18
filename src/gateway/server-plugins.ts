@@ -17,7 +17,10 @@ import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cach
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/subagent-requester-context.js";
 import type {
@@ -241,7 +244,7 @@ export function createGatewaySubagentRuntime(
     return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
   };
 
-  return {
+  const subagentRuntime: PluginRuntime["subagent"] = {
     async run(params) {
       const pluginSubagentRequester = resolvePluginSubagentCompletionRequester(
         params.completionDelivery,
@@ -367,6 +370,10 @@ export function createGatewaySubagentRuntime(
       );
     },
   };
+  if (resolveGatewayContext) {
+    bindGatewayContextResolver(subagentRuntime, resolveGatewayContext);
+  }
+  return subagentRuntime;
 }
 
 type GatewayRuntimeNodes = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
@@ -433,26 +440,37 @@ export function createGatewayNodesRuntime(
 function createGatewayPluginRuntimeBindings(
   resolveGatewayContext: GatewayContextResolver,
   overridePolicies: PluginSubagentOverridePolicies,
-): Pick<PluginRuntime, "gateway" | "nodes" | "subagent"> &
-  Pick<CreatePluginRuntimeOptions, "dispatchReplyFromConfig"> {
+): {
+  runtime: Pick<PluginRuntime, "gateway" | "nodes" | "subagent"> &
+    Pick<CreatePluginRuntimeOptions, "dispatchReplyFromConfig">;
+  retire: () => void;
+} {
+  let active = true;
+  const resolveBoundGatewayContext = () => (active ? resolveGatewayContext() : undefined);
   return {
-    dispatchReplyFromConfig: async (params) => {
-      const { dispatchReplyFromConfig } =
-        await import("../auto-reply/reply/dispatch-from-config.js");
-      const sessionWorkerPlacementContext =
-        getInProcessGatewayRequestContext(resolveGatewayContext);
-      return await dispatchReplyFromConfig({
-        ...params,
-        ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
-      });
+    retire: () => {
+      active = false;
     },
-    gateway: {
-      isAvailable: async () => hasInProcessGatewayContext(resolveGatewayContext),
-      request: (method, params, options) =>
-        dispatchTrustedPluginGatewayMethod(method, params, options, resolveGatewayContext),
+    runtime: {
+      dispatchReplyFromConfig: async (params) => {
+        const { dispatchReplyFromConfig } =
+          await import("../auto-reply/reply/dispatch-from-config.js");
+        const sessionWorkerPlacementContext = getInProcessGatewayRequestContext(
+          resolveBoundGatewayContext,
+        );
+        return await dispatchReplyFromConfig({
+          ...params,
+          ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
+        });
+      },
+      gateway: {
+        isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
+        request: (method, params, options) =>
+          dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
+      },
+      nodes: createGatewayNodesRuntime(resolveBoundGatewayContext),
+      subagent: createGatewaySubagentRuntime(resolveBoundGatewayContext, overridePolicies),
     },
-    nodes: createGatewayNodesRuntime(resolveGatewayContext),
-    subagent: createGatewaySubagentRuntime(resolveGatewayContext, overridePolicies),
   };
 }
 
@@ -564,6 +582,7 @@ export function loadGatewayPlugins(params: {
     return {
       pluginRegistry,
       gatewayMethods: [...params.baseMethods],
+      retireGatewayRuntimeBindings: () => {},
     };
   }
   const beforeLoad = performance.now();
@@ -593,7 +612,7 @@ export function loadGatewayPlugins(params: {
     }),
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
-      ...gatewayRuntimeBindings,
+      ...gatewayRuntimeBindings.runtime,
     },
     channelPluginLoadIntent: params.channelPluginLoadIntent,
     preferBuiltPluginArtifacts: true,
@@ -641,5 +660,9 @@ export function loadGatewayPlugins(params: {
         .join(","),
     ],
   ]);
-  return { pluginRegistry, gatewayMethods };
+  return {
+    pluginRegistry,
+    gatewayMethods,
+    retireGatewayRuntimeBindings: gatewayRuntimeBindings.retire,
+  };
 }

@@ -208,6 +208,9 @@ describe("gateway plugin instance bindings", () => {
 
       await second.close({ reason: "close last-started Gateway first" });
       started.pop();
+      await expect(requestInstanceBindingProbe(secondRuntime)).rejects.toThrow(
+        "In-process gateway dispatch requires a gateway request scope or instance binding",
+      );
       await expect(requestInstanceBindingProbe(firstRuntime)).resolves.toEqual(firstProbe);
       await expect(
         firstRuntime.subagent.getSessionMessages({ sessionKey: "agent:main:main", limit: 1 }),
@@ -270,6 +273,9 @@ describe("gateway plugin instance bindings", () => {
       expect(reloadedProbe.sessionsId).toBe(initialProbe.sessionsId);
       expect(reloadedProbe.placementId).toBe(initialProbe.placementId);
       expect(hotReloadRecovery).not.toHaveBeenCalled();
+      await expect(requestInstanceBindingProbe(initialRuntime)).rejects.toThrow(
+        "In-process gateway dispatch requires a gateway request scope or instance binding",
+      );
       await expect(
         reloadedRuntime.subagent.getSessionMessages({
           sessionKey: "agent:main:main",

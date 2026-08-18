@@ -7,6 +7,7 @@
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { logWarn } from "../../../logger.js";
+import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import {
   type DeliveryContext,
@@ -451,6 +452,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
           attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
         ),
         signal: params.signal,
+        resolveGatewayContext: getSharedGatewayContextResolver(settledBatch),
       });
     } catch (error) {
       // A transport exception can arrive after gateway admission. Replay the
