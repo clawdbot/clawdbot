@@ -281,6 +281,44 @@ function buildSearchSessionListCases(
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
 }
 
+function buildActivitySessionRows(baseTime: number) {
+  const owners = {
+    molty: { type: "agent", id: "profile-molty", label: "Molty" },
+    riley: { type: "human", id: "presence-riley", label: "Riley" },
+    colin: { type: "human", id: "presence-colin", label: "Colin" },
+    patricia: {
+      type: "human",
+      id: "presence-patricia",
+      label: "patricia.erichsen@example.com",
+    },
+    unresolved: { type: "human", id: "147591189530201337" },
+  } as const;
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const fixtures = [
+    ["release-check", "Release readiness check", owners.riley, 5 * 60_000],
+    ["api-notes", "Gateway API notes", owners.molty, 20 * 60_000],
+    ["design-review", "Activity feed design review", owners.colin, hour],
+    ["archive-audit", "Archive retention audit", owners.unresolved, 3 * hour],
+    ["support-handoff", "Support handoff", owners.patricia, 6 * hour],
+    ["mobile-smoke", "Mobile layout smoke test", owners.riley, 18 * hour],
+    ["provider-matrix", "Provider matrix cleanup", owners.molty, 30 * hour],
+    ["docs-pass", "Operator docs pass", owners.colin, 2 * day],
+    ["queue-review", "Queue behavior review", owners.patricia, 2.5 * day],
+    ["identity-trace", "Identity trace", owners.unresolved, 3 * day],
+    ["channel-followup", "Channel delivery follow-up", owners.riley, 4 * day],
+    ["tooling-refresh", "Tooling refresh", owners.molty, 5 * day],
+    ["fixture-polish", "Mock fixture polish", owners.colin, 6 * day],
+    ["weekly-summary", "Weekly activity summary", owners.patricia, 6.5 * day],
+  ] as const;
+  return fixtures.map(([key, label, owner, age]) =>
+    sessionRow(`agent:activity:${key}`, label, baseTime - age, {
+      createdActor: owner,
+      owner: { actor: owner },
+    }),
+  );
+}
+
 function usageCostTotals(totalTokens: number, totalCost = 0) {
   return {
     input: Math.round(totalTokens * 0.2),
@@ -1405,7 +1443,9 @@ async function createChatPickerScenario(
         ]
       : [];
   const workboardMocks = buildWorkboardMocks(baseTime);
+  const activitySessions = buildActivitySessionRows(Date.now());
   const sessions = [
+    ...activitySessions,
     ...(fixture === "workboard"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {
