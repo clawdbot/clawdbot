@@ -1354,6 +1354,7 @@ class NodeRuntime private constructor(
   // response from publishing into a replacement socket on the same stable endpoint.
   private val gatewayMethodsLock = Any()
   private var gatewayApprovalRpcFamily = GatewayApprovalRpcFamily.Unavailable
+  private var gatewayProgressCardAdvertised: Boolean? = null
   private var gatewayMethodsEpoch = 0L
 
   @Volatile internal var gatewayDataRequestOverrideForTests: GatewayDataRequestOverride? = null
@@ -1703,7 +1704,7 @@ class NodeRuntime private constructor(
     _remoteAddress.value = null
     _gatewayVersion.value = null
     _gatewayUpdateAvailable.value = null
-    replaceGatewayMethods(emptySet())
+    replaceGatewayMethods(null)
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
@@ -1959,6 +1960,7 @@ class NodeRuntime private constructor(
           cacheScope = ::chatCacheScope,
           currentDefaultAgentId = { gatewayDefaultAgentId.value },
           currentDefaultAgentRevision = gatewayDefaultAgentRevision::get,
+          gatewayAdvertisesProgressCard = ::gatewayAdvertisesProgressCard,
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
@@ -1974,6 +1976,7 @@ class NodeRuntime private constructor(
           scope = scope,
           json = json,
           requestGateway = AndroidScreenshotFixture::request,
+          gatewayAdvertisesProgressCard = { true },
         )
     }.also {
       it.applyMainSessionKey(_mainSessionKey.value)
@@ -7644,15 +7647,19 @@ class NodeRuntime private constructor(
       ?: error("Malformed approval.get response")
   }
 
-  private fun replaceGatewayMethods(methods: Set<String>) {
+  private fun replaceGatewayMethods(methods: Set<String>?) {
     synchronized(gatewayMethodsLock) {
-      gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(methods)
-      _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(methods)
-      _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in methods
-      systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in methods
+      val advertisedMethods = methods.orEmpty()
+      gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(advertisedMethods)
+      gatewayProgressCardAdvertised = methods?.let { GatewayMethod.ProgressCardGet.rawValue in it }
+      _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(advertisedMethods)
+      _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in advertisedMethods
+      systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in advertisedMethods
       gatewayMethodsEpoch += 1
     }
   }
+
+  private fun gatewayAdvertisesProgressCard(): Boolean? = synchronized(gatewayMethodsLock) { gatewayProgressCardAdvertised }
 
   private fun captureGatewayMethods(): GatewayMethodsSnapshot =
     synchronized(gatewayMethodsLock) {

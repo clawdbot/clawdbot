@@ -12,7 +12,36 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatControllerProgressCardTest {
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = backgroundScope.createChatController(requestGateway = gateway::request)
+  private data class StartedRun(
+    val controller: ChatController,
+    val gateway: ScriptedGateway,
+    val runId: String,
+  )
+
+  private fun TestScope.newController(
+    gateway: ScriptedGateway,
+    gatewayAdvertisesProgressCard: () -> Boolean? = { null },
+  ): ChatController =
+    backgroundScope.createChatController(
+      requestGateway = gateway::request,
+      gatewayAdvertisesProgressCard = gatewayAdvertisesProgressCard,
+    )
+
+  private suspend fun TestScope.startRun(gatewayAdvertisesProgressCard: Boolean?): StartedRun {
+    val gateway = ScriptedGateway(chatControllerTestJson)
+    gateway.respondChatSend(status = "started")
+    val controller = newController(gateway) { gatewayAdvertisesProgressCard }
+    controller.handleGatewayEvent("health", null)
+    runCurrent()
+    assertTrue(controller.sendMessageAwaitAcceptance("make a plan", "off", emptyList()))
+    return StartedRun(controller, gateway, requireNotNull(gateway.lastRunId))
+  }
+
+  private fun planEvent(
+    runId: String,
+    data: String,
+    timestamp: Long = 10,
+  ): String = """{"sessionKey":"main","runId":"$runId","seq":1,"ts":$timestamp,"stream":"plan","data":$data}"""
 
   private fun changedEvent(
     sessionKey: String,
@@ -26,6 +55,103 @@ class ChatControllerProgressCardTest {
     markdown: String = "Working",
     steps: String = "[]",
   ): String = """{"card":{"sessionKey":"$sessionKey","revision":$revision,"updatedAt":$updatedAt,"markdown":"$markdown","steps":$steps}}"""
+
+  @Test
+  fun legacyPlanRendersWhenGatewayLacksProgressCardStore() =
+    runTest {
+      val (controller, _, runId) = startRun(gatewayAdvertisesProgressCard = false)
+
+      controller.handleGatewayEvent(
+        "agent",
+        planEvent(
+          runId,
+          """{"phase":"update","explanation":" Inspect, patch, and test ","steps":[{"step":" Inspect ","status":"completed"},{"step":"Patch","status":"in_progress"},{"step":"Test","status":"pending"}]}""",
+        ),
+      )
+
+      assertEquals(
+        ChatProgressCard(
+          revision = 1,
+          updatedAt = 10,
+          markdown = "Inspect, patch, and test",
+          steps =
+            listOf(
+              ChatPlanStep("Inspect", ChatPlanStepStatus.Completed),
+              ChatPlanStep("Patch", ChatPlanStepStatus.InProgress),
+              ChatPlanStep("Test", ChatPlanStepStatus.Pending),
+            ),
+        ),
+        controller.progressCard.value,
+      )
+    }
+
+  @Test
+  fun emptyLegacyPlanClearsFallbackCard() =
+    runTest {
+      val (controller, _, runId) = startRun(gatewayAdvertisesProgressCard = false)
+      controller.handleGatewayEvent(
+        "agent",
+        planEvent(runId, """{"phase":"update","steps":[{"step":"Active","status":"in_progress"}]}"""),
+      )
+      assertEquals(
+        "Active",
+        controller.progressCard.value
+          ?.steps
+          ?.single()
+          ?.step,
+      )
+
+      controller.handleGatewayEvent("agent", planEvent(runId, """{"phase":"update","steps":[]}"""))
+
+      assertNull(controller.progressCard.value)
+    }
+
+  @Test
+  fun capableGatewayIgnoresLegacyPlanDualEmit() =
+    runTest {
+      val (controller, gateway, runId) = startRun(gatewayAdvertisesProgressCard = true)
+      gateway.respondWith("progressCard.get", cardResponse(markdown = "Canonical"))
+      controller.handleGatewayEvent("progressCard.changed", changedEvent("main", "1"))
+      runCurrent()
+      val expected = requireNotNull(controller.progressCard.value)
+
+      controller.handleGatewayEvent(
+        "agent",
+        planEvent(runId, """{"phase":"update","explanation":"Legacy","steps":[{"step":"Duplicate","status":"in_progress"}]}"""),
+      )
+
+      assertEquals(expected, controller.progressCard.value)
+    }
+
+  @Test
+  fun unknownGatewayCapabilityIgnoresLegacyPlan() =
+    runTest {
+      val (controller, _, runId) = startRun(gatewayAdvertisesProgressCard = null)
+
+      controller.handleGatewayEvent(
+        "agent",
+        planEvent(runId, """{"phase":"update","steps":[{"step":"Wait","status":"in_progress"}]}"""),
+      )
+
+      assertNull(controller.progressCard.value)
+    }
+
+  @Test
+  fun failedStoreFetchPreservesLegacyFallbackCard() =
+    runTest {
+      val (controller, gateway, runId) = startRun(gatewayAdvertisesProgressCard = false)
+      controller.handleGatewayEvent(
+        "agent",
+        planEvent(runId, """{"phase":"update","explanation":"Keep me","steps":[{"step":"Active","status":"in_progress"}]}"""),
+      )
+      val expected = requireNotNull(controller.progressCard.value)
+      gateway.respond("progressCard.get") { error("method not found") }
+
+      controller.handleGatewayEvent("health", null)
+      runCurrent()
+
+      assertEquals(expected, controller.progressCard.value)
+    }
 
   @Test
   fun matchingChangeFetchesAndPublishesTypedCard() =
