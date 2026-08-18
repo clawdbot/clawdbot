@@ -215,17 +215,17 @@ describe("plugin compatibility registry", () => {
     expect(record?.removeAfter).toBeUndefined();
   });
 
-  it("keeps removed shipped channel setup exports as a migration tombstone", () => {
+  it("keeps shipped channel setup exports until published packages migrate", () => {
     const record = listPluginCompatRecords().find(
       (candidate) => candidate.code === "plugin-sdk-shipped-channel-setup-exports",
     );
 
     expect(record).toMatchObject({
-      status: "removed",
+      status: "deprecated",
       replacement:
         "plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
     });
-    expect(record?.removeAfter).toBeUndefined();
+    expect(record?.removeAfter).toBe("2026-08-30");
   });
 
   it("keeps the removed memory embedding registrar as a migration tombstone", () => {

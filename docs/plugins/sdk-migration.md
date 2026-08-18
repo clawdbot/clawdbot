@@ -156,15 +156,17 @@ review date; removal still requires the reader condition in the final column.
 ### Published channel setup compatibility
 
 Slack, Discord, Signal, and Microsoft Teams packages published through
-`2026.7.1` imported channel-specific config schemas from
+`2026.7.1` import channel-specific config schemas from
 `openclaw/plugin-sdk/bundled-channel-config-schema`. The published Slack and
-Discord packages also imported `createLegacyCompatChannelDmPolicy` and
+Discord packages also import `createLegacyCompatChannelDmPolicy` and
 `promptLegacyChannelAllowFromForAccount` from
 `openclaw/plugin-sdk/setup-runtime`.
 
-Those compatibility exports were removed in August 2026. Channel plugins must
-own their config schemas and setup policy locally, using generic primitives
-from `channel-config-schema` and `setup-runtime`.
+Those exports remain available as deprecated runtime compatibility adapters.
+New and republished plugins should own their config schemas and setup policy
+locally, using generic primitives from `channel-config-schema` and
+`setup-runtime`. The compatibility exports can be removed only after the
+minimum supported published package versions no longer import them.
 
 ### Channel setup input field compatibility
 
