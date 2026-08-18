@@ -351,8 +351,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       const target = resolveGatewaySessionStoreTarget({ cfg, key: targetKey, agentId });
       sessionKey = preservesUnspecifiedKey ? undefined : targetKey;
       sessionAgentId = target.agentId;
-      const workspace =
-        projectRoot ?? requestedCwd ?? resolveAgentWorkspaceDir(cfg, target.agentId);
+      const canonicalWorkspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
+      const workspace = projectRoot ?? requestedCwd ?? canonicalWorkspaceDir;
       // Subdirectory workspaces are valid: the worktree service resolves the repo root
       // via git discovery, so the preflight must accept ancestor .git entries too.
       if (!insideGitCheckout(workspace)) {
@@ -470,6 +470,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               id: preparedWorktree.id,
               branch: preparedWorktree.branch,
               repoRoot: preparedWorktree.repoRoot,
+              canonicalWorkspaceDir,
             },
             ...(provisioned
               ? {
