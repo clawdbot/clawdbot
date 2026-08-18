@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type ConnectedNodePluginTool = {
   nodeId: string;
@@ -32,30 +31,15 @@ export type RegisteredNodePluginToolCommand = {
   };
 };
 
-type ConnectedNodePluginToolSnapshot = {
-  toolsByNodeId: Map<string, ConnectedNodePluginTool[]>;
-  version: number;
-};
-
-const CONNECTED_NODE_PLUGIN_TOOL_SNAPSHOT_KEY = Symbol.for(
-  "openclaw.gateway.connected-node-plugin-tool-snapshot",
-);
-// Registry publication and agent tool construction occupy separate packaged chunks.
-// Share their snapshot or an inventoried node tool disappears from agent runs.
-const snapshot = resolveGlobalSingleton<ConnectedNodePluginToolSnapshot>(
-  CONNECTED_NODE_PLUGIN_TOOL_SNAPSHOT_KEY,
-  () => ({ toolsByNodeId: new Map(), version: 0 }),
-  (value) => {
-    value.toolsByNodeId.clear();
-    value.version = 0;
-  },
-);
+const toolsByNodeId = new Map<string, ConnectedNodePluginTool[]>();
 const NODE_PLUGIN_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const NODE_PLUGIN_TOOL_DESCRIPTION_MAX_LENGTH = 1024;
 const NODE_PLUGIN_TOOL_MAX_DESCRIPTORS = 128;
 const log = createSubsystemLogger("gateway/node-plugin-tools");
+let snapshotVersion = 0;
+
 function bumpSnapshotVersion(): void {
-  snapshot.version += 1;
+  snapshotVersion += 1;
 }
 
 function defaultParameters(): Record<string, unknown> {
@@ -196,13 +180,13 @@ export function replaceConnectedNodePluginTools(params: {
   tools: readonly NormalizedNodePluginTool[];
 }): void {
   if (params.tools.length === 0) {
-    const removed = snapshot.toolsByNodeId.delete(params.nodeId);
+    const removed = toolsByNodeId.delete(params.nodeId);
     if (removed) {
       bumpSnapshotVersion();
     }
     return;
   }
-  snapshot.toolsByNodeId.set(
+  toolsByNodeId.set(
     params.nodeId,
     params.tools.map((entry) => ({
       nodeId: params.nodeId,
@@ -217,14 +201,14 @@ export function replaceConnectedNodePluginTools(params: {
 }
 
 export function removeConnectedNodePluginTools(nodeId: string): void {
-  const removed = snapshot.toolsByNodeId.delete(nodeId);
+  const removed = toolsByNodeId.delete(nodeId);
   if (removed) {
     bumpSnapshotVersion();
   }
 }
 
 export function listConnectedNodePluginTools(): ConnectedNodePluginTool[] {
-  return [...snapshot.toolsByNodeId.values()]
+  return [...toolsByNodeId.values()]
     .flat()
     .toSorted(
       (left, right) =>
@@ -235,5 +219,5 @@ export function listConnectedNodePluginTools(): ConnectedNodePluginTool[] {
 }
 
 export function getConnectedNodePluginToolsVersion(): number {
-  return snapshot.version;
+  return snapshotVersion;
 }

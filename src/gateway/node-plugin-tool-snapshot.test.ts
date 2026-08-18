@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
@@ -136,27 +136,5 @@ describe("normalizeNodePluginToolDescriptors", () => {
         enabled: false,
       }),
     ).toEqual([]);
-  });
-
-  it("shares connected tools across duplicated runtime module loads", async () => {
-    const writer = await import("./node-plugin-tool-snapshot.js");
-    const tools = writer.normalizeNodePluginToolDescriptors({
-      nodeId: "node-split-chunk",
-      tools: [descriptor("demo_split_chunk")],
-      allowedCommands: ["demo.echo"],
-      registeredDescriptors: new Map(),
-    });
-    writer.replaceConnectedNodePluginTools({ nodeId: "node-split-chunk", tools });
-
-    vi.resetModules();
-    const reader = await import("./node-plugin-tool-snapshot.js");
-    try {
-      expect(reader.listConnectedNodePluginTools().map((entry) => entry.descriptor.name)).toContain(
-        "demo_split_chunk",
-      );
-    } finally {
-      writer.removeConnectedNodePluginTools("node-split-chunk");
-      reader.removeConnectedNodePluginTools("node-split-chunk");
-    }
   });
 });

@@ -195,7 +195,11 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
                 defaults: { ...cfg.agents?.defaults, ...live.agents?.defaults },
                 entries: {
                   ...cfg.agents?.entries,
-                  qa: { ...cfg.agents?.entries?.qa, model: { primary: MODEL_REF } },
+                  qa: {
+                    ...cfg.agents?.entries?.qa,
+                    model: { primary: MODEL_REF },
+                    tools: { ...cfg.agents?.entries?.qa?.tools, profile: "full" },
+                  },
                 },
               },
               mcp: { servers: gatewayServers },
