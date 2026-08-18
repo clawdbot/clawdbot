@@ -587,6 +587,8 @@ suite.define(() => {
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
 
+      // The picker's own revalidation lands after the rows render, so wait for it.
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
       expect(await gateway.getRequests("chat.metadata")).toEqual([
         expect.objectContaining({ params: { agentId: "main" } }),
         expect.objectContaining({ params: { agentId: "main" } }),
