@@ -724,7 +724,10 @@ function withoutInternalHarnessAuthority(
     return {
       // The built-in harness is the internal owner of this authority. Only
       // plugin handoffs receive the projected public attempt shape below.
-      params: params as import("./types.js").AgentHarnessAttemptParamsV2,
+      params: {
+        ...params,
+        operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+      } as import("./types.js").AgentHarnessAttemptParamsV2,
       closeHostCapabilities: () => {},
     };
   }
@@ -755,7 +758,10 @@ function prepareHarnessFinalizationParams(
     ...withoutCapabilities
   } = params;
   if (builtIn) {
-    return withoutCapabilities;
+    return {
+      ...withoutCapabilities,
+      operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    };
   }
   const pluginParams = withoutPluginHarnessPrivateState(withoutCapabilities);
   const boundary = "plugin harness finalization handoff";
@@ -784,7 +790,10 @@ function withoutPluginHarnessPrivateState(
   } = params as EmbeddedRunAttemptParams & {
     __openclawSourceReplyDeliveryRuntime?: unknown;
   };
-  return pluginParams;
+  return {
+    ...pluginParams,
+    operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+  };
 }
 
 function preparePluginHarnessParams(

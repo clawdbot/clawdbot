@@ -43,10 +43,12 @@ import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import {
+  CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+  CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
   CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME,
-  createNodeExecDynamicTool,
-  createNodeProcessDynamicTool,
+  createExecAliasDynamicTool,
+  createProcessAliasDynamicTool,
   isCodexDynamicToolExcluded,
 } from "./shell-dynamic-tools.js";
 import { filterCodexVisionTools } from "./vision-tools.js";
@@ -295,6 +297,8 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         ...sessionKeys,
         sessionId: params.sessionId,
         runId: params.runId,
+        // Egress correlation follows the exact admitted outer run; host capabilities own authority.
+        operationalRunInstance: params.operationalRunInstance,
         approvalReviewerDeviceId: params.approvalReviewerDeviceId,
         agentDir,
         preparedModelRuntime: params.preparedModelRuntime,
@@ -395,12 +399,17 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       ? preserveRingZeroSystemAgentTool(readableAllTools, normallyProfiledTools)
       : normallyProfiledTools;
   const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
-    addSandboxShellDynamicToolsIfAvailable(
-      isCodexMemoryFlushRun(params)
-        ? filterCodexMemoryFlushDynamicTools(readableAllTools)
-        : profileFilteredTools,
+    addGatewayShellDynamicToolsIfAvailable(
+      addSandboxShellDynamicToolsIfAvailable(
+        isCodexMemoryFlushRun(params)
+          ? filterCodexMemoryFlushDynamicTools(readableAllTools)
+          : profileFilteredTools,
+        readableAllTools,
+        input,
+      ),
       readableAllTools,
       input,
+      nativeExecutionPolicy,
     ),
     readableAllTools,
     input,
@@ -522,6 +531,50 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     );
   }
   return exposedTools;
+}
+/** Keeps the OpenClaw Gateway execution path available beside Codex native shell. */
+function addGatewayShellDynamicToolsIfAvailable(
+  filteredTools: OpenClawDynamicTool[],
+  allTools: OpenClawDynamicTool[],
+  input: DynamicToolBuildParams,
+  executionPolicy: CodexNativeExecutionPolicy,
+): OpenClawDynamicTool[] {
+  if (
+    isCodexMemoryFlushRun(input.params) ||
+    input.nativeToolSurfaceEnabled !== true ||
+    input.sandbox?.enabled === true ||
+    !executionPolicy.nativeToolSurfaceAllowed ||
+    executionPolicy.effectiveExecHost !== "gateway"
+  ) {
+    return filteredTools;
+  }
+  const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
+  const processTool = allTools.find(
+    (tool) => normalizeCodexDynamicToolName(tool.name) === "process",
+  );
+  const existingNames = new Set(
+    filteredTools.map((tool) => normalizeCodexDynamicToolName(tool.name)),
+  );
+  const execExcluded = isCodexDynamicToolExcluded(input.pluginConfig, [
+    "exec",
+    CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+  ]);
+  if (!execTool || execExcluded || existingNames.has(CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME)) {
+    return filteredTools;
+  }
+  const toolsToAppend = [createExecAliasDynamicTool(execTool, { host: "gateway" })];
+  const processExcluded = isCodexDynamicToolExcluded(input.pluginConfig, [
+    "process",
+    CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
+  ]);
+  if (
+    processTool &&
+    !processExcluded &&
+    !existingNames.has(CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME)
+  ) {
+    toolsToAppend.push(createProcessAliasDynamicTool(processTool, "gateway"));
+  }
+  return [...filteredTools, ...toolsToAppend];
 }
 /** Preserves delivery-critical tools when a narrow allowlist would otherwise hide them. */
 function includeForcedCodexDynamicToolAllow(
@@ -821,7 +874,9 @@ function addNodeShellDynamicToolsIfNeeded(
       (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     )
   ) {
-    toolsToAppend.push(createNodeExecDynamicTool(execTool, nodePolicy.node));
+    toolsToAppend.push(
+      createExecAliasDynamicTool(execTool, { host: "node", node: nodePolicy.node }),
+    );
   }
   if (
     !isCodexDynamicToolExcluded(input.pluginConfig, [
@@ -832,7 +887,7 @@ function addNodeShellDynamicToolsIfNeeded(
       (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME,
     )
   ) {
-    toolsToAppend.push(createNodeProcessDynamicTool(processTool));
+    toolsToAppend.push(createProcessAliasDynamicTool(processTool, "node"));
   }
   return toolsToAppend.length > 0 ? [...filteredTools, ...toolsToAppend] : filteredTools;
 }
@@ -885,6 +940,9 @@ function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
       allowSet.has(normalized) ||
       (normalized === "sandbox_exec" && allowSet.has("exec")) ||
       (normalized === "sandbox_process" && (allowSet.has("exec") || allowSet.has("process"))) ||
+      (normalized === CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec")) ||
+      (normalized === CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME &&
+        (allowSet.has("exec") || allowSet.has("process"))) ||
       (normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec")) ||
       (normalized === CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME &&
         (allowSet.has("exec") || allowSet.has("process")))

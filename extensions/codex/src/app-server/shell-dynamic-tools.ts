@@ -7,7 +7,11 @@ type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
 
 export const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 export const CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME = "node_process";
-const CODEX_NODE_EXEC_POLICY_PARAMETER_NAMES = new Set(["host", "security", "ask"]);
+export const CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME = "gateway_exec";
+export const CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME = "gateway_process";
+const CODEX_EXEC_POLICY_PARAMETER_NAMES = new Set(["host", "security", "ask"]);
+const PROCESS_FOLLOWUP_TEXT =
+  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
 /** Returns true when plugin config explicitly removes any named dynamic tool. */
 export function isCodexDynamicToolExcluded(
@@ -20,24 +24,33 @@ export function isCodexDynamicToolExcluded(
   );
 }
 
-export function createNodeExecDynamicTool(
+export function createExecAliasDynamicTool(
   execTool: OpenClawDynamicTool,
-  configuredNode: string | undefined,
+  params: { host: "gateway" | "node"; node?: string },
 ): OpenClawDynamicTool {
-  const pinnedNode = configuredNode?.trim();
+  const pinnedNode = params.host === "node" ? params.node?.trim() : undefined;
+  const nodeAlias = params.host === "node";
+  const name = nodeAlias ? CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME : CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME;
+  const description = nodeAlias
+    ? pinnedNode
+      ? "Run a shell command on the OpenClaw configured remote node for this session. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use remote-node background-session control for follow-up when available. Use Codex's native shell for local app-server work."
+      : "Run a shell command on an OpenClaw remote node. Select the node by name or id when multiple nodes are available. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use remote-node background-session control for follow-up when available. Use Codex's native shell for local app-server work."
+    : "Run a shell command through OpenClaw on the Gateway host for OpenClaw-managed Gateway environment access, including Secret Store agent-readable environment values and protected egress sentinels. Native Codex shell remains preferred for ordinary local work. This tool always uses OpenClaw host=gateway internally and follows Gateway exec approval and allowlist policy.";
+  const followupText = nodeAlias
+    ? "Use remote-node background-session control (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up when available."
+    : "Use gateway_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
   return {
     ...execTool,
-    name: CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
-    description: pinnedNode
-      ? "Run a shell command on the OpenClaw configured remote node for this session. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use remote-node background-session control for follow-up when available. Use Codex's native shell for local app-server work."
-      : "Run a shell command on an OpenClaw remote node. Select the node by name or id when multiple nodes are available. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use remote-node background-session control for follow-up when available. Use Codex's native shell for local app-server work.",
-    parameters: hideNodeExecDynamicToolParameters(execTool.parameters, {
-      hideNode: Boolean(pinnedNode),
-    }),
+    name,
+    description,
+    parameters: hideExecDynamicToolParameters(
+      execTool.parameters,
+      !nodeAlias || Boolean(pinnedNode),
+    ),
     execute: async (toolCallId, args, signal, onUpdate) => {
       const result = await execTool.execute(
         toolCallId,
-        pinNodeExecDynamicToolArgs(args, pinnedNode),
+        pinExecDynamicToolArgs(args, params.host, pinnedNode),
         signal,
         onUpdate,
       );
@@ -46,10 +59,7 @@ export function createNodeExecDynamicTool(
         content: result.content.map((item) =>
           item.type === "text"
             ? Object.assign({}, item, {
-                text: item.text.replace(
-                  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-                  "Use remote-node background-session control (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up when available.",
-                ),
+                text: item.text.replace(PROCESS_FOLLOWUP_TEXT, followupText),
               })
             : item,
         ),
@@ -58,34 +68,47 @@ export function createNodeExecDynamicTool(
   };
 }
 
-export function createNodeProcessDynamicTool(
+export function createProcessAliasDynamicTool(
   processTool: OpenClawDynamicTool,
+  host: "gateway" | "node",
 ): OpenClawDynamicTool {
-  return {
-    ...processTool,
-    name: CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME,
-    description:
-      "Manage background shell sessions on OpenClaw remote nodes: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for remote-node follow-up; use Codex's native shell session handling for local app-server work.",
-  };
+  const nodeAlias = host === "node";
+  const name = nodeAlias
+    ? CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME
+    : CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME;
+  const description = nodeAlias
+    ? "Manage background shell sessions on OpenClaw remote nodes: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for remote-node follow-up; use Codex's native shell session handling for local app-server work."
+    : "Manage background shell sessions in the existing per-session OpenClaw process scope: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use for gateway_exec follow-up; use native Codex shell session handling for ordinary local work.";
+  return { ...processTool, name, description };
 }
 
-function pinNodeExecDynamicToolArgs(args: unknown, configuredNode: string | undefined): unknown {
-  const source =
-    args && typeof args === "object" && !Array.isArray(args)
-      ? (args as Record<string, unknown>)
-      : {};
+function pinExecDynamicToolArgs(
+  args: unknown,
+  host: "gateway" | "node",
+  configuredNode?: string,
+): unknown {
+  const source = normalizeExecDynamicToolArgs(args);
   const { host: _host, security: _security, ask: _ask, node: requestedNode, ...rest } = source;
+  if (host === "gateway") {
+    return { ...rest, host };
+  }
   const node = configuredNode ?? (typeof requestedNode === "string" ? requestedNode.trim() : "");
   return {
     ...rest,
-    host: "node",
+    host,
     ...(node ? { node } : {}),
   };
 }
 
-function hideNodeExecDynamicToolParameters(
+function normalizeExecDynamicToolArgs(args: unknown): Record<string, unknown> {
+  return args && typeof args === "object" && !Array.isArray(args)
+    ? (args as Record<string, unknown>)
+    : {};
+}
+
+function hideExecDynamicToolParameters(
   parameters: OpenClawDynamicTool["parameters"],
-  options: { hideNode: boolean },
+  hideNode: boolean,
 ) {
   if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
     return parameters;
@@ -98,8 +121,8 @@ function hideNodeExecDynamicToolParameters(
   const nextProperties = Object.fromEntries(
     Object.entries(rawProperties).filter(
       ([name]) =>
-        !CODEX_NODE_EXEC_POLICY_PARAMETER_NAMES.has(normalizeCodexDynamicToolName(name)) &&
-        !(options.hideNode && normalizeCodexDynamicToolName(name) === "node"),
+        !CODEX_EXEC_POLICY_PARAMETER_NAMES.has(normalizeCodexDynamicToolName(name)) &&
+        !(hideNode && normalizeCodexDynamicToolName(name) === "node"),
     ),
   );
   const rawRequired = schema.required;
@@ -107,8 +130,8 @@ function hideNodeExecDynamicToolParameters(
     ? rawRequired.filter(
         (name) =>
           typeof name !== "string" ||
-          (!CODEX_NODE_EXEC_POLICY_PARAMETER_NAMES.has(normalizeCodexDynamicToolName(name)) &&
-            !(options.hideNode && normalizeCodexDynamicToolName(name) === "node")),
+          (!CODEX_EXEC_POLICY_PARAMETER_NAMES.has(normalizeCodexDynamicToolName(name)) &&
+            !(hideNode && normalizeCodexDynamicToolName(name) === "node")),
       )
     : rawRequired;
   return {
