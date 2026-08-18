@@ -150,6 +150,7 @@ const mocks = vi.hoisted(() => ({
   generateImage: vi.fn(),
   listRuntimeImageGenerationProviders: vi.fn(() => []),
   generateVideo: vi.fn(),
+  describeVideoFile: vi.fn(),
   listRuntimeVideoGenerationProviders: vi.fn(() => []),
   transcribeAudioFile: vi.fn(async () => ({ text: "meeting notes" })),
   textToSpeech: vi.fn(async () => ({
@@ -389,7 +390,8 @@ vi.mock("../media-understanding/runtime.js", () => ({
     mocks.describePreparedImageWithModel as typeof import("../media-understanding/runtime.js").describePreparedImageWithModel,
   describeImageFileWithModel:
     mocks.describeImageFileWithModel as typeof import("../media-understanding/runtime.js").describeImageFileWithModel,
-  describeVideoFile: vi.fn(),
+  describeVideoFile:
+    mocks.describeVideoFile as typeof import("../media-understanding/runtime.js").describeVideoFile,
   transcribeAudioFile:
     mocks.transcribeAudioFile as typeof import("../media-understanding/runtime.js").transcribeAudioFile,
 }));
@@ -627,6 +629,11 @@ describe("capability cli", () => {
     mocks.generateImage.mockReset();
     mocks.listRuntimeImageGenerationProviders.mockReset().mockReturnValue([]);
     mocks.generateVideo.mockReset();
+    mocks.describeVideoFile.mockReset().mockResolvedValue({
+      text: "friendly lobster",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    } as never);
     mocks.listRuntimeVideoGenerationProviders.mockReset().mockReturnValue([]);
     mocks.transcribeAudioFile.mockClear();
     mocks.textToSpeech.mockClear();
@@ -762,6 +769,11 @@ describe("capability cli", () => {
 
   function firstVideoGenerationCall() {
     const calls = mocks.generateVideo.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    return calls[0]?.[0];
+  }
+
+  function firstVideoDescriptionCall() {
+    const calls = mocks.describeVideoFile.mock.calls as unknown as Array<[Record<string, unknown>]>;
     return calls[0]?.[0];
   }
 
@@ -1956,6 +1968,13 @@ describe("capability cli", () => {
       expectedAgent: "/tmp/agent-beta",
     },
     {
+      name: "video describe",
+      run: () =>
+        runCapability("video", "describe", "--agent", "beta", "--file", "clip.mp4", "--json"),
+      selectedAgent: () => firstVideoDescriptionCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
       name: "embedding create",
       run: () =>
         runCapability("embedding", "create", "--agent", "beta", "--text", "hello", "--json"),
@@ -2066,6 +2085,13 @@ describe("capability cli", () => {
         );
       },
       selectedAgent: () => firstVideoGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "video describe",
+      run: () =>
+        runCapabilityWithParentAgent("video", "describe", "beta", "--file", "clip.mp4", "--json"),
+      selectedAgent: () => firstVideoDescriptionCall()?.agentDir,
       expectedAgent: "/tmp/agent-beta",
     },
     {

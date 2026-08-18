@@ -259,7 +259,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "video.describe",
     description: "Describe one video file through media-understanding providers.",
     transports: ["local"],
-    flags: ["--file", "--model", "--json"],
+    flags: ["--file", "--agent", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {

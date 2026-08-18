@@ -235,15 +235,17 @@ async function runVideoGenerate(params: {
   } satisfies CapabilityEnvelope;
 }
 
-async function runVideoDescribe(params: { file: string; model?: string }) {
+async function runVideoDescribe(params: { file: string; model?: string; agent?: string }) {
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer video.describe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
+  const agentDir = resolveAgentDir(cfg, resolveCapabilityExecutionAgentId(cfg, params.agent));
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
     cfg,
+    agentDir,
     activeModel,
   });
   if (!result.text) {
@@ -308,12 +310,14 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .command("describe")
     .description("Describe one video file")
     .requiredOption("--file <path>", "Video file")
+    .option("--agent <id>", "Agent whose model and auth state should be used")
     .option("--model <provider/model>", "Model override")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runVideoDescribe({
           file: String(opts.file),
+          agent: resolveCapabilityAgentOption(command, opts.agent),
           model: opts.model as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
