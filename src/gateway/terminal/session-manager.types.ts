@@ -17,6 +17,7 @@ export type AgentTerminalOwner = {
 export type TerminalOwner = { kind: "conn"; connId: string } | AgentTerminalOwner;
 
 export type AgentTerminalSessionDrain = {
+  drained: Promise<void>;
   hasWork(): boolean;
   release(): void;
 };

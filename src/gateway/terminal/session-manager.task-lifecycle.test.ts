@@ -149,9 +149,15 @@ describe("TerminalSessionManager task lifecycle", () => {
 
     const drain = manager.beginAgentSessionDrain(oldOwner);
     expect(oldPty.killed).toBe(true);
+    expect(drain.hasWork()).toBe(true);
     resolvePending(pendingPty);
     await expect(pending).resolves.toMatchObject({ ok: false, code: "closed" });
     expect(pendingPty.killed).toBe(true);
+    expect(drain.hasWork()).toBe(true);
+    oldPty.emitExit(0);
+    expect(drain.hasWork()).toBe(true);
+    pendingPty.emitExit(0);
+    await expect(drain.drained).resolves.toBeUndefined();
     expect(drain.hasWork()).toBe(false);
     await expect(manager.open(baseOpenRequest({ owner: oldOwner }))).resolves.toMatchObject({
       ok: false,

@@ -3133,7 +3133,6 @@ src/gateway/talk-agent-consult.ts	3
 src/gateway/talk-realtime-relay-forced-consults.ts	1
 src/gateway/talk-realtime-relay-session-create.ts	1
 src/gateway/terminal/node-relay.ts	1
-src/gateway/terminal/session-manager.ts	1
 src/gateway/test-http-response.ts	4
 src/gateway/test-temp-config.ts	1
 src/gateway/tools-invoke-http.ts	1

@@ -45,14 +45,22 @@ test("sessions.patch closes only the exact terminal session incarnation", async 
     throw new Error("expected terminal sessions");
   }
 
-  const archived = await directSessionReq(
+  let archiveSettled = false;
+  const archivePromise = directSessionReq(
     "sessions.patch",
     { key: sessionKey, archived: true, expectedSessionId: oldOwner.agentSessionId },
     { context: { terminalSessions: manager } },
-  );
+  ).finally(() => {
+    archiveSettled = true;
+  });
+
+  await vi.waitFor(() => expect(oldPty.killed).toBe(true));
+  expect(archiveSettled).toBe(false);
+  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+  oldPty.emitExit(0);
+  const archived = await archivePromise;
 
   expect(archived.ok).toBe(true);
-  expect(oldPty.killed).toBe(true);
   expect(manager.listAgent(oldOwner)).toEqual([]);
   expect(manager.writeAgent(oldOwner, oldSession.sessionId, "stale")).toEqual({
     ok: false,

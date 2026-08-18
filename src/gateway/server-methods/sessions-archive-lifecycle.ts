@@ -199,6 +199,11 @@ export async function prepareSessionArchiveLifecycle(
           () => true,
         )
       : Promise.resolve(true);
+    const terminalWork = terminalDrain
+      ? withTimeout(terminalDrain.drained, timeoutMs, "agent terminal archive drain").then(
+          () => true,
+        )
+      : Promise.resolve(true);
     const drains = await Promise.all([
       controllerDrain,
       admittedWork,
@@ -206,6 +211,7 @@ export async function prepareSessionArchiveLifecycle(
       embeddedWork,
       placementWork,
       workerWork,
+      terminalWork,
     ]);
     if (!drains.every(Boolean)) {
       throw new Error("Session work did not fully drain before archive");
