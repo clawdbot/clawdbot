@@ -24,6 +24,7 @@ import {
   providerOperationRetryConfig,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { notifyProviderHttpResponse } from "openclaw/plugin-sdk/provider-lifecycle";
 import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
@@ -34,7 +35,6 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
-  notifyProviderHttpResponse,
   sanitizeTransportPayloadText,
   sortPromptCacheToolsByName,
   stripSystemPromptCacheBoundary,

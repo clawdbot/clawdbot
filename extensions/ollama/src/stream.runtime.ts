@@ -19,8 +19,8 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { notifyProviderHttpResponse } from "openclaw/plugin-sdk/provider-lifecycle";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
-import { notifyProviderHttpResponse } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {

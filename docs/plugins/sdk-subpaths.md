@@ -149,6 +149,7 @@ are private-local.
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | Private-local after July 2026; `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Private-local after July 2026; Generic provider HTTP/endpoint capability helpers, provider HTTP errors, and audio transcription multipart form helpers |
+    | `plugin-sdk/provider-lifecycle` | Supported provider request-acceptance types and helpers for real HTTP metadata and metadata-free SDK or WebSocket streams |
     | `plugin-sdk/provider-binary-stream` | Direct-reader bounded binary streams with fitting-prefix delivery and explicit overflow/release errors |
     | `plugin-sdk/provider-web-fetch-contract` | Private-local after July 2026; Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
     | `plugin-sdk/provider-web-fetch` | Private-local after July 2026; Web-fetch provider registration/cache helpers |
