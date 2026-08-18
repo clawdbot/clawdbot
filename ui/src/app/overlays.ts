@@ -199,6 +199,12 @@ export function createApplicationOverlays(
     publish,
     publishBanner: publishUpdateBanner,
     publishRecordedAttempt: publishRecordedUpdateAttempt,
+    publishRecordedFailure: ({ attempt, banner }) => {
+      // Both facts terminate the same reconciliation. Publishing either first
+      // exposes a false success or a failure without its recorded cause.
+      snapshot = { ...snapshot, recordedUpdateAttempt: attempt, updateStatusBanner: banner };
+      publish();
+    },
     onVerifiedInstall: announceVerifiedUpdateInstall,
   });
   const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {

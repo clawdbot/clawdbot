@@ -290,6 +290,10 @@ export function createUpdateVerificationController(params: {
   publish: () => void;
   publishBanner: (banner: ApplicationStatusBanner | null) => void;
   publishRecordedAttempt?: (attempt: RecordedUpdateAttempt | null) => void;
+  publishRecordedFailure: (params: {
+    attempt: RecordedUpdateAttempt | null;
+    banner: ApplicationStatusBanner;
+  }) => void;
   onVerifiedInstall?: (identity: { version: string | null; sha: string | null }) => void;
 }) {
   let generation = 0;
@@ -354,14 +358,14 @@ export function createUpdateVerificationController(params: {
       }
       if (sentinel?.kind === "update" && sentinel.status && sentinel.status !== "ok") {
         params.clearPending();
-        params.publishRecordedAttempt?.(readRecordedUpdateAttempt(sentinel));
-        params.publishBanner(
-          resolveUpdateStatusBanner({
+        params.publishRecordedFailure({
+          attempt: readRecordedUpdateAttempt(sentinel),
+          banner: resolveUpdateStatusBanner({
             status: "error",
             ...(sentinel.stats?.reason ? { reason: sentinel.stats.reason } : {}),
             cause: readUpdateFailureCause(sentinel),
           }),
-        );
+        });
         return;
       }
       const actualVersion = sentinel?.stats?.after?.version?.trim() || null;
