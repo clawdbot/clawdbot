@@ -55,7 +55,7 @@ describe("normalizeChatSendRequest", () => {
     expect(result).toEqual({ ok: false, error: "message or attachment required" });
   });
 
-  it("preserves targetless steer for leaf-bound compatibility admission", () => {
+  it("accepts start-or-steer requests with or without a transcript leaf", () => {
     expect(
       normalizeChatSendRequest({
         params: validParams({ queueMode: "steer" }),
@@ -68,12 +68,6 @@ describe("normalizeChatSendRequest", () => {
           queueMode: "steer",
           expectedLeafEntryId: "leaf-1",
         }),
-        client: null,
-      }),
-    ).toMatchObject({ ok: true });
-    expect(
-      normalizeChatSendRequest({
-        params: validParams({ queueMode: "steer", expectedRunId: " run-1 " }),
         client: null,
       }),
     ).toMatchObject({ ok: true });

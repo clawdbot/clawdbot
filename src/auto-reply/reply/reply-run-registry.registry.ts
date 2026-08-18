@@ -8,7 +8,6 @@ import {
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   replyMessageInjectionTargetOperation,
-  type ReplyMessageInjectionTarget,
   type ReplyOperation,
   type ReplyOperationPhase,
   type ReplyRunRegistry,
@@ -108,22 +107,6 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return replyRunState.activeRunsByKey.has(normalizedSessionKey);
   },
-  resolveMessageInjectionTarget({ sessionKey, expectedRunId }) {
-    const operation = this.get(sessionKey);
-    const resolved = resolveReplyMessageInjectionRejection({
-      operation,
-      expectedRunId,
-    });
-    if (!("injection" in resolved)) {
-      return undefined;
-    }
-    const target: ReplyMessageInjectionTarget = {
-      [replyMessageInjectionTargetOperation]: operation!,
-      identity: normalizeOptionalString(expectedRunId) ? "run" : "operation",
-      ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
-    };
-    return target;
-  },
   resolveCurrentMessageInjectionTarget(sessionKey) {
     const operation = this.get(sessionKey);
     const resolved = resolveReplyMessageInjectionRejection({
@@ -134,7 +117,6 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return {
       [replyMessageInjectionTargetOperation]: operation,
-      identity: "operation",
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
     };
   },

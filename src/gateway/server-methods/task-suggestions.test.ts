@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -374,6 +373,7 @@ describe("task suggestion gateway methods", () => {
         sessionKey,
         agentId: "main",
         message: "Apply the focused fix in this session.",
+        queueMode: "steer",
         idempotencyKey: `task-suggestion:${taskId}`,
       });
       respond(true, { runId: "cloud-run", status: "started" }, undefined);
@@ -497,6 +497,7 @@ describe("task suggestion gateway methods", () => {
             agentId: "main",
             sessionId: "source-session",
             message: "Apply the focused fix in this session.",
+            queueMode: "steer",
             idempotencyKey: `task-suggestion:${taskId}`,
           },
         }),
@@ -504,7 +505,7 @@ describe("task suggestion gateway methods", () => {
     });
   });
 
-  it("steers a session acceptance into its one exact active run", async () => {
+  it("sends a session acceptance through start-or-steer", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
@@ -514,84 +515,15 @@ describe("task suggestion gateway methods", () => {
 
       const accepted = await call("taskSuggestions.accept", { taskId, mode: "session" }, vi.fn(), {
         client: operatorClient(),
-        context: {
-          chatAbortControllers: new Map([
-            [
-              "run-one",
-              { sessionKey: SOURCE_SESSION_KEY, sessionId: "source-session", agentId: "main" },
-            ],
-          ]) as never,
-        },
+        context: { chatAbortControllers: new Map() },
       });
 
       expect(accepted.response?.[0]).toBe(true);
       expect(mocks.handleChatSend).toHaveBeenCalledWith(
         expect.objectContaining({
-          params: expect.objectContaining({ queueMode: "steer", expectedRunId: "run-one" }),
+          params: expect.objectContaining({ queueMode: "steer" }),
         }),
       );
-    });
-  });
-
-  it.each([
-    { label: "multiple run IDs", runIds: ["run-one", "run-two"], projected: false },
-    { label: "no exact run ID", runIds: [], projected: true },
-  ])("rejects an active session with $label and restores the suggestion", async (testCase) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
-        { sessionId: "source-session", updatedAt: 1 },
-      );
-      const taskId = await createSourceSuggestion();
-      const deleteSession = vi.spyOn(sessionDeleteHandlers, "sessions.delete");
-      if (testCase.projected) {
-        registerAgentRunContext("projected-task-suggestion-run", {
-          projectSessionActive: true,
-          sessionId: "source-session",
-          sessionKey: SOURCE_SESSION_KEY,
-        });
-      }
-      const activeRuns = new Map(
-        testCase.runIds.map((runId) => [
-          runId,
-          {
-            sessionKey: SOURCE_SESSION_KEY,
-            sessionId: "source-session",
-            agentId: "main",
-            runId,
-          },
-        ]),
-      );
-      try {
-        const accepted = await call(
-          "taskSuggestions.accept",
-          { taskId, mode: "session" },
-          vi.fn(),
-          {
-            client: operatorClient(),
-            context: { chatAbortControllers: activeRuns as never },
-          },
-        );
-        const listed = await call("taskSuggestions.list", {});
-
-        expect(accepted.response?.[0]).toBe(false);
-        expect(accepted.response?.[2]).toMatchObject({
-          code: "INVALID_REQUEST",
-          details: { code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS" },
-        });
-        if (testCase.projected) {
-          expect(accepted.response?.[2]?.message).toBe(
-            "active session run has no exact dispatch identity; refresh and retry",
-          );
-        }
-        expect(mocks.handleChatSend).not.toHaveBeenCalled();
-        expect(deleteSession).not.toHaveBeenCalled();
-        expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
-      } finally {
-        if (testCase.projected) {
-          clearAgentRunContext("projected-task-suggestion-run");
-        }
-      }
     });
   });
 
