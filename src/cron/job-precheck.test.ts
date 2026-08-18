@@ -318,7 +318,10 @@ describe("runCronJobPrecheck", () => {
       );
       expect(result.decision).toBe("run");
       expect(spawned).not.toBeNull();
-      const spawnedCmd = spawned as { cmd: string; args: string[] };
+      if (spawned === null) {
+        throw new Error("expected spawn");
+      }
+      const spawnedCmd = spawned;
       expect(spawnedCmd.cmd).toBe("/bin/sh");
       expect(spawnedCmd.args[0]).toBe("-c");
     } finally {

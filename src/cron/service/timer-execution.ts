@@ -123,8 +123,7 @@ export async function executeJobCore(
     try {
       const cfg = getRuntimeConfig();
       toolsExec = cfg.tools?.exec;
-      const configuredDefault =
-        state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+      const configuredDefault = state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
       precheckAgentId = resolveCronJobEffectiveAgentId(job, configuredDefault);
       agentToolsExec = resolveAgentConfig(cfg, precheckAgentId)?.tools?.exec;
     } catch (err) {

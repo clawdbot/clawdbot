@@ -1,10 +1,6 @@
 /** Full cron job validation orchestration. */
 import type { CronConfig } from "../../config/types.cron.js";
-import type {
-  CronJobCreate,
-  CronJobPatch,
-  CronStoredJob,
-} from "../types.js";
+import type { CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
 import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
 import {
   assertAnnounceDeliveryChannelSupport,
@@ -20,7 +16,7 @@ import {
   assertTriggerSupport,
 } from "./jobs-validation.js";
 
-export type JobValidationContext =
+type JobValidationContext =
   | { kind: "create"; cronConfig?: CronConfig; defaultAgentId?: string; nowMs: number }
   | {
       kind: "patch";
