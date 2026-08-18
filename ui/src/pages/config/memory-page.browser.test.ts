@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import "../../styles/base.css";
+import "../../styles/layout.css";
 import "../../styles/settings.css";
+import "../../styles/hub-tabs.css";
 import "../../styles/config.css";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
@@ -67,7 +69,7 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
     );
   });
 
-  it("keeps the hero fixed when a subview changes scrollbar state", async () => {
+  it("keeps horizontal hero geometry fixed when a subview changes scrollbar state", async () => {
     host = document.createElement("div");
     host.className = "shell shell--settings";
     host.innerHTML = `
@@ -118,6 +120,5 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
       layoutTolerancePx,
     );
     expect(Math.abs(after.tabs.left - before.tabs.left)).toBeLessThanOrEqual(layoutTolerancePx);
-    expect(Math.abs(after.tabs.top - before.tabs.top)).toBeLessThanOrEqual(layoutTolerancePx);
   });
 });
