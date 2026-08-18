@@ -578,7 +578,7 @@ suite.define(() => {
       await where.getByText("Cloud", { exact: true }).waitFor();
       const cloud = where.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe("Cloud workers require a Git checkout");
+      expect(await cloud.getAttribute("title")).toBe("Cloud needs a Git checkout");
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("clone and inspect this project");
