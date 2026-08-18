@@ -140,6 +140,7 @@ async function readLogSlice(params: {
     if (lines.length > limit) {
       truncated = true;
       lines = lines.slice(lines.length - limit);
+      truncated = true;
     }
 
     cursor = size;
