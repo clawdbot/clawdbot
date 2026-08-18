@@ -342,6 +342,14 @@ type PluginNodeInvokePolicyRegistration = {
   rootDir?: string;
 };
 
+export type PluginWidgetPresenterRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  presenter: import("./plugin-registration.types.js").WidgetPresenter;
+  source: string;
+  rootDir?: string;
+};
+
 type PluginSecurityAuditCollectorRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -563,6 +571,7 @@ export type PluginRegistry = {
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
+  widgetPresenters: PluginWidgetPresenterRegistration[];
   mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
   reloads: PluginReloadRegistration[];

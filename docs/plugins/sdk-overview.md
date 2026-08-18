@@ -159,11 +159,14 @@ Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
 with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
 or fully dynamic tool registration.
 
-| Method                                 | What it registers                                                                                                                        |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerTool(tool, opts?)`        | Agent tool (required or `{ optional: true }`)                                                                                            |
-| `api.registerCommand(def)`             | Custom command (bypasses the LLM)                                                                                                        |
-| `api.registerNodeHostCommand(command)` | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
+| Method                                   | What it registers                                                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerTool(tool, opts?)`          | Agent tool (required or `{ optional: true }`)                                                                                            |
+| `api.registerCommand(def)`               | Custom command (bypasses the LLM)                                                                                                        |
+| `api.registerNodeHostCommand(command)`   | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
+| `api.registerWidgetPresenter(presenter)` | Destination that can present a hosted `show_widget` document                                                                             |
+
+Widget presenters declare a model-visible target, a short description, current availability, and a `present(...)` callback. Return the closed presentation result codes (`no_eligible_node` or `node_error`) instead of throwing for expected device failures; core then keeps the widget available inline and gives the agent a recovery step.
 
 Computer Use providers use `registerComputerUseProvider(api, provider)` from
 `openclaw/plugin-sdk/computer-use`. It registers the shared

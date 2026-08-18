@@ -399,6 +399,7 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
           ...(params.params !== undefined && { params: params.params }),
           timeoutMs: params.timeoutMs,
           idempotencyKey: params.idempotencyKey || randomUUID(),
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         },
         {
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
