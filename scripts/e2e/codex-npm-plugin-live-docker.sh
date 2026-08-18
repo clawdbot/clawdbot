@@ -449,9 +449,9 @@ rm -f "$FOLLOWTHROUGH_ARTIFACT"
 FOLLOWTHROUGH_PROMPT="$(cat <<PROMPT
 Live release follow-through check.
 
-First call message(action=send) without passing final and send exactly
-$FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. The final field must be
-omitted, not false. Make this progress send your only tool call in this step,
+First call message(action=send) with final=false and send exactly
+$FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. Make this progress send
+your only tool call in this step,
 and wait for its result before calling any other tool.
 
 Only after that send succeeds, read FOLLOWTHROUGH_ALPHA.md,
