@@ -521,7 +521,7 @@ export class TerminalPanelSessionController
     this.openRetry.remember(catalog, agentId);
     this.host.terminalPanelErrorText = null;
     // Freeze the selection for this tab; later agent changes affect only new tabs.
-    const ownerAgentId = agentId ?? undefined;
+    const ownerSessionKey = !catalog ? this.host.sessionKey?.trim() || undefined : undefined;
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalPanelSessionTab | undefined;
     try {
@@ -529,7 +529,8 @@ export class TerminalPanelSessionController
       createdTab = boot.tab;
       const result = await boot.connection.open(
         {
-          agentId: ownerAgentId,
+          agentId: agentId ?? undefined,
+          ...(ownerSessionKey ? { sessionKey: ownerSessionKey } : {}),
           cols: boot.cols,
           rows: boot.rows,
           ...(catalog ? { catalog } : {}),
@@ -547,7 +548,7 @@ export class TerminalPanelSessionController
         }
         return false;
       }
-      this.adoptSession(boot.tab, result);
+      this.adoptSession(boot.tab, result, ownerSessionKey !== undefined);
       boot.tab.controller.terminal.focus();
       return true;
     } catch (error) {

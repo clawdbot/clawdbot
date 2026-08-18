@@ -60,6 +60,8 @@ export type TerminalSessionManagerOptions = {
 
 export type TerminalOpenRequest = {
   owner: TerminalOwner;
+  /** Operator connection initially viewing an agent-owned session. */
+  viewerConnId?: string;
   agentId: string;
   cwd: string;
   shell: string;

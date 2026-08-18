@@ -51,6 +51,7 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   readonly isConnected: boolean;
   readonly client: TerminalGatewayClient | null;
   readonly agentId: string | null;
+  readonly sessionKey: string | null;
   readonly available: boolean;
   readonly themeMode: "dark" | "light";
   readonly fullscreen: boolean;

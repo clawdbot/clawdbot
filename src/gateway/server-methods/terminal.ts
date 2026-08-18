@@ -25,6 +25,8 @@ import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
 import { createNodeRelayBackend } from "../terminal/node-relay.js";
 import {
@@ -164,6 +166,7 @@ export const CATALOG_TERMINAL_INITIAL_SIZE = { cols: 80, rows: 24 } as const;
 
 type TerminalSessionOpenRequest = {
   agentId?: string;
+  sessionKey?: string;
   cols: number;
   rows: number;
   requiredCwd?: string;
@@ -343,6 +346,24 @@ export async function openTerminalSession(
     respondLaunchBlocked(respond, refreshedLaunch.block, request.failureHint);
     return;
   }
+  let agentSessionKey: string | undefined;
+  if (request.sessionKey) {
+    const runtimeConfig = context.getRuntimeConfig();
+    const requestedOwner = resolveRequestedSessionAgentId(
+      runtimeConfig,
+      request.sessionKey,
+      refreshedLaunch.plan.agentId,
+    );
+    if (!requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
+    agentSessionKey = resolveStoredSessionKeyForAgentStore({
+      cfg: runtimeConfig,
+      agentId: requestedOwner.agentId,
+      sessionKey: request.sessionKey,
+    });
+  }
   if (nodeRelay) {
     const relay = nodeRelay;
     const access = authorizeCatalogTerminalNode(context, relay.plan);
@@ -388,12 +409,19 @@ export async function openTerminalSession(
           catalogPlan.pathEnv ? { PATH: catalogPlan.pathEnv } : undefined,
         ])
       : buildTerminalEnv(process.env);
+  const closeOpenedSession = (sessionId: string) =>
+    agentSessionKey
+      ? manager.closeAgent(agentSessionKey, sessionId, spawnPlan.agentId)
+      : manager.close(connId, sessionId);
   let openingTerminal: ReturnType<typeof manager.open> | undefined;
   let outcome: Awaited<ReturnType<typeof manager.open>>;
   try {
     outcome = await waitForTerminalOpenDeadline(() => {
       openingTerminal = manager.open({
-        owner: { kind: "conn", connId },
+        owner: agentSessionKey
+          ? { kind: "agent", agentSessionKey, agentId: spawnPlan.agentId }
+          : { kind: "conn", connId },
+        ...(agentSessionKey ? { viewerConnId: connId } : {}),
         agentId: spawnPlan.agentId,
         cwd: spawnPlan.cwd,
         shell: spawnPlan.shell,
@@ -415,7 +443,7 @@ export async function openTerminalSession(
         void openingTerminal.then(
           (lateOutcome) => {
             if (lateOutcome.ok) {
-              manager.close(connId, lateOutcome.sessionId);
+              closeOpenedSession(lateOutcome.sessionId);
             }
           },
           () => undefined,
@@ -438,7 +466,7 @@ export async function openTerminalSession(
   if (context.isConnectionActive?.(connId) === false) {
     // A browser deadline can close the socket while PTY creation is still
     // finishing. Release the raced session instead of leaving an orphan.
-    manager.close(connId, outcome.sessionId);
+    closeOpenedSession(outcome.sessionId);
     respond(
       false,
       undefined,
@@ -502,6 +530,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
     }
     await openTerminalSession(opts, {
       ...(p.agentId ? { agentId: p.agentId } : {}),
+      ...(p.sessionKey ? { sessionKey: p.sessionKey } : {}),
       cols: p.cols,
       rows: p.rows,
       ...(resolveCatalogPlan ? { resolveCatalogPlan } : {}),

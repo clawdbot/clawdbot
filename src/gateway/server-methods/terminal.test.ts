@@ -7,8 +7,10 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createTerminalLaunchPolicy } from "../terminal/launch.js";
+import { TerminalSessionManager } from "../terminal/session-manager.js";
+import { makeFakePty } from "../terminal/session-manager.test-helpers.js";
 import type { TerminalSessionSummary } from "../terminal/session-types.js";
-import { terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
+import { openTerminalSession, terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -124,6 +126,38 @@ afterEach(() => {
 });
 
 describe("terminal gateway policy", () => {
+  it("binds a UI terminal to its exact agent session while keeping the UI attached", async () => {
+    const backend = makeFakePty();
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
+    const agentSessionKey = "agent:main:ui-session";
+    const { opts, respond } = makeOpts({}, { enabled: true });
+    opts.context.terminalSessions = manager;
+
+    await openTerminalSession(opts, {
+      agentId: "main",
+      sessionKey: agentSessionKey,
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ agentId: "main", sessionId: expect.any(String) }),
+    );
+    const owned = manager.listAgent(agentSessionKey, "main");
+    expect(owned).toHaveLength(1);
+    const session = expectDefined(owned[0], "session-owned UI terminal");
+    expect(session).toMatchObject({ attached: true, owner: `agent:${agentSessionKey}` });
+    expect(manager.write("conn-1", session.sessionId, "operator input\n")).toBe(true);
+
+    backend.emitData("ui session output");
+    expect(manager.snapshotAgent(agentSessionKey, session.sessionId, "main")).toContain(
+      "ui session output",
+    );
+    expect(manager.listAgent("agent:main:other-session", "main")).toEqual([]);
+    expect(manager.snapshotAgent(agentSessionKey, session.sessionId, "research")).toBeUndefined();
+  });
+
   it("lists agent-owned sessions with their owner marker", async () => {
     const { opts, sessions, respond } = makeOpts({}, { enabled: true });
     sessions.list.mockReturnValue([

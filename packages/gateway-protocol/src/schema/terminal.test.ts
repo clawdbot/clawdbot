@@ -6,6 +6,7 @@ describe("terminal protocol", () => {
   it("accepts a typed catalog reference and rejects client command fields", () => {
     expect(
       validateTerminalOpenParams({
+        sessionKey: "agent:main:thread",
         cols: 80,
         rows: 24,
         catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread" },

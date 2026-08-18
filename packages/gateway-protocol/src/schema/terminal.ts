@@ -22,6 +22,9 @@ export const TerminalOpenParamsSchema = closedObject({
   // Optional agent selector; defaults to the gateway's default agent. The
   // session starts in that agent's workspace and inherits its isolation.
   agentId: Type.Optional(NonEmptyString),
+  // Binds a Control UI shell opened inside a conversation to that exact
+  // session, so the session's agent and the initiating operator share it.
+  sessionKey: Type.Optional(NonEmptyString),
   catalog: Type.Optional(SessionCatalogLocatorSchema),
   cols: TerminalDimension,
   rows: TerminalDimension,

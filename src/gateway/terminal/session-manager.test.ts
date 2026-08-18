@@ -527,7 +527,23 @@ describe("TerminalSessionManager", () => {
     }
   });
 
-  it("kills a pending open whose connection disconnects during spawn", async () => {
+  it.each([
+    {
+      label: "owns the terminal",
+      request: { owner: { kind: "conn" as const, connId: "conn-x" } },
+    },
+    {
+      label: "is the initial viewer",
+      request: {
+        owner: {
+          kind: "agent" as const,
+          agentSessionKey: "agent:main:ui-session",
+          agentId: "main",
+        },
+        viewerConnId: "conn-x",
+      },
+    },
+  ])("kills a pending open when its connection $label and disconnects", async ({ request }) => {
     const emit = vi.fn();
     const fake = makeFakePty();
     let release: (() => void) | undefined;
@@ -541,7 +557,7 @@ describe("TerminalSessionManager", () => {
         return fake;
       },
     });
-    const openPromise = manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-x" } }));
+    const openPromise = manager.open(baseRequest(request));
     // Connection drops while the shell is still spawning.
     manager.handleDisconnect("conn-x");
     release?.();
