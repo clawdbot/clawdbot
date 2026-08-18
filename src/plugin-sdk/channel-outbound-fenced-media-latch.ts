@@ -14,6 +14,7 @@ type LatchPayload = {
 
 /** Latch fenced-MEDIA diagnostics to accepted visible direct-delivery text (#41966). */
 export function createDirectAcceptedFencedMediaWarnLatch(params: { payload: object }) {
+  // SAFETY: callers pass normalized ReplyPayload-shaped objects; LatchPayload is the private subset used here.
   const payload = params.payload as LatchPayload;
   // Honor upstream disabled media-directive parsing (block replies) — do not
   // re-enable extraction with plan defaults (#41966 / ClawSweeper P2).

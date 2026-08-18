@@ -272,6 +272,11 @@ type AgentRuntimeReplyPayload = {
   mediaTokenSkippedInFence?: boolean;
   /** Skipped fenced MEDIA identities for operator diagnostics. */
   fencedSkippedMediaDirectives?: string[];
+  /**
+   * When false, outbound plan/direct latch must not re-enable MEDIA directive
+   * extraction (block replies) (#41966).
+   */
+  extractMediaDirectives?: boolean;
   audioAsVoice?: boolean;
   videoAsNote?: boolean;
   location?: AgentRuntimeReplyPayloadLocation;
