@@ -5,9 +5,6 @@ import { installNativeTitleGuard } from "./tooltip.ts";
 
 type TooltipElement = HTMLElement & {
   content: string;
-  delay?: number;
-  placement: string;
-  suppressed: boolean;
   readonly updateComplete: Promise<boolean>;
 };
 
@@ -59,7 +56,6 @@ function webAwesomeTooltip(tooltip: TooltipElement) {
     HTMLElement & {
       anchor: Element | null;
       open: boolean;
-      placement: string;
       readonly updateComplete: Promise<boolean>;
     }
   >("wa-tooltip");
@@ -199,31 +195,6 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
   });
 
-  it("lets a tooltip override the provider hover delay", async () => {
-    const provider = createProvider();
-    provider.delay = 40;
-    const { tooltip, trigger } = createTooltip("Deliberate tooltip");
-    tooltip.delay = 400;
-    provider.append(tooltip);
-    document.body.append(provider);
-    await tooltip.updateComplete;
-
-    hoverTrigger(trigger);
-    vi.advanceTimersByTime(399);
-    expectOpenCount(0);
-    vi.advanceTimersByTime(1);
-    expectOpenCount(1);
-  });
-
-  it("passes caller placement to the Web Awesome popup", async () => {
-    const { tooltip } = createTooltip("Side tooltip");
-    tooltip.placement = "right";
-    document.body.append(tooltip);
-    await tooltip.updateComplete;
-
-    expect(webAwesomeTooltip(tooltip)?.placement).toBe("right");
-  });
-
   it("suppresses a tooltip that repeats fully visible trigger text", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "Claude Opus 4.7 Anthropic");
@@ -306,39 +277,6 @@ describe("openclaw-tooltip", () => {
     const descriptionId = trigger.getAttribute("aria-describedby");
     expect(descriptionId).toBeTruthy();
     expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Accessible tooltip");
-  });
-
-  it("closes when its hover surface is suppressed", async () => {
-    const { tooltip, trigger } = createTooltip("Suppressed tooltip");
-    document.body.append(tooltip);
-    await tooltip.updateComplete;
-
-    focusTrigger(trigger);
-    expectOpenCount(1);
-
-    tooltip.suppressed = true;
-    await tooltip.updateComplete;
-    expectOpenCount(0);
-  });
-
-  it("stays closed while an ancestor suppresses hover surfaces", async () => {
-    const scope = document.createElement("div");
-    scope.setAttribute("data-hover-suppressed", "");
-    const provider = createProvider();
-    const { tooltip, trigger } = createTooltip("Suppressed tooltip");
-    provider.append(tooltip);
-    scope.append(provider);
-    document.body.append(scope);
-    await tooltip.updateComplete;
-
-    hoverTrigger(trigger);
-    vi.advanceTimersByTime(400);
-    expectOpenCount(0);
-
-    scope.removeAttribute("data-hover-suppressed");
-    hoverTrigger(trigger);
-    vi.advanceTimersByTime(400);
-    expectOpenCount(1);
   });
 
   it("describes the focusable element inside a wrapper trigger", async () => {

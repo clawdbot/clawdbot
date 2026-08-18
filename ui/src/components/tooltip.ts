@@ -2,13 +2,12 @@
 // wrapper API; Web Awesome owns popup positioning, rendering, and dismissal.
 import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
-import { css, html, type PropertyValues } from "lit";
+import { css, html } from "lit";
 import { property, query } from "lit/decorators.js";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const DESCRIBABLE_SELECTOR =
   'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
-const HOVER_SUPPRESSED_SCOPE = "[data-hover-suppressed]";
 const HOVER_DELAY = 150;
 const TOUCH_DELAY = 450;
 const TOUCH_VISIBLE = 900;
@@ -225,10 +224,6 @@ class Tooltip extends OpenClawLitElement {
   /** Let a reveal-only trigger open on click instead of dismissing. */
   @property({ type: Boolean, attribute: "open-on-click" }) openOnClick = false;
 
-  @property({ type: Number }) delay?: number;
-  @property({ type: Boolean, reflect: true }) suppressed = false;
-  @property() placement = "top";
-
   @query("wa-tooltip") private webAwesomeTooltip?: WaTooltip;
 
   private triggerElement: HTMLElement | null = null;
@@ -300,10 +295,7 @@ class Tooltip extends OpenClawLitElement {
     this.style.display = "contents";
   }
 
-  protected override updated(changed: PropertyValues) {
-    if (changed.has("suppressed") && this.suppressed) {
-      this.close();
-    }
+  protected override updated() {
     this.attachTrigger();
     this.syncDescription();
     this.syncWebAwesomeTooltip();
@@ -325,7 +317,7 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private get hoverDelay() {
-    return Math.max(0, this.delay ?? this.provider?.delay ?? HOVER_DELAY);
+    return Math.max(0, this.provider?.delay ?? HOVER_DELAY);
   }
 
   private get touchDelay() {
@@ -703,7 +695,7 @@ class Tooltip extends OpenClawLitElement {
   override render() {
     return html`
       <slot @slotchange=${() => this.attachTrigger()}></slot>
-      <wa-tooltip id=${this.tooltipId} trigger="manual" placement=${this.placement}>
+      <wa-tooltip id=${this.tooltipId} trigger="manual">
         <span class="tooltip-content">${this.content}</span>
         <span
           class="tooltip-rich-content"
