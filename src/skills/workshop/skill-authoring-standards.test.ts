@@ -16,6 +16,9 @@ describe("skill authoring standards", () => {
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("Every sentence must earn its tokens");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("never invent flags");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("capture the working fix");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain(
+      "NEVER capture: environment-dependent failures; claims that a tool or provider is broken or unavailable; transient errors that later resolved; one-off task narratives or session recaps; sequences of failed attempts dressed up as best practice; procedures the evidence did not verify.",
+    );
   });
 
   it("is included verbatim in learn, experience-review, and history-scan prompts", () => {

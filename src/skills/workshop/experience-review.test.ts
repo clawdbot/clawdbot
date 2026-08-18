@@ -795,6 +795,7 @@ describe("skill experience review scheduler", () => {
     expect(prompt).toContain("patch a used writable workspace skill that governs this work");
     expect(prompt).toContain("quote the exact text to change");
     expect(prompt).toContain("a sequence of failed attempts is not a workflow");
+    expect(prompt).toContain("NEVER capture: environment-dependent failures");
     expect(prompt).toContain("NOTHING_TO_LEARN");
     expect(prompt).toContain("[tool call: exec]");
     expect(prompt).toContain("Completed run: run-1");

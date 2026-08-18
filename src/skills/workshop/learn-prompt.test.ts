@@ -11,6 +11,7 @@ describe("buildLearnPrompt", () => {
     expect(prompt).toContain("never fetch only the first source");
     expect(prompt).toContain("update the best existing skill before creating anything new");
     expect(prompt).toContain("no durable reusable procedure");
+    expect(prompt).toContain("NEVER capture: environment-dependent failures");
     expect(buildLearnPrompt(" ")).toContain(DEFAULT_LEARN_REQUEST);
   });
 });
