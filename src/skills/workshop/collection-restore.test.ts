@@ -524,6 +524,17 @@ describe("skill collection backup and restore", () => {
           }),
         ]),
       );
+      // The collection-staged create must be retired, not linger pending
+      // against a missing skill and consume the maxPending budget.
+      expect(listed.proposals).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "create",
+            skillKey: proposal.record.target.skillKey,
+            status: "rejected",
+          }),
+        ]),
+      );
       await expect(inspection).resolves.toMatchObject({
         record: { id: proposal.record.id, status: "pending" },
       });

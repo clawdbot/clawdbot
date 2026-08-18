@@ -35,6 +35,7 @@ import {
 import {
   prepareCollectionCreateProposals,
   promoteCollectionCreateProposal,
+  retireCollectionCreateProposals,
 } from "./collection-create-proposal.js";
 import {
   canonicalSkillCollectionWorkspace,
@@ -214,120 +215,137 @@ export async function reconcileSkillCollection(params: {
         agentId: params.agentId,
         env: params.env,
       });
-      await assertResultCollectionBytes(current, plan, prepared, MAX_RECONCILED_SKILL_BYTES);
-      const backup = await createCollectionBackup({ workspaceDir, current, plan, env: params.env });
-      const shouldDispatch = hasCommittedSkillChangeHooks();
-      const before = new Map<string, PluginHookSkillArtifact | undefined>();
-      if (shouldDispatch) {
-        for (const entry of plan) {
-          const existing = currentByName.get(entry.name);
-          if (entry.action === "keep" || !existing) {
-            continue;
-          }
-          before.set(
-            entry.name,
-            await snapshotCommittedSkillArtifactBestEffort({
-              skillDir: existing.baseDir,
-              skillKey: existing.name,
-              source: "workshop",
-            }),
-          );
-        }
-      }
+      // Any failure from here through promotion must retire the staged pending
+      // create rows: they target files that will not exist and would consume
+      // the maxPending budget until an operator cleans them up.
       try {
-        await assertCollectionMutationCurrent(current, params.readSkillTreeHashes, prepared);
-      } catch (error) {
-        await discardPendingCollectionBackup(backup);
-        throw error;
-      }
-      const appliedWrites: PreparedWorkspaceSkillMutation[] = [];
-      const droppedSkills: Array<
-        Pick<WritableSkillCollectionEntry, "name" | "baseDir"> & { stagedDir: string }
-      > = [];
-      try {
-        for (const mutation of prepared) {
-          await applyWorkspaceSkillMutation(mutation);
-          appliedWrites.push(mutation);
-        }
-        for (const entry of plan) {
-          if (entry.action !== "drop") {
-            continue;
+        await assertResultCollectionBytes(current, plan, prepared, MAX_RECONCILED_SKILL_BYTES);
+        const backup = await createCollectionBackup({
+          workspaceDir,
+          current,
+          plan,
+          env: params.env,
+        });
+        const shouldDispatch = hasCommittedSkillChangeHooks();
+        const before = new Map<string, PluginHookSkillArtifact | undefined>();
+        if (shouldDispatch) {
+          for (const entry of plan) {
+            const existing = currentByName.get(entry.name);
+            if (entry.action === "keep" || !existing) {
+              continue;
+            }
+            before.set(
+              entry.name,
+              await snapshotCommittedSkillArtifactBestEffort({
+                skillDir: existing.baseDir,
+                skillKey: existing.name,
+                source: "workshop",
+              }),
+            );
           }
-          const skill = currentByName.get(entry.name)!;
-          droppedSkills.push(await stageSkillCollectionDrop({ ...skill, workspaceDir }));
         }
-        await commitCollectionBackup(workspaceDir, backup);
-      } catch (error) {
         try {
-          await rollbackSkillCollectionMutation({
-            workspaceDir,
-            appliedWrites,
-            droppedSkills,
-          });
-        } catch (restoreError) {
-          throw new Error(
-            `Skill collection reconciliation failed (${String(error)}) and backup ${backup.manifest.id} could not be restored.`,
-            { cause: restoreError },
-          );
+          await assertCollectionMutationCurrent(current, params.readSkillTreeHashes, prepared);
+        } catch (error) {
+          await discardPendingCollectionBackup(backup);
+          throw error;
         }
-        await discardPendingCollectionBackup(backup);
+        const appliedWrites: PreparedWorkspaceSkillMutation[] = [];
+        const droppedSkills: Array<
+          Pick<WritableSkillCollectionEntry, "name" | "baseDir"> & { stagedDir: string }
+        > = [];
+        try {
+          for (const mutation of prepared) {
+            await applyWorkspaceSkillMutation(mutation);
+            appliedWrites.push(mutation);
+          }
+          for (const entry of plan) {
+            if (entry.action !== "drop") {
+              continue;
+            }
+            const skill = currentByName.get(entry.name)!;
+            droppedSkills.push(await stageSkillCollectionDrop({ ...skill, workspaceDir }));
+          }
+          await commitCollectionBackup(workspaceDir, backup);
+        } catch (error) {
+          try {
+            await rollbackSkillCollectionMutation({
+              workspaceDir,
+              appliedWrites,
+              droppedSkills,
+            });
+          } catch (restoreError) {
+            throw new Error(
+              `Skill collection reconciliation failed (${String(error)}) and backup ${backup.manifest.id} could not be restored.`,
+              { cause: restoreError },
+            );
+          }
+          await discardPendingCollectionBackup(backup);
+          throw error;
+        }
+        bumpSkillsSnapshotVersion({ reason: "workshop" });
+        await discardStagedSkillCollectionDrops(workspaceDir, droppedSkills);
+        clearCuratedSkillLifecycle(
+          current.map((skill) => skill.filePath),
+          params.env ? { env: params.env } : {},
+        );
+        // Finalize the filesystem before recording ownership. Promotion failures
+        // leave newly written skills visible but read-only.
+        for (const mutation of prepared) {
+          const proposal = createProposals.get(mutation.skillFile.filePath);
+          if (proposal) {
+            await promoteCollectionCreateProposal({
+              proposal,
+              workspaceDir,
+              env: params.env,
+            });
+          }
+        }
+        const result: SkillCollectionReconcileResult = {
+          backupId: backup.manifest.id,
+          ...outcome,
+        };
+        recordSkillCollectionReviewSuccess(
+          workspaceDir,
+          Date.now(),
+          result,
+          params.env ? { env: params.env } : {},
+        );
+        await pruneOlderSkillCollectionBackups(backup.backupRoot, backup.manifest.id);
+        const changes: SkillCollectionChange[] = [];
+        if (shouldDispatch) {
+          for (const entry of plan) {
+            if (entry.action === "keep") {
+              continue;
+            }
+            const existing = currentByName.get(entry.name);
+            const skillDir = existing?.baseDir ?? path.join(workspaceDir, "skills", entry.name);
+            changes.push({
+              action: entry.action === "drop" ? "removed" : existing ? "updated" : "created",
+              before: before.get(entry.name),
+              after:
+                entry.action === "write"
+                  ? await snapshotCommittedSkillArtifactBestEffort({
+                      skillDir,
+                      skillKey: entry.name,
+                      source: "workshop",
+                    })
+                  : undefined,
+            });
+          }
+        }
+        return {
+          result,
+          changes,
+        };
+      } catch (error) {
+        await retireCollectionCreateProposals({
+          proposals: createProposals.values(),
+          workspaceDir,
+          env: params.env,
+        });
         throw error;
       }
-      bumpSkillsSnapshotVersion({ reason: "workshop" });
-      await discardStagedSkillCollectionDrops(workspaceDir, droppedSkills);
-      clearCuratedSkillLifecycle(
-        current.map((skill) => skill.filePath),
-        params.env ? { env: params.env } : {},
-      );
-      // Finalize the filesystem before recording ownership. Promotion failures
-      // leave newly written skills visible but read-only.
-      for (const mutation of prepared) {
-        const proposal = createProposals.get(mutation.skillFile.filePath);
-        if (proposal) {
-          await promoteCollectionCreateProposal({
-            proposal,
-            workspaceDir,
-            env: params.env,
-          });
-        }
-      }
-      const result: SkillCollectionReconcileResult = {
-        backupId: backup.manifest.id,
-        ...outcome,
-      };
-      recordSkillCollectionReviewSuccess(
-        workspaceDir,
-        Date.now(),
-        result,
-        params.env ? { env: params.env } : {},
-      );
-      await pruneOlderSkillCollectionBackups(backup.backupRoot, backup.manifest.id);
-      const changes: SkillCollectionChange[] = [];
-      if (shouldDispatch) {
-        for (const entry of plan) {
-          if (entry.action === "keep") {
-            continue;
-          }
-          const existing = currentByName.get(entry.name);
-          const skillDir = existing?.baseDir ?? path.join(workspaceDir, "skills", entry.name);
-          changes.push({
-            action: entry.action === "drop" ? "removed" : existing ? "updated" : "created",
-            before: before.get(entry.name),
-            after:
-              entry.action === "write"
-                ? await snapshotCommittedSkillArtifactBestEffort({
-                    skillDir,
-                    skillKey: entry.name,
-                    source: "workshop",
-                  })
-                : undefined,
-          });
-        }
-      }
-      return {
-        result,
-        changes,
-      };
     },
     params.env ? { env: params.env } : {},
   );
