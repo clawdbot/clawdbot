@@ -29,13 +29,19 @@ vi.mock("../channels/plugins/index.js", () => ({
 import { channelsLogsCommand } from "./channels/logs.js";
 
 const runtime = createTestRuntime();
-function logLine(params: { module?: string; plugin?: string; message: string }) {
+function logLine(params: {
+  subsystem?: string;
+  module?: string;
+  plugin?: string;
+  message: string;
+}) {
   return JSON.stringify({
     time: "2026-04-25T12:00:00.000Z",
     0: params.message,
     _meta: {
       logLevelName: "INFO",
       name: JSON.stringify({
+        ...(params.subsystem ? { subsystem: params.subsystem } : {}),
         ...(params.module ? { module: params.module } : {}),
         ...(params.plugin ? { plugin: params.plugin } : {}),
       }),
@@ -91,6 +97,33 @@ describe("channelsLogsCommand", () => {
     const payload = readJsonPayload();
     expect(payload.channel).toBe("external-chat");
     expect(payload.lines.map((line) => line.message)).toEqual(["external sent"]);
+  });
+
+  it.each([
+    {
+      label: "subsystem",
+      channel: "slack",
+      shadow: { subsystem: "gateway/channels/slack-archive" },
+      match: { subsystem: "gateway/channels/slack/send" },
+    },
+    {
+      label: "module",
+      channel: "external-chat",
+      shadow: { module: "external-chat-shadow" },
+      match: { module: "external-chat" },
+    },
+  ])("excludes a shadow $label while preserving an exact channel match", async (fixture) => {
+    await fs.writeFile(
+      logPath,
+      [
+        logLine({ ...fixture.shadow, message: "shadow" }),
+        logLine({ ...fixture.match, message: "match" }),
+      ].join("\n"),
+    );
+
+    await channelsLogsCommand({ channel: fixture.channel, json: true }, runtime);
+
+    expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["match"]);
   });
 
   it.each([false, true])(

@@ -59,6 +59,11 @@ function parseChannelFilter(raw?: string): ChannelLogFilter {
   );
 }
 
+function matchesChannelContext(value: string | undefined, channel: string) {
+  const path = `gateway/channels/${channel}`;
+  return value === channel || value === path || value?.startsWith(`${path}/`) === true;
+}
+
 function matchesChannel(
   line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">,
   filter: ChannelLogFilter,
@@ -67,14 +72,11 @@ function matchesChannel(
   if (channel === "all") {
     return true;
   }
-  const needle = `gateway/channels/${channel}`;
-  if (line.subsystem?.includes(needle)) {
-    return true;
-  }
-  if (line.module?.includes(channel)) {
-    return true;
-  }
-  return line.plugin !== undefined && filter.pluginIds.has(line.plugin);
+  return (
+    matchesChannelContext(line.subsystem, channel) ||
+    matchesChannelContext(line.module, channel) ||
+    (line.plugin !== undefined && filter.pluginIds.has(line.plugin))
+  );
 }
 
 function parseLinesOption(value: unknown): number {
