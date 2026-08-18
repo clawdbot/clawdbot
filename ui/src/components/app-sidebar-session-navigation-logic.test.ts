@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildSidebarSessionNavigationState,
@@ -64,7 +64,7 @@ function sortSidebarRows(
   rows: GatewaySessionRow[],
   sortMode: "created" | "updated" | "people",
   createdOrder: ReadonlyMap<string, number>,
-  creators?: Array<{ id: string; label: string }>,
+  creators?: SessionsListResult["creators"],
 ) {
   return rows.toSorted((a, b) =>
     compareSidebarSessionRowsByMode({ a, b, sortMode, createdOrder, creators }),
@@ -83,6 +83,7 @@ describe("sidebar session sort modes", () => {
     updatedAt,
     createdAt,
     createdActor: creatorId ? { type: "human", id: creatorId } : undefined,
+    owner: creatorId ? { actor: { type: "human", id: creatorId } } : undefined,
   });
 
   it("sorts timestamped sessions newest-first ahead of legacy sessions", () => {
@@ -134,8 +135,8 @@ describe("sidebar session sort modes", () => {
 
     expect(
       sortSidebarRows(rows, "people", observed, [
-        { id: "alex", label: "Alex" },
-        { id: "sam", label: "Sam" },
+        { type: "human", id: "alex", label: "Alex" },
+        { type: "human", id: "sam", label: "Sam" },
       ]).map((entry) => entry.key),
     ).toEqual(["alex-new", "alex-old", "sam-new"]);
   });

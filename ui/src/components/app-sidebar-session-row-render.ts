@@ -184,7 +184,7 @@ export function renderRecentSession(params: {
   const ownerActor = host.sessionOwnershipVisible
     ? host.sessionsStatusFilter === "archived"
       ? session.archivedBy
-      : (session.owner?.actor ?? session.createdActor)
+      : session.owner?.actor
     : undefined;
   const ownerId = ownerActor?.id?.trim();
   const ownerViewing = ownerId

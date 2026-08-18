@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   countActiveDescendantRuns,
@@ -20,6 +21,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
 import {
   resolveSessionStoreAgentId,
@@ -43,7 +45,7 @@ import {
   buildSessionListRowMetadataContext,
   buildSingleRowStoreChildSessionsByKey,
 } from "./session-utils-projection.js";
-import { buildGatewaySessionRow, projectSessionActor } from "./session-utils-row.js";
+import { buildGatewaySessionRow, projectAssignableSessionOwner } from "./session-utils-row.js";
 import {
   appendStoredSessionModelSearchFields,
   matchesSessionListSearch,
@@ -79,7 +81,7 @@ type ListSessionsFromStoreParams = {
 
 type SessionEntrySelection = {
   entries: SessionEntryPair[];
-  creators: Array<{ id: string; label?: string; avatarUrl?: string }>;
+  ownerFacet: SessionOwnerFacetIdentity[];
   totalCount: number;
   limitApplied?: number;
   offset: number;
@@ -87,49 +89,21 @@ type SessionEntrySelection = {
   hasMore: boolean;
 };
 
-function preferredCreatorIdentityValue(
-  current: string | undefined,
-  candidate: string | undefined,
-): string | undefined {
-  if (!current || !candidate) {
-    return current ?? candidate;
-  }
-  return candidate < current ? candidate : current;
-}
-
-function addSessionCreatorIdentity(
-  creators: Map<string, { id: string; label?: string; avatarUrl?: string }>,
-  entry: SessionEntry,
-  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>,
-  cfg: OpenClawConfig,
+function addSessionOwnerFacetIdentity(
+  ownerFacet: Map<string, SessionOwnerFacetIdentity>,
+  actor: SessionOwnerFacetIdentity,
 ): void {
-  const actor = projectSessionActor(
-    entry.owner?.actor ?? entry.createdActor,
-    userProfileIdentityById,
-    cfg,
-  );
-  const id = normalizeOptionalString(actor?.id);
-  if (!id) {
-    return;
-  }
-  const label = normalizeOptionalString(actor?.label);
-  const avatarUrl = normalizeOptionalString(actor?.avatarUrl);
-  const existing = creators.get(id);
-  const preferredLabel = preferredCreatorIdentityValue(existing?.label, label);
-  const preferredAvatarUrl = preferredCreatorIdentityValue(existing?.avatarUrl, avatarUrl);
-  if (!existing || preferredLabel !== existing.label || preferredAvatarUrl !== existing.avatarUrl) {
-    creators.set(id, {
-      id,
-      ...(preferredLabel ? { label: preferredLabel } : {}),
-      ...(preferredAvatarUrl ? { avatarUrl: preferredAvatarUrl } : {}),
-    });
+  const existing = ownerFacet.get(actor.id);
+  // The wire filter is id-only; a configured agent wins an authoritative namespace collision.
+  if (!existing || (existing.type === "human" && actor.type === "agent")) {
+    ownerFacet.set(actor.id, actor);
   }
 }
 
-function sortSessionCreatorIdentities(
-  creators: Map<string, { id: string; label?: string; avatarUrl?: string }>,
-): Array<{ id: string; label?: string; avatarUrl?: string }> {
-  return [...creators.values()].toSorted((a, b) => {
+function sortSessionOwnerFacet(
+  ownerFacet: Map<string, SessionOwnerFacetIdentity>,
+): SessionOwnerFacetIdentity[] {
+  return [...ownerFacet.values()].toSorted((a, b) => {
     const byLabel = (a.label ?? a.id).localeCompare(b.label ?? b.id);
     return byLabel || a.id.localeCompare(b.id);
   });
@@ -196,10 +170,11 @@ function filterSessionEntries(params: {
   opts: SessionsListParams;
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
+  configuredAgentIds?: ReadonlySet<string>;
   getRowContext?: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   involvingActorId?: string;
-}): Pick<SessionEntrySelection, "creators" | "entries"> {
+}): Pick<SessionEntrySelection, "ownerFacet" | "entries"> {
   const { cfg, store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
@@ -216,7 +191,9 @@ function filterSessionEntries(params: {
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
   const entries: SessionEntryPair[] = [];
-  const creators = new Map<string, { id: string; label?: string; avatarUrl?: string }>();
+  const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
+  let configuredAgentIds = params.configuredAgentIds;
+  let filterOwnerIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined;
 
   for (const [key, entry] of Object.entries(store)) {
     if (params.entryFilter && !params.entryFilter(key, entry)) {
@@ -320,15 +297,31 @@ function filterSessionEntries(params: {
     if (activeCutoff !== undefined && (entry.updatedAt ?? 0) < activeCutoff) {
       continue;
     }
+    let effectiveOwner: SessionOwnerFacetIdentity | undefined;
     if (params.userProfileIdentityById) {
-      addSessionCreatorIdentity(creators, entry, params.userProfileIdentityById, cfg);
+      configuredAgentIds ??= new Set(listAgentIds(cfg));
+      effectiveOwner = projectAssignableSessionOwner(
+        entry.owner?.actor ?? entry.createdActor,
+        params.userProfileIdentityById,
+        cfg,
+        configuredAgentIds,
+      );
+      if (effectiveOwner) {
+        addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
+      }
+    } else if (creatorId || involvingActorId) {
+      filterOwnerIdentityById ??= new Map();
+      effectiveOwner = projectAssignableSessionOwner(
+        entry.owner?.actor ?? entry.createdActor,
+        filterOwnerIdentityById,
+        cfg,
+      );
     }
-    if (creatorId && (entry.owner?.actor ?? entry.createdActor)?.id !== creatorId) {
+    if (creatorId && effectiveOwner?.id !== creatorId) {
       continue;
     }
     if (involvingActorId) {
-      const owner = entry.owner?.actor ?? entry.createdActor;
-      const viewerOwns = owner?.type === "human" && owner.id === involvingActorId;
+      const viewerOwns = effectiveOwner?.type === "human" && effectiveOwner.id === involvingActorId;
       // Only profile-backed ids share the authenticated viewer namespace.
       // Channel-native and legacy unknown ids remain display-only.
       const viewerParticipates = entry.participants?.some(
@@ -344,7 +337,7 @@ function filterSessionEntries(params: {
     entries.push([key, entry]);
   }
 
-  return { entries, creators: sortSessionCreatorIdentities(creators) };
+  return { entries, ownerFacet: sortSessionOwnerFacet(ownerFacet) };
 }
 
 function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefined): boolean {
@@ -364,10 +357,11 @@ function selectSessionEntries(params: {
   getRowContext?: SessionListRowContextProvider;
   defaultLimit?: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
+  configuredAgentIds?: ReadonlySet<string>;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   involvingActorId?: string;
 }): SessionEntrySelection {
-  const { creators, entries: filtered } = filterSessionEntries(params);
+  const { ownerFacet, entries: filtered } = filterSessionEntries(params);
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
   const offset = resolveSessionsListOffset(params.opts);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);
@@ -378,7 +372,7 @@ function selectSessionEntries(params: {
   const hasMore = nextOffset < filtered.length;
   return {
     entries,
-    creators,
+    ownerFacet,
     totalCount: filtered.length,
     limitApplied: limit,
     offset,
@@ -391,6 +385,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const { cfg, store, opts } = params;
   const now = Date.now();
   const userProfileIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
+  const configuredAgentIds = new Set(listAgentIds(cfg));
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => {
     rowContext ??= buildSessionListRowContext({ store, now, userProfileIdentityById });
@@ -419,6 +414,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
         : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     userProfileIdentityById,
+    configuredAgentIds,
     involvingActorId: params.involvingActorId,
   });
   const fullRowContext =
@@ -453,6 +449,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     includeDerivedTitles: opts.includeDerivedTitles === true,
     includeLastMessage: opts.includeLastMessage === true,
     now,
+    configuredAgentIds,
     rowContext: sharedRowContext,
     storeChildSessionsByKey: fullRowContext?.storeChildSessionsByKey,
     storePath: hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath),
@@ -476,7 +473,7 @@ function buildSessionsListResult(params: {
     offset: list.offset > 0 ? list.offset : undefined,
     nextOffset: list.nextOffset,
     hasMore: list.hasMore,
-    creators: list.creators,
+    creators: list.ownerFacet,
     defaults: getSessionDefaults(params.cfg, params.modelCatalog, {
       ...(params.agentId ? { agentId: params.agentId } : {}),
       allowPluginNormalization: false,
@@ -526,6 +523,7 @@ export function listSessionsFromStore(params: ListSessionsFromStoreParams): Sess
       transcriptUsageMaxBytes: SESSIONS_LIST_TRANSCRIPT_USAGE_MAX_BYTES,
       storeChildSessionsByKey,
       rowContext: list.rowContext,
+      configuredAgentIds: list.configuredAgentIds,
       skipTranscriptUsageFallback: params.lightweightListRows === true,
       lightweightListRow: params.lightweightListRows === true,
     });

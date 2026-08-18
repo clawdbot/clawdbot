@@ -126,6 +126,7 @@ function mountIntegratedPresenceHeader(params: {
   const session = row({
     key: state.sessionKey,
     createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+    owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
   });
   state.settings = {} as ChatPageHost["settings"];
   state.sessionsResult = {
@@ -493,7 +494,10 @@ describe("chat pane header", () => {
   it("renders the permanent owner chip only when attribution chrome is enabled", () => {
     const shown = mount({
       showOwnerChip: true,
-      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
+      session: row({
+        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+        owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
+      }),
     });
     expect(shown.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
 
@@ -509,6 +513,7 @@ describe("chat pane header", () => {
       showOwnerChip: true,
       session: row({
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+        owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
         participants: [
           { type: "human", id: "profile-bob", label: "Bob" },
           { type: "agent", id: "research", label: "Research" },
@@ -533,8 +538,8 @@ describe("chat pane header", () => {
     {
       name: "excludes the creator when the owner chip is shown",
       creators: [
-        { type: "human", id: "profile-ada", label: "Ada" },
-        { type: "human", id: "profile-zoe", label: "Zoe" },
+        { type: "human" as const, id: "profile-ada", label: "Ada" },
+        { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
       viewers: ["profile-ada", "profile-zoe"],
       expectedChip: true,
@@ -542,7 +547,7 @@ describe("chat pane header", () => {
     },
     {
       name: "keeps the creator when the owner chip is hidden",
-      creators: [{ type: "human", id: "profile-ada", label: "Ada" }],
+      creators: [{ type: "human" as const, id: "profile-ada", label: "Ada" }],
       viewers: ["profile-ada", "profile-zoe"],
       expectedChip: false,
       expectedViewers: ["profile-ada", "profile-zoe"],
@@ -550,8 +555,8 @@ describe("chat pane header", () => {
     {
       name: "omits the facepile when the shown owner is the only viewer",
       creators: [
-        { type: "human", id: "profile-ada", label: "Ada" },
-        { type: "human", id: "profile-zoe", label: "Zoe" },
+        { type: "human" as const, id: "profile-ada", label: "Ada" },
+        { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
       viewers: ["profile-ada"],
       expectedChip: true,
@@ -633,6 +638,14 @@ describe("chat pane header", () => {
           id: "profile-ada",
           label: "Ada",
           avatarUrl: "/api/users/profile-ada/avatar?v=7",
+        },
+        owner: {
+          actor: {
+            type: "human",
+            id: "profile-ada",
+            label: "Ada",
+            avatarUrl: "/api/users/profile-ada/avatar?v=7",
+          },
         },
       }),
     });
