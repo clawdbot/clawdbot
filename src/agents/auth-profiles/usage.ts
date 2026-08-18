@@ -83,6 +83,7 @@ export function resolveInlineProviderApiKeyUsageId(provider: string): string {
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",
   "auth",
+  "session_expired",
   "billing",
   "format",
   "model_not_found",

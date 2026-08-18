@@ -450,6 +450,10 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       permissionPicker: composerControls?.permissionPicker,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
       taskSuggestions: this.taskSuggestions,
+      activeTaskSuggestionId: this.activeTaskSuggestionId,
+      taskSuggestionSwapDirection: this.taskSuggestionSwapDirection,
+      taskSuggestionSwapGeneration: this.taskSuggestionSwapGeneration,
+      onNavigateTaskSuggestion: this.navigateTaskSuggestion,
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
       ),
