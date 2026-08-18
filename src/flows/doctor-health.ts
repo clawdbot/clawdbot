@@ -82,12 +82,14 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
 
   // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
   const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
-  const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
+  const { noteSourceInstallIssues, repairWindowsGitLauncher } =
+    await import("../commands/doctor-install.js");
   const { noteStalePluginRuntimeSymlinks } =
     await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
   const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
   await maybeRepairUiProtocolFreshness(effectiveRuntime, prompter);
   noteSourceInstallIssues(root);
+  await repairWindowsGitLauncher(root, prompter.shouldRepair);
   await noteStalePluginRuntimeSymlinks(root);
   noteStartupOptimizationHints();
 

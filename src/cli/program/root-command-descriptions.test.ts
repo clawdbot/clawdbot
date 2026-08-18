@@ -175,6 +175,7 @@ const JSON_NOT_APPLICABLE = {
       "models auth logout",
       "models auth order set",
       "models auth order clear",
+      "update install-git-launcher",
       "hooks enable",
       "hooks disable",
       "hooks install",

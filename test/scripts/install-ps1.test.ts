@@ -3,9 +3,10 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.ps1";
@@ -91,6 +92,7 @@ function createDeferredPathSuccessFixture(source: string): string {
 
 describe("install.ps1 failure handling", () => {
   const harness = createScriptTestHarness();
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const source = readFileSync(SCRIPT_PATH, "utf8");
   const powershell = findPowerShell();
   const runIfPowerShell = powershell ? it : it.skip;
@@ -1174,9 +1176,179 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain('$entryPath = Join-Path $RepoDir "dist\\\\entry.js"');
     expect(gitInstallBody).toContain("Test-Path $entryPath");
     expect(gitInstallBody).toContain('Write-Host "[!] OpenClaw build did not produce $entryPath"');
-    expect(gitInstallBody).toContain('node ""$entryPath"" %*');
+    const gitLauncherBody = extractFunctionBody(source, "Install-GitLauncher");
+    expect(gitLauncherBody).toContain("& $NodePath $EntryPath update install-git-launcher");
+    expect(gitLauncherBody).toContain("return ($LASTEXITCODE -eq 0)");
+    expect(gitLauncherBody).toContain("$env:HOME = $env:USERPROFILE");
+    expect(gitLauncherBody).toContain("$env:HOME = $previousHome");
+    expect(gitInstallBody).toContain(
+      "Install-GitLauncher -NodePath $nodePath -EntryPath $entryPath",
+    );
+    expect(gitInstallBody).not.toContain("Set-Content -Path $cmdPath");
     expect(gitInstallBody).not.toContain("& $pnpmCommand -C $RepoDir install");
     expect(gitInstallBody).not.toContain('node ""$RepoDir\\\\dist\\\\entry.js"" %*');
+  });
+
+  runIfPowerShell("invokes launcher generation with the Windows profile home", () => {
+    const gitLauncherBody = extractFunctionBody(source, "Install-GitLauncher");
+    const command = [
+      "function Install-GitLauncher {",
+      gitLauncherBody,
+      "}",
+      "$originalHome = $env:HOME",
+      "$env:HOME = 'C:\\other-home'",
+      "$env:USERPROFILE = 'C:\\approved-home'",
+      "function fake-node {",
+      "  $script:LauncherHome = $env:HOME",
+      "  $script:LauncherArgs = $args",
+      "  $global:LASTEXITCODE = 0",
+      "}",
+      "$result = Install-GitLauncher -NodePath 'fake-node' -EntryPath 'C:\\openclaw\\dist\\entry.js'",
+      "if (-not $result) { throw 'Launcher command failed' }",
+      "if ($script:LauncherHome -ne 'C:\\approved-home') { throw \"LauncherHome=$script:LauncherHome\" }",
+      "if (($script:LauncherArgs -join '|') -ne 'C:\\openclaw\\dist\\entry.js|update|install-git-launcher') { throw \"LauncherArgs=$($script:LauncherArgs -join '|')\" }",
+      'if ($env:HOME -ne "C:\\other-home") { throw "RestoredHome=$env:HOME" }',
+      "Remove-Item Env:HOME",
+      "$result = Install-GitLauncher -NodePath 'fake-node' -EntryPath 'C:\\openclaw\\dist\\entry.js'",
+      "if (-not $result) { throw 'Launcher command without HOME failed' }",
+      'if (Test-Path Env:HOME) { throw "Unexpected restored HOME=$env:HOME" }',
+      "$env:HOME = $originalHome",
+      "",
+    ].join("\n");
+
+    const result = runPowerShell(["-NoLogo", "-NoProfile", "-Command", command]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
+  runIfPowerShell("binds git wrappers to the validated Node runtime", () => {
+    const tempDir = tempDirs.make("openclaw-install-ps1-node-binding-");
+    const scriptPath = join(tempDir, "node-binding.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        `$testRoot = ${toPowerShellSingleQuotedLiteral(join(tempDir, "sandbox with spaces"))}`,
+        "$sandbox = Join-Path $testRoot 'paths ^openclaw_test_caret^ %OPENCLAW_TEST_PERCENT% !openclaw_test_bang!'",
+        "$originalPath = $env:Path",
+        "$originalUserProfile = $env:USERPROFILE",
+        "try {",
+        "  $isWindowsHost = $IsWindows -or $env:OS -eq 'Windows_NT'",
+        "  $repo = Join-Path $sandbox 'repo with spaces'",
+        "  $entryDir = Join-Path $repo 'dist'",
+        "  $entryPath = Join-Path $repo 'dist\\\\entry.js'",
+        "  $homeDir = Join-Path $testRoot 'home with spaces'",
+        "  New-Item -ItemType Directory -Force -Path (Join-Path $repo '.git'), $entryDir, $homeDir | Out-Null",
+        "  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)",
+        "  [System.IO.File]::WriteAllText($entryPath, 'process.stdout.write(\"approved-node:\" + process.execPath);', $utf8NoBom)",
+        "  $env:USERPROFILE = $homeDir",
+        "  function Ensure-Git { return $true }",
+        "  function Resolve-GitCheckoutPath { param([string]$RepoDir) return $RepoDir }",
+        "  function Assert-GitCheckoutHasCommit { param([string]$RepoDir) }",
+        "  function Ensure-Pnpm { param([string]$RepoDir) }",
+        "  function Remove-LegacySubmodule { param([string]$RepoDir) }",
+        "  function Get-PnpmCommandPath { return 'fake-pnpm' }",
+        "  function fake-pnpm { $global:LASTEXITCODE = 0 }",
+        "  function Add-ToUserPath { param([string]$PathEntry) return $false }",
+        "  function Install-GitLauncher {",
+        "    param([string]$NodePath, [string]$EntryPath)",
+        "    $script:LauncherNodePath = $NodePath",
+        "    $script:LauncherEntryPath = $EntryPath",
+        "    $launcherDir = Join-Path $env:USERPROFILE '.local\\bin'",
+        "    New-Item -ItemType Directory -Force -Path $launcherDir | Out-Null",
+        "    $escapedNode = $NodePath.Replace('%', '%%')",
+        "    $escapedEntry = $EntryPath.Replace('%', '%%')",
+        "    $launcher = @(",
+        "      '@echo off'",
+        "      'rem OpenClaw Git launcher'",
+        "      'setlocal DisableDelayedExpansion'",
+        '      "if exist `"$escapedNode`" goto openclaw_runtime_ready"',
+        '      "echo [!] OpenClaw\'s validated Node.js runtime is missing. 1>&2"',
+        "      'echo [i] Re-run the OpenClaw installer to repair this Git installation. 1>&2'",
+        "      'exit /b 1'",
+        "      ':openclaw_runtime_ready'",
+        '      "`"$escapedNode`" `"$escapedEntry`" %*"',
+        "      ''",
+        '    ) -join "`r`n"',
+        "    [System.IO.File]::WriteAllText((Join-Path $launcherDir 'openclaw.cmd'), $launcher, $utf8NoBom)",
+        "    return $true",
+        "  }",
+        "  if ($isWindowsHost) {",
+        "    $approvedNodeDir = Join-Path $sandbox 'approved node'",
+        "    New-Item -ItemType Directory -Force -Path $approvedNodeDir | Out-Null",
+        "    $approvedNodePath = Join-Path $approvedNodeDir 'node.exe'",
+        `    Copy-Item -LiteralPath ${toPowerShellSingleQuotedLiteral(process.execPath)} -Destination $approvedNodePath`,
+        '    $env:Path = "$approvedNodeDir;$originalPath"',
+        "  }",
+        "  if (-not (Check-Node)) { throw 'current Node runtime did not validate' }",
+        "  $validatedNodePath = $script:ValidatedNodePath",
+        "  $result = Install-OpenClawFromGit -RepoDir $repo -SkipUpdate",
+        "  if (-not $result) { throw 'Git install failed' }",
+        '  if ($script:LauncherNodePath -ne $validatedNodePath) { throw "LauncherNode=$script:LauncherNodePath Expected=$validatedNodePath" }',
+        '  if ($script:LauncherEntryPath -ne $entryPath) { throw "LauncherEntry=$script:LauncherEntryPath Expected=$entryPath" }',
+        "  $wrapperPath = Join-Path $homeDir '.local\\bin\\openclaw.cmd'",
+        "  $cmdNodePath = $validatedNodePath.Replace('%', '%%')",
+        "  $cmdEntryPath = $entryPath.Replace('%', '%%')",
+        '  $expectedLine = "`"$cmdNodePath`" `"$cmdEntryPath`" %*"',
+        "  $wrapperLines = @(Get-Content -LiteralPath $wrapperPath)",
+        '  if ($wrapperLines[-1] -ne $expectedLine) { throw "Wrapper=$($wrapperLines[-1]) Expected=$expectedLine" }',
+        '  if ($wrapperLines[2] -ne "setlocal DisableDelayedExpansion") { throw "Missing delayed expansion guard: $($wrapperLines[2])" }',
+        '  if ($wrapperLines[3] -ne "if exist `"$cmdNodePath`" goto openclaw_runtime_ready") { throw "Missing runtime guard: $($wrapperLines[3])" }',
+        "  if ($isWindowsHost) {",
+        "    $shadowDir = Join-Path $sandbox 'shadow-node'",
+        "    New-Item -ItemType Directory -Force -Path $shadowDir | Out-Null",
+        "    [System.IO.File]::WriteAllText((Join-Path $shadowDir 'node.cmd'), \"@echo off`r`necho shadow-node`r`nexit /b 47`r`n\", $utf8NoBom)",
+        '    $env:Path = "$shadowDir;$originalPath"',
+        "    Push-Location -LiteralPath (Split-Path -Parent $wrapperPath)",
+        "    try {",
+        "      $env:OPENCLAW_TEST_PERCENT = 'expanded-away'",
+        "      $env:openclaw_test_bang = 'expanded-away'",
+        "      $output = @(& $wrapperPath --version 2>&1 | ForEach-Object { $_.ToString() })",
+        "      $exitCode = $LASTEXITCODE",
+        '      $text = $output -join "`n"',
+        '      if ($exitCode -ne 0) { throw "Wrapper exit=$exitCode output=$text" }',
+        "      if ($text -notmatch '^approved-node:') { throw \"Validated runtime did not run: $text\" }",
+        "      if ($text -match 'shadow-node') { throw \"PATH shadow ran: $text\" }",
+        "      $cmdOutput = @(& $env:ComSpec /d /v:on /c 'openclaw.cmd --version' 2>&1 | ForEach-Object { $_.ToString() })",
+        "      $cmdExitCode = $LASTEXITCODE",
+        '      $cmdText = $cmdOutput -join "`n"',
+        '      if ($cmdExitCode -ne 0) { throw "CMD wrapper exit=$cmdExitCode output=$cmdText" }',
+        "      if ($cmdText -notmatch '^approved-node:') { throw \"Validated runtime did not run under CMD: $cmdText\" }",
+        "      if ($cmdText -match 'shadow-node') { throw \"PATH shadow ran under CMD: $cmdText\" }",
+        "      Remove-Item -LiteralPath $validatedNodePath -Force",
+        "      $missingOutput = @(& $wrapperPath --version 2>&1 | ForEach-Object { $_.ToString() })",
+        "      $missingExitCode = $LASTEXITCODE",
+        '      $missingText = $missingOutput -join "`n"',
+        '      if ($missingExitCode -ne 1) { throw "Missing runtime exit=$missingExitCode output=$missingText" }',
+        "      if ($missingText -notmatch 'validated Node.js runtime is missing') { throw \"Missing recovery error: $missingText\" }",
+        "      if ($missingText -notmatch 'Re-run the OpenClaw installer') { throw \"Missing recovery action: $missingText\" }",
+        "      if ($missingText -match 'shadow-node') { throw \"PATH shadow ran after removal: $missingText\" }",
+        "    } finally {",
+        "      Pop-Location",
+        "    }",
+        "  }",
+        "} finally {",
+        "  $env:Path = $originalPath",
+        "  $env:USERPROFILE = $originalUserProfile",
+        "  Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   });
 
   it("cleans legacy git submodules only from the selected git checkout", () => {

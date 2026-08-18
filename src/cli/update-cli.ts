@@ -13,6 +13,7 @@ import type {
   UpdateStatusOptions,
   UpdateWizardOptions,
 } from "./update-cli/shared.js";
+import { resolveUpdateRoot } from "./update-cli/shared.js";
 import { updateStatusCommand } from "./update-cli/status.js";
 import { updateCommand, updateFinalizeCommand } from "./update-cli/update-command.js";
 import { updateWizardCommand } from "./update-cli/wizard.js";
@@ -225,6 +226,34 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
 
   registerUpdateFinalizationCommand(update, "repair", false);
   registerUpdateFinalizationCommand(update, "finalize", true);
+
+  update
+    .command("install-git-launcher", { hidden: true })
+    .description("Install the Windows Git launcher")
+    .action(async () => {
+      try {
+        const { reconcileWindowsGitLauncher } = await import("../infra/windows-git-launcher.js");
+        const result = await reconcileWindowsGitLauncher({
+          root: await resolveUpdateRoot(),
+          repair: true,
+          create: true,
+        });
+        if (result.status === "needs-reinstall") {
+          throw new Error(
+            "The current Node runtime is not supported for a durable Windows Git launcher; re-run the OpenClaw installer",
+          );
+        }
+        if (result.status === "skipped") {
+          throw new Error(
+            result.reason === "not-windows"
+              ? "The Windows Git launcher is only available on Windows"
+              : "Refusing to replace an unrecognized Windows Git launcher",
+          );
+        }
+      } catch (err) {
+        handleUpdateCommandError(err);
+      }
+    });
 
   update
     .command("wizard")

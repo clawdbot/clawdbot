@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { reconcileWindowsGitLauncher } from "../infra/windows-git-launcher.js";
 
 /** Emits install warnings when a source checkout looks npm-installed or lacks source-run deps. */
 export function noteSourceInstallIssues(root: string | null) {
@@ -38,5 +39,26 @@ export function noteSourceInstallIssues(root: string | null) {
 
   if (warnings.length > 0) {
     note(warnings.join("\n"), "Install");
+  }
+}
+
+/** Migrates the installer-owned Windows Git launcher through Doctor/update repair. */
+export async function repairWindowsGitLauncher(root: string | null, shouldRepair: boolean) {
+  if (!root) {
+    return;
+  }
+  const result = await reconcileWindowsGitLauncher({ root, repair: shouldRepair });
+  if (result.status === "needs-repair") {
+    note(
+      `- ${result.launcherPath} does not use the current validated Node runtime. Run: openclaw doctor --fix`,
+      "Install",
+    );
+  } else if (result.status === "needs-reinstall") {
+    note(
+      `- ${result.launcherPath} cannot be safely migrated from the current Node runtime. Re-run the OpenClaw installer.`,
+      "Install",
+    );
+  } else if (result.status === "updated") {
+    note(`- Updated ${result.launcherPath} to use the validated Node runtime.`, "Install");
   }
 }

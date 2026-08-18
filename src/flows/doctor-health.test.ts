@@ -46,6 +46,7 @@ vi.mock("../commands/doctor-ui.js", () => ({
 
 vi.mock("../commands/doctor-install.js", () => ({
   noteSourceInstallIssues: () => undefined,
+  repairWindowsGitLauncher: async () => undefined,
 }));
 
 vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({

@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   updateFinalizeCommand: vi.fn(async (_opts: unknown) => {}),
   updateStatusCommand: vi.fn(async (_opts: unknown) => {}),
   updateWizardCommand: vi.fn(async (_opts: unknown) => {}),
+  reconcileWindowsGitLauncher: vi.fn(async (_opts: unknown) => ({
+    status: "created" as const,
+    launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+  })),
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -39,6 +43,15 @@ vi.mock("./update-cli/wizard.js", () => ({
   updateWizardCommand: (opts: unknown) => mocks.updateWizardCommand(opts),
 }));
 
+vi.mock("./update-cli/shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cli/shared.js")>()),
+  resolveUpdateRoot: async () => "C:\\Users\\alice\\openclaw",
+}));
+
+vi.mock("../infra/windows-git-launcher.js", () => ({
+  reconcileWindowsGitLauncher: (opts: unknown) => mocks.reconcileWindowsGitLauncher(opts),
+}));
+
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
@@ -62,11 +75,27 @@ describe("update cli option collisions", () => {
     updateFinalizeCommand.mockClear();
     updateStatusCommand.mockClear();
     updateWizardCommand.mockClear();
+    mocks.reconcileWindowsGitLauncher.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
+  });
+
+  it("installs the Git launcher through its hidden owner command", async () => {
+    await runRegisteredCli({
+      register: registerUpdateCli as (program: Command) => void,
+      argv: ["update", "install-git-launcher"],
+    });
+
+    expect(mocks.reconcileWindowsGitLauncher).toHaveBeenCalledWith({
+      root: "C:\\Users\\alice\\openclaw",
+      repair: true,
+      create: true,
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([

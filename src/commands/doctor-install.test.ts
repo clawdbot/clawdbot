@@ -4,10 +4,16 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { noteSourceInstallIssues } from "./doctor-install.js";
+import { noteSourceInstallIssues, repairWindowsGitLauncher } from "./doctor-install.js";
+
+const reconcileWindowsGitLauncher = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
+}));
+
+vi.mock("../infra/windows-git-launcher.js", () => ({
+  reconcileWindowsGitLauncher,
 }));
 
 async function writeFile(root: string, relativePath: string, content = "") {
@@ -19,6 +25,8 @@ async function writeFile(root: string, relativePath: string, content = "") {
 describe("noteSourceInstallIssues", () => {
   beforeEach(() => {
     vi.mocked(note).mockReset();
+    reconcileWindowsGitLauncher.mockReset();
+    reconcileWindowsGitLauncher.mockResolvedValue({ status: "skipped", reason: "not-windows" });
   });
 
   it("does not treat a packaged workspace config as a source checkout", async () => {
@@ -48,5 +56,59 @@ describe("noteSourceInstallIssues", () => {
         "Install",
       );
     });
+  });
+});
+
+describe("repairWindowsGitLauncher", () => {
+  beforeEach(() => {
+    vi.mocked(note).mockReset();
+    reconcileWindowsGitLauncher.mockReset();
+  });
+
+  it("warns without changing a legacy launcher outside repair mode", async () => {
+    reconcileWindowsGitLauncher.mockResolvedValue({
+      status: "needs-repair",
+      launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+    });
+
+    await repairWindowsGitLauncher("C:\\Users\\alice\\openclaw", false);
+
+    expect(reconcileWindowsGitLauncher).toHaveBeenCalledWith({
+      root: "C:\\Users\\alice\\openclaw",
+      repair: false,
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Run: openclaw doctor --fix"),
+      "Install",
+    );
+  });
+
+  it("reports a launcher migrated by repair mode", async () => {
+    reconcileWindowsGitLauncher.mockResolvedValue({
+      status: "updated",
+      launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+    });
+
+    await repairWindowsGitLauncher("C:\\Users\\alice\\openclaw", true);
+
+    expect(reconcileWindowsGitLauncher).toHaveBeenCalledWith({
+      root: "C:\\Users\\alice\\openclaw",
+      repair: true,
+    });
+    expect(note).toHaveBeenCalledWith(expect.stringContaining("Updated"), "Install");
+  });
+
+  it("directs unsupported legacy-launcher runtimes to the installer", async () => {
+    reconcileWindowsGitLauncher.mockResolvedValue({
+      status: "needs-reinstall",
+      launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+    });
+
+    await repairWindowsGitLauncher("C:\\Users\\alice\\openclaw", true);
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Re-run the OpenClaw installer"),
+      "Install",
+    );
   });
 });
