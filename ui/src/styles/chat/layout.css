@@ -1845,11 +1845,11 @@ button.chat-reply-preview--message:disabled {
 }
 
 .task-suggestion[data-swap-direction="next"] {
-  animation: task-suggestion-swap-next 160ms var(--ease-out);
+  animation: task-suggestion-swap-next 240ms var(--ease-out);
 }
 
 .task-suggestion[data-swap-direction="previous"] {
-  animation: task-suggestion-swap-previous 160ms var(--ease-out);
+  animation: task-suggestion-swap-previous 240ms var(--ease-out);
 }
 
 @keyframes task-suggestion-swap-next {
