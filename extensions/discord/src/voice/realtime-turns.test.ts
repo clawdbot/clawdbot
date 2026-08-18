@@ -61,6 +61,7 @@ defineDiscordVoiceTests(
         "provider resolve options",
       );
       expect(providerOptions.configuredProviderId).toBeUndefined();
+      expect(providerOptions.agentId).toBe("agent-1");
       expect(providerOptions.defaultModel).toBe("gpt-realtime-2");
       expect(requireRecord(providerOptions.providerConfigs, "provider configs").openai).toEqual({
         model: "provider-default",
@@ -71,6 +72,7 @@ defineDiscordVoiceTests(
         voice: "cedar",
         minBargeInAudioEndMs: 500,
       });
+      expect(lastRealtimeBridgeParams().agentId).toBe("agent-1");
     });
 
     it("keeps agent-proxy realtime transcripts on the audio turn speaker context", async () => {

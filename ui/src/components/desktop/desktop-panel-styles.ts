@@ -1,6 +1,11 @@
 import { css } from "lit";
 
 export const desktopPanelStyles = css`
+  .bp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
   .bp--bottom {
     left: var(--shell-nav-width, 0);
     right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
@@ -13,6 +18,19 @@ export const desktopPanelStyles = css`
   }
   .bp-title {
     min-width: 0;
+  }
+  .bp-icon[aria-disabled="true"] {
+    opacity: 0.4;
+  }
+  .desktop-fullscreen-icon > svg {
+    width: 15px;
+    height: 15px;
+  }
+  .bp:fullscreen {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
   }
   .desktop-content {
     display: flex;

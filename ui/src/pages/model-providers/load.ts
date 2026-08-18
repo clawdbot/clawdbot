@@ -11,6 +11,7 @@ import type {
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -25,8 +26,8 @@ export const MODEL_PROVIDERS_COST_DAYS = 30;
 export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
-  catalogModels: ModelCatalogEntry[] | null;
   providerOutcomes: ModelCatalogProviderOutcome[];
+  catalogError: string | null;
   config: Record<string, unknown> | null;
   providerUsage: UsageSummary | null;
   costByProvider: SessionModelUsage[] | null;
@@ -35,15 +36,14 @@ export type ModelProvidersData = {
 };
 
 type ModelProvidersCatalogResult = {
-  models: ModelCatalogEntry[];
   providerOutcomes?: ModelCatalogProviderOutcome[];
 };
 
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   models: null,
-  catalogModels: null,
   providerOutcomes: [],
+  catalogError: null,
   config: null,
   providerUsage: null,
   costByProvider: null,
@@ -61,15 +61,12 @@ function errorMessage(error: unknown): string {
   if (isMissingOperatorReadScopeError(error)) {
     return formatMissingOperatorReadScopeMessage("model providers");
   }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" ? error : "request failed";
+  return formatUiError(error, "request failed");
 }
 
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean; agentId?: string; signal?: AbortSignal },
+  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
   const request = <T>(method: string, params?: unknown): Promise<T> =>
     opts?.signal
@@ -77,19 +74,34 @@ export async function loadModelProvidersData(
       : params === undefined
         ? client.request<T>(method)
         : client.request<T>(method, params);
+  const catalogRefresh = opts?.refresh
+    ? request<ModelProvidersCatalogResult>("models.list", {
+        view: "all",
+        agentId: opts.agentId,
+        refresh: true,
+      })
+        .then((result) => ({ ok: true as const, result: result ?? null }))
+        .catch((error: unknown) => ({ ok: false as const, error }))
+    : Promise.resolve({ ok: true as const, result: null });
+  const modelsLoad = opts?.refresh
+    ? catalogRefresh.then((catalogResult) =>
+        loadModels(client, {
+          agentId: opts.agentId,
+          ...(catalogResult.ok ? { refresh: true } : { preparedOnly: true }),
+        }),
+      )
+    : loadModels(client, {
+        agentId: opts.agentId,
+        preparedOnly: true,
+      }).catch(() => null);
   const [authStatus, models, catalogResult, config, providerUsage, costByProvider] =
     await Promise.all([
       loadModelAuthStatus(client, opts).then(
         (result) => ({ ok: true as const, result }),
         (error: unknown) => ({ ok: false as const, error }),
       ),
-      loadModels(client, opts).catch(() => null),
-      request<ModelProvidersCatalogResult>("models.list", {
-        view: "all",
-        includeProviderCapabilities: true,
-      })
-        .then((result) => result ?? null)
-        .catch(() => null),
+      modelsLoad,
+      catalogRefresh,
       request<ConfigSnapshot>("config.get", {})
         .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
         .catch(() => null),
@@ -107,8 +119,8 @@ export async function loadModelProvidersData(
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models,
-    catalogModels: catalogResult?.models ?? null,
-    providerOutcomes: catalogResult?.providerOutcomes ?? [],
+    providerOutcomes: catalogResult.ok ? (catalogResult.result?.providerOutcomes ?? []) : [],
+    catalogError: catalogResult.ok ? null : errorMessage(catalogResult.error),
     config,
     providerUsage,
     costByProvider,

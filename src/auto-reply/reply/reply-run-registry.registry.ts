@@ -108,11 +108,10 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return replyRunState.activeRunsByKey.has(normalizedSessionKey);
   },
-  resolveMessageInjectionTarget({ sessionKey, originatingLeafEntryId, expectedRunId }) {
+  resolveMessageInjectionTarget({ sessionKey, expectedRunId }) {
     const operation = this.get(sessionKey);
     const resolved = resolveReplyMessageInjectionRejection({
       operation,
-      originatingLeafEntryId,
       expectedRunId,
     });
     if (!("injection" in resolved)) {
@@ -120,11 +119,24 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     const target: ReplyMessageInjectionTarget = {
       [replyMessageInjectionTargetOperation]: operation!,
-      identity: normalizeOptionalString(expectedRunId) ? "run" : "leaf",
+      identity: normalizeOptionalString(expectedRunId) ? "run" : "operation",
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
-      originatingLeafEntryId,
     };
     return target;
+  },
+  resolveCurrentMessageInjectionTarget(sessionKey) {
+    const operation = this.get(sessionKey);
+    const resolved = resolveReplyMessageInjectionRejection({
+      operation,
+    });
+    if (!operation || !("injection" in resolved)) {
+      return undefined;
+    }
+    return {
+      [replyMessageInjectionTargetOperation]: operation,
+      identity: "operation",
+      ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
+    };
   },
   abort(sessionKey) {
     const operation = this.get(sessionKey);

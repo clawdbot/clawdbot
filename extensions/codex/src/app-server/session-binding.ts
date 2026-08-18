@@ -209,6 +209,9 @@ const threadBindingSchema = z
     connectionScope: z.literal("supervision").optional(),
     supervisionSourceThreadId: z.string().trim().min(1).optional(),
     authProfileId: optionalStringSchema,
+    // Freeze external-cwd AGENTS.md at thread creation; bootstrap refreshes must
+    // not mutate the inherited policy of a resumed native session.
+    agentWorkspaceDeveloperInstructions: optionalNonBlankStringSchema,
     model: optionalStringSchema,
     // Codex App Server owns selection for supervised and adopted threads. Keep
     // this marker across resumes so OpenClaw never substitutes a default or fallback.
@@ -222,6 +225,8 @@ const threadBindingSchema = z
       .pipe(z.string().min(1))
       .optional()
       .catch(undefined),
+    // Legacy rows may contain the retired two-field permission overlay. Keep
+    // parsing it so the rest of the binding survives; SessionEntry owns live policy.
     approvalPolicy: z
       .preprocess(
         (value) => (value === "on-failure" ? "on-request" : value),
@@ -250,6 +255,8 @@ const threadBindingSchema = z
     configuredMcpOwnershipVersion: z.literal(1).optional().catch(undefined),
     ringZeroConfigFingerprint: optionalStringSchema,
     ringZeroClientInstanceId: optionalStringSchema,
+    /** Durable fact preventing a later unrestricted turn from widening this thread. */
+    nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,
@@ -260,6 +267,17 @@ const threadBindingSchema = z
     conversationStartId: optionalStringSchema,
     conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
     historyCoveredThrough: optionalTimestampSchema,
+    // Observed density of the last completed turn on this thread: prompt chars
+    // actually sent vs provider-reported input tokens. Read by the no-engine
+    // continuity cap so the next projection is sized from this session's real
+    // content density instead of a fixed chars-per-token guess.
+    continuityCalibration: z
+      .object({
+        promptChars: z.number().int().positive(),
+        inputTokens: z.number().int().positive(),
+      })
+      .optional()
+      .catch(undefined),
   })
   .superRefine((binding, context) => {
     if (binding.connectionScope === "supervision") {
@@ -446,9 +464,12 @@ function normalizeLegacyBindingFingerprint(value: unknown): unknown {
   return hashCodexAppServerBindingFingerprint(value);
 }
 
-function normalizeLegacyBindingFingerprints(
-  record: Record<string, unknown>,
-): Record<string, unknown> {
+function normalizeLegacyBindingFingerprints<
+  T extends {
+    dynamicToolsFingerprint?: unknown;
+    userMcpServersFingerprint?: unknown;
+  },
+>(record: T): T {
   // Shipped sidecars can contain unbounded canonical JSON fingerprints. Bound
   // them at the legacy encoder so plugin-state registration cannot reject the row.
   let normalized = record;
@@ -461,7 +482,7 @@ function normalizeLegacyBindingFingerprints(
     if (normalized === record) {
       normalized = { ...record };
     }
-    normalized[key] = next;
+    Object.assign(normalized, { [key]: next });
   }
   return normalized;
 }
@@ -473,9 +494,7 @@ export function normalizeStoredCodexAppServerBindingFingerprints(
   if (!stored || stored.state !== "active") {
     return stored;
   }
-  const binding = normalizeLegacyBindingFingerprints(
-    stored.binding as unknown as Record<string, unknown>,
-  );
+  const binding = normalizeLegacyBindingFingerprints(stored.binding);
   return binding === stored.binding
     ? stored
     : readStoredCodexAppServerBinding({ ...stored, binding });

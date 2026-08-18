@@ -2,21 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { isCronTimeoutErrorText } from "../execution-error-constants.js";
-
-function requireCronAgentId(agentId: string | undefined): string {
-  if (!agentId?.trim()) {
-    throw new Error("Cron task run requires an agent id or prepared configured default.");
-  }
-  return normalizeAgentId(agentId);
-}
-
-function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
-}
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import {
   createRunningTaskRunCore,
@@ -27,6 +13,10 @@ import {
 } from "../../tasks/task-executor.js";
 import { listTaskRecordsByRuntimeSourceIdInDatabase } from "../../tasks/task-registry.store.sqlite.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import {
+  CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+  resolveCronJobEffectiveAgentId,
+} from "../agent-id.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
@@ -46,6 +36,17 @@ import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 
+function requireCronAgentId(agentId: string | undefined): string {
+  if (!agentId?.trim()) {
+    throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+  }
+  return normalizeAgentId(agentId);
+}
+
+function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
+  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+}
+
 const activeCronTaskRunId = new AsyncLocalStorage<string>();
 
 /** Keeps the detached task id on the async execution that owns it. */
@@ -56,44 +57,6 @@ export function withCronTaskRunId<T>(taskRunId: string | undefined, run: () => T
 
 export function getActiveCronTaskRunId(): string | undefined {
   return activeCronTaskRunId.getStore();
-}
-
-/** Converts cron ids into bounded session-key path segments with a fallback for empty input. */
-export function normalizeCronLaneSegment(value: string | undefined, fallback: string): string {
-  const normalized = normalizeOptionalLowercaseString(value)
-    ?.replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64);
-  return normalized || fallback;
-}
-
-/** Builds the main-session child key used to isolate one cron run's task transcript. */
-export function resolveMainSessionCronRunSessionKey(
-  job: CronJob,
-  startedAt: number,
-  configuredDefaultAgentId: string | undefined,
-): string {
-  const agentId = resolveCronJobEffectiveAgentId(job, configuredDefaultAgentId);
-  const jobSegment = normalizeCronLaneSegment(job.id, "job");
-  const runSegment = normalizeCronLaneSegment(String(Math.max(0, Math.floor(startedAt))), "run");
-  return `agent:${agentId}:cron:${jobSegment}:run:${runSegment}`;
-}
-
-function resolveCronTaskChildSessionKey(params: {
-  state: CronServiceState;
-  job: CronJob;
-  startedAt: number;
-}): string | undefined {
-  if (params.job.sessionTarget === "main" && params.job.payload.kind === "systemEvent") {
-    return resolveMainSessionCronRunSessionKey(
-      params.job,
-      params.startedAt,
-      resolveCurrentDefaultAgentId(params.state),
-    );
-  }
-  // Agent turns publish their exact transcript key after setup. This also
-  // avoids inventing links for headless command/script/heartbeat work.
-  return undefined;
 }
 
 /** Updates an active cron task with the exact transcript identity reported by its runner. */
@@ -248,16 +211,7 @@ function tryCreateCronTaskRunRecord(params: {
   childSessionKey?: string;
 }): string | undefined {
   try {
-    const explicitJobAgentId = params.job?.agentId?.trim();
-    const childSessionKey =
-      params.childSessionKey ??
-      (params.job
-        ? resolveCronTaskChildSessionKey({
-            state: params.state,
-            job: params.job,
-            startedAt: params.startedAt,
-          })
-        : undefined);
+    const childSessionKey = params.childSessionKey;
     const effectiveJobAgentId = params.job
       ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
       : undefined;
@@ -270,7 +224,6 @@ function tryCreateCronTaskRunRecord(params: {
       childSessionKey,
       agentId:
         effectiveJobAgentId ??
-        (explicitJobAgentId ? normalizeAgentId(explicitJobAgentId) : undefined) ??
         (childSessionKey
           ? resolveAgentIdFromSessionKey(
               childSessionKey,
@@ -321,7 +274,10 @@ export function tryFinishCronTaskRunWithoutHistory(
   if (!result.taskRunId) {
     return;
   }
-  const error = result.status === "error" ? normalizeCronRunErrorText(result.error) : undefined;
+  const error =
+    result.status !== "ok" && result.error !== undefined
+      ? normalizeCronRunErrorText(result.error)
+      : undefined;
   const quietTriggerEval =
     result.triggerEval?.fired === false
       ? { ...result.triggerEval, fired: false as const }
@@ -330,12 +286,7 @@ export function tryFinishCronTaskRunWithoutHistory(
     finalizeTaskRunByRunIdCore({
       runId: result.taskRunId,
       runtime: "cron",
-      status:
-        result.status === "ok" || result.status === "skipped"
-          ? "succeeded"
-          : isCronTimeoutErrorText(error)
-            ? "timed_out"
-            : "failed",
+      status: cronRunStatusToTaskStatus({ status: result.status, error }),
       endedAt: result.endedAt,
       lastEventAt: result.endedAt,
       error,

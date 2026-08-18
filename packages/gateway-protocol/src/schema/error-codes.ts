@@ -13,6 +13,7 @@ import { NonEmptyString } from "./primitives.js";
 export {
   ErrorCodes,
   GatewayErrorDetailCodes,
+  type CronJobNotFoundErrorDetails,
   type ErrorCode,
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
@@ -22,10 +23,16 @@ export {
   type ProjectCloneFailureCause,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
+  readCronJobNotFoundError,
   isMcpAppViewExpiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "../gateway-error-details.js";
+
+export const CronJobNotFoundErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND),
+  jobId: NonEmptyString,
+});
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
 export const MissingScopeErrorDetailsSchema = closedObject({
@@ -62,6 +69,7 @@ export const ProjectCloneErrorDetailsSchema = closedObject({
 
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
+  CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,

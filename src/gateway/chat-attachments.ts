@@ -48,6 +48,11 @@ export type OffloadedRef = {
   height?: number;
 };
 
+/** Deletes prepared inbound files that never reached a durable owner. */
+export async function discardPreparedInboundMedia(refs: readonly OffloadedRef[]): Promise<void> {
+  await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+}
+
 type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
@@ -377,16 +382,26 @@ export async function parseMessageWithAttachments(
   opts?: {
     maxBytes?: number;
     log?: AttachmentLog;
-    supportsImages?: boolean;
+    supportsImages?: boolean | (() => Promise<boolean>);
     supportsInlineImages?: boolean;
     acceptNonImage?: boolean;
   },
 ): Promise<ParsedMessageWithImages> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
   const log = opts?.log;
-  const shouldForceImageOffload = opts?.supportsImages === false;
   const supportsInlineImages = opts?.supportsInlineImages !== false;
   const acceptNonImage = opts?.acceptNonImage !== false;
+  const supportsImagesOption = opts?.supportsImages;
+  let resolvedSupportsImages =
+    typeof supportsImagesOption === "boolean" ? supportsImagesOption : undefined;
+  const resolveSupportsImages = async (): Promise<boolean> => {
+    if (resolvedSupportsImages !== undefined) {
+      return resolvedSupportsImages;
+    }
+    resolvedSupportsImages =
+      typeof supportsImagesOption === "function" ? await supportsImagesOption() : true;
+    return resolvedSupportsImages;
+  };
 
   if (!attachments || attachments.length === 0) {
     return {
@@ -460,6 +475,7 @@ export async function parseMessageWithAttachments(
       }
 
       const isImage = isImageMime(finalMime);
+      const shouldForceImageOffload = isImage && !(await resolveSupportsImages());
       if (isImage && !supportsInlineImages && !shouldForceImageOffload) {
         throw new UnsupportedAttachmentError(
           "text-only-image",

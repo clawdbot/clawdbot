@@ -173,7 +173,6 @@ allowBuilds:
   "@discordjs/opus": false
   esbuild: true
   koffi: false
-  node-llama-cpp: false
   onnxruntime-node: false
   protobufjs: true
   sharp: true

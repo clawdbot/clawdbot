@@ -58,9 +58,13 @@ async function createWorkspace(): Promise<string> {
   return dir;
 }
 
-async function waitForLog(text: string): Promise<void> {
-  await vi.waitFor(() => {
-    expect(mocks.runtime.log.mock.calls.some(([line]) => String(line).includes(text))).toBe(true);
+function waitForLog(text: string): Promise<void> {
+  return new Promise((resolve) => {
+    mocks.runtime.log.mockImplementation((line) => {
+      if (String(line).includes(text)) {
+        resolve();
+      }
+    });
   });
 }
 
@@ -94,6 +98,7 @@ function mockRedirectFlow(redirectUrl: string): void {
 describe("mcp login loopback callback", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.runtime.log.mockReset();
     program = new Command().exitOverride();
     registerMcpCli(program);
     mocks.readMcpOAuthCredentialsStatus.mockResolvedValue({
@@ -115,8 +120,9 @@ describe("mcp login loopback callback", () => {
       const redirectUrl = `http://127.0.0.1:${port}/oauth/callback`;
       mockRedirectFlow(redirectUrl);
 
+      const waitingForBrowser = waitForLog("Waiting for the browser");
       const login = program.parseAsync(["mcp", "login", "docs"], { from: "user" });
-      await waitForLog("Waiting for the browser");
+      await waitingForBrowser;
       const printedUrlIndex = mocks.runtime.log.mock.calls.findIndex(([line]) =>
         String(line).startsWith("https://auth.example.com/authorize"),
       );

@@ -249,7 +249,7 @@ export async function healthCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const cfg = opts.config ?? (await readBestEffortHealthConfig());
+  const cfg = opts.config ?? (await readNonObservingHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
   let summary: HealthSummary;
   try {
@@ -267,6 +267,7 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          sharedStateMode: "read-only",
           ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
         }),
@@ -337,9 +338,10 @@ export async function healthCommand(
               } satisfies AgentHealthSummary;
             }),
           );
-    const displayAgents = opts.verbose
-      ? resolvedAgents
-      : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
+    const displayAgents =
+      opts.verbose || !defaultAgentId
+        ? resolvedAgents
+        : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,
@@ -561,7 +563,11 @@ export async function healthCommand(
   }
 }
 
-async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
-  const { readBestEffortConfig } = await loadConfigRuntime();
-  return await readBestEffortConfig();
+export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
+  const { readConfigFileSnapshot } = await loadConfigRuntime();
+  const snapshot = await readConfigFileSnapshot({
+    observe: false,
+    pluginValidation: "core-only",
+  });
+  return snapshot.runtimeConfig ?? snapshot.config;
 }

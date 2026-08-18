@@ -12,8 +12,8 @@ import {
   type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
   type AgentHarnessV2,
   type AgentMessage,
+  type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -1862,15 +1862,17 @@ describe("runCopilotAttempt", () => {
   it("F7: result.yieldDetected is true when the tool bridge fires onYieldDetected during the attempt", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async (input: { onYieldDetected?: (msg?: string) => void }) => {
-      // Simulate a wrapped tool invoking sessions_yield before the
-      // attempt settles. The bridge is responsible for notifying the
-      // caller via onYieldDetected so the final result can carry the
-      // flag (parent runner uses it to mark liveness paused /
-      // stop_reason end_turn). Mirrors PI/codex parity.
-      input.onYieldDetected?.("paused by tool");
-      return { sdkTools: [], sourceTools: [] };
-    });
+    const createToolBridge = vi.fn(
+      async (input: { onYieldDetected?: (message?: string, acknowledgment?: string) => void }) => {
+        // Simulate a wrapped tool invoking sessions_yield before the
+        // attempt settles. The bridge is responsible for notifying the
+        // caller via onYieldDetected so the final result can carry the
+        // flag (parent runner uses it to mark liveness paused /
+        // stop_reason end_turn). Mirrors PI/codex parity.
+        input.onYieldDetected?.("private continuation", "Research started; results will follow.");
+        return { sdkTools: [], sourceTools: [] };
+      },
+    );
 
     const result = await runCopilotAttempt(makeParams(), {
       createToolBridge,
@@ -1878,6 +1880,7 @@ describe("runCopilotAttempt", () => {
     });
 
     expect(result.yieldDetected).toBe(true);
+    expect(result.yieldAcknowledgment).toBe("Research started; results will follow.");
   });
 
   it("F7: result.yieldDetected is false on a clean attempt (no sessions_yield fired)", async () => {
@@ -2013,12 +2016,20 @@ describe("runCopilotAttempt", () => {
     });
     const pool = makeFakePool(sdk);
 
-    const attempt = runCopilotAttempt(makeParams({ onBlockReply }), { pool });
+    const toolAuthorityFingerprint = "ask-user-authority";
+    const attempt = runCopilotAttempt(makeParams({ onBlockReply, toolAuthorityFingerprint }), {
+      pool,
+    });
 
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
     expect(queueAgentHarnessMessage("session-1", "tool progress")).toBe(true);
     await waitForEventLoopTurn();
-    expect(queueAgentHarnessMessage("session-1", "2", { isInboundUserMessage: true })).toBe(true);
+    expect(
+      queueAgentHarnessMessage("session-1", "2", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
     const result = await attempt;
 
     const cfg = requireCreateSessionConfig(sdk);

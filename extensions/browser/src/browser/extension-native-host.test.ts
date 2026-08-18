@@ -12,6 +12,7 @@ import {
 
 const EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop";
 const ORIGIN = `chrome-extension://${EXTENSION_ID}/`;
+const STORE_ORIGIN = "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/";
 const OTHER_ORIGIN = `chrome-extension://${"p".repeat(32)}/`;
 const NONCE = Buffer.alloc(16, 7).toString("base64url");
 const PAIRING = `ws://127.0.0.1:18799/extension#${relayTestKey(1)}`;
@@ -234,6 +235,35 @@ describe("native host origin and topology boundary", () => {
     const result = await invokeHost();
     expect(result.response).toEqual({ v: 1, ok: true, nonce: NONCE, pairingString: PAIRING });
     expect(result.writes).toHaveLength(1);
+  });
+
+  it("accepts the exact Store caller when launcher args and manifest match", async () => {
+    const fixture = await nativeFixture();
+    const expectedOrigins = [ORIGIN, STORE_ORIGIN].toSorted();
+    await fs.writeFile(
+      fixture.manifestPath,
+      `${JSON.stringify({
+        name: "ai.openclaw.browser_bootstrap",
+        description: "OpenClaw browser extension bootstrap",
+        path: fixture.launcherPath,
+        type: "stdio",
+        allowed_origins: expectedOrigins,
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    const result = await invokeHost({
+      ...fixture,
+      callerOrigin: STORE_ORIGIN,
+      expectedOrigins,
+    });
+
+    expect(result.response).toEqual({
+      v: 1,
+      ok: true,
+      nonce: NONCE,
+      pairingString: PAIRING,
+    });
   });
 
   it("rejects a wrong extension origin", async () => {

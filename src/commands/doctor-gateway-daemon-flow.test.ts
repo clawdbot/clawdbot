@@ -22,6 +22,7 @@ const service = vi.hoisted(() => ({
 const note = vi.hoisted(() => vi.fn());
 const sleep = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
+const formatGatewayClosedDiagnostic = vi.hoisted(() => vi.fn((): string | undefined => undefined));
 const inspectPortConnections = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
@@ -154,7 +155,7 @@ vi.mock("./gateway-install-token.js", () => ({
 }));
 
 vi.mock("./health-format.js", () => ({
-  formatGatewayClosedDiagnostic: vi.fn(() => undefined),
+  formatGatewayClosedDiagnostic,
   formatHealthCheckFailure: vi.fn(() => "health failed"),
 }));
 
@@ -173,6 +174,8 @@ describe("maybeRepairGatewayDaemon", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    formatGatewayClosedDiagnostic.mockReset();
+    formatGatewayClosedDiagnostic.mockReturnValue(undefined);
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
     service.readCommand.mockResolvedValue(null);
@@ -624,6 +627,25 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
+  it("reports a typed close after restart without depending on error wording", async () => {
+    setPlatform("linux");
+    const error = new Error("transport closed after restart");
+    healthCommand.mockRejectedValueOnce(error);
+    formatGatewayClosedDiagnostic.mockReturnValueOnce(
+      "Gateway connect failed: transport closed after restart",
+    );
+
+    const runtime = await runAutoRepair();
+
+    expect(formatGatewayClosedDiagnostic).toHaveBeenCalledWith(error);
+    expect(note).toHaveBeenCalledWith(
+      "Gateway connect failed: transport closed after restart",
+      "Gateway",
+    );
+    expect(note).toHaveBeenCalledWith("details", "Gateway connection");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("restarts running service when --yes explicitly approves repairs", async () => {
     setPlatform("linux");
 
@@ -702,8 +724,9 @@ describe("maybeRepairGatewayDaemon", () => {
   it("skips LaunchAgent bootstrap repair when service repair policy is external", async () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
     vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
-    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValue(true);
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
 
     await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
       await runAutoRepair();
@@ -712,6 +735,8 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway LaunchAgent");
+    expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+    expect(buildGatewayRuntimeHints).not.toHaveBeenCalled();
   });
 
   it("re-enables and bootstraps a parked LaunchAgent during non-interactive repair", async () => {
@@ -753,7 +778,6 @@ describe("maybeRepairGatewayDaemon", () => {
       {
         status: "unknown",
         detail: "Bootstrap failed: 125: Domain does not support specified action",
-        missingSupervision: true,
         missingGuiSession: true,
       },
       { platform: "darwin", env: process.env },
@@ -856,7 +880,6 @@ describe("maybeRepairGatewayDaemon", () => {
       {
         status: "unknown",
         detail: "Bootstrap failed: 125: Domain does not support specified action",
-        missingSupervision: true,
         missingGuiSession: true,
       },
       { platform: "darwin", env: process.env },

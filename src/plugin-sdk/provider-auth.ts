@@ -16,8 +16,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import type { AuthProfileStore, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,

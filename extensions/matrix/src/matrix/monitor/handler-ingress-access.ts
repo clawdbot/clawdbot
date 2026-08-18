@@ -189,6 +189,7 @@ export async function resolveMatrixIngressAccess(config: {
     roomUsers,
     senderId,
     isRoom,
+    conversationId: roomId,
     accountId,
     eventKind: isReactionEvent ? "reaction" : "message",
   });

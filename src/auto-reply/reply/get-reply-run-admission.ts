@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -30,7 +31,10 @@ import {
   loadSessionUpdatesRuntime,
   routeThreadIdsMatch,
 } from "./get-reply-run-helpers.js";
-import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
+import {
+  REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
+  resolvePreparedReplyQueueState,
+} from "./get-reply-run-queue.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
@@ -66,7 +70,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     startupAction,
     startupContextPrelude,
     softResetTail,
-    workspaceDir,
     isMainSession,
     inboundUserContextPromptJoiner,
     effectiveQueueMode,
@@ -193,7 +196,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           storePath,
           sessionId,
           isFirstTurnInSession,
-          workspaceDir,
+          workspaceDir: context.skillsWorkspaceDir,
+          executionSkillsDir: path.join(
+            sessionEntry?.worktree?.canonicalWorkspaceDir ?? context.workspaceDir,
+            "skills",
+          ),
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
@@ -362,6 +369,23 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   )
     ? undefined
     : rawActiveSessionIdForInterrupt;
+  const shouldPreemptHeartbeat =
+    !isRoomEvent && !context.isHeartbeat && rawActiveSessionIdForInterrupt !== undefined;
+  const heartbeatPreemption =
+    shouldPreemptHeartbeat && embeddedAgentRuntime
+      ? await embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun(
+          rawActiveSessionIdForInterrupt,
+          REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+        )
+      : "not-heartbeat";
+  if (heartbeatPreemption === "timed-out") {
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply: { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT },
+    } as const;
+  }
+  const visibleTurnPreemptsHeartbeat = heartbeatPreemption === "drained";
   if (
     activeRunQueueMode === "interrupt" &&
     !isRoomEvent &&
@@ -522,9 +546,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
+    !visibleTurnPreemptsHeartbeat &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
+    !visibleTurnPreemptsHeartbeat &&
     ((isRoomEvent && isActive) ||
       resolvedQueue.mode === "steer" ||
       resolvedQueue.mode === "followup" ||

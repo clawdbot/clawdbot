@@ -4,6 +4,7 @@ import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  AgentSelectionRequiredError,
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -16,6 +17,7 @@ import { isTerminalConfigEnabled } from "./enabled.js";
 /** Why a terminal cannot open, or `null` when it can. */
 type TerminalLaunchBlock =
   | { kind: "disabled" }
+  | { kind: "owner-required"; message: string }
   | { kind: "unknown-agent"; agentId: string }
   | { kind: "sandboxed"; agentId: string; mode: "all" };
 
@@ -90,7 +92,15 @@ function resolveTerminalLaunch(params: {
   }
   const env = params.env ?? process.env;
   const requested = params.agentId?.trim();
-  const agentId = requested ? normalizeAgentId(requested) : resolveDefaultAgentId(params.config);
+  let agentId: string;
+  try {
+    agentId = requested ? normalizeAgentId(requested) : resolveDefaultAgentId(params.config);
+  } catch (error) {
+    if (!(error instanceof AgentSelectionRequiredError)) {
+      throw error;
+    }
+    return { ok: false, block: { kind: "owner-required", message: error.message } };
+  }
   // Fail closed on unknown ids: they would resolve against the *global*
   // sandbox defaults and an invented workspace, sidestepping a per-agent
   // `sandbox.mode: "all"` refusal below.

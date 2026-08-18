@@ -725,7 +725,7 @@ export function registerLogsCli(program: Command) {
           if (
             !emitJsonLine({
               type: "notice",
-              message: "Log tail truncated (increase --max-bytes).",
+              message: "Log tail truncated (increase --limit or --max-bytes).",
             })
           ) {
             return;
@@ -785,7 +785,7 @@ export function registerLogsCli(program: Command) {
           }
         }
         if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --max-bytes).")) {
+          if (!errorLine("Log tail truncated (increase --limit or --max-bytes).")) {
             return;
           }
         }

@@ -52,6 +52,7 @@ import { healthCommand } from "./health.js";
 
 type LaunchAgentBootstrapDoctorOutcome =
   | { status: "skipped" }
+  | { status: "not-loaded" }
   | { status: "repaired" }
   | { status: "system-launchdaemon-blocked"; detail: string }
   | { status: "gui-session-unavailable"; detail: string };
@@ -101,7 +102,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
   if (params.serviceRepairExternal) {
     note(EXTERNAL_SERVICE_REPAIR_NOTE, `${params.title} LaunchAgent`);
-    return { status: "skipped" };
+    return { status: "not-loaded" };
   }
 
   const shouldFix = await confirmDoctorServiceRepair(params.prompter, {
@@ -109,7 +110,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     initialValue: true,
   });
   if (!shouldFix) {
-    return { status: "skipped" };
+    return { status: "not-loaded" };
   }
 
   params.runtime.log(`Bootstrapping ${params.title} LaunchAgent...`);
@@ -127,13 +128,13 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     params.runtime.error(
       `${params.title} LaunchAgent bootstrap failed: ${repair.detail ?? "unknown error"}`,
     );
-    return { status: "skipped" };
+    return { status: "not-loaded" };
   }
 
   const verified = await isLaunchAgentLoaded({ env: params.env });
   if (!verified) {
     params.runtime.error(`${params.title} LaunchAgent still not loaded after repair.`);
-    return { status: "skipped" };
+    return { status: "not-loaded" };
   }
 
   note(`${params.title} LaunchAgent repaired.`, `${params.title} LaunchAgent`);
@@ -279,6 +280,9 @@ export async function maybeRepairGatewayDaemon(params: {
       prompter: params.prompter,
       serviceRepairExternal,
     });
+    if (gatewayRepair.status === "not-loaded") {
+      return;
+    }
     if (gatewayRepair.status === "system-launchdaemon-blocked") {
       note(gatewayRepair.detail, "Gateway");
       return;
@@ -287,7 +291,6 @@ export async function maybeRepairGatewayDaemon(params: {
       serviceRuntime = {
         status: "unknown",
         detail: gatewayRepair.detail || serviceRuntime?.detail,
-        missingSupervision: true,
         missingGuiSession: true,
       };
     }
@@ -524,16 +527,10 @@ export async function maybeRepairGatewayDaemon(params: {
       try {
         await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
       } catch (err) {
-        const message = String(err);
-        if (message.includes("gateway closed")) {
-          const closedDiagnostic = formatGatewayClosedDiagnostic(err);
-          if (closedDiagnostic) {
-            note(closedDiagnostic, "Gateway");
-            note(params.gatewayDetailsMessage, "Gateway connection");
-          } else {
-            note("Gateway not running.", "Gateway");
-            note(params.gatewayDetailsMessage, "Gateway connection");
-          }
+        const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+        if (closedDiagnostic) {
+          note(closedDiagnostic, "Gateway");
+          note(params.gatewayDetailsMessage, "Gateway connection");
         } else {
           params.runtime.error(formatHealthCheckFailure(err));
         }

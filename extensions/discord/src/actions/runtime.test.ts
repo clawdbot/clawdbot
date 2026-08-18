@@ -1,8 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";

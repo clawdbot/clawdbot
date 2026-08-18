@@ -6,6 +6,7 @@ import {
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isReasoningModelHeuristic,
   readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
@@ -77,7 +78,7 @@ export function orderPreferredOllamaModelIds(modelIds: Iterable<string>): string
   return ordered;
 }
 
-export function selectAppGuidedOllamaModelId(
+function selectAppGuidedOllamaModelId(
   models: Iterable<{
     id: string;
     contextWindow?: number;
@@ -101,6 +102,21 @@ export function selectAppGuidedOllamaModelId(
   const fastest =
     smallestSize === undefined ? pool : pool.filter((model) => model.size === smallestSize);
   return orderPreferredOllamaModelIds(fastest.map((model) => model.id))[0];
+}
+
+export function selectAppGuidedOllamaModelFromDiscovery(
+  models: Iterable<OllamaModelWithContext>,
+): string | undefined {
+  return selectAppGuidedOllamaModelId(
+    [...models].map((model) => ({
+      id: model.name,
+      contextWindow: model.contextWindow,
+      supportsTools: model.capabilities?.includes("tools") === true,
+      reasoning:
+        model.capabilities?.includes("thinking") === true || isReasoningModelHeuristic(model.name),
+      size: model.size,
+    })),
+  );
 }
 
 export function buildOllamaModelsConfig(

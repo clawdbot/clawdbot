@@ -1434,6 +1434,32 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Ready for operator review.");
   });
 
+  it("renders a queued linked session without running copy", () => {
+    const { state, container, renderView } = createWorkboardView({
+      sessions: [
+        {
+          key: "agent:main:queued",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: true,
+          status: "queued",
+        },
+      ],
+    });
+    state.cards = [
+      createWorkboardCard({
+        status: "todo",
+        sessionKey: "agent:main:queued",
+      }),
+    ];
+    renderView();
+
+    expect(container.querySelector(".workboard-lifecycle")?.textContent?.trim()).toBe("Queued");
+    expect(container.querySelector(".workboard-card__lifecycle-detail")?.textContent?.trim()).toBe(
+      "Waiting for a concurrency slot",
+    );
+  });
+
   it("uses terminal session lifecycle when cached task status is stale", () => {
     const { state, container, renderView } = createWorkboardView({
       sessions: [

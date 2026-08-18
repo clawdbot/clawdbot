@@ -69,6 +69,10 @@ function createFixture() {
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const context = {
     gateway,
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
     basePath: "",
     navigate: vi.fn(),
     runtimeConfig,
@@ -95,7 +99,7 @@ async function mountPage(
   const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
   page.routeData = {
     state: { phase: "ready", result: detection },
-    connection: { client, hello },
+    connection: { client, hello, agentId: context.agentSelection.state.selectedId },
     firstRun: false,
   };
   provider.append(page);

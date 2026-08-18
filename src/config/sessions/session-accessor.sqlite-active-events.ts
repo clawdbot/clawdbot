@@ -16,6 +16,7 @@ import type {
 import {
   readTranscriptProjectionGeneration,
   readVisibleMessageRange,
+  readVisibleTranscriptStats,
   resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
@@ -46,6 +47,7 @@ export type SessionTranscriptMessageEvent = {
 
 export type SessionTranscriptMessageEventPage = {
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
   events: SessionTranscriptMessageEvent[];
   totalMessages: number;
 };
@@ -90,34 +92,31 @@ export function readSessionTranscriptMessageEvents(
   });
 }
 
-/** Reads the projected active leaf without materializing the transcript. */
-export function readSessionTranscriptActiveLeafEvents(
+/** Classifies one entry against the authoritative active path and leaf. */
+export function readSessionTranscriptActivePathEntryRelation(
   scope: SessionTranscriptReadScope,
-): TranscriptEvent[] {
+  entryId: string | null,
+): "exact" | "ancestor" | "off-path" {
   return withCurrentProjectionSnapshot(scope, (projection) => {
-    const leafEventId = projection.state.leafEventId;
-    if (!leafEventId) {
-      return [];
+    if (projection.state.leafEventId === entryId || entryId === null) {
+      return projection.state.leafEventId === entryId ? "exact" : "off-path";
     }
     const db = getActiveTranscriptKysely(projection.database);
     const row = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
         .selectFrom("transcript_event_identities as identity")
-        .innerJoin("transcript_events as event", (join) =>
+        .innerJoin("session_transcript_active_events as active", (join) =>
           join
-            .onRef("event.session_id", "=", "identity.session_id")
-            .onRef("event.seq", "=", "identity.seq"),
+            .onRef("active.session_id", "=", "identity.session_id")
+            .onRef("active.event_seq", "=", "identity.seq"),
         )
-        .select("event.event_json")
+        .select("identity.seq")
         .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("identity.event_id", "=", leafEventId)
+        .where("identity.event_id", "=", entryId)
         .limit(1),
     );
-    if (!row) {
-      throw new Error(`Active transcript leaf event is missing: ${leafEventId}`);
-    }
-    return [JSON.parse(row.event_json) as TranscriptEvent];
+    return row ? "ancestor" : "off-path";
   });
 }
 
@@ -151,35 +150,12 @@ export function readRecentSessionTranscriptActiveEvents(
   });
 }
 
-/** Reads active-path event count and JSONL byte size without materializing payloads. */
+/** Reads logical transcript event count and JSONL byte size. */
 export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadScope): {
   eventCount: number;
   sizeBytes: number;
 } {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const db = getActiveTranscriptKysely(projection.database);
-    const row = executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select((eb) => [
-          eb.fn.count<number>("active.event_seq").as("event_count"),
-          /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
-          sql<number>`COALESCE(SUM(LENGTH(CAST(event.event_json AS BLOB))), 0)
-            + COUNT(*)`.as("size_bytes"),
-        ])
-        .where("active.session_id", "=", projection.resolved.sessionId),
-    );
-    return {
-      eventCount: row?.event_count ?? 0,
-      sizeBytes: row?.size_bytes ?? 0,
-    };
-  });
+  return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats);
 }
 
 /** Reads one append-stable forward page from the materialized active-message projection. */

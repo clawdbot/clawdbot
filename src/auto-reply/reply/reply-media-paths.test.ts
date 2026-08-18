@@ -200,7 +200,9 @@ describe("createReplyMediaPathNormalizer", () => {
       path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
       5 * 1024 * 1024,
     );
-    expect(result.text).toBe("⚠️ Media failed.");
+    expect(result.text).toBe(
+      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
   });
 
   it.each([
@@ -432,7 +434,9 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/missing.png"],
     });
 
-    expect(result.text).toBe("WA_MEDIA_DM_07\n⚠️ Media failed.");
+    expect(result.text).toBe(
+      "WA_MEDIA_DM_07\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
     expectNoMedia(result);
   });
 
@@ -445,7 +449,9 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/missing.png", "https://example.com/ok.png"],
     });
 
-    expect(result.text).toBe("Here is the surviving attachment\n⚠️ Media failed.");
+    expect(result.text).toBe(
+      "Here is the surviving attachment\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
     expectMedia(result, "https://example.com/ok.png", ["https://example.com/ok.png"]);
   });
 
@@ -457,7 +463,9 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/missing.png"],
     });
 
-    expect(result.text).toBe("⚠️ Media failed.");
+    expect(result.text).toBe(
+      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
     expectNoMedia(result);
   });
 

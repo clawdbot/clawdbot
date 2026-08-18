@@ -1,12 +1,4 @@
-import {
-  readSessionMessageIdentity,
-  readSessionMessageSequence,
-} from "@openclaw/gateway-client/browser";
-import {
-  asNonArrayRecord,
-  asNullableRecord,
-  isRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
@@ -33,7 +25,6 @@ import {
   loadChatBranches,
   loadChatHistory,
   shouldHideAssistantChatMessage,
-  type ChatState,
 } from "./chat-history.ts";
 import {
   readDeliveredQueuedChatSendForRun,
@@ -53,7 +44,12 @@ import {
   reconcileChatRunFromSessionRow,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
-import { preserveQueuedUserTurn, retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
+import {
+  preserveQueuedUserTurn,
+  retirePersistedSteeredChips,
+  retireSteeredChipsForTerminalRun,
+} from "./steer-lifecycle.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
@@ -63,57 +59,6 @@ function sessionMessageMatchesChat(
   event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
 ): boolean {
   return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
-}
-
-function applyLiveUserMessage(
-  state: ChatPageHost,
-  payload: unknown,
-  runActive: boolean | undefined,
-): void {
-  if (!isRecord(payload)) {
-    return;
-  }
-  const event = payload as {
-    clientRunId?: unknown;
-    message?: unknown;
-    messageId?: unknown;
-    messageSeq?: unknown;
-  };
-  const sourceMessage = event.message;
-  const incoming = readSessionMessageIdentity(sourceMessage, event);
-  if (incoming?.role !== "user") {
-    return;
-  }
-  // Partial import provenance cannot turn an envelope position into durable
-  // transcript identity; only the persisted row can prove its source order.
-  if (
-    incoming.isImported &&
-    !incoming.externalSource &&
-    readSessionMessageSequence(sourceMessage) === null
-  ) {
-    return;
-  }
-  if (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null) {
-    return;
-  }
-  const sourceRecord = sourceMessage as Record<string, unknown>;
-  const marker = sourceRecord["__openclaw"];
-  const sourceMetadata = asNonArrayRecord(marker);
-  const message = {
-    ...sourceRecord,
-    __openclaw: {
-      ...sourceMetadata,
-      ...(incoming.id ? { id: incoming.id } : {}),
-      ...(incoming.idempotencyKey ? { idempotencyKey: incoming.idempotencyKey } : {}),
-      ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
-    },
-  };
-  const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
-  reduceChatSessionProjection(
-    state,
-    { type: "messagePersisted", message, envelope: event },
-    { scope, runActive },
-  );
 }
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
@@ -183,8 +128,14 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
   if (matchesChat) {
-    applyLiveUserMessage(state, payload, event.hasActiveRun ?? undefined);
-    void loadChatBranches(state);
+    // A previous run can persist its final after the next local run starts.
+    // Admit that sequenced row now so the later unsequenced chat.final replay
+    // replaces it in place instead of appending below the newer user turn.
+    applySessionMessagePayload(state, payload, event.hasActiveRun ?? undefined, {
+      kind: "live",
+      activeRunId: state.chatRunId,
+    });
+    retirePersistedSteeredChips(state);
   }
   if (matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
@@ -244,6 +195,11 @@ function replayPendingSessionMessageReload(
   void loadChatHistory(state).finally(() => state.requestUpdate?.());
 }
 
+// Branch topology only changes on structural mutations; the producer records
+// the reason, so reload branches only for those instead of on every
+// sessions.changed (each cache miss rescans the full transcript on the gateway).
+const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
+
 function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
@@ -251,15 +207,22 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
   );
   const source = asNullableRecord(payload);
-  const resetsSelectedSession =
-    matchesChat && (source?.reason === "reset" || source?.phase === "reset");
+  const resetsSession = source?.reason === "reset" || source?.phase === "reset";
+  if (event && (resetsSession || source?.reason === "new")) {
+    state.retireSessionCompanion?.(event.key, event.agentId);
+  }
+  const resetsSelectedSession = matchesChat && resetsSession;
   if (resetsSelectedSession) {
     const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
     // Reset keeps the public session ID; the explicit reducer event is the
     // only proof that its old live and pending transcript no longer exists.
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
-  if (matchesChat) {
+  if (
+    matchesChat &&
+    typeof source?.reason === "string" &&
+    BRANCH_TOPOLOGY_REASONS.has(source.reason)
+  ) {
     void loadChatBranches(state);
   }
   if (event && matchesChat && event.archived !== null) {
@@ -462,7 +425,7 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       // Materialize it before the terminal assistant to preserve transcript order.
       preserveQueuedUserTurn(state, delivered);
     }
-    const result = handleChatGatewayEvent(state as unknown as ChatState, payload);
+    const result = handleChatGatewayEvent(state, payload);
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
     }

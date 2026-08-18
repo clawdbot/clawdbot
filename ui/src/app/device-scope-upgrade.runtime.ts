@@ -1,10 +1,16 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import { readScopeUpgradeAvailability, type ScopeUpgradeState } from "./device-scope-upgrade.ts";
+import {
+  dismissScopeUpgradeBanner,
+  hasDismissedScopeUpgradeBanner,
+  readScopeUpgradeAvailability,
+  type ScopeUpgradeState,
+} from "./device-scope-upgrade.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
 type UpgradeOperation = {
@@ -135,6 +141,7 @@ type ScopeUpgradeBannerProps = {
 class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ScopeUpgradeBannerProps;
   private controller?: ScopeUpgradeController;
+  private expanded = !hasDismissedScopeUpgradeBanner();
 
   protected override updated(): void {
     const snapshot = this.props?.snapshot;
@@ -163,8 +170,26 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
     if (!props || state.phase === "hidden") {
       return nothing;
     }
+    if (!this.expanded && (state.phase === "available" || state.phase === "guidance")) {
+      return html`<div class="scope-upgrade-chip-row">
+        <button
+          class="scope-upgrade-chip"
+          type="button"
+          aria-expanded="false"
+          aria-label=${t("connection.scopeUpgrade.showDetails")}
+          @click=${() => {
+            this.expanded = true;
+            this.requestUpdate();
+          }}
+        >
+          <span class="scope-upgrade-chip__dot" aria-hidden="true"></span>
+          ${t("connection.scopeUpgrade.status")}
+        </button>
+      </div>`;
+    }
     const retryable =
       state.phase === "pending" || state.phase === "rejected" || state.phase === "error";
+    const dismissible = state.phase === "available" || state.phase === "guidance";
     const text =
       state.phase === "guidance"
         ? t("connection.scopeUpgrade.guidance")
@@ -184,7 +209,7 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
     return html`<div
       class="callout ${state.phase === "error" || state.phase === "rejected"
         ? "danger"
-        : "warn"} callout--action"
+        : "warn"} callout--action ${dismissible ? "callout--dismissible" : ""}"
       role="status"
     >
       <span class="callout__content">${text}</span>
@@ -206,6 +231,22 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
                 </button>
               `
             : nothing}
+      ${dismissible
+        ? html`<openclaw-tooltip .content=${t("connection.scopeUpgrade.dismiss")}>
+            <button
+              class="callout__dismiss"
+              type="button"
+              aria-label=${t("connection.scopeUpgrade.dismiss")}
+              @click=${() => {
+                dismissScopeUpgradeBanner();
+                this.expanded = false;
+                this.requestUpdate();
+              }}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>`
+        : nothing}
     </div>`;
   }
 }

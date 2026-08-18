@@ -6,8 +6,8 @@ import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
-import type { DraftNode } from "./discovery.ts";
-import { readDraftNodes } from "./discovery.ts";
+import { isDraftNodeSessionEligible, readDraftNodes, type DraftNode } from "./discovery.ts";
+import { DraftCloudMachineState, type PendingCloudPlace } from "./draft-cloud-machine-state.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
@@ -38,6 +38,7 @@ export class DraftPlaceState {
   private nodesValue: DraftNode[] = [];
   private execNodeValue = "";
   private cloudProfileIdValue = "";
+  readonly cloudMachines = new DraftCloudMachineState();
   private restoredFolderValidation: "none" | "checking" | "failed" = "none";
   private gatewayApprovedWorkspaceRoots: string[] = [];
   private agentsHydratedValue = false;
@@ -123,12 +124,32 @@ export class DraftPlaceState {
     return this.cloudProfileIdValue;
   }
 
+  get machineClass(): string {
+    return this.cloudMachines.resolve(this.cloudProfileIdValue);
+  }
+
   get agentsHydrated(): boolean {
     return this.agentsHydratedValue;
   }
 
   get worktreePreferenceReady(): boolean {
     return this.repositoryState.preferenceReady;
+  }
+
+  canAdoptGroupDefaults(): boolean {
+    return (
+      !this.folderSelectedByUser &&
+      !this.whereSelectedByUser &&
+      !this.projectSelectedByUser &&
+      !this.repositoryState.hasUserSelection
+    );
+  }
+
+  adoptGroupDefaults() {
+    if (this.read().data?.groupStatus !== "resolved" || !this.canAdoptGroupDefaults()) {
+      return;
+    }
+    this.adoptAgentDefaults({ preserveSelectedAgent: true });
   }
 
   setAgentsHydrated(value: boolean) {
@@ -149,7 +170,7 @@ export class DraftPlaceState {
   }
 
   execNodes(): DraftNode[] {
-    return this.executionNodes().filter((node) => node.connected);
+    return this.executionNodes().filter(isDraftNodeSessionEligible);
   }
 
   execNodeReady(): boolean {
@@ -224,15 +245,15 @@ export class DraftPlaceState {
     const agents = this.agents();
     const configuredDefault = snapshot.context?.agents.state.agentsList?.defaultId;
     const fallback = agents.some((agent) => agent.id === configuredDefault)
-      ? (configuredDefault ?? "main")
-      : (agents[0]?.id ?? "main");
+      ? (configuredDefault ?? "")
+      : (agents[0]?.id ?? "");
     const keepSelectedAgent =
       options.preserveSelectedAgent && this.agentSelectedByUser && Boolean(this.selectedAgent());
     if (!keepSelectedAgent) {
       this.agentIdValue = catalog.resolveAgentId(snapshot.data, agents, fallback);
       this.agentSelectedByUser = false;
     }
-    const preference = this.gateway.readPreference(this.agentIdValue);
+    const preference = this.agentIdValue ? this.gateway.readPreference(this.agentIdValue) : null;
     const keepSelectedFolder = options.preserveSelectedFolder && this.folderSelectedByUser;
     if (!this.execNodeValue && !keepSelectedFolder && !snapshot.pendingCloudSessionKey) {
       const workspace = this.workspacePath();
@@ -242,16 +263,30 @@ export class DraftPlaceState {
         storedFolder === preference?.workspace &&
         preference.workspace !== workspace;
       const storedFolderUsable = Boolean(storedFolder) && !storedWorkspaceMoved;
-      this.folderValue = storedFolderUsable ? storedFolder : workspace;
+      const groupTarget = Boolean(snapshot.data?.group);
+      const groupFolder = snapshot.data?.groupCwd ?? "";
+      const groupWorktree = snapshot.data?.groupWorktree === true;
+      this.folderValue = groupTarget
+        ? groupFolder || workspace
+        : storedFolderUsable
+          ? storedFolder
+          : workspace;
       this.folderGatewayApproved = false;
       this.folderSelectedByUser = false;
-      this.repositoryState.adoptPreference(preference);
-      const preferredWhere = preference?.where ?? { kind: "local" };
+      this.repositoryState.adoptPreference(groupTarget ? { worktree: groupWorktree } : preference);
+      if (groupTarget) {
+        // Group defaults own the initial local/worktree choice. Repository
+        // discovery still rejects worktrees when the selected folder is not Git.
+        this.repositoryState.forceWorktree(groupWorktree);
+      }
+      const preferredWhere = groupTarget
+        ? { kind: "local" as const }
+        : (preference?.where ?? { kind: "local" as const });
       this.preferredWhereRestore = preferredWhere.kind === "local" ? null : preferredWhere;
-      this.preferredProjectRestore = preference?.projectId ?? "";
+      this.preferredProjectRestore = groupTarget ? "" : (preference?.projectId ?? "");
       this.whereSelectedByUser = false;
       this.projectSelectedByUser = false;
-      if (storedWorkspaceMoved) {
+      if (storedWorkspaceMoved && !groupTarget) {
         this.persistPreference({ folder: workspace });
       }
     }
@@ -301,6 +336,7 @@ export class DraftPlaceState {
     this.execNodeValue = "";
     this.modelControl.reset();
     this.cloudProfileIdValue = "";
+    this.cloudMachines.clear();
     this.callbacks.requestUpdate();
   }
 
@@ -332,12 +368,14 @@ export class DraftPlaceState {
     this.nodesValue = [];
     this.execNodeValue = "";
     this.cloudProfileIdValue = "";
+    this.cloudMachines.clear();
     this.callbacks.requestUpdate();
   }
 
-  applyPendingCloud(params: { agentId: string; profileId: string; cwd?: string }) {
+  applyPendingCloud(params: PendingCloudPlace) {
     this.agentIdValue = params.agentId;
     this.cloudProfileIdValue = params.profileId;
+    this.cloudMachines.applyPending(params.profileId, params.machineClass);
     this.repositoryState.forceWorktree(true);
     this.folderValue = params.cwd ?? "";
     this.folderGatewayApproved = false;
@@ -468,6 +506,12 @@ export class DraftPlaceState {
   selectExecNode(execNode: string) {
     const snapshot = this.read();
     if (snapshot.submitting || snapshot.pendingCloudSessionKey) {
+      return;
+    }
+    if (
+      execNode &&
+      !this.nodesValue.some((node) => node.nodeId === execNode && isDraftNodeSessionEligible(node))
+    ) {
       return;
     }
     if (execNode === this.execNodeValue && !this.cloudProfileIdValue) {
@@ -696,7 +740,9 @@ export class DraftPlaceState {
       this.nodesHydrated = true;
       if (
         this.execNodeValue &&
-        !nodes.some((node) => node.nodeId === this.execNodeValue && node.canExec)
+        !nodes.some(
+          (node) => node.nodeId === this.execNodeValue && isDraftNodeSessionEligible(node),
+        )
       ) {
         this.execNodeValue = "";
         this.folderValue = this.workspacePath();

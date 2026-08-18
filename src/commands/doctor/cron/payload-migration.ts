@@ -5,7 +5,11 @@ import {
   readStringValue as readString,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { toCanonicalOpenAIModelRef } from "../shared/codex-route-model-ref.js";
-import { migrateLegacyTaskSuggestionToolList } from "../shared/legacy-tool-name-migration.js";
+import {
+  IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+  migrateLegacyToolNameList,
+  TASK_SUGGESTION_TOOL_NAME_MIGRATION,
+} from "../shared/legacy-tool-name-migration.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -344,7 +348,10 @@ export function migrateLegacyCronPayload(
 ): boolean {
   let mutated = false;
 
-  if (migrateLegacyTaskSuggestionToolList(payload.toolsAllow)) {
+  if (migrateLegacyToolNameList(payload.toolsAllow, TASK_SUGGESTION_TOOL_NAME_MIGRATION)) {
+    mutated = true;
+  }
+  if (migrateLegacyToolNameList(payload.toolsAllow, IMAGE_INSPECTION_TOOL_NAME_MIGRATION)) {
     mutated = true;
   }
 

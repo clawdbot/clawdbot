@@ -305,7 +305,11 @@ describe("Canvas agent tool over a paired Linux node", () => {
             );
           }
           if (action.command === "canvas.eval") {
-            expect(result.details).toEqual({ result: "canvas-eval-result" });
+            expect(result.details).toEqual({
+              ok: true,
+              node: nodeId,
+              result: "canvas-eval-result",
+            });
           }
           if (action.command === "canvas.snapshot") {
             expect(result.details).toMatchObject({

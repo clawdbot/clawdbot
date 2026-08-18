@@ -25,7 +25,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { testing } from "./runtime-snapshots.test-support.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 function createStore(access: string): AuthProfileStore {
   return {
@@ -234,6 +234,36 @@ describe("runtime auth profile snapshots", () => {
       expect(listener).toHaveBeenCalledWith({
         affectsInheritedStores: true,
       });
+    } finally {
+      unregister();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("notifies when identical external credentials change from CLI to plugin ownership", () => {
+    const agentDir = "/tmp/openclaw-auth-runtime-external-owner";
+    const store: RuntimeAuthProfileStore = {
+      ...createStore("same-credential"),
+      runtimeExternalProfileIds: ["openai:default"],
+      runtimeExternalCliProfileIds: ["openai:default"],
+    };
+    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      const pluginOwned: RuntimeAuthProfileStore = {
+        ...store,
+        runtimeExternalCliProfileIds: undefined,
+      };
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: pluginOwned,
+        },
+      ]);
+
+      expect(listener).toHaveBeenCalledOnce();
+      expect(listener).toHaveBeenCalledWith({ affectsInheritedStores: true });
     } finally {
       unregister();
       clearRuntimeAuthProfileStoreSnapshots();

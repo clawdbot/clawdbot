@@ -393,7 +393,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("does not fallback after structured replay state records potential side effects", () => {
+  it("does not fallback after a yielded empty result records potential side effects", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",
       model: "gpt-5.5",
@@ -402,7 +402,8 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         meta: {
           durationMs: 42,
           replayInvalid: true,
-          agentHarnessResultClassification: "reasoning-only",
+          yielded: true,
+          stopReason: "end_turn",
         },
       },
     });

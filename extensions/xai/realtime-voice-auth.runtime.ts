@@ -1,3 +1,4 @@
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -5,13 +6,18 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 export async function resolveXaiRealtimeApiKey(
   configApiKey: string | undefined,
   cfg: OpenClawConfig | undefined,
+  agentId?: string,
 ): Promise<string> {
   const direct =
     normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
   if (direct) {
     return direct;
   }
-  const auth = await resolveApiKeyForProvider({ provider: "xai", cfg });
+  const auth = await resolveApiKeyForProvider({
+    provider: "xai",
+    cfg,
+    ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
+  });
   const oauthKey = normalizeOptionalString(auth?.apiKey);
   if (oauthKey) {
     return oauthKey;

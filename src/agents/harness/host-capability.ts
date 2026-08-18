@@ -1,7 +1,12 @@
 import path from "node:path";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
-import { getAdmittedRunDelegatedAuthority } from "../admitted-run-context.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  retainAdmittedRunBeforeToolCallRecovery,
+} from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import { bindAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
@@ -10,6 +15,7 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
@@ -27,8 +33,29 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
+type AgentHarnessHostApprovalResult = NonNullable<
+  Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
+>;
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
+
+type RetainedBeforeToolCallRunner = Readonly<{
+  assertActive: () => void;
+  release: () => void;
+  runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"];
+}>;
+
+const retainedBeforeToolCallRunners = new WeakMap<
+  AgentHarnessHostCapabilities["runBeforeToolCall"],
+  () => RetainedBeforeToolCallRunner | undefined
+>();
+
+/** Internal core-only lease for an already-created host policy callback. */
+export function retainBeforeToolCallForNativeHookRelay(
+  runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"],
+): RetainedBeforeToolCallRunner | undefined {
+  return retainedBeforeToolCallRunners.get(runBeforeToolCall)?.();
+}
 
 function normalizeNativeOperationCwd(value: unknown, attemptCwd: string | undefined): string {
   if (typeof value !== "string") {
@@ -162,6 +189,11 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
+  const preparedRunEnvironment = prepareGitHubToolEnvironment({
+    config: config ?? {},
+    sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
+    agentId: attempt.agentId ?? "main",
+  });
   const skillUsagePaths = attempt.sandbox?.skillUsagePaths
     ? cloneSnapshot(attempt.sandbox.skillUsagePaths)
     : undefined;
@@ -207,11 +239,67 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   const withCaller = async <T>(run: () => Promise<T>): Promise<T> =>
     await withGatewayToolCallerIdentity(callerIdentity, run);
+  const runBeforeToolCallWithAssertion = async (
+    assertCurrent: () => void,
+    {
+      nativeOperation,
+      approvalMode,
+      ...request
+    }: Parameters<AgentHarnessHostCapabilities["runBeforeToolCall"]>[0],
+  ) => {
+    assertCurrent();
+    const hostApprovalMode = approvalMode === "defer" ? "defer" : "request";
+    const actionCwd =
+      nativeOperation?.cwd !== undefined
+        ? normalizeNativeOperationCwd(nativeOperation.cwd, hookContext.cwd)
+        : undefined;
+    const actionHookContext = actionCwd
+      ? Object.freeze({ ...hookContext, cwd: actionCwd })
+      : hookContext;
+    const result = await runBeforeToolCallHook({
+      ...request,
+      approvalMode: hostApprovalMode,
+      ctx: actionHookContext,
+    });
+    assertCurrent();
+    return result;
+  };
+  const runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"] = async (request) =>
+    await withCaller(async () => await runBeforeToolCallWithAssertion(assertActive, request));
+  retainedBeforeToolCallRunners.set(runBeforeToolCall, () => {
+    const recovery = retainAdmittedRunBeforeToolCallRecovery(attempt.admittedRunContext);
+    if (!recovery) {
+      return undefined;
+    }
+    const assertRecoveryActive = () => {
+      if (
+        attempt.abortSignal?.aborted ||
+        attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance
+      ) {
+        throw new Error("agent harness retained host policy is no longer active");
+      }
+      recovery.assertActive();
+    };
+    return Object.freeze({
+      assertActive: assertRecoveryActive,
+      release: recovery.release,
+      runBeforeToolCall: async (request) =>
+        await runBeforeToolCallWithAssertion(assertRecoveryActive, request),
+    });
+  });
 
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    preparedEnvironment: () => {
+      assertActive();
+      return Object.freeze({
+        credentialScrubEnv: Object.freeze({ ...preparedRunEnvironment.credentialScrubEnv }),
+        localIdentityEnv: Object.freeze({ ...preparedRunEnvironment.localIdentityEnv }),
+        managedLocalIdentity: preparedRunEnvironment.managedLocalIdentity,
+      });
+    },
     bindToolSurface: (tools, options) => {
       assertActive();
       const boundAbortSignal = attempt.abortSignal
@@ -239,31 +327,25 @@ export function createAgentHarnessHostCapabilities(params: {
           .map((tool) => gateBoundTool(tool, assertActive))
       );
     },
-    runBeforeToolCall: async ({ nativeOperation, approvalMode, ...request }) => {
+    prepareMutableFileApproval: async (request) => {
       assertActive();
-      const hostApprovalMode = approvalMode === "defer" ? "defer" : "request";
-      const actionCwd =
-        nativeOperation?.cwd !== undefined
-          ? normalizeNativeOperationCwd(nativeOperation.cwd, hookContext.cwd)
-          : undefined;
-      // Native action location can vary within one attempt. Only cwd is derived;
-      // all authority and identity fields remain fixed to the admitted host snapshot.
-      const actionHookContext = actionCwd
-        ? Object.freeze({ ...hookContext, cwd: actionCwd })
-        : hookContext;
-      const result = await withCaller(
-        async () =>
-          await runBeforeToolCallHook({
-            ...request,
-            approvalMode: hostApprovalMode,
-            ctx: actionHookContext,
-          }),
-      );
-      // Policy hooks may yield while the run owner closes. Revalidate before
-      // their result crosses the native action boundary.
+      const prepared = await prepareSystemRunMutableFileApproval(request);
       assertActive();
-      return result;
+      if (!prepared.ok) {
+        return prepared;
+      }
+      return Object.freeze({
+        ok: true,
+        requiresOneShot: prepared.requiresOneShot,
+        revalidate: async () => {
+          assertActive();
+          const current = await prepared.revalidate();
+          assertActive();
+          return current;
+        },
+      });
     },
+    runBeforeToolCall,
     requestApproval: async (request) => {
       assertActive();
       const result = await withCaller(
@@ -299,7 +381,7 @@ export function createAgentHarnessHostCapabilities(params: {
       assertActive();
       const result = await withCaller(
         async () =>
-          await callGatewayTool<{ id?: string; decision?: string | null }>(
+          await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
             "plugin.approval.waitDecision",
             { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
             { id: request.approvalId },
@@ -309,9 +391,13 @@ export function createAgentHarnessHostCapabilities(params: {
       // An allowed decision is useful only while this exact admitted owner is
       // still live; fail closed if closure raced the awaited Gateway result.
       assertActive();
-      return result?.id === request.approvalId
-        ? (result.decision as "allow-once" | "allow-always" | "deny" | null | undefined)
-        : undefined;
+      if (result?.id !== request.approvalId) {
+        return undefined;
+      }
+      return {
+        decision: result.decision,
+        terminalReason: result.terminalReason,
+      };
     },
   });
   return {

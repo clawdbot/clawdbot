@@ -14,7 +14,8 @@ import {
 } from "./attempt-steering.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
-import type { CodexTurnStartResponse, JsonObject } from "./protocol.js";
+import { canonicalizeNativeProgressCardInput } from "./plan-compaction-state.js";
+import { isJsonObject, type CodexTurnStartResponse } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -56,12 +57,14 @@ export async function activateCodexAttemptTurn(
     sandboxSessionKey,
     effectiveCwd,
   } = connection;
-  const { dynamicToolParams, computerContextEpoch, toolBridge } = attemptTools;
+  const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
   const { state, userInputBridgeRef, steeringQueueRef, turnWatches, completeTurn, interruptTurn } =
     turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
+  const progressCardTool = toolBridge.availableTools.find((tool) => tool.name === "progress_card");
+  let nativePlanUpdateOrdinal = 0;
   const prepareNativeMcpAppResultDetails = createCodexNativeMcpAppResultDetailsPreparer({
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
@@ -114,12 +117,53 @@ export async function activateCodexAttemptTurn(
       trajectoryRecorder,
       resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      ...(progressCardTool
+        ? {
+            onNativePlanUpdate: async (update: {
+              markdown?: string;
+              steps: Array<{
+                step: string;
+                status: "pending" | "in_progress" | "completed";
+              }>;
+            }) => {
+              nativePlanUpdateOrdinal += 1;
+              try {
+                const input = canonicalizeNativeProgressCardInput(update);
+                await progressCardTool.execute(
+                  `codex-native-plan:${activeTurnId}:${nativePlanUpdateOrdinal}`,
+                  input,
+                  runAbortController.signal,
+                );
+              } catch (error) {
+                embeddedAgentLog.warn("failed to persist native Codex plan to progress card", {
+                  runId: params.runId,
+                  threadId: resourceState.thread.threadId,
+                  error: formatErrorMessage(error),
+                });
+              }
+            },
+          }
+        : {}),
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText: turnState.codexTurnPromptText,
-      onContextCompacted: () => {
+      onContextCompacted: async () => {
         computerContextEpoch.value += 1;
         delete computerContextEpoch.frameToolCallId;
         delete computerContextEpoch.frameImageIdentity;
+        try {
+          await compactionPlanState.restore({
+            client: resourceState.client,
+            threadId: resourceState.thread.threadId,
+            timeoutMs: connection.appServer.requestTimeoutMs,
+            signal: runAbortController.signal,
+          });
+        } catch (error) {
+          embeddedAgentLog.warn("failed to restore Codex plan state after compaction", {
+            runId: params.runId,
+            threadId: resourceState.thread.threadId,
+            error: formatErrorMessage(error),
+          });
+        }
       },
     },
   );
@@ -151,13 +195,16 @@ export async function activateCodexAttemptTurn(
     }
   }
   if (!state.completed && isTerminalTurnStatus(turn.turn.status)) {
+    if (!isJsonObject(turn.turn)) {
+      throw new Error("Codex turn completion payload is not a JSON object");
+    }
     await enqueueNotification(
       {
         method: "turn/completed",
         params: {
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
-          turn: turn.turn as unknown as JsonObject,
+          turn: turn.turn,
         },
       },
       { threadId: resourceState.thread.threadId, turnId: activeTurnId },
@@ -172,23 +219,37 @@ export async function activateCodexAttemptTurn(
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;
+  const claimPendingUserInputAnswer = async (
+    text: string,
+    optionsLocal?: CodexSteeringQueueOptions,
+  ) => {
+    if (optionsLocal?.isInboundUserMessage !== true || optionsLocal.images?.length) {
+      return false;
+    }
+    const claimed = await claimPendingAgentQuestionAnswer({
+      sessionKey: params.sessionKey ?? params.sessionId,
+      text,
+      persist: optionsLocal.userTurnTranscriptRecorder
+        ? async () => {
+            await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    });
+    return claimed;
+  };
+  const cancelPendingUserInput = (resolvedBy: string) =>
+    cancelPendingAgentQuestionForSession({
+      sessionKey: params.sessionKey ?? params.sessionId,
+      resolvedBy,
+    });
   const queueMessage = async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
     const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
-    if (isInboundUserMessage && !optionsLocal?.images?.length) {
-      const claimed = await claimPendingAgentQuestionAnswer({
-        sessionKey: params.sessionKey ?? params.sessionId,
-        text,
-      });
-      if (claimed) {
-        optionsLocal?.onQueueAccepted?.(true);
-        return undefined;
-      }
-    } else if (isInboundUserMessage) {
+    if (await claimPendingUserInputAnswer(text, optionsLocal)) {
+      optionsLocal?.onQueueAccepted?.(true);
+      return undefined;
+    } else if (isInboundUserMessage && optionsLocal?.images?.length) {
       try {
-        await cancelPendingAgentQuestionForSession({
-          sessionKey: params.sessionKey ?? params.sessionId,
-          resolvedBy: "image-reply",
-        });
+        await cancelPendingUserInput("image-reply");
       } catch (error) {
         // Cleanup failure must not drop the user's image turn.
         embeddedAgentLog.warn("failed to cancel codex gateway question before image steering", {
@@ -212,6 +273,9 @@ export async function activateCodexAttemptTurn(
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
+    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    claimPendingUserInputAnswer,
+    cancelPendingUserInput,
     queueMessage,
     messageInjection: {
       isAvailable: () =>

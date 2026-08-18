@@ -476,6 +476,15 @@ suite.define(() => {
       }
       const handedOffToast = page.locator(".shell > openclaw-toast-host .app-toast");
       await expect.poll(() => handedOffToast.textContent()).toContain("Codex hidden");
+      const [toastBounds, composerBounds] = await Promise.all([
+        handedOffToast.boundingBox(),
+        page.locator(".agent-chat__composer-shell").boundingBox(),
+      ]);
+      if (!toastBounds || !composerBounds) {
+        throw new Error("expected the handed-off toast and chat composer to have layout boxes");
+      }
+      expect(Math.round(toastBounds.y)).toBe(20);
+      expect(toastBounds.y + toastBounds.height).toBeLessThan(composerBounds.y);
       await handedOffToast.getByRole("button", { name: "Dismiss" }).click();
       await expect.poll(() => handedOffToast.isVisible()).toBe(false);
     },

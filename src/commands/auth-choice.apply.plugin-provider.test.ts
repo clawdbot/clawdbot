@@ -6,8 +6,7 @@ import {
   prepareAuthChoiceLoadedPluginProvider,
   runProviderPluginAuthMethod,
 } from "../plugins/provider-auth-choice.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
+import type { ProviderPlugin, ProviderAuthMethod } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
 type ResolveProviderInstallCatalogEntry =

@@ -2417,7 +2417,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
     const call = createCall(Date.now() - 1_000);
     call.providerCallId = "CA-stream-1";
 
-    const endCall = vi.fn(async () => ({ success: true }));
+    const endCall = vi.fn(async () => ({ success: false, error: "carrier unavailable" }));
     const speakInitialMessage = vi.fn(async () => {});
     const getCallByProviderCallId = vi.fn((providerCallId: string) =>
       providerCallId === "CA-stream-1" ? call : undefined,
@@ -2460,7 +2460,16 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         },
       },
     });
-    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    const { logger, messages } = createCapturingLogger();
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      twilioProvider,
+      undefined,
+      undefined,
+      undefined,
+      logger,
+    );
     await server.start();
 
     const mediaHandler = server.getMediaStreamHandler() as unknown as {
@@ -2474,9 +2483,11 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       throw new Error("expected webhook server to expose a media stream handler");
     }
 
+    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-old");
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");
     await vi.advanceTimersByTimeAsync(1_000);
     mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
+    mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");
     await vi.advanceTimersByTimeAsync(2_100);
     expect(endCall).not.toHaveBeenCalled();
     expect(speakInitialMessage).not.toHaveBeenCalled();
@@ -2486,9 +2497,16 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
     expect(speakInitialMessage).toHaveBeenCalledWith("CA-stream-1");
 
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-new");
+    mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-new");
     await vi.advanceTimersByTimeAsync(2_100);
     expect(endCall).toHaveBeenCalledTimes(1);
     expect(endCall).toHaveBeenCalledWith(call.callId);
+    expect(messages).toContain(
+      `[voice-call] Call finalization requested reason=stream-disconnect-grace-expired callId=${call.callId} providerCallId=CA-stream-1`,
+    );
+    expect(messages).toContain(
+      `[voice-call] Failed to auto-end call ${call.callId}: carrier unavailable`,
+    );
 
     await server.stop();
   });

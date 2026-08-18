@@ -6,17 +6,20 @@ import SwiftUI
 struct DesktopHubScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     let source: String?
+    let session: String?
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
     let gatewayAction: (() -> Void)?
 
     init(
         source: String? = nil,
+        session: String? = nil,
         headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         usesNativeNavigationChrome: Bool = false,
         gatewayAction: (() -> Void)? = nil)
     {
         self.source = source
+        self.session = session
         self.headerSidebarAction = headerSidebarAction
         self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.gatewayAction = gatewayAction
@@ -27,17 +30,19 @@ struct DesktopHubScreen: View {
         let storedOperatorToken = AuthenticatedControlUI.storedOperatorToken(config: config)
         ZStack {
             OpenClawProBackground()
-            if let url = Self.desktopURL(config: config, source: self.source) {
+            if let url = Self.desktopURL(config: config, source: self.source, session: self.session) {
                 AuthenticatedControlUIWebView(
                     url: url,
                     authScript: Self.desktopAuthUserScript(
                         config: config,
                         source: self.source,
+                        session: self.session,
                         storedOperatorToken: storedOperatorToken),
                     tls: config?.tls)
                     .id(Self.webContentIdentity(
                         config: config,
                         source: self.source,
+                        session: self.session,
                         storedOperatorToken: storedOperatorToken))
                     .ignoresSafeArea(.container, edges: .bottom)
             } else {
@@ -90,10 +95,17 @@ struct DesktopHubScreen: View {
 
     /// Credentials never enter this URL; the document-start user script carries
     /// them through the Control UI's native-auth contract.
-    static func desktopURL(config: GatewayConnectConfig?, source: String?) -> URL? {
+    static func desktopURL(
+        config: GatewayConnectConfig?,
+        source: String?,
+        session: String? = nil) -> URL?
+    {
         var queryItems = [URLQueryItem(name: "view", value: "desktop")]
         if let source = self.normalizedSource(source) {
             queryItems.append(URLQueryItem(name: "source", value: source))
+        }
+        if let session = self.normalizedSource(session) {
+            queryItems.append(URLQueryItem(name: "session", value: session))
         }
         return AuthenticatedControlUI.pageURL(
             config: config,
@@ -101,27 +113,34 @@ struct DesktopHubScreen: View {
             queryItems: queryItems)
     }
 
-    static func desktopAuthUserScript(config: GatewayConnectConfig?, source: String?) -> String? {
+    static func desktopAuthUserScript(
+        config: GatewayConnectConfig?,
+        source: String?,
+        session: String? = nil) -> String?
+    {
         self.desktopAuthUserScript(
             config: config,
             source: source,
+            session: session,
             storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
     }
 
     static func desktopAuthUserScript(
         config: GatewayConnectConfig?,
         source: String?,
+        session: String? = nil,
         storedOperatorToken: String?) -> String?
     {
         AuthenticatedControlUI.authUserScript(
             config: config,
-            pageURL: self.desktopURL(config: config, source: source),
+            pageURL: self.desktopURL(config: config, source: source, session: session),
             storedOperatorToken: storedOperatorToken)
     }
 
     static func webContentIdentity(
         config: GatewayConnectConfig?,
         source: String?,
+        session: String? = nil,
         storedOperatorToken: String?) -> Int
     {
         var hasher = Hasher()
@@ -129,6 +148,7 @@ struct DesktopHubScreen: View {
             config: config,
             storedOperatorToken: storedOperatorToken))
         hasher.combine(self.normalizedSource(source))
+        hasher.combine(self.normalizedSource(session))
         return hasher.finalize()
     }
 

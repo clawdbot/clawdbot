@@ -1,6 +1,12 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
-import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
+import type {
+  WorkboardAttachment,
+  WorkboardCard,
+  WorkboardExecutionStatus,
+  WorkboardStaleState,
+  WorkboardStatus,
+} from "@openclaw/workboard-contract";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -18,6 +24,7 @@ import {
   mergeDiagnostics,
   removeUndefinedCardFields,
   retryBudgetExhausted,
+  shouldSyncWorkboardLifecycleStatus,
 } from "./store-card-helpers.js";
 import {
   isWorkboardClaimReclaimable,
@@ -45,6 +52,68 @@ export type { WorkboardDispatchResult } from "./store-inputs.js";
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
+  async syncLifecycle(
+    id: string,
+    input: {
+      targetStatus: WorkboardStatus | undefined;
+      executionStatus: WorkboardExecutionStatus | undefined;
+      sourceUpdatedAt: number | undefined;
+      stale: WorkboardStaleState | undefined;
+      now: number;
+    },
+  ): Promise<boolean> {
+    return await this.enqueueMutation(async () => {
+      const card = await this.get(id);
+      if (!card || card.metadata?.archivedAt) {
+        return false;
+      }
+      const patch: WorkboardCardPatch = {};
+      let metadata: Record<string, unknown> | undefined;
+      // Recheck manual status under the mutation lock; a hook can race an operator move.
+      if (
+        input.sourceUpdatedAt !== undefined &&
+        shouldSyncWorkboardLifecycleStatus(card, input.targetStatus)
+      ) {
+        patch.status = input.targetStatus;
+        metadata = { lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt };
+      }
+      if (
+        card.execution &&
+        input.executionStatus &&
+        card.execution.status !== input.executionStatus
+      ) {
+        patch.execution = {
+          ...card.execution,
+          status: input.executionStatus,
+          updatedAt: input.now,
+        };
+      }
+      if (input.stale) {
+        const existing = card.metadata?.stale;
+        if (
+          !existing ||
+          existing.lastSessionUpdatedAt !== input.stale.lastSessionUpdatedAt ||
+          existing.reason !== input.stale.reason
+        ) {
+          metadata = {
+            ...metadata,
+            stale: { ...input.stale, detectedAt: existing?.detectedAt ?? input.stale.detectedAt },
+          };
+        }
+      } else if (card.metadata?.stale) {
+        metadata = { ...metadata, stale: null };
+      }
+      if (metadata) {
+        patch.metadata = metadata;
+      }
+      if (Object.keys(patch).length === 0) {
+        return false;
+      }
+      await this.updateCard(id, patch);
+      return true;
+    });
+  }
+
   private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
     if (
       card.status !== "triage" ||

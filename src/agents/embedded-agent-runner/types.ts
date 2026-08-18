@@ -44,6 +44,7 @@ export type EmbeddedAgentMeta = {
   provider: string;
   model: string;
   contextTokens?: number;
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   agentHarnessId?: string;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
@@ -185,6 +186,8 @@ export type EmbeddedAgentRunMeta = {
   terminalReplyKind?: "silent-empty";
   terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
+  /** Explicit user-facing waiting status supplied to sessions_yield. */
+  yieldAcknowledgment?: string;
   error?: {
     kind:
       | "context_overflow"
@@ -261,6 +264,7 @@ export type EmbeddedAgentRunResult = {
 export type EmbeddedAgentCompactResult = {
   ok: boolean;
   compacted: boolean;
+  compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
   reason?: string;
   /** Structured failure metadata used by model fallback classification. */
   failure?: {
@@ -270,8 +274,11 @@ export type EmbeddedAgentCompactResult = {
     rawError?: string;
   };
   result?: {
-    summary: string;
-    firstKeptEntryId: string;
+    /** Identifies summaryless provider compaction in RPC and UI consumers. */
+    kind?: "server-endpoint";
+    /** Server-endpoint compaction has no transcript summary or first-kept entry. */
+    summary?: string;
+    firstKeptEntryId?: string;
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;

@@ -401,7 +401,8 @@ Default Docker image: `openclaw-sandbox:bookworm-slim`
 
 The `scripts/sandbox-setup.sh`, `scripts/sandbox-common-setup.sh`, and `scripts/sandbox-browser-setup.sh` helper scripts are only available when running from a [source checkout](https://github.com/openclaw/openclaw). They are not included in the npm package.
 
-If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker build` commands shown below instead.
+If you installed the global OpenClaw npm package, use the inline `docker build`
+commands shown below instead.
 </Note>
 
 <Steps>
@@ -460,6 +461,8 @@ If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker 
 </Steps>
 
 By default, local container sandboxes run with **no network**. Override with `agents.defaults.sandbox.docker.network`.
+
+The default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy) is Gateway-loopback only. Sandbox exec receives the proxy and CA environment variables when the feature is enabled, but container loopback does not reach the Gateway host, and the default `network: "none"` blocks egress entirely. Sandbox/container proxy reachability is not implemented; do not enable sandbox networking expecting secret substitution to work in this release.
 
 <Note>
 Package installation and certificate-store changes are image provisioning, not

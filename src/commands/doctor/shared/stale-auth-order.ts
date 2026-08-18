@@ -7,22 +7,16 @@ import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "../../../agents/auth-profiles/order.js";
-import { resolveSharedAuthStorePath } from "../../../agents/auth-profiles/path-resolve.js";
 import {
-  coercePersistedAuthProfileStore,
-  mergeAuthProfileStores,
-} from "../../../agents/auth-profiles/persisted.js";
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../../../agents/auth-profiles/path-resolve.js";
+import { mergeAuthProfileStores } from "../../../agents/auth-profiles/persisted.js";
+import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import {
-  inspectPersistedAuthProfileStateRaw,
-  inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
-  resolveAuthProfileDatabaseFilePaths,
 } from "../../../agents/auth-profiles/sqlite.js";
-import {
-  coerceAuthProfileState,
-  mergeAuthProfileState,
-} from "../../../agents/auth-profiles/state.js";
 import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../../../config/paths.js";
@@ -34,10 +28,10 @@ import {
 } from "../../../state/openclaw-agent-db.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 import {
-  resolveLegacyAuthProfilesPath as resolveAuthStorePath,
-  resolveLegacyAuthStatePath as resolveAuthStatePath,
-  resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
-} from "../../doctor-auth-legacy-paths.js";
+  inspectAuthDatabaseFiles,
+  inspectUnmigratedAuthStoreSources,
+  loadCompletePersistedStore,
+} from "./stale-auth-order-store.js";
 
 type StaleConfiguredAuthOrder = {
   provider: string;
@@ -104,146 +98,6 @@ function hasNonemptyConfiguredAuthOrder(cfg: OpenClawConfig): boolean {
   return Boolean(order && Object.values(order).some((profileIds) => profileIds.length > 0));
 }
 
-function inspectAuthPath(pathname: string): "present" | "missing" | "unreadable" {
-  try {
-    fs.statSync(pathname);
-    return "present";
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      return "unreadable";
-    }
-  }
-  try {
-    // A dangling final symlink is unavailable state, not a stale registry row.
-    fs.lstatSync(pathname);
-    return "unreadable";
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      return "unreadable";
-    }
-  }
-
-  // Accept ENOENT only when the missing suffix has no broken symlink or
-  // non-directory ancestor masking an unavailable auth source.
-  let ancestor = path.dirname(pathname);
-  while (true) {
-    try {
-      const stat = fs.lstatSync(ancestor);
-      if (!stat.isSymbolicLink()) {
-        return stat.isDirectory() ? "missing" : "unreadable";
-      }
-      try {
-        return fs.statSync(ancestor).isDirectory() ? "missing" : "unreadable";
-      } catch {
-        return "unreadable";
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        return "unreadable";
-      }
-    }
-    const parent = path.dirname(ancestor);
-    if (parent === ancestor) {
-      return "missing";
-    }
-    ancestor = parent;
-  }
-}
-
-function inspectUnmigratedAuthStoreSources(agentDir: string): "present" | "missing" | "unreadable" {
-  const results = new Set(
-    [
-      resolveAuthStorePath(agentDir),
-      resolveAuthStatePath(agentDir),
-      resolveLegacyAuthStorePath(agentDir),
-    ].map((pathname) => inspectAuthPath(pathname)),
-  );
-  if (results.has("unreadable")) {
-    return "unreadable";
-  }
-  return results.has("present") ? "present" : "missing";
-}
-
-function inspectAuthDatabaseFiles(agentDir: string): "present" | "missing" | "unreadable" {
-  const [databasePath, ...sidecarPaths] = resolveAuthProfileDatabaseFilePaths(agentDir);
-  if (!databasePath) {
-    return "unreadable";
-  }
-  const availability = inspectAuthPath(databasePath);
-  const sidecarAvailability = sidecarPaths.map((pathname) => inspectAuthPath(pathname));
-  if (
-    availability === "unreadable" ||
-    sidecarAvailability.some((status) => status === "unreadable")
-  ) {
-    return "unreadable";
-  }
-  if (availability === "present") {
-    return "present";
-  }
-  return sidecarAvailability.every((sidecar) => sidecar === "missing") ? "missing" : "unreadable";
-}
-
-function loadCompletePersistedStore(
-  agentDir: string,
-):
-  | { status: "ok"; store: AuthProfileStore | null; hasAuthTables: boolean }
-  | { status: "invalid" } {
-  const inspection = inspectPersistedAuthProfileStoreRaw(agentDir);
-  const stateInspection = inspectPersistedAuthProfileStateRaw(agentDir);
-  if (inspection.status === "unreadable" || stateInspection.status === "unreadable") {
-    return { status: "invalid" };
-  }
-  const storeMissingReason = inspection.status === "missing" ? inspection.reason : undefined;
-  const stateMissingReason =
-    stateInspection.status === "missing" ? stateInspection.reason : undefined;
-  if (storeMissingReason === "database" || stateMissingReason === "database") {
-    return storeMissingReason === "database" && stateMissingReason === "database"
-      ? { status: "ok", store: null, hasAuthTables: false }
-      : { status: "invalid" };
-  }
-  if ((storeMissingReason === "table") !== (stateMissingReason === "table")) {
-    return { status: "invalid" };
-  }
-  if (storeMissingReason === "table") {
-    return { status: "ok", store: null, hasAuthTables: false };
-  }
-  const persistedState =
-    stateInspection.status === "readable" ? coerceAuthProfileState(stateInspection.raw) : {};
-  if (inspection.status === "missing") {
-    return stateInspection.status === "missing"
-      ? { status: "ok", store: null, hasAuthTables: true }
-      : {
-          status: "ok",
-          store: { version: 1, profiles: {}, ...persistedState },
-          hasAuthTables: true,
-        };
-  }
-  if (!isRecord(inspection.raw) || !isRecord(inspection.raw.profiles)) {
-    return { status: "invalid" };
-  }
-  const store = coercePersistedAuthProfileStore(inspection.raw);
-  const rawProfileIds = Object.keys(inspection.raw.profiles);
-  if (
-    !store ||
-    rawProfileIds.length !== Object.keys(store.profiles).length ||
-    rawProfileIds.some((profileId) => !Object.hasOwn(store.profiles, profileId))
-  ) {
-    // Coercion deliberately drops malformed credentials. A dropped id may be
-    // the user's explicit selection, so doctor must not infer that it vanished.
-    return { status: "invalid" };
-  }
-  return {
-    status: "ok",
-    store: {
-      ...store,
-      ...mergeAuthProfileState(coerceAuthProfileState(inspection.raw), persistedState),
-    },
-    hasAuthTables: true,
-  };
-}
-
 function listRetainedStateAgentDirs(env: NodeJS.ProcessEnv): string[] | null {
   const agentsRoot = path.join(resolveStateDir(env), "agents");
   let entries: fs.Dirent[];
@@ -295,9 +149,11 @@ function loadConfiguredAgentAuthStores(
   if (!order || !hasValidConfiguredAuthProfiles(cfg)) {
     return undefined;
   }
-  // Every secondary agent inherits the legacy main store at runtime, even when
-  // `agents.list` names a different default agent.
-  const mainAgentDir = path.dirname(resolveSharedAuthStorePath(env));
+  // Every agent inherits the shared store at runtime, even when `agents.list`
+  // names a different default agent.
+  const mainAgentDir = resolveSharedMainAuthAgentDir(env);
+  const sharedDatabasePath = path.resolve(resolveSharedAuthStorePath(env));
+  const sharedOwnership = resolveSharedAuthStoreOwnership(env);
   const activeAgentDirs = new Set<string>();
   const expectedAgentIdsByDir = new Map<string, Set<string>>();
   const addExpectedAgentDir = (agentDir: string, agentId: string) => {
@@ -305,7 +161,9 @@ function loadConfiguredAgentAuthStores(
     owners.add(normalizeAgentId(agentId));
     expectedAgentIdsByDir.set(agentDir, owners);
   };
-  addExpectedAgentDir(mainAgentDir, resolveAuthProfileDatabaseOwnerId(mainAgentDir));
+  if (sharedOwnership.location === "legacy-main") {
+    addExpectedAgentDir(mainAgentDir, resolveAuthProfileDatabaseOwnerId(mainAgentDir));
+  }
   for (const agentId of listAgentIds(cfg)) {
     const agentDir = path.resolve(resolveAgentDir(cfg, agentId, env));
     activeAgentDirs.add(agentDir);
@@ -325,10 +183,43 @@ function loadConfiguredAgentAuthStores(
   const agentDirs = new Set([mainAgentDir, ...activeAgentDirs, ...retainedAgentDirs]);
 
   const entries: Array<{
-    agentDir: string;
+    agentDir?: string;
     databasePath: string;
     store: AuthProfileStore | null;
+    isShared: boolean;
   }> = [];
+  const sharedLegacyAvailability = inspectUnmigratedAuthStoreSources(mainAgentDir);
+  if (sharedLegacyAvailability === "unreadable") {
+    return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
+  }
+  if (sharedLegacyAvailability === "present") {
+    return undefined;
+  }
+  const sharedLoaded = loadCompletePersistedStore(undefined, env);
+  if (sharedLoaded.status === "invalid") {
+    return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
+  }
+  if (sharedOwnership.location === "legacy-main") {
+    const availability = inspectAuthDatabaseFiles(mainAgentDir);
+    const expectedAgentIds = expectedAgentIdsByDir.get(mainAgentDir);
+    const owner =
+      availability === "present"
+        ? inspectOpenClawAgentDatabaseOwner(sharedDatabasePath)
+        : undefined;
+    if (
+      availability === "unreadable" ||
+      owner?.status === "unreadable" ||
+      (expectedAgentIds && owner?.status === "owned" && !expectedAgentIds.has(owner.agentId)) ||
+      (owner?.status === "unowned" && sharedLoaded.hasAuthTables)
+    ) {
+      return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
+    }
+  }
+  entries.push({
+    databasePath: sharedDatabasePath,
+    store: sharedLoaded.store,
+    isShared: true,
+  });
   for (const agentDir of agentDirs) {
     const expectedAgentIds = expectedAgentIdsByDir.get(agentDir);
     if (expectedAgentIds && expectedAgentIds.size !== 1) {
@@ -342,6 +233,9 @@ function loadConfiguredAgentAuthStores(
       return undefined;
     }
     const databasePath = path.resolve(resolveAuthProfileDatabasePath(agentDir));
+    if (databasePath === sharedDatabasePath) {
+      continue;
+    }
     const availability = inspectAuthDatabaseFiles(agentDir);
     if (availability === "unreadable") {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
@@ -363,7 +257,7 @@ function loadConfiguredAgentAuthStores(
     if (owner?.status === "unowned" && loaded.hasAuthTables) {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
-    entries.push({ agentDir, databasePath, store: loaded.store });
+    entries.push({ agentDir, databasePath, store: loaded.store, isShared: false });
   }
 
   let registeredDatabases: Array<{ agentId: string; path: string }>;
@@ -429,17 +323,20 @@ function loadConfiguredAgentAuthStores(
   }
 
   const emptyStore: AuthProfileStore = { version: 1, profiles: {} };
-  const mainStore = entries.find((entry) => entry.agentDir === mainAgentDir)?.store ?? emptyStore;
+  const mainStore = entries.find((entry) => entry.isShared)?.store ?? emptyStore;
   const agentStores = entries.map((entry) => {
     const localStore = entry.store ?? emptyStore;
-    return entry.agentDir === mainAgentDir
+    return entry.isShared
       ? mainStore
       : mergeAuthProfileStores(mainStore, localStore, {
           preserveBaseRuntimeExternalProfiles: true,
         });
   });
   const activeStores = entries.flatMap((entry, index) =>
-    activeAgentDirs.has(entry.agentDir) ? [agentStores[index] ?? emptyStore] : [],
+    (entry.isShared && activeAgentDirs.has(mainAgentDir)) ||
+    (entry.agentDir !== undefined && activeAgentDirs.has(entry.agentDir))
+      ? [agentStores[index] ?? emptyStore]
+      : [],
   );
   const stores = [
     ...agentStores,

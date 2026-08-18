@@ -109,6 +109,24 @@ function normalizeElevenLabsLatencyTier(value: unknown): number | undefined {
     : undefined;
 }
 
+const ELEVENLABS_OUTPUT_FAMILIES = new Set(["opus", "mp3", "pcm", "ulaw", "alaw", "wav"]);
+
+function resolveElevenLabsOutputPlan(req: SpeechSynthesisRequest): {
+  outputFormat: string;
+  fileExtension: string;
+  voiceCompatible: boolean;
+} {
+  const outputFormat =
+    trimToUndefined(req.providerOverrides?.outputFormat) ??
+    (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
+  const family = outputFormat.trim().toLowerCase().split("_", 1)[0];
+  return {
+    outputFormat,
+    fileExtension: family && ELEVENLABS_OUTPUT_FAMILIES.has(family) ? `.${family}` : ".bin",
+    voiceCompatible: family === "opus",
+  };
+}
+
 function normalizeVoiceSettings(
   rawVoiceSettings: Record<string, unknown> | undefined,
 ): Partial<ElevenLabsProviderConfig["voiceSettings"]> {
@@ -549,38 +567,30 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       Boolean(resolveElevenLabsApiKey(readElevenLabsProviderConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
-      const outputFormat =
-        trimToUndefined(overrides.outputFormat) ??
-        (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
+      const outputPlan = resolveElevenLabsOutputPlan(req);
       const audioBuffer = await elevenLabsTTS(
         resolveElevenLabsTtsRequest(req, {
-          outputFormat,
+          outputFormat: outputPlan.outputFormat,
           latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
         }),
       );
       return {
         audioBuffer,
-        outputFormat,
-        fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
-        voiceCompatible: req.target === "voice-note",
+        ...outputPlan,
       };
     },
     streamSynthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
-      const outputFormat =
-        trimToUndefined(overrides.outputFormat) ??
-        (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
+      const outputPlan = resolveElevenLabsOutputPlan(req);
       const stream = await elevenLabsTTSStream(
         resolveElevenLabsTtsRequest(req, {
-          outputFormat,
+          outputFormat: outputPlan.outputFormat,
           latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
         }),
       );
       return {
         audioStream: stream.audioStream,
-        outputFormat,
-        fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
-        voiceCompatible: req.target === "voice-note",
+        ...outputPlan,
         release: stream.release,
       };
     },

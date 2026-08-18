@@ -7,6 +7,7 @@ import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
+  startControlUiE2eServer,
   waitForConfirmModal,
   type MockGatewayControls,
   type MockGatewayRequest,
@@ -24,9 +25,10 @@ export const uiProofArtifactDir = path.join(
   "thread-management",
 );
 
-export function createSessionManagementE2eSuite() {
+export function createSessionManagementE2eSuite(source = false) {
   return createControlUiE2eSuite({
     name: "Control UI session management mocked Gateway E2E",
+    ...(source ? { startServer: () => startControlUiE2eServer(undefined, { source: true }) } : {}),
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
   });

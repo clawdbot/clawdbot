@@ -5,7 +5,6 @@ import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ConnectErrorDetailCodes,
@@ -15,11 +14,11 @@ import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
-import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveAdvertisedControlUiLinks,
@@ -34,33 +33,17 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import {
-  canonicalPathFromExistingAncestor,
-  isPathInside,
-  movePathToTrash,
-} from "../infra/fs-safe.js";
+import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import { listAgentSessionDirs, removeWorkspaceDirs } from "./cleanup-utils.js";
+import { listAgentSessionDirs, moveToTrash, removeWorkspaceDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
-
-/** Builds the token-authenticated Control UI URL shown by onboarding surfaces. */
-export function buildOnboardingControlUiUrl(params: {
-  httpUrl: string;
-  authMode?: GatewayAuthMode;
-  token?: string;
-  suppressTokenOutput?: boolean;
-}): string {
-  return params.authMode === "token" && params.token && !params.suppressTokenOutput
-    ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
-    : params.httpUrl;
-}
 
 /** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
@@ -190,7 +173,7 @@ export function applyWizardMetadata(
 ): OpenClawConfig {
   const commit =
     normalizeOptionalString(process.env.GIT_COMMIT) ?? normalizeOptionalString(process.env.GIT_SHA);
-  return {
+  return inheritLegacyDefaultAgentId(cfg, {
     ...cfg,
     wizard: {
       ...cfg.wizard,
@@ -200,28 +183,20 @@ export function applyWizardMetadata(
       lastRunCommand: params.command,
       lastRunMode: params.mode,
     },
-  };
+  });
 }
 
 /** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
-export function formatControlUiSshHint(params: {
-  port: number;
-  basePath?: string;
-  token?: string;
-}): string {
+export function formatControlUiSshHint(params: { port: number; basePath?: string }): string {
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
   const localUrl = `http://localhost:${params.port}${uiPath}`;
-  const authedUrl = params.token
-    ? `${localUrl}#token=${encodeURIComponent(params.token)}`
-    : undefined;
   const sshTarget = resolveSshTargetHint();
   return [
     "No GUI detected. Open from your computer:",
     `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
     "Then open:",
     localUrl,
-    authedUrl,
     "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
     "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     "Docs:",
@@ -259,49 +234,6 @@ export async function ensureWorkspaceAndSessions(
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };
-}
-
-/** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<boolean> {
-  if (!pathname) {
-    return false;
-  }
-  try {
-    await fs.lstat(pathname);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
-  try {
-    const targetPath = path.resolve(pathname);
-    const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
-    await movePathToTrash(sourcePath, {
-      allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
-    });
-    runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
-    return true;
-  } catch {
-    runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
-    return false;
-  }
-}
-
-async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {
-  return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
-}
-
-async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<string[]> {
-  const allowedRoots = [path.dirname(targetPath)];
-  const stat = await fs.lstat(targetPath);
-  if (stat.isSymbolicLink()) {
-    try {
-      // fs-safe resolves valid symlinks before allow-root checks; include the
-      // resolved parent so deleting a configured symlink moves the link itself.
-      allowedRoots.push(path.dirname(await fs.realpath(targetPath)));
-    } catch {
-      // Broken symlinks are handled lexically by fs-safe.
-    }
-  }
-  return uniqueStrings(allowedRoots);
 }
 
 async function assertFullResetPreservesOnboardingLock(workspaceDir: string): Promise<void> {
@@ -370,6 +302,7 @@ function throwIfResetFailed(failures: string[]): void {
 
 type OnboardingGatewayProbeParams = {
   url: string;
+  config?: OpenClawConfig;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -385,6 +318,7 @@ function runOnboardingGatewayProbe(
   const timeoutMs = params.timeoutMs ?? Math.max(1500, params.preauthHandshakeTimeoutMs ?? 0);
   return probeGateway({
     url,
+    ...(params.config ? { config: params.config } : {}),
     timeoutMs,
     auth: {
       token: params.token,

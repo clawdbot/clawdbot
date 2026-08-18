@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -122,6 +123,33 @@ describe("auth profile sqlite store", () => {
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
       expect(fs.existsSync(path.join(agentDir, "auth-state.json"))).toBe(false);
       expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(true);
+    });
+  });
+
+  it("persists the relocated shared store through the shared-state adapter", async () => {
+    await withAgentDirEnv("openclaw-auth-shared-state-", () => {
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      saveAuthProfileStore({
+        ...apiKeyStore("sk-shared"),
+        order: { openai: ["openai:default"] },
+      });
+
+      expect(ensureAuthProfileStore(undefined, { syncExternalCli: false })).toMatchObject({
+        profiles: { "openai:default": { key: "sk-shared" } },
+        order: { openai: ["openai:default"] },
+      });
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      expect(
+        database
+          .prepare("SELECT store_key FROM auth_profile_stores WHERE store_key = 'shared'")
+          .get(),
+      ).toEqual({ store_key: "shared" });
+      expect(
+        database
+          .prepare("SELECT store_key FROM auth_profile_state WHERE store_key = 'shared'")
+          .get(),
+      ).toEqual({ store_key: "shared" });
+      database.close();
     });
   });
 

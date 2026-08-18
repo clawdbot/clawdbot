@@ -92,13 +92,9 @@ const BindingMatchSchema = z
 const BindingSessionSchema = z
   .object({
     dmScope: z
-      .union([
-        z.literal("main"),
-        z.literal("per-peer"),
-        z.literal("per-channel-peer"),
-        z.literal("per-account-channel-peer"),
-      ])
+      .enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"])
       .optional(),
+    groupScope: z.enum(["main", "per-group"]).optional(),
   })
   .strict();
 

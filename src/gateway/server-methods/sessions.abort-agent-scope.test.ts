@@ -72,6 +72,8 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
       return actual.abortEmbeddedAgentRun(sessionId);
     },
     isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
+    resolveEmbeddedAgentRunProgressState: (...args: unknown[]) =>
+      isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
   };
 });
 
@@ -245,6 +247,7 @@ describe("sessions.abort agent scope", () => {
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
     loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      durableTargets: [],
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
     });

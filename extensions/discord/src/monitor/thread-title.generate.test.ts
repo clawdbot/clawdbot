@@ -72,7 +72,7 @@ describe("generateThreadTitle", () => {
       userMessage:
         "Channel: release-status\n\nChannel description: Deploy updates and incident notes\n\nMessage:\nSummarize deployment blockers and owner follow-ups.",
       prompt:
-        "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
+        "Generate a concise Discord thread title (3-6 words) in sentence case: capitalize only the first word and words that are always capitalized. Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
       modelRef: "openai/gpt-4.1-mini@local",
       timeoutMs: 60_000,
       maxLength: 600,

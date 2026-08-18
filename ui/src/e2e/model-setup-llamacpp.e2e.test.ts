@@ -24,7 +24,7 @@ const prepareOptions = [
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "llama.cpp",
-    hint: "Run one private GGUF model directly inside this Gateway",
+    hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
     actionLabel: "Set up model",
   },
   {
@@ -87,8 +87,18 @@ suite.define(() => {
                     id: "llama-cpp-consent",
                     type: "confirm",
                     message:
-                      "OpenClaw will download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) and run it directly inside this Gateway. Continue?",
+                      "OpenClaw will install a verified llama.cpp server and download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) plus the local embedding model (about 0.3 GB). Continue?",
                     initialValue: false,
+                  },
+                },
+                {
+                  done: false,
+                  status: "running",
+                  step: {
+                    id: "llama-server-verified",
+                    type: "progress",
+                    message: "Verified llama-server b10357",
+                    executor: "gateway",
                   },
                 },
                 {
@@ -105,9 +115,9 @@ suite.define(() => {
                   done: false,
                   status: "running",
                   step: {
-                    id: "llama-cpp-download-100",
+                    id: "llama-cpp-embedding-ready",
                     type: "progress",
-                    message: "Gemma 4 E4B model downloaded",
+                    message: "EmbeddingGemma model verified",
                     executor: "gateway",
                   },
                 },
@@ -141,7 +151,7 @@ suite.define(() => {
         const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
         expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
         await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
-        await page.getByText("OpenClaw will download Gemma 4 E4B IT Q4_K_M").waitFor();
+        await page.getByText("OpenClaw will install a verified llama.cpp server").waitFor();
 
         if (artifactDir) {
           await page.screenshot({
@@ -180,6 +190,7 @@ suite.define(() => {
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
         expect(activate.params).toEqual({
           kind: "provider-auto:llama-cpp",
+          agentId: "main",
           modelRef,
         });
 

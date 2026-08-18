@@ -5,6 +5,8 @@
  * auth profiles, and the current runtime config snapshot.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -138,6 +140,8 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     : undefined;
   const existingToolNames = new Set(params.existingToolNames ?? []);
   const preparedModelRuntime = params.options?.preparedModelRuntime;
+  const runtimeRegistry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry() ?? undefined;
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
     context: {
@@ -151,6 +155,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
+    ...(runtimeRegistry ? { runtimeRegistry } : {}),
     ...(preparedModelRuntime
       ? {
           preparedRuntime: {

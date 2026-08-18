@@ -94,6 +94,7 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /** Optional media stream handler for sending audio */
   private mediaStreamHandler: MediaStreamHandler | null = null;
+  private playbackMarkSequence = 0;
 
   /** Map of call SID to stream SID for media streams */
   private callStreamMap = new Map<string, string>();
@@ -705,14 +706,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return normalizeSendResult(raw);
     };
 
-    const sendPlaybackMark = (name: string): StreamSendResult => {
-      const raw = (handler as { sendMark: (sid: string, markName: string) => unknown }).sendMark(
-        streamSid,
-        name,
-      );
-      return normalizeSendResult(raw);
-    };
-
     await handler.queueTts(streamSid, async (signal) => {
       const sendKeepAlive = () => {
         sendAudioChunk(SILENCE_CHUNK);
@@ -727,6 +720,7 @@ export class TwilioProvider implements VoiceCallProvider {
       // Generate audio with core TTS (returns mu-law at 8kHz)
       let muLawAudio: Buffer;
       let synthTimeout: ReturnType<typeof setTimeout> | null = null;
+      let removeAbortListener = () => {};
       const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
       try {
         const synthPromise = ttsProvider.synthesizeForTelephony(text);
@@ -735,12 +729,27 @@ export class TwilioProvider implements VoiceCallProvider {
             reject(new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`));
           }, synthTimeoutMs);
         });
-        muLawAudio = await Promise.race([synthPromise, timeoutPromise]);
+        const abortPromise = new Promise<never>((_, reject) => {
+          const onAbort = () => {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Telephony TTS synthesis aborted"),
+            );
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+          if (signal.aborted) {
+            onAbort();
+          }
+        });
+        muLawAudio = await Promise.race([synthPromise, timeoutPromise, abortPromise]);
       } finally {
         if (synthTimeout) {
           clearTimeout(synthTimeout);
         }
         clearInterval(keepAlive);
+        removeAbortListener();
       }
 
       if (muLawAudio.length === 0) {
@@ -756,9 +765,13 @@ export class TwilioProvider implements VoiceCallProvider {
         }
         chunkAttempts += 1;
         const chunkResult = sendAudioChunk(chunk);
-        if (chunkResult.sent) {
-          chunkDelivered += 1;
+        if (!chunkResult.sent) {
+          handler.clearAudio(streamSid);
+          throw new Error(
+            `Telephony stream playback failed: audio chunk ${chunkAttempts} not delivered`,
+          );
         }
+        chunkDelivered += 1;
 
         // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
         const waitMs = nextChunkDueAt - Date.now();
@@ -778,22 +791,14 @@ export class TwilioProvider implements VoiceCallProvider {
         }
       }
 
-      let markSent = true;
-      if (!signal.aborted) {
-        // Send a mark to track when audio finishes
-        markSent = sendPlaybackMark(`tts-${Date.now()}`).sent;
+      if (signal.aborted) {
+        return;
       }
-
-      if (!signal.aborted && chunkAttempts > 0 && (chunkDelivered === 0 || !markSent)) {
-        const failures: string[] = [];
-        if (chunkDelivered === 0) {
-          failures.push("no audio chunks delivered");
-        }
-        if (!markSent) {
-          failures.push("completion mark not delivered");
-        }
-        throw new Error(`Telephony stream playback failed: ${failures.join("; ")}`);
+      if (chunkAttempts === 0 || chunkDelivered !== chunkAttempts) {
+        throw new Error("Telephony stream playback failed: incomplete audio delivery");
       }
+      const markName = `tts-${Date.now()}-${++this.playbackMarkSequence}`;
+      await handler.sendMarkAndWait(streamSid, markName, muLawAudio.length / 8, signal);
     });
   }
 

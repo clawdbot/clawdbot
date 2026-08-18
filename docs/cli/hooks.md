@@ -15,8 +15,8 @@ Related: [Hooks](/automation/hooks) - [Plugin hooks](/plugins/hooks)
 ## List hooks
 
 ```bash
-openclaw hooks --json
-openclaw hooks list [--eligible] [--json] [-v|--verbose]
+openclaw hooks --agent <id> --json
+openclaw hooks list [--agent <id>] [--eligible] [--json] [-v|--verbose]
 ```
 
 Bare `openclaw hooks` and `openclaw hooks --json` use the same list operation as
@@ -24,6 +24,7 @@ Bare `openclaw hooks` and `openclaw hooks --json` use the same list operation as
 extra, and bundled directories.
 
 - `--eligible`: only hooks whose requirements are met.
+- `--agent <id>`: inspect hooks for that agent's workspace. Required when multiple agents are configured without an implicit owner.
 - `--json`: structured output.
 - `-v, --verbose`: include a Missing column with unmet requirements.
 
@@ -40,7 +41,7 @@ Ready:
 ## Get hook info
 
 ```bash
-openclaw hooks info <name> [--json]
+openclaw hooks info <name> [--agent <id>] [--json]
 ```
 
 `<name>` is the hook name or hook key (for example `session-memory`). Shows source, file/handler paths, homepage, events, and per-requirement status (binaries, env, config, OS).
@@ -48,7 +49,7 @@ openclaw hooks info <name> [--json]
 ## Check eligibility
 
 ```bash
-openclaw hooks check [--json]
+openclaw hooks check [--agent <id>] [--json]
 ```
 
 Prints a ready/not-ready count summary; with hooks not ready, lists each with its blocking reason.
@@ -56,10 +57,14 @@ Prints a ready/not-ready count summary; with hooks not ready, lists each with it
 ## Enable a hook
 
 ```bash
-openclaw hooks enable <name>
+openclaw hooks enable <name> [--agent <id>]
 ```
 
 Adds/updates `hooks.internal.entries.<name>.enabled = true` in config and also flips the `hooks.internal.enabled` master switch on (the gateway does not load any internal hook handler until at least one is configured). Fails if the hook does not exist, is plugin-managed, or is not eligible (missing requirements).
+
+`--agent <id>` selects the workspace used to discover the hook and is required
+when multiple agents are configured without an implicit owner. The persisted
+hook entry is global and applies wherever that hook key is discovered.
 
 Plugin-managed hooks show `plugin:<id>` in `hooks list` and cannot be enabled/disabled here; enable or disable the owning plugin instead.
 
@@ -68,7 +73,7 @@ Restart the gateway after enabling (macOS menu bar app restart, or restart your 
 ## Disable a hook
 
 ```bash
-openclaw hooks disable <name>
+openclaw hooks disable <name> [--agent <id>]
 ```
 
 Sets `hooks.internal.entries.<name>.enabled = false`. Restart the gateway afterward.
@@ -120,6 +125,7 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .   # filter by action
 ## Notes
 
 - `hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
+- `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when falling back to local read-only discovery against an older or unavailable Gateway.
 
 ## Related
 

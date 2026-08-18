@@ -841,7 +841,6 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
       modelId: params.modelRef.model,
     }),
     warn: () => {},
-    toolPolicyAuditLogLevel: "debug",
   });
   return collectNormalizedToolSchemaFindings({
     agentId: params.agentId,
@@ -904,7 +903,6 @@ function collectAgentRuntimeToolSchemaFindings(params: {
       modelContextWindowTokens: params.model.contextWindow,
       allowGatewaySubagentBinding: true,
       emitBeforeToolCallDiagnostics: false,
-      toolPolicyAuditLogLevel: "debug",
     });
   } catch (error) {
     return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
@@ -1054,7 +1052,6 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
         modelId: params.modelRef.model,
       }),
       warn: () => {},
-      toolPolicyAuditLogLevel: "debug",
     }).length > 0
   );
 }
@@ -1101,6 +1098,8 @@ export async function collectRuntimeToolSchemaFindings(
           config: cfg,
           agentId,
           agentDir: resolveAgentDir(cfg, agentId),
+          readOnly: true,
+          providerDiscoveryProviderIds: [],
         });
         const modelRef = resolveDefaultModelForAgent({
           cfg,

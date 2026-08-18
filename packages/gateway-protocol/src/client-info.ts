@@ -63,6 +63,8 @@ export type GatewayClientInfo = {
   displayName?: string;
   /** Client app or package version reported by the connecting process. */
   version: string;
+  /** Exact immutable artifact identity when the client can report one. */
+  buildId?: string;
   /** Runtime platform string, such as `darwin`, `ios`, `android`, or `web`. */
   platform: string;
   /** Optional device family used by native clients for display and routing hints. */

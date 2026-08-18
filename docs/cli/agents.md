@@ -44,7 +44,7 @@ Options: `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <chan
 - Passing any explicit add flag switches the command into the non-interactive path.
 - Non-interactive mode requires both an agent name and `--workspace`.
 - `main` is reserved and cannot be used as the new agent id.
-- Interactive mode seeds auth by copying only portable static credentials (`api_key` and static `token` profiles) unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available only through read-through inheritance from the real `main` agent store. If the configured default agent is not `main`, sign in separately for OAuth profiles on the new agent.
+- Interactive mode seeds auth by copying only portable static credentials (`api_key` and static `token` profiles) unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available through the shared auth base. If the configured default agent has its own local OAuth profile, sign in separately for the new agent.
 
 ### `agents bindings`
 
@@ -66,9 +66,10 @@ Options: `--agent <id>`, `--workspace <dir>`, `--identity-file <path>`, `--from-
 
 Options: `--force`, `--json`.
 
-- `main` cannot be deleted.
+- The only configured agent cannot be deleted.
 - Without `--force`, interactive confirmation is required (fails in a non-TTY session; re-run with `--force`).
-- Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, agent config deletion still succeeds and reports paths requiring manual cleanup.
+- Workspace, agent state, and session transcript directories move to Trash, not hard-deleted. If Trash is unavailable, agent config deletion still succeeds and reports paths requiring manual cleanup; `--json` exposes path outcomes in `removed` and `failed` arrays.
+- On installations that have not migrated shared auth yet, the legacy owner cannot be deleted. Run `openclaw doctor --fix`; after relocation into shared state SQLite, `main` follows the same deletion rules as any other agent.
 - When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway is unreachable, the CLI falls back to the offline local path.
 - If another agent's workspace is the same path, inside this workspace, or contains this workspace, the workspace is retained, and `--json` reports `workspaceRetained`, `workspaceRetainedReason`, and `workspaceSharedWith`.
 

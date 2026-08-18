@@ -13,6 +13,7 @@ import {
 } from "./chat-engine.test-support.js";
 import { ChatTurnRouter } from "./chat-turn-router.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
+import { describeSystemAgentPersistentOperation } from "./operations.js";
 
 function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRouter>[0]) {
   const verifiedInference = expectDefined(
@@ -43,6 +44,36 @@ function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRoute
 }
 
 describe("SystemAgentChatEngine approval", () => {
+  it("records the delegated requester before hashing a model-tool proposal", async () => {
+    const unrecordedOperation = {
+      kind: "create-agent" as const,
+      agentId: "researcher",
+      workspace: "/tmp/researcher",
+    };
+    const unrecordedHash = hashSystemAgentOperation(unrecordedOperation);
+    const router = createRouterHarness({
+      operatorApprovalOnly: true,
+      requesterAgentId: "research",
+      runAgentTurn: async ({ session }) => {
+        session.proposalRef.current = unrecordedHash;
+        session.proposalRef.operation = unrecordedOperation;
+        return { text: "Creation needs operator approval." };
+      },
+    });
+
+    await router.resolveTurn("Create a research agent.");
+    const proposal = expectDefined(router.getPendingOperatorProposal(), "delegated proposal");
+
+    expect(proposal.operation).toEqual({
+      ...unrecordedOperation,
+      requesterAgentId: "research",
+    });
+    expect(proposal.hash).not.toBe(unrecordedHash);
+    expect(describeSystemAgentPersistentOperation(proposal.operation)).toContain(
+      "requested by agent research",
+    );
+  });
+
   it("lets only an operator arm delegated persistent writes", async () => {
     useTempStateDir();
     const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
@@ -211,34 +242,72 @@ describe("SystemAgentChatEngine approval", () => {
     expect(reply.text).toContain("Settings → Ask OpenClaw");
   });
 
-  it("hatches into a newly created agent and carries its id", async () => {
-    useTempStateDir();
-    const createAgent = vi.fn(async () => ({
-      status: "created" as const,
-      agentId: "researcher",
-      name: "researcher",
-      workspace: "/tmp/researcher",
-      agentDir: "/tmp/agent-researcher",
-      bootstrapPending: true,
-    }));
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-      deps: { createAgent, loadOverview: fakeOverviewLoader() },
-    });
-    engine.propose({ kind: "create-agent", agentId: "researcher" });
+  it.each([
+    {
+      origin: "custodian",
+      requesterAgentId: undefined,
+      expectedCreatorAgentId: "openclaw",
+      expectedDescription: "create agent researcher with workspace /tmp/researcher",
+    },
+    {
+      origin: "delegated agent",
+      requesterAgentId: "research",
+      expectedCreatorAgentId: "research",
+      expectedDescription:
+        "create agent researcher with workspace /tmp/researcher, requested by agent research",
+    },
+  ])(
+    "hatches an agent requested by the $origin with approval-bound provenance",
+    async ({ requesterAgentId, expectedCreatorAgentId, expectedDescription }) => {
+      useTempStateDir();
+      const createAgent = vi.fn(async () => ({
+        status: "created" as const,
+        agentId: "researcher",
+        name: "researcher",
+        workspace: "/tmp/researcher",
+        agentDir: "/tmp/agent-researcher",
+        bootstrapPending: true,
+      }));
+      const engine = new SystemAgentChatEngine({
+        runAgentTurn: async () => null,
+        planWithAssistant: async () => null,
+        classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+        deps: { createAgent, loadOverview: fakeOverviewLoader() },
+        ...(requesterAgentId ? { requesterAgentId, operatorApprovalOnly: true } : {}),
+      });
+      engine.propose({
+        kind: "create-agent",
+        agentId: "researcher",
+        workspace: "/tmp/researcher",
+      });
+      const proposal = expectDefined(engine.getPendingOperatorProposal(), "create-agent proposal");
 
-    const reply = await engine.handle("yes");
+      expect(proposal.operation).toEqual({
+        kind: "create-agent",
+        agentId: "researcher",
+        workspace: "/tmp/researcher",
+        ...(requesterAgentId ? { requesterAgentId } : {}),
+      });
+      expect(describeSystemAgentPersistentOperation(proposal.operation)).toBe(expectedDescription);
 
-    expect(createAgent).toHaveBeenCalledWith({ name: "researcher" });
-    expect(reply.action).toBe("open-tui");
-    expect(reply.handoff).toMatchObject({
-      kind: "open-tui",
-      agentId: "researcher",
-      agentDraft: "hatch",
-    });
-  });
+      const reply = expectDefined(
+        await engine.resolveOperatorApproval("allow-once", proposal.hash),
+        "approved create-agent reply",
+      );
+
+      expect(createAgent).toHaveBeenCalledWith({
+        name: "researcher",
+        workspace: "/tmp/researcher",
+        provenance: { createdVia: "agent", creatorAgentId: expectedCreatorAgentId },
+      });
+      expect(reply.action).toBe("open-tui");
+      expect(reply.handoff).toMatchObject({
+        kind: "open-tui",
+        agentId: "researcher",
+        agentDraft: "hatch",
+      });
+    },
+  );
 
   it("stays in setup when an established workspace has no bootstrap pending", async () => {
     useTempStateDir();
@@ -539,6 +608,53 @@ describe("SystemAgentChatEngine approval", () => {
     );
   });
 
+  it("preserves the pending first-agent name when a planner adds the verified model", async () => {
+    useTempStateDir();
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: "before",
+      configHashAfter: "after",
+      bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
+      lines: [],
+    }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => ({
+        reply: "I'll keep the verified model.",
+        command: "setup workspace /tmp/new-work model openai/gpt-5.5",
+        modelLabel: "planner",
+      }),
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: {
+        applySetup,
+        verifyInferenceConfig: vi.fn(async () => ({
+          ok: true as const,
+          modelRef: "openai/gpt-5.5",
+          latencyMs: 100,
+        })),
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
+      },
+    });
+    engine.propose({
+      kind: "setup",
+      workspace: "/tmp/old-work",
+      agentName: "robby",
+    });
+
+    await engine.handle("keep the model and change the workspace");
+    await engine.handle("yes");
+
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/new-work",
+        firstAgent: { name: "robby" },
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("tells the agent loop when a preserved proposal was resolved", async () => {
     const observedInputs: string[] = [];
     const router = createRouterHarness({
@@ -604,7 +720,19 @@ describe("SystemAgentChatEngine approval", () => {
     expect(observedInput).toContain("<redacted>");
   });
 
-  it("keeps an exact sensitive config set away from every model path", async () => {
+  it.each([
+    "channels.synology-chat.webhookUrl",
+    "channels.synology-chat[webhookUrl]",
+    "channels.synology-chat.accounts[work].webhookUrl",
+    'channels.synology-chat.accounts["prod.guild"].webhookUrl',
+    'channels.synology-chat.accounts["prod=us"].webhookUrl',
+    String.raw`channels.synology-chat.accounts.prod\ guild.webhookUrl`,
+    "channels.synology-chat.incomingUrl",
+    "channels.synology-chat.accounts[work].incomingUrl",
+    "plugins.entries.codex.config.appServer.headers",
+    "plugins.entries.codex.config.appServer.headers.Authorization",
+    "channels.synology-chat",
+  ])("keeps hint-sensitive config set %s away from every model path", async (path) => {
     useTempStateDir();
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
     const planner = vi.fn(async () => ({ reply: "should never run" }));
@@ -615,7 +743,11 @@ describe("SystemAgentChatEngine approval", () => {
       deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
     });
 
-    const proposed = await engine.handle("config set channels.telegram.botToken 123:very-secret");
+    const value =
+      path === "channels.synology-chat"
+        ? '{ webhookUrl: "https://gateway.example/webhook/synology?access_token=very-secret" }'
+        : "https://gateway.example/webhook/synology?access_token=very-secret";
+    const proposed = await engine.handle(`config set ${path} ${value}`);
 
     expect(runAgentTurn).not.toHaveBeenCalled();
     expect(planner).not.toHaveBeenCalled();
@@ -628,7 +760,200 @@ describe("SystemAgentChatEngine approval", () => {
     expect(applied.text).toContain("[openclaw] done: config.set");
   });
 
-  it("redacts sensitive config-set values from the AI-visible history", async () => {
+  it.each([
+    ["channels.defaults.groupPolicy", '"open"', "open"],
+    ["channels.modelByChannel.telegram.chat", '"openai/gpt-5.5"', "openai/gpt-5.5"],
+    ['channels.modelByChannel["token=prod"].chat', '"openai/gpt-5.5"', "openai/gpt-5.5"],
+  ])("keeps kernel-owned channel config %s visible in its approval", async (path, value, shown) => {
+    const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
+    const planner = vi.fn(async () => ({ reply: "should never run" }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner as never,
+      deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
+    });
+
+    const proposed = await engine.handle(`config set ${path} ${value}`);
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(planner).not.toHaveBeenCalled();
+    expect(proposed.text).toContain(path);
+    expect(proposed.text).toContain(shown);
+    expect(proposed.text).not.toContain("<redacted>");
+    expect(engine.hasPendingProposal()).toBe(true);
+  });
+
+  it("host-routes validated SecretRef writes without exposing the command to a model", async () => {
+    const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
+    const planner = vi.fn(async () => ({ reply: "should never run" }));
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner as never,
+      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+
+    const proposed = await engine.handle("config set-ref gateway.auth.token env GATEWAY_TOKEN");
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(planner).not.toHaveBeenCalled();
+    expect(proposed.text).toContain("env SecretRef <redacted>");
+    expect(proposed.text).not.toContain("GATEWAY_TOKEN");
+    expect(engine.hasPendingProposal()).toBe(true);
+  });
+
+  it("keeps valid SecretRef ids out of pending context and later history", async () => {
+    const rawRef = "123:actual-gateway-token";
+    const observedInputs: string[] = [];
+    const planner = vi.fn(async (params: unknown) => {
+      observedInputs.push(JSON.stringify(params));
+      return { reply: "still pending" };
+    });
+    const engine = new SystemAgentChatEngine({
+      classifyApproval: async () => "other",
+      runAgentTurn: async (params) => {
+        observedInputs.push(params.input);
+        throw new Error("force planner fallback");
+      },
+      planWithAssistant: planner as never,
+      deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
+    });
+
+    const proposed = await engine.handle(`config set-ref gateway.auth.token exec ${rawRef}`);
+    expect(proposed.text).not.toContain(rawRef);
+    await engine.handle("what will this change?");
+
+    expect(observedInputs.join("\n")).not.toContain(rawRef);
+    expect(observedInputs.join("\n")).toContain("<redacted>");
+  });
+
+  it.each([
+    'channels.telegram.accounts["prod=us"].botToken',
+    String.raw`channels.telegram.accounts.prod\=us.botToken`,
+  ])("host-routes a SecretRef write through dynamic config key %s", async (path) => {
+    const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
+    const planner = vi.fn(async () => ({ reply: "should never run" }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner as never,
+      deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
+    });
+
+    const proposed = await engine.handle(`config set-ref ${path} env TELEGRAM_TOKEN`);
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(planner).not.toHaveBeenCalled();
+    expect(proposed.text).toContain(path);
+    expect(proposed.text).not.toContain("TELEGRAM_TOKEN");
+    expect(engine.hasPendingProposal()).toBe(true);
+  });
+
+  it.each([
+    "config get gateway.auth.tokenabcDEF123",
+    'config get gateway.auth["token=abcDEF123"]',
+    String.raw`config get gateway.auth.token\=abcDEF123`,
+    "config get gateway.auth.token abcDEF123",
+    "config get channels.missing.opaque=abcDEF123",
+    "config schema gateway.port=abcDEF123",
+    "config schema gateway.auth.token=abcDEF123",
+    'config schema gateway.auth["token=abcDEF123"]',
+    "config schema channels.missing.opaque=abcDEF123",
+  ])("keeps malformed config read path %s off model and history", async (command) => {
+    const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
+    const planner = vi.fn(async () => ({ reply: "should never run" }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner as never,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle(command);
+
+    expect(reply.text).toContain("Invalid config path");
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(planner).not.toHaveBeenCalled();
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("abcDEF123");
+  });
+
+  it("redacts vulnerable config command text when persisted history is seeded", () => {
+    const engine = new SystemAgentChatEngine({
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    engine.seedHistory([
+      { role: "user", text: "config set-ref gateway.auth.token exec 123:actual-gateway-token" },
+      { role: "user", text: "config get gateway.auth.tokenabcDEF123" },
+    ]);
+
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("actual-gateway-token");
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("abcDEF123");
+  });
+
+  it.each([
+    "config set gateway.auth..token very-secret",
+    "config set gateway.auth.token=very-secret",
+    "config set gateway.auth.token=very-secret please",
+    String.raw`config set gateway.auth.token\=very-secret please`,
+    String.raw`config set gateway.auth.token\ very-secret please`,
+    "config set gateway.auth.tokenabcDEF123 please",
+    "config set gateway.auth.token_abcDEF123 please",
+    "config set gateway.auth.token$abcDEF123 please",
+    "config set plugins.entries.codex.config.appServer.headersabcDEF123 please",
+    "config set plugins.entries.codex.config.appServer.headers.Authorization=Bearer-abc please",
+    'config set channels.synology-chat["webhookUrl=abcDEF123"] please',
+    'config set channels.buzz.groups["gateway.auth.token=abcDEF123"].enabled true',
+    'config set hooks.mappings["token=abcDEF123"].agentId main',
+    "config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN",
+    "config set-ref gateway.auth.token=abcDEF123 env GATEWAY_TOKEN",
+    "config set-ref gateway.auth.token env 123:actual-gateway-token",
+    'config set gateway.auth["token=very-secret"] please',
+    'config set gateway.auth["token very-secret"] please',
+    'config set gateway.auth["token:very-secret"] please',
+    'config set gateway.auth["token=very-secret"].nested please',
+  ])("keeps malformed sensitive config write %s away from every model path", async (command) => {
+    useTempStateDir();
+    const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
+    const planner = vi.fn(async () => ({ reply: "should never run" }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner as never,
+      deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
+    });
+
+    const proposed = await engine.handle(command);
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(planner).not.toHaveBeenCalled();
+    expect(proposed.text).toContain("Invalid config path");
+    expect(proposed.text).not.toContain("very-secret");
+    expect(proposed.text).not.toContain("abcDEF123");
+    expect(engine.hasPendingProposal()).toBe(false);
+  });
+
+  it.each([
+    "config set gateway.auth.token=very-secret",
+    "config set gateway.auth.token=very-secret please",
+    String.raw`config set gateway.auth.token\=very-secret please`,
+    String.raw`config set gateway.auth.token\ very-secret please`,
+    "config set gateway.auth.token.verysecret please",
+    "config set gateway.auth.tokenabcDEF123 please",
+    "config set gateway.auth.token_abcDEF123 please",
+    "config set gateway.auth.token$abcDEF123 please",
+    "config set plugins.entries.codex.config.appServer.headersabcDEF123 please",
+    'config set hooks.mappings["token=abcDEF123"].agentId main',
+    "config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN",
+    "config set-ref gateway.auth.token=abcDEF123 env GATEWAY_TOKEN",
+    "config set-ref gateway.auth.token env 123:actual-gateway-token",
+    'config set gateway.auth["token=very-secret"] please',
+    'config set gateway.auth["token very-secret"] please',
+    'config set gateway.auth["token:very-secret"] please',
+    'config set gateway.auth["token=very-secret"].nested please',
+    "config set channels.missing.opaque=very-secret please",
+    'config set channels.missing["opaque=very-secret"].nested please',
+    "config set plugins.entries.missing.config.opaque=very-secret please",
+    'config set plugins.entries.missing.config["opaque=very-secret"].nested please',
+    'config set channels.synology-chat.accounts["prod.guild"].webhookUrl.abcDEF123 please',
+  ])("redacts malformed config write %s from model-visible history", async (command) => {
     const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
       reply: "noted",
     }));
@@ -639,7 +964,82 @@ describe("SystemAgentChatEngine approval", () => {
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    await engine.handle("config set channels.telegram.botToken 123:very-secret");
+    await engine.handle(command);
+    await engine.handle("did that work?");
+
+    const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];
+    const userTurns = history.filter((turn) => turn.role === "user").map((turn) => turn.text);
+    expect(userTurns.some((text) => text.includes("very-secret"))).toBe(false);
+    expect(userTurns.some((text) => text.includes("abcDEF123"))).toBe(false);
+    expect(userTurns.some((text) => text.includes("Bearer-abc"))).toBe(false);
+    expect(userTurns.some((text) => text.includes("<redacted secret>"))).toBe(true);
+  });
+
+  it.each([
+    "config set channels.missing.opaque.abcDEF123 please",
+    "config set plugins.entries.missing.config.opaque.abcDEF123 please",
+    "config set plugins.entries.codex.config.opaque=abcDEF123 please",
+    "config set channels.telegram.opaque=abcDEF123 please",
+    "config set gateway.auth.token.abcDEF123 please",
+    'config set channels.synology-chat.accounts["prod.guild"].webhookUrl.abcDEF123 please',
+  ])(
+    "keeps sensitive dynamic or unknown-owner path %s out of model paths, responses, and history",
+    async (command) => {
+      const planner = vi.fn(
+        async (_params: { history?: Array<{ role: string; text: string }> }) => ({
+          reply: "noted",
+        }),
+      );
+      const runAgentTurn = vi.fn(async () => null);
+      const engine = new SystemAgentChatEngine({
+        runAgentTurn,
+        planWithAssistant: planner as never,
+        classifyApproval: async () => "other",
+        deps: { loadOverview: fakeOverviewLoader() },
+      });
+
+      const proposed = await engine.handle(command);
+      expect(proposed.text).not.toContain("abcDEF123");
+      expect(proposed.text).not.toContain("Bearer-abc");
+      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(planner).not.toHaveBeenCalled();
+
+      await engine.handle("no");
+      await engine.handle("did that work?");
+      const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];
+      expect(history.some((turn) => turn.text.includes("abcDEF123"))).toBe(false);
+      expect(history.some((turn) => turn.text.includes("Bearer-abc"))).toBe(false);
+    },
+  );
+
+  it.each([
+    "channels.telegram.botToken",
+    "channels.synology-chat[webhookUrl]",
+    "channels.synology-chat.accounts[work].webhookUrl",
+    'channels.synology-chat.accounts["prod.guild"].webhookUrl',
+    String.raw`channels.synology-chat.accounts.prod\ guild.webhookUrl`,
+    "gateway.auth..token",
+    "channels.synology-chat.incomingUrl",
+    "channels.synology-chat.accounts[work].incomingUrl",
+    "plugins.entries.codex.config.appServer.headers",
+    "plugins.entries.codex.config.appServer.headers.Authorization",
+    "channels.synology-chat",
+  ])("redacts config-set value at %s from the AI-visible history", async (path) => {
+    const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
+      reply: "noted",
+    }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: planner as never,
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const value =
+      path === "channels.synology-chat"
+        ? '{ webhookUrl: "https://gateway.example/webhook/synology?access_token=very-secret" }'
+        : "123:very-secret";
+    await engine.handle(`config set ${path} ${value}`);
     await engine.handle("did that work?");
 
     const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];

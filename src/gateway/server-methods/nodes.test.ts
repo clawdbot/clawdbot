@@ -4,7 +4,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import {
   captureNodePairingGeneration,
   captureNodePairingState,
@@ -12,12 +12,10 @@ import {
   resolveCurrentPairedDeviceNodeBinding,
 } from "../../infra/device-pairing-node-state.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
+import { revokeDeviceToken, rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
 import {
-  approveDevicePairing,
   listDevicePairing,
   requestDevicePairing,
-  revokeDeviceToken,
-  rotateDeviceToken,
   withPairedDeviceRecords,
 } from "../../infra/device-pairing.js";
 import {
@@ -45,15 +43,10 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
+import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import { nodeHandlers } from "./nodes.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-const WORKER_RUNS = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.1",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-};
 
 const createdStates: OpenClawTestState[] = [];
 const pairingGenerationHooks = vi.hoisted(() => ({
@@ -163,18 +156,20 @@ function createOptions(
 ): {
   context: ReturnType<typeof createContext>;
   opts: GatewayRequestHandlerOptions;
+  respond: ReturnType<typeof vi.fn>;
 } {
   const context = createContext();
+  const respond = vi.fn();
   const opts = {
     req: { type: "req", id: "req-1", method: "node.pair.remove", params },
     params,
     client: createClient(["operator.pairing", "operator.admin"]),
     isWebchatConnect: () => false,
-    respond: vi.fn(),
+    respond,
     context,
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
-  return { context, opts };
+  return { context, opts, respond };
 }
 
 describe("nodeHandlers node.skills.update", () => {
@@ -282,7 +277,7 @@ async function approveNodeSurface(stateDir: string, nodeId: string): Promise<voi
 }
 
 describe("nodeHandlers node.describe", () => {
-  it("projects the current exact worker build as a safe session-host boolean", async () => {
+  it("projects exact runner slots with derived launch eligibility", async () => {
     const state = await createState("node-describe-session-host");
     const nodeId = "node-1";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
@@ -291,7 +286,7 @@ describe("nodeHandlers node.describe", () => {
     expect(pairingState?.generation).not.toBeNull();
 
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const nodeClient = createWorkerSupervisorNodeClient("conn-1", WORKER_RUNS);
+    const nodeClient = createWorkerSupervisorNodeClient("conn-1");
     runtime.nodeRegistry.register(nodeClient, {
       pairingIdentity: pairingState?.identity.key ?? "",
       pairingGeneration: pairingState?.generation?.key,
@@ -299,7 +294,12 @@ describe("nodeHandlers node.describe", () => {
     const publication = createOptions(
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: WORKER_RUNS,
+        workerHost: {
+          enabled: true,
+          capacity: { total: 2, available: 2 },
+          bundleRetention: 1,
+          bundleStatus: 1,
+        },
       },
       { client: nodeClient as never },
     );
@@ -308,7 +308,22 @@ describe("nodeHandlers node.describe", () => {
       nodeHandlers["node.runnerInventory.update"],
       'nodeHandlers["node.runnerInventory.update"] test invariant',
     )(publication.opts);
+    const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+    expect(proof).toBeDefined();
+    expect(
+      proof &&
+        runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
+          bundleHash: "a".repeat(64),
+          status: { status: "installed", version: "2026.8.9" },
+        }),
+    ).toBe(true);
 
+    const listCall = createOptions({});
+    Object.assign(listCall.context, { nodeRegistry: runtime.nodeRegistry });
+    await expectDefined(
+      nodeHandlers["node.list"],
+      'nodeHandlers["node.list"] test invariant',
+    )(listCall.opts);
     const describeCall = createOptions({ nodeId });
     Object.assign(describeCall.context, { nodeRegistry: runtime.nodeRegistry });
     await expectDefined(
@@ -316,11 +331,31 @@ describe("nodeHandlers node.describe", () => {
       'nodeHandlers["node.describe"] test invariant',
     )(describeCall.opts);
 
-    expect(describeCall.opts.respond).toHaveBeenCalledWith(
+    expect(listCall.respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ nodeId, sessionHost: true }),
+      expect.objectContaining({
+        nodes: expect.arrayContaining([
+          expect.objectContaining({
+            nodeId,
+            workerSlots: { total: 2, available: 2 },
+            workerBundle: { status: "installed", version: "2026.8.9" },
+          }),
+        ]),
+      }),
       undefined,
     );
+    expect(describeCall.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        nodeId,
+        sessionHost: true,
+        workerSlots: { total: 2, available: 2 },
+        workerBundle: { status: "installed", version: "2026.8.9" },
+      }),
+      undefined,
+    );
+    expect(JSON.stringify(listCall.respond.mock.calls)).not.toContain("bundleHash");
+    expect(JSON.stringify(describeCall.respond.mock.calls)).not.toContain("bundleHash");
     runtime.nodeRegistry.unregister(nodeClient.connId);
   });
 });
@@ -455,7 +490,10 @@ describe("nodeHandlers node.pair.approve", () => {
       pairingGeneration: previousState?.generation?.key,
     });
     const publication = createOptions(
-      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
+      },
       { client: client as never },
     );
     Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
@@ -678,6 +716,37 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
     await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();
+  });
+
+  it("reconciles device worker authority before reporting node-role removal", async () => {
+    const state = await createState("node-remove-worker-reconcile");
+    const nodeId = "worker-node-remove";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    const { opts } = createOptions({ nodeId });
+    const order: string[] = [];
+    const workerEnvironmentService = {};
+    bindDeviceWorkerReconciliation(workerEnvironmentService, async () => {
+      order.push("environment");
+      return ["environment-1"];
+    });
+    const reconcileActive = vi.fn(async () => {
+      order.push("placement");
+    });
+    Object.assign(opts.context, {
+      workerEnvironmentService,
+      workerPlacementDispatchService: { reconcileActive },
+    });
+    vi.mocked(opts.respond).mockImplementation(() => {
+      order.push("respond");
+    });
+
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
+
+    expect(reconcileActive).toHaveBeenCalledWith("environment-1");
+    expect(order).toEqual(["environment", "placement", "respond"]);
   });
 
   it("preserves an APNs registration created after node-role removal commits", async () => {

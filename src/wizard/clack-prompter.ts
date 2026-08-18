@@ -81,6 +81,7 @@ function guardCancel<T>(value: T | symbol, signal?: AbortSignal): T {
 }
 
 type KeypressInfo = {
+  ctrl?: boolean;
   name?: string;
 };
 
@@ -130,16 +131,32 @@ async function runPromptWithNavigation<T>(
   work: (signal: AbortSignal | undefined) => Promise<T | symbol>,
   externalSignal?: AbortSignal,
 ): Promise<T> {
-  if (!hasPromptNavigation(navigation)) {
-    return guardCancel(await work(externalSignal), externalSignal);
-  }
-
   const controller = new AbortController();
   const signal = externalSignal
     ? AbortSignal.any([controller.signal, externalSignal])
     : controller.signal;
   let navigationDirection: "back" | "forward" | undefined;
-  const onKeypress = (_input: string | undefined, key: KeypressInfo | undefined) => {
+  let promptSettled = false;
+  let cancellationImmediate: NodeJS.Immediate | undefined;
+  const queueCancellation = () => {
+    if (cancellationImmediate || signal.aborted || navigationDirection) {
+      return;
+    }
+    // Input completion can settle Clack in the same event dispatch. Defer the
+    // fallback abort so Clack owns finalization when it consumed the input.
+    cancellationImmediate = setImmediate(() => {
+      cancellationImmediate = undefined;
+      if (!promptSettled && !signal.aborted && !navigationDirection) {
+        controller.abort();
+      }
+    });
+  };
+  const onStdinEnd = () => queueCancellation();
+  const onKeypress = (input: string | undefined, key: KeypressInfo | undefined) => {
+    if (input === "\x04" || (key?.ctrl === true && key.name === "d")) {
+      queueCancellation();
+      return;
+    }
     const nextDirection = resolveNavigationDirection(navigation, key);
     if (!nextDirection) {
       return;
@@ -149,13 +166,24 @@ async function runPromptWithNavigation<T>(
   };
 
   try {
+    process.stdin.once("end", onStdinEnd);
+    if (process.stdin.readableEnded) {
+      queueCancellation();
+    }
     process.stdin.on("keypress", onKeypress);
-    const value = await work(signal);
+    const value = await work(signal).finally(() => {
+      promptSettled = true;
+    });
     if (navigationDirection) {
       throw new WizardNavigationError(navigationDirection);
     }
     return guardCancel(value, externalSignal);
   } finally {
+    if (cancellationImmediate) {
+      clearImmediate(cancellationImmediate);
+      cancellationImmediate = undefined;
+    }
+    process.stdin.off("end", onStdinEnd);
     process.stdin.off("keypress", onKeypress);
   }
 }

@@ -10,7 +10,6 @@ import {
   parseSqliteSessionFileMarker,
 } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  appendTranscriptEvent,
   appendTranscriptMessage,
   listSessionEntriesCore,
   loadTranscriptEvents,
@@ -1931,7 +1930,6 @@ describe("CLI attempt execution", () => {
           sessionCwd: tmpDir,
           storePath,
           config: {},
-          embeddedAssistantGapFill: true,
         });
       } else {
         await persistAcpTurnTranscript({
@@ -2156,7 +2154,7 @@ describe("CLI attempt execution", () => {
     );
   });
 
-  it("does not gap-fill an assistant already owned by the runtime", async () => {
+  it("does not append a CLI assistant already owned by the runtime", async () => {
     const sessionKey = "agent:main:direct:runtime-owned-assistant";
     const sessionEntry = makeSessionEntry("session-runtime-owned-assistant");
     await appendTranscriptMessage(
@@ -2181,7 +2179,7 @@ describe("CLI attempt execution", () => {
       sessionAgentId: "main",
       sessionCwd: tmpDir,
       config: {},
-      embeddedAssistantGapFill: true,
+      skipUserTurn: true,
       skipAssistantTurn: true,
     });
 
@@ -2276,201 +2274,6 @@ describe("CLI attempt execution", () => {
     await expect(fs.stat(staleSessionFile)).rejects.toMatchObject({ code: "ENOENT" });
     const persisted = readSessionStore();
     expect(persisted[sessionKey]).toBeUndefined();
-  });
-
-  it("embedded assistant gap-fill skips user mirror and dedupes identical assistant tails", async () => {
-    const sessionKey = "agent:main:subagent:embedded-gap-fill";
-    const sessionEntry = makeSessionEntry("session-embedded-gap-fill");
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-
-    const result = makeCliResult("already mirrored");
-    result.meta.executionTrace = {
-      winnerProvider: "anthropic",
-      winnerModel: "claude-opus-4-6",
-      fallbackUsed: false,
-      runner: "embedded",
-    };
-
-    const updatedFirst = await persistCliTranscriptEntry({
-      body: "ignored for gap fill",
-      transcriptBody: "also ignored",
-      result,
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-      embeddedAssistantGapFill: true,
-    });
-
-    const target = {
-      agentId: "main",
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      storePath,
-    };
-    let messages = await readSessionMessages(target);
-    expect(messages).toHaveLength(1);
-    expectRecordFields(requireRecord(messages[0], "assistant message"), {
-      role: "assistant",
-      content: [{ type: "text", text: "already mirrored" }],
-    });
-
-    await persistCliTurnTranscript({
-      body: "still ignored",
-      result,
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry: updatedFirst,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-      embeddedAssistantGapFill: true,
-    });
-
-    messages = await readSessionMessages(target);
-    expect(messages).toHaveLength(1);
-  });
-
-  it("embedded assistant gap-fill skips trailing openclaw.cache-ttl custom entries (regression for #83427)", async () => {
-    const sessionKey = "agent:main:subagent:embedded-gap-fill-cache-ttl";
-    const sessionEntry = makeSessionEntry("session-embedded-gap-fill-cache-ttl");
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-
-    const result = makeCliResult("canonical answer");
-    result.meta.executionTrace = {
-      winnerProvider: "anthropic",
-      winnerModel: "claude-haiku-4-5-20251001",
-      fallbackUsed: false,
-      runner: "embedded",
-    };
-
-    const updatedFirst = await persistCliTranscriptEntry({
-      body: "ignored for gap fill",
-      result,
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-      embeddedAssistantGapFill: true,
-    });
-    await appendTranscriptEvent(
-      { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
-      {
-        type: "custom",
-        customType: "openclaw.cache-ttl",
-        timestamp: new Date().toISOString(),
-        data: {
-          provider: "anthropic",
-          modelId: "claude-haiku-4-5-20251001",
-        },
-      } as never,
-    );
-
-    await persistCliTurnTranscript({
-      body: "still ignored",
-      result,
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry: updatedFirst,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-      embeddedAssistantGapFill: true,
-    });
-
-    const messages = await readSessionMessages({
-      agentId: "main",
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      storePath,
-    });
-    expect(messages).toHaveLength(1);
-    expectRecordFields(requireRecord(messages[0], "assistant message"), {
-      role: "assistant",
-      content: [{ type: "text", text: "canonical answer" }],
-    });
-  });
-
-  it("embedded assistant gap-fill appends repeated replies after a user tail", async () => {
-    const sessionKey = "agent:main:subagent:embedded-repeated-reply";
-    const sessionEntry = makeSessionEntry("session-embedded-repeated-reply");
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-
-    const result = makeCliResult("same answer");
-    result.meta.executionTrace = {
-      winnerProvider: "anthropic",
-      winnerModel: "claude-opus-4-6",
-      fallbackUsed: false,
-      runner: "embedded",
-    };
-
-    const updatedFirst = await persistCliTranscriptEntry({
-      body: "ignored for gap fill",
-      result,
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-      embeddedAssistantGapFill: true,
-    });
-    expect(updatedFirst).not.toHaveProperty("sessionFile");
-
-    await appendTranscriptMessage(
-      { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
-      {
-        message: {
-          role: "user",
-          content: "next prompt",
-          timestamp: Date.now(),
-        },
-        cwd: tmpDir,
-      },
-    );
-
-    await persistCliTurnTranscript({
-      body: "still ignored",
-      result,
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry: updatedFirst,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-      embeddedAssistantGapFill: true,
-    });
-
-    const messages = await readSessionMessages({
-      agentId: "main",
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      storePath,
-    });
-    expect(messages.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
-    expect(messages).toHaveLength(3);
-    expectRecordFields(requireRecord(messages[2], "deduped assistant message"), {
-      content: [{ type: "text", text: "same answer" }],
-    });
   });
 
   it("persists the transcript body instead of runtime-only CLI prompt context", async () => {
@@ -3092,6 +2895,60 @@ describe("CLI attempt execution", () => {
         chat: { id: "chat-embedded" },
       },
       senderId: "sender-embedded",
+    });
+  });
+
+  it("adds Git attribution only to provider-bound CLI and plugin prompts", async () => {
+    const attribution =
+      "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
+    const sessionKey = "agent:main:direct:coauthor-runtime-prompts";
+    const sessionEntry = makeSessionEntry("coauthor-runtime-prompts");
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli result"));
+
+    await runStoredAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      sessionEntry,
+      sessionKey,
+      body: "commit from CLI",
+      runId: "run-cli-coauthor-prompt",
+      opts: { gitCoauthorAttribution: attribution },
+      sessionStore,
+    });
+
+    const cliArg = firstRunCliAgentArg();
+    const attributionSuffix = `\n\n${attribution}`;
+    expect(cliArg.prompt).toEqual(expect.stringContaining("commit from CLI"));
+    expect(String(cliArg.prompt).endsWith(attributionSuffix)).toBe(true);
+    expect(cliArg.transcriptPrompt).toBe(String(cliArg.prompt).slice(0, -attributionSuffix.length));
+
+    const codexSessionKey = "agent:main:direct:coauthor-codex-prompt";
+    const codexSessionEntry = makeSessionEntry("coauthor-codex-prompt");
+    const codexSessionStore: Record<string, SessionEntry> = {
+      [codexSessionKey]: codexSessionEntry,
+    };
+    await writeSessionStoreSeed(codexSessionStore);
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runStoredAttempt({
+      agentHarnessRuntimeOverride: "codex",
+      body: "commit from Codex",
+      sessionEntry: codexSessionEntry,
+      sessionKey: codexSessionKey,
+      runId: "run-codex-coauthor-prompt",
+      opts: { gitCoauthorAttribution: attribution },
+      sessionStore: codexSessionStore,
+    });
+
+    const codexArg = firstEmbeddedAgentArg();
+    expectRecordFields(codexArg, {
+      agentHarnessId: "codex",
+      prompt: `commit from Codex\n\n${attribution}`,
+      transcriptPrompt: "commit from Codex",
     });
   });
 

@@ -3,6 +3,13 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // user-visible sections for owners, tools, safety, skills, and subagents.
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { CHANNEL_IDS } from "../channels/ids.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
@@ -378,6 +385,19 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Directives stripped before render");
   });
 
+  it("teaches structured speech fields for message-tool-only replies", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolNames: ["message"],
+    });
+
+    expect(prompt).toContain("voiceText");
+    expect(prompt).toContain("voiceProvider");
+    expect(prompt).toContain("voiceId");
+    expect(prompt).not.toContain("[[tts:");
+  });
+
   it("omits the heartbeat section when no heartbeat prompt is provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -557,6 +577,10 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn"],
       runtimeInfo: { channel: "webchat" },
     });
+    const webchatWithoutSpawn = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "webchat" },
+    });
     const minimalWebchatPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn"],
@@ -571,20 +595,26 @@ describe("buildAgentSystemPrompt", () => {
     expect(webchatPrompt).toContain(
       "Reserve `sessions_spawn` for delegated work with its own deliverable",
     );
+    expect(webchatWithoutSpawn).not.toContain("sessions_spawn");
     expect(minimalWebchatPrompt).not.toContain("## Control UI Session Companion");
   });
 
   it("guides subagent workflows to avoid polling loops", () => {
-    const prompt = buildAgentSystemPrompt({
+    const withoutSpawn = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "sessions_list", "subagents"],
+    });
 
+    expect(withoutSpawn).not.toContain("sessions_spawn");
     expect(prompt).toContain(
       "Long wait: no rapid poll. Use exec yieldMs or process(poll, timeout=<ms>).",
     );
     expect(prompt).toContain("Large work: `sessions_spawn`; completion push-based.");
     expect(prompt).toContain("Never loop-poll `subagents list`/`sessions_list`");
-    expect(prompt).not.toContain("use `sessions_yield` when waiting");
+    expect(prompt).not.toContain("wait with `sessions_yield`");
     expect(prompt).toContain(
       "First-class tool exists: use it; never ask user for equivalent CLI/slash.",
     );
@@ -600,8 +630,8 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
     });
 
-    expect(withoutYield).not.toContain("use `sessions_yield` when waiting");
-    expect(withYield).toContain("wait with `sessions_yield`");
+    expect(withoutYield).not.toContain("`sessions_yield`");
+    expect(withYield).toContain("Wait with `sessions_yield`");
   });
 
   it("limits screen guidance to web/app tool surfaces", () => {
@@ -669,20 +699,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Brave API");
   });
 
-  it("keeps the OpenClaw empty-tool fallback on the main prompt surface", () => {
+  it("keeps the OpenClaw empty-tool fallback capability-only", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: [],
     });
 
-    expect(prompt).toContain("OpenClaw lists the standard tools above");
-    expect(prompt).toContain("- sessions_spawn: spawn an isolated sub-agent session");
+    expect(prompt).toContain("active runtime provides the available OpenClaw tools directly");
+    expect(prompt).not.toContain("sessions_spawn");
   });
 
   it("documents ACP sessions_spawn agent targeting requirements", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["sessions_spawn"],
+      toolNames: ["sessions_spawn", "agents_list"],
       acpEnabled: true,
     });
 
@@ -713,9 +743,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       'Discord ACP default: persistent thread (`thread:true`, `mode:"session"`)',
     );
-    expect(prompt).toContain("never route ACP via `subagents`/`agents_list`/local PTY");
+    expect(prompt).toContain("never route ACP through local subagent controls or a local PTY");
     expect(prompt).toContain(
-      'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`; never `message(thread-create)`',
+      'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`; never create a messaging thread for it.',
     );
   });
 
@@ -1021,7 +1051,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Never restart the Gateway through shell commands or write your own config.",
     );
-    expect(prompt).toContain("`visible:true` only web/app user or asked.");
+    expect(prompt).toContain("`visible:true` for work the user follows or asked for; else hidden.");
   });
 
   it("omits openclaw delegation guidance without the tool", () => {
@@ -1267,6 +1297,31 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(`final ONLY ${SILENT_REPLY_TOKEN}`);
   });
 
+  it("keeps model-visible channel ids stable across external registration order", () => {
+    const activeRegistry = captureActivePluginRegistrySnapshot();
+    const registrations = ["zeta-channel", "alpha-channel"].map((id) => ({
+      pluginId: id,
+      source: "test" as const,
+      plugin: { id },
+    }));
+    const buildPrompt = () =>
+      buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames: ["message"] });
+
+    try {
+      setActivePluginRegistry(createTestRegistry(registrations));
+      const firstPrompt = buildPrompt();
+      setActivePluginRegistry(createTestRegistry(registrations.toReversed()));
+      const secondPrompt = buildPrompt();
+
+      expect(firstPrompt).toBe(secondPrompt);
+      expect(firstPrompt).toContain(
+        `ids: ${[...CHANNEL_IDS, "alpha-channel", "zeta-channel"].join("|")}.`,
+      );
+    } finally {
+      restoreActivePluginRegistrySnapshot(activeRegistry);
+    }
+  });
+
   it("keeps channel choice guidance lean when message sends have a source channel", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1325,15 +1380,36 @@ describe("buildAgentSystemPrompt", () => {
       subagentDelegationMode: "prefer",
     });
 
-    expect(defaultPrompt).not.toContain("## Sub-Agent Delegation");
-    expect(preferPrompt).toContain("## Sub-Agent Delegation");
-    expect(preferPrompt).toContain("Mode: prefer");
-    expect(preferPrompt).toContain("You coordinate; children do non-trivial work");
-    expect(preferPrompt).toContain("Otherwise use `sessions_spawn`");
-    expect(preferPrompt).toContain("objective, output, inputs/files");
-    expect(preferPrompt).toContain("lowercase `taskName` (underscores/hyphens)");
-    expect(preferPrompt).toContain("Child output = evidence");
+    expect(defaultPrompt).not.toContain("## Delegation");
+    expect(preferPrompt).toContain("## Delegation");
+    expect(preferPrompt).toContain("Stay responsive: incoming messages wait on your current turn");
+    expect(preferPrompt).toContain("Multi-step or slow work");
+    expect(preferPrompt).toContain("objective, output, write scope, verification");
+    expect(preferPrompt).toContain("spawn `visible=true`");
+    expect(preferPrompt).toContain("Child output is evidence");
     expect(preferPrompt).toContain("`subagents(action=list)` only for requested status");
+    expect(preferPrompt).not.toContain("- Subagents: `sessions_spawn`");
+  });
+
+  it("keeps prefer delegation out of minimal prompts and conditions follow-up guidance", () => {
+    const buildPreferPrompt = (toolNames: string[], promptMode?: "minimal") =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames,
+        promptMode,
+        subagentDelegationMode: "prefer",
+      });
+
+    const withSend = buildPreferPrompt(["sessions_spawn", "sessions_send"]);
+    const withoutSend = buildPreferPrompt(["sessions_spawn"]);
+    const minimal = buildPreferPrompt(["sessions_spawn", "sessions_send"], "minimal");
+
+    expect(withSend).toContain(
+      "later turns in a kept session do not report back; follow up via `sessions_send`.",
+    );
+    expect(withoutSend).toContain("later turns in a kept session do not report back.");
+    expect(withoutSend).not.toContain("follow up via `sessions_send`");
+    expect(minimal).not.toContain("## Delegation");
   });
 
   it("adds run-scoped Ultra orchestration only when sessions_spawn is callable", () => {
@@ -1386,7 +1462,7 @@ describe("buildAgentSystemPrompt", () => {
       subagentDelegationMode: "prefer",
     });
 
-    expect(prompt).not.toContain("## Sub-Agent Delegation");
+    expect(prompt).not.toContain("## Delegation");
     expect(prompt).toContain("- Subagents:");
   });
 
@@ -1955,17 +2031,18 @@ describe("buildSubagentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Sub-Agent Spawning");
-    expect(prompt).toContain("May `sessions_spawn` for parallel/complex work");
-    expect(prompt).toContain("sessions_spawn");
-    expect(prompt).toContain('runtime:"acp"');
+    expect(prompt).toContain("May delegate descendants for parallel/complex work");
+    expect(prompt).not.toContain("sessions_spawn");
     expect(prompt).toContain("ACP harness:");
     expect(prompt).toContain("set `agentId` unless default");
-    expect(prompt).toContain("Never ask user for slash/CLI");
+    expect(prompt).toContain("Never ask the user for slash/CLI");
     expect(prompt).toContain("exec openclaw/acpx");
-    expect(prompt).toContain("`agents_list`/`subagents` = OpenClaw runtime=subagent only");
+    expect(prompt).toContain(
+      "Local subagent list/status tools cover OpenClaw runtime=subagent only",
+    );
     expect(prompt).toContain("Subagent results auto-announce");
-    expect(prompt).toContain("never sessions_list/history, exec sleep, or poll loops");
-    expect(prompt).toContain("Need wait: `sessions_yield`");
+    expect(prompt).toContain("never list histories, sleep, or poll in loops");
+    expect(prompt).toContain("available turn-yield tool when needed");
     expect(prompt).toContain("objective, output, inputs/files, write scope");
     expect(prompt).toContain("Track expected session keys");
     expect(prompt).toContain("Late completion after final: reply ONLY NO_REPLY");
@@ -2005,10 +2082,9 @@ describe("buildSubagentSystemPrompt", () => {
       acpEnabled: false,
     });
 
-    expect(prompt).not.toContain('runtime:"acp"');
     expect(prompt).not.toContain("ACP harness:");
     expect(prompt).not.toContain("set `agentId` unless default");
-    expect(prompt).toContain("May `sessions_spawn`");
+    expect(prompt).toContain("May delegate descendants");
   });
 
   it("renders subagent-scoped native command guidance when ACP is disabled", () => {
@@ -2022,7 +2098,7 @@ describe("buildSubagentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Subagent-only command guidance.");
-    expect(prompt).not.toContain('runtime:"acp"');
+    expect(prompt).not.toContain("ACP harness:");
   });
 
   it("omits ACP spawning guidance by default", () => {
@@ -2033,9 +2109,8 @@ describe("buildSubagentSystemPrompt", () => {
       maxSpawnDepth: 2,
     });
 
-    expect(prompt).not.toContain('runtime:"acp"');
     expect(prompt).not.toContain("ACP harness:");
-    expect(prompt).toContain("May `sessions_spawn`");
+    expect(prompt).toContain("May delegate descendants");
   });
 
   it("prefers native Codex commands over Codex ACP when available", () => {
@@ -2094,7 +2169,7 @@ describe("buildSubagentSystemPrompt", () => {
     for (const testCase of leafCases) {
       const prompt = buildSubagentSystemPrompt(testCase.input);
       expect(prompt, testCase.name).not.toContain("## Sub-Agent Spawning");
-      expect(prompt, testCase.name).not.toContain("May `sessions_spawn`");
+      expect(prompt, testCase.name).not.toContain("May delegate descendants");
       if (testCase.expectMainAgentLabel) {
         expect(prompt, testCase.name).toContain("spawned by main agent");
       }

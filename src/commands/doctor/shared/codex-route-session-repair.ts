@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../../../agents/agent-scope.js";
@@ -7,9 +6,9 @@ import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
 } from "../../../agents/auth-profiles/oauth-shared.js";
-import { resolveSharedAuthStorePath } from "../../../agents/auth-profiles/path-resolve.js";
 import {
   loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
 import {
@@ -175,8 +174,9 @@ function repairProviderlessCodexSessionOverride(
     delete entry.model;
     delete entry.modelProvider;
   }
-  if (entry.contextTokens !== undefined) {
+  if (entry.contextTokens !== undefined || entry.contextTokensSource !== undefined) {
     delete entry.contextTokens;
+    delete entry.contextTokensSource;
   }
   if (entry.contextBudgetStatus !== undefined) {
     delete entry.contextBudgetStatus;
@@ -332,9 +332,7 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
   }
   const agentDir = resolveAgentDir(params.cfg, params.agentId, params.env);
   const localProfiles = loadPersistedAuthProfileStore(agentDir)?.profiles ?? {};
-  const mainProfiles =
-    loadPersistedAuthProfileStore(path.dirname(resolveSharedAuthStorePath(params.env)))?.profiles ??
-    {};
+  const mainProfiles = loadPersistedSharedAuthProfileStore(params.env)?.profiles ?? {};
   const localLegacyAuthPath = resolveLegacyAuthProfilesPath(agentDir);
   const localLegacySourceExists = fs.existsSync(localLegacyAuthPath);
   const localLegacySource = localLegacySourceExists

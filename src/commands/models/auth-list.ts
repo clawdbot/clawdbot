@@ -27,6 +27,7 @@ type AuthProfileSummary = {
   cooldownUntil?: string;
   disabledUntil?: string;
   cooldownReason?: ProfileUsageStats["cooldownReason"];
+  cooldownClassification?: ProfileUsageStats["cooldownClassification"];
   disabledReason?: ProfileUsageStats["disabledReason"];
   recoveryHint?: string;
 };
@@ -99,6 +100,9 @@ function summarizeProfile(params: {
     ...(cooldownUntil ? { cooldownUntil } : {}),
     ...(disabledUntil ? { disabledUntil } : {}),
     ...(params.usage?.cooldownReason ? { cooldownReason: params.usage.cooldownReason } : {}),
+    ...(params.usage?.cooldownClassification
+      ? { cooldownClassification: params.usage.cooldownClassification }
+      : {}),
     ...(params.usage?.disabledReason ? { disabledReason: params.usage.disabledReason } : {}),
     ...(recoveryHint ? { recoveryHint } : {}),
   };
@@ -110,9 +114,8 @@ function formatProfileLine(profile: AuthProfileSummary): string {
     details.push(`expires ${profile.expiresAt}`);
   }
   if (profile.cooldownUntil) {
-    details.push(
-      `cooldown${profile.cooldownReason ? `:${profile.cooldownReason}` : ""} until ${profile.cooldownUntil}`,
-    );
+    const diagnostic = profile.cooldownClassification ?? profile.cooldownReason;
+    details.push(`cooldown${diagnostic ? `:${diagnostic}` : ""} until ${profile.cooldownUntil}`);
   }
   if (profile.disabledUntil) {
     details.push(

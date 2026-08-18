@@ -22,12 +22,26 @@ function loadRoute(search: string): ActivityRouteData {
 }
 
 describe("resolveActivityRouteData", () => {
-  it("keeps the default Activity route on the live browser-local view", () => {
-    expect(loadRoute("")).toEqual({ mode: "live", selector: null });
-    expect(loadRoute("?view=other&run=ignored")).toEqual({
-      mode: "live",
+  it("opens the session feed by default and decodes its linkable filters", () => {
+    expect(loadRoute("")).toEqual({
+      mode: "sessions",
+      filters: { personId: null, query: "", time: "7d" },
       selector: null,
     });
+    expect(loadRoute("?view=other&run=ignored")).toEqual({
+      mode: "sessions",
+      filters: { personId: null, query: "", time: "7d" },
+      selector: null,
+    });
+    expect(loadRoute("?person=alice&time=30d&q=release")).toEqual({
+      mode: "sessions",
+      filters: { personId: "alice", query: "release", time: "30d" },
+      selector: null,
+    });
+  });
+
+  it("keeps the browser-local tool feed behind its explicit mode", () => {
+    expect(loadRoute("?view=live")).toEqual({ mode: "live", selector: null });
   });
 
   it("decodes one run-inspector query reference without narrowing it", () => {

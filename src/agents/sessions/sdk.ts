@@ -13,6 +13,7 @@ import {
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
+import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { getAgentDir } from "../config.js";
 import {
   Agent,
@@ -545,7 +546,7 @@ async function createAgentSessionImpl(
 
   // Restore messages if session has existing data
   if (hasExistingSession) {
-    agent.state.messages = existingSession.messages;
+    agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
     if (!hasThinkingEntry) {
       sessionManager.appendThinkingLevelChange(thinkingLevel);
     }

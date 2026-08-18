@@ -15,7 +15,10 @@ import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payl
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { normalizeCronRuntimeAuthority } from "./runtime-authority.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
-import { normalizeCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "./scheduled-tool-policy.js";
 import { inferCronJobName } from "./service/normalize.js";
 import {
   assertSafeCronSessionTargetId,
@@ -406,6 +409,7 @@ export function normalizeCronJobInput(
       next.toolsAllowProvenance = {
         version: 1,
         source: "final-executable-surface",
+        callerOrigin: normalizeCronScheduledToolCallerOrigin(provenance.callerOrigin),
       };
     } else {
       delete next.toolsAllowProvenance;

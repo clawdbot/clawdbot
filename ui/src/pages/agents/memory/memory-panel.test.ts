@@ -11,6 +11,7 @@ import {
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import type { DreamingState } from "./dreaming.ts";
 import type { DreamingViewState } from "./view.ts";
 import "./memory-panel.ts";
@@ -86,7 +87,7 @@ function contextWithGateway(
     phase: connected ? "connected" : "stopped",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: gatewayHelloForMethods(["config.patch"]),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -622,6 +623,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
       });
       const page = await context.newPage();
       const gateway = await e2e.installMockGateway(page, {
+        webSocketPassthroughPrefixes: [`${e2e.controlUiBundledGatewayUrl(server.baseUrl)}/?token=`],
         featureMethods: [
           "chat.metadata",
           "chat.startup",

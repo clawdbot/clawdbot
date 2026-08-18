@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
+  persistSessionTranscriptTurn: vi.fn(),
   readTranscriptStatsSync: vi.fn<() => SessionTranscriptStats>(() => ({
     eventCount: 0,
     maxSeq: 0,
@@ -114,7 +115,33 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
     ...actual,
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
+    persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
     readTranscriptStatsSync: mocks.readTranscriptStatsSync,
+  };
+});
+
+vi.mock("../../sessions/user-turn-transcript.js", async () => {
+  const actual = await vi.importActual<typeof import("../../sessions/user-turn-transcript.js")>(
+    "../../sessions/user-turn-transcript.js",
+  );
+  return {
+    ...actual,
+    createUserTurnTranscriptRecorder: (
+      params: Parameters<typeof actual.createUserTurnTranscriptRecorder>[0],
+    ) =>
+      actual.createUserTurnTranscriptRecorder({
+        ...params,
+        // Handler-unit fixtures mock session loading with ordered returns. The
+        // gateway-server suites own real target revalidation and SQLite proof.
+        target: {
+          sessionId: "test-session-id",
+          expectedSessionId: "test-session-id",
+          sessionKey: "agent:main:main",
+          sessionEntry: { sessionId: "test-session-id", updatedAt: Date.now() },
+          storePath: "/tmp/sessions.json",
+          agentId: "main",
+        },
+      }),
   };
 });
 
@@ -554,6 +581,52 @@ function resetSessionAccessorMocks() {
           skipMaintenance: params.skipMaintenance,
         },
       ),
+  );
+  mocks.persistSessionTranscriptTurn.mockReset().mockImplementation(
+    async (
+      scope: {
+        agentId?: string;
+        sessionId: string;
+        sessionKey: string;
+        sessionEntry?: SessionEntry;
+        storePath?: string;
+      },
+      options: {
+        messages: Array<{
+          message: unknown;
+          prepareMessageAfterIdempotencyCheck?: (message: unknown) => unknown;
+        }>;
+      },
+    ) => {
+      const candidate = options.messages[0]?.message;
+      const message =
+        options.messages[0]?.prepareMessageAfterIdempotencyCheck?.(candidate) ?? candidate;
+      if (!message) {
+        return { appendedCount: 0, messages: [], sessionEntry: scope.sessionEntry };
+      }
+      return {
+        appendedCount: 1,
+        messages: [
+          {
+            appended: true,
+            messageId: "test-user-turn",
+            message,
+            anchor: {
+              agentId: scope.agentId ?? "main",
+              sessionId: scope.sessionId,
+              sessionKey: scope.sessionKey,
+              storePath: scope.storePath ?? "/tmp/sessions.json",
+              generation: "test-generation",
+              entryId: "test-user-turn",
+              rawSeq: 1,
+              effectiveParentId: null,
+              activeMessagePosition: 0,
+            },
+          },
+        ],
+        sessionEntry: scope.sessionEntry,
+      };
+    },
   );
   mocks.patchSessionEntryTarget.mockReset().mockImplementation(
     async (

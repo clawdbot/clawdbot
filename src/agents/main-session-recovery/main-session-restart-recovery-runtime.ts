@@ -282,26 +282,18 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     params.shouldContinue?.() !== false &&
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
   const startupRecoveryCutoffMs = Date.now();
-  const markedStorePaths = new Set<string>();
+  const startupCheckedStorePaths = new Set<string>();
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
   ): Promise<RecoveryCounts> => {
     return await runWithGatewayIndependentRootWorkAdmission(async () => {
       const cfg = params.getConfig();
-      const currentStorePaths = await resolveRestartRecoveryStorePaths({
+      await markStartupOrphanedMainSessionsForRecovery({
         cfg,
         stateDir: params.stateDir,
+        startupCheckedStorePaths,
+        updatedBeforeMs: startupRecoveryCutoffMs,
       });
-      if (currentStorePaths.some((storePath) => !markedStorePaths.has(storePath))) {
-        await markStartupOrphanedMainSessionsForRecovery({
-          cfg,
-          stateDir: params.stateDir,
-          updatedBeforeMs: startupRecoveryCutoffMs,
-        });
-        for (const storePath of currentStorePaths) {
-          markedStorePaths.add(storePath);
-        }
-      }
       return await recoverRestartAbortedMainSessions({
         cfg,
         onExhaustedTarget: (target) => {

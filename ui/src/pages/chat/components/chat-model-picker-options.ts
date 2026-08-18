@@ -11,6 +11,7 @@ import { formatContextTokenCapacity } from "../../../lib/format.ts";
 export type ChatModelPickerOption = {
   agentRuntimeId?: string;
   commitValue: string;
+  contextTokens?: number;
   contextWindow?: number;
   disabled?: boolean;
   isDefault: boolean;
@@ -19,6 +20,18 @@ export type ChatModelPickerOption = {
   supportsTools?: boolean;
   value: string;
 };
+
+function formatModelContextMeta(option: ChatModelPickerOption): string {
+  const active = option.contextTokens;
+  const maximum = option.contextWindow;
+  if (active && maximum && active !== maximum) {
+    return t("chat.modelControls.contextActiveAndMax", {
+      active: formatContextTokenCapacity(active),
+      maximum: formatContextTokenCapacity(maximum),
+    });
+  }
+  return maximum ? formatContextTokenCapacity(maximum) : "";
+}
 
 export type ChatModelPickerTargetGroup = {
   id: string;
@@ -74,7 +87,7 @@ export function renderChatModelPickerOption(params: {
     (params.entry.isDefault && params.selectedModelValue === "");
   const modelLabel = formatModelLabel(params.entry);
   const modelMeta = [
-    params.entry.contextWindow ? formatContextTokenCapacity(params.entry.contextWindow) : "",
+    formatModelContextMeta(params.entry),
     params.entry.supportsTools === false ? t("chat.modelControls.chatOnly") : "",
     params.entry.agentRuntimeId ? formatAgentRuntimeLabel(params.entry.agentRuntimeId) : "",
     params.entry.disabled ? t("modelSetup.candidates.signInNeeded") : "",
@@ -89,6 +102,9 @@ export function renderChatModelPickerOption(params: {
       data-chat-model-option=${params.entry.value}
       data-chat-model-default=${params.entry.isDefault ? "true" : nothing}
       data-chat-model-index=${params.index}
+      data-chat-model-keywords=${params.entry.isDefault
+        ? t("chat.modelControls.default").toLocaleLowerCase()
+        : nothing}
       data-chat-model-name=${modelLabel.toLocaleLowerCase()}
       data-chat-model-provider-label=${providerDisplayLabel(
         params.entry.provider,

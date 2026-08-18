@@ -79,6 +79,7 @@ function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn>
     storePath: "/tmp/voice-call.json",
     transcriptWaiters: new Map(),
     maxDurationTimers: new Map(),
+    endCallOperations: new Map(),
   };
 
   return { call, ctx, hangupCall };
@@ -681,6 +682,7 @@ describe("voice-call outbound helpers", () => {
           storePath: "/tmp/voice-call.json",
           transcriptWaiters: new Map(),
           maxDurationTimers: new Map(),
+          endCallOperations: new Map(),
         } as never,
         "call-1",
       ),

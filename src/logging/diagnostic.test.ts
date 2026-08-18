@@ -13,10 +13,12 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  createDiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
@@ -520,6 +522,12 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
 
     expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    const delayedHeartbeat = loggerMessages(warnSpy).find((message) =>
+      message.includes("liveness heartbeat delayed"),
+    );
+    expect(delayedHeartbeat).toMatch(/overdue=\d+ms elapsed=\d+ms/u);
+    const timing = delayedHeartbeat?.match(/overdue=(\d+)ms elapsed=(\d+)ms/u);
+    expect(Number(timing?.[2]) - Number(timing?.[1])).toBe(30_000);
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(30_000);
@@ -1323,6 +1331,60 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("defers direct and repeated recovery until the latest model request allowance expires", async () => {
+    const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
+    const ref = { sessionId: "allowance-session", sessionKey: "agent:main:allowance" };
+    const runId = "allowance-run";
+    const requestTimeoutMs = 150_000;
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      },
+    );
+    logSessionStateChange({ ...ref, state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-1",
+        provider: "mock",
+        model: "slow-model",
+      },
+      owner.generation,
+      requestTimeoutMs,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.advanceTimersByTime(120_000);
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-2",
+        provider: "mock",
+        model: "slow-model",
+      },
+      owner.generation,
+      requestTimeoutMs,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The first request has exceeded the provider allowance, but the active
+    // retry has not. Recovery must honor the exact request currently in flight.
+    vi.advanceTimersByTime(30_000);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(120_000);
+
+    expectRecoveryCall(recoverStuckSession, { ...ref, queueDepth: 0, allowActiveAbort: true }, [
+      "ageMs",
+      "stateGeneration",
+    ]);
   });
 
   it("recovers stale model calls without active embedded-run ownership", async () => {
@@ -2394,6 +2456,7 @@ describe("stuck session diagnostics threshold", () => {
   it("suppresses liveness warnings during startupGraceMs while still sampling", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const events: string[] = [];
+    const recoverStuckSession = vi.fn();
     const sampleLiveness = vi.fn(() => ({
       reasons: ["event_loop_delay" as const],
       intervalMs: 30_000,
@@ -2403,6 +2466,7 @@ describe("stuck session diagnostics threshold", () => {
     const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
 
     try {
+      vi.setSystemTime(0);
       startDiagnosticHeartbeat(
         {
           diagnostics: {
@@ -2411,23 +2475,35 @@ describe("stuck session diagnostics threshold", () => {
         },
         {
           emitMemorySample: createEmitMemorySampleMock(),
+          recoverStuckSession,
           sampleLiveness,
           startupGraceMs: 60_000,
+          testTimings: { stuckSessionWarnMs: 1_000, stuckSessionAbortMs: 1_000 },
         },
       );
 
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      vi.setSystemTime(1_001);
       vi.advanceTimersByTime(30_000);
 
       expect(sampleLiveness).toHaveBeenCalledTimes(1);
+      expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
       expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
       expect(events).not.toContain("diagnostic.liveness.warning");
+      expect(recoverStuckSession).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(30_000);
 
       expect(sampleLiveness).toHaveBeenCalledTimes(2);
       expectLoggerMessageContaining(warnSpy, "liveness warning:");
       expect(events).toContain("diagnostic.liveness.warning");
+      expectRecoveryCall(
+        recoverStuckSession,
+        { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+        ["ageMs", "stateGeneration"],
+      );
     } finally {
       unsubscribe();
     }

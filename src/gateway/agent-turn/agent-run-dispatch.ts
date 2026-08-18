@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { withAgentCommandExecutionIdentitySpawnFacts } from "../../agents/agent-command-execution-identity-spawn.js";
 import {
   buildAgentRunTerminalOutcome,
   classifyAgentRunTerminalOutcome,
@@ -12,10 +13,12 @@ import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { normalizeAgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
+import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
+import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { readErrorName } from "../../infra/errors.js";
+import { formatErrorMessageWithCode, readErrorName } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
@@ -28,6 +31,7 @@ import {
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
+import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
@@ -121,6 +125,7 @@ export function dispatchAgentRunFromGateway(params: {
   io: AgentTurnIo;
   context: AgentTurnContext;
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  canonicalSkillWorkspaceDir?: string;
   restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   onSettled?: (outcome: {
     terminalOutcome: AgentRunTerminalOutcome;
@@ -172,18 +177,27 @@ export function dispatchAgentRunFromGateway(params: {
     }
   };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
-    ? createCronCreatorAuthorityCapability(params.cronCreatorAuthority.runId)
+    ? createCronCreatorAuthorityCapability(
+        params.cronCreatorAuthority.runId,
+        params.cronCreatorAuthority.callerOrigin,
+      )
     : undefined;
+  const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
+    params.ingressOpts,
+    readAgentRunDispatchExecutionIdentity(params),
+  );
   const runAgent = () =>
-    agentCommandFromGatewayIngress(
-      cronCreatorAuthorityCapability
-        ? { ...params.ingressOpts, cronCreatorAuthorityCapability }
-        : params.ingressOpts,
-      defaultRuntime,
-      params.context.deps,
-      {
-        restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-      },
+    runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
+      agentCommandFromGatewayIngress(
+        cronCreatorAuthorityCapability
+          ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
+          : ingressOptsWithSpawnFacts,
+        defaultRuntime,
+        params.context.deps,
+        {
+          restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+        },
+      ),
     );
   const agentRun = cronCreatorAuthorityCapability
     ? runWithCronCreatorAuthorityCapability(
@@ -194,6 +208,7 @@ export function dispatchAgentRunFromGateway(params: {
     : runAgent();
   void agentRun
     .then(async (result) => {
+      const recordedOutcome = readAgentRunTerminalOutcome(result);
       const signalStopReason = resolveResolvedAgentTimeoutStopReason(
         result?.meta,
         params.abortController.signal,
@@ -209,7 +224,9 @@ export function dispatchAgentRunFromGateway(params: {
         status:
           aborted || result?.meta?.stopReason === "timeout" || timeoutPhase
             ? "timeout"
-            : result?.meta?.error || result?.meta?.stopReason === "error"
+            : recordedOutcome === "failed" ||
+                result?.meta?.error ||
+                result?.meta?.stopReason === "error"
               ? "error"
               : "ok",
         error: result?.meta?.error,
@@ -289,7 +306,7 @@ export function dispatchAgentRunFromGateway(params: {
     })
     .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
-      const renderedErr = formatForLog(err);
+      const renderedErr = formatErrorMessageWithCode(err);
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
         : isAbortError(err)
@@ -345,7 +362,7 @@ export function dispatchAgentRunFromGateway(params: {
       persistTerminalDedupe(settled);
       params.io.emitFinal([aborted && settled, payload, aborted && settled ? undefined : error], {
         runId: params.runId,
-        ...(aborted ? {} : { error: formatForLog(err) }),
+        ...(aborted ? {} : { error: renderedErr }),
       });
     })
     .finally(() => {

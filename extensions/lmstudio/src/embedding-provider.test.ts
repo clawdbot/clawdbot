@@ -118,47 +118,21 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
 
   it.each([
     {
-      name: "model contextTokens before every fallback",
+      name: "model contextTokens before its native window",
       model: { contextTokens: 4096, contextWindow: 8192 },
-      provider: { contextTokens: 2048, contextWindow: 16384 },
       expected: 4096,
     },
     {
-      name: "provider contextTokens as the model's effective cap",
+      name: "model contextWindow when no active-input cap is set",
       model: { contextWindow: 8192 },
-      provider: { contextTokens: 4096, contextWindow: 16384 },
-      expected: 4096,
-    },
-    {
-      name: "model contextWindow when below the provider cap",
-      model: { contextWindow: 8192 },
-      provider: { contextTokens: 16384, contextWindow: 32768 },
       expected: 8192,
-    },
-    {
-      name: "provider contextTokens when the model has no context fields",
-      provider: { contextTokens: 4096, contextWindow: 16384 },
-      expected: 4096,
-    },
-    {
-      name: "model contextWindow before provider contextWindow",
-      model: { contextWindow: 8192 },
-      provider: { contextWindow: 16384 },
-      expected: 8192,
-    },
-    {
-      name: "provider contextWindow as the final configured fallback",
-      provider: { contextWindow: 16384 },
-      expected: 16384,
     },
     {
       name: "the loader default when no context is configured",
       expected: undefined,
     },
-  ])("uses $name", async ({ model, provider, expected }) => {
-    await expect(readRequestedContextLength(buildConfig({ model, provider }))).resolves.toBe(
-      expected,
-    );
+  ])("uses $name", async ({ model, expected }) => {
+    await expect(readRequestedContextLength(buildConfig({ model }))).resolves.toBe(expected);
   });
 
   it.each(["lmstudio", "lmstudio-spark"])(

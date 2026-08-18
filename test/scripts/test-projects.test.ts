@@ -14,7 +14,6 @@ import {
   applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
-  buildVitestArgs,
   buildVitestRunPlans,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
@@ -22,7 +21,6 @@ import {
   formatNoChangedTestTargetLines,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
-  shouldAcquireLocalHeavyCheckLock,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
@@ -41,27 +39,44 @@ import {
 } from "../vitest/vitest.contracts-shared.ts";
 
 const normalizeRepoPath = toRepoPath;
+const CODEX_TEST_PROCESS_FILE_LIMIT = 40;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
+const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 1;
+
+function expectedCodexTestProcessCount() {
+  const testFileCount = listExtensionTestFilesForRoots(["extensions/codex"]).length;
+  return Math.max(1, Math.ceil(testFileCount / CODEX_TEST_PROCESS_FILE_LIMIT));
+}
 
 function expectedMatrixTestProcessCount() {
   const testFileCount = listExtensionTestFilesForRoots(["extensions/matrix"]).length;
   return Math.max(1, Math.ceil(testFileCount / MATRIX_TEST_PROCESS_FILE_LIMIT));
 }
 
+function expectedTelegramTestProcessCount() {
+  const testFileCount = listExtensionTestFilesForRoots(["extensions/telegram"]).length;
+  return Math.max(1, Math.ceil(testFileCount / TELEGRAM_TEST_PROCESS_FILE_LIMIT));
+}
+
 function listExpectedFullExtensionRunPlans() {
+  const codexConfig = "test/vitest/vitest.extension-codex.config.ts";
   const matrixConfig = "test/vitest/vitest.extension-matrix.config.ts";
-  const matrixPlans = buildVitestRunPlans(["extensions/matrix"], process.cwd());
-  return listFullExtensionVitestProjectConfigs().flatMap((config) =>
-    config === matrixConfig
-      ? matrixPlans
-      : [
-          {
-            config,
-            forwardedArgs: [],
-            includePatterns: null,
-            watchMode: false,
-          },
-        ],
+  const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
+  const boundedPlansByConfig = new Map([
+    [codexConfig, buildVitestRunPlans(["extensions/codex"], process.cwd())],
+    [matrixConfig, buildVitestRunPlans(["extensions/matrix"], process.cwd())],
+    [telegramConfig, buildVitestRunPlans(["extensions/telegram"], process.cwd())],
+  ]);
+  return listFullExtensionVitestProjectConfigs().flatMap(
+    (config) =>
+      boundedPlansByConfig.get(config) ?? [
+        {
+          config,
+          forwardedArgs: [],
+          includePatterns: null,
+          watchMode: false,
+        },
+      ],
   );
 }
 
@@ -1924,6 +1939,40 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plan.targets).not.toContain("extensions/discord/src/channel-actions.contract.test.ts");
   });
 
+  it.each([
+    ["extensions/imessage/message-tool-api.ts", "extensions/imessage/src/message-tool-api.test.ts"],
+    ["extensions/imessage/src/actions.ts", "extensions/imessage/src/actions.test.ts"],
+    ["extensions/imessage/src/channel.ts", "extensions/imessage/src/test-plugin.test.ts"],
+    ["extensions/slack/message-tool-api.ts", "extensions/slack/message-tool-api.ts"],
+    [
+      "extensions/slack/src/channel-actions.ts",
+      "extensions/slack/src/channel-actions-setup-status.contract.test.ts",
+    ],
+    ["extensions/slack/src/channel.ts", "extensions/slack/src/channel.test.ts"],
+    ["extensions/mattermost/gateway-auth-api.ts", "extensions/mattermost/gateway-auth-api.ts"],
+    ["extensions/mattermost/src/channel.ts", "extensions/mattermost/src/channel.test.ts"],
+    ["extensions/feishu/session-key-api.ts", "extensions/feishu/session-key-api.ts"],
+    ["extensions/feishu/src/channel.ts", "extensions/feishu/src/channel.test.ts"],
+    ["extensions/telegram/session-key-api.ts", "extensions/telegram/session-key-api.ts"],
+    ["extensions/telegram/src/channel.ts", "test/telegram-question-gateway.test.ts"],
+    ["extensions/discord/session-key-api.ts", "extensions/discord/session-key-api.ts"],
+    ["extensions/discord/thread-binding-api.ts", "extensions/discord/thread-binding-api.ts"],
+    ["extensions/discord/src/channel.ts", "extensions/discord/src/channel.test.ts"],
+    ["extensions/matrix/thread-binding-api.ts", "extensions/matrix/thread-binding-api.ts"],
+    ["extensions/matrix/src/channel.ts", "extensions/matrix/src/channel.threading.test.ts"],
+  ] as const)(
+    "routes %s through its owner and the plugin-shape parity contract",
+    (changedPath, ownerTarget) => {
+      const plan = resolveChangedTestTargetPlan([changedPath]);
+
+      expect(plan.mode).toBe("targets");
+      expect(plan.targets).toContain(ownerTarget);
+      expect(plan.targets).toContain(
+        "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
+      );
+    },
+  );
+
   it("routes precise plugin contract helpers without broad-running every shard", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
@@ -1941,6 +1990,20 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "extensions/slack/src/monitor/enterprise-install.test.ts",
         "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
+      ],
+    );
+  });
+
+  it("routes worker launcher changes through every split owner suite", () => {
+    expectChangedTargets(
+      ["src/gateway/worker-environments/worker-turn-launcher.ts"],
+      [
+        "src/gateway/worker-environments/worker-turn-launcher.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-claim-admission.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-reclaimed-placement.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-remote-handoff.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts",
       ],
     );
   });
@@ -2049,13 +2112,17 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("routes the top-level extensions target to every extension shard", () => {
+    const codexConfig = "test/vitest/vitest.extension-codex.config.ts";
     const matrixConfig = "test/vitest/vitest.extension-matrix.config.ts";
+    const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
     const plans = buildVitestRunPlans(["extensions"], process.cwd());
     const matrixPlans = plans.filter((plan) => plan.config === matrixConfig);
+    const telegramPlans = plans.filter((plan) => plan.config === telegramConfig);
+    const boundedConfigs = new Set([codexConfig, matrixConfig, telegramConfig]);
 
-    expect(plans.filter((plan) => plan.config !== matrixConfig)).toEqual(
+    expect(plans.filter((plan) => !boundedConfigs.has(plan.config))).toEqual(
       listFullExtensionVitestProjectConfigs()
-        .filter((config) => config !== matrixConfig)
+        .filter((config) => !boundedConfigs.has(config))
         .map((config) => ({
           config,
           forwardedArgs: [],
@@ -2072,7 +2139,111 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(matrixPlans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
+    expect(telegramPlans).toHaveLength(expectedTelegramTestProcessCount());
+    expect(
+      telegramPlans.every(
+        (plan) => (plan.includePatterns?.length ?? 0) <= TELEGRAM_TEST_PROCESS_FILE_LIMIT,
+      ),
+    ).toBe(true);
+    expect(telegramPlans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
+      listExtensionTestFilesForRoots(["extensions/telegram"]),
+    );
     expect(plans).toEqual(listExpectedFullExtensionRunPlans());
+  });
+
+  it("bounds an explicit Telegram config target across process lifetimes", () => {
+    const config = "test/vitest/vitest.extension-telegram.config.ts";
+    const plans = buildVitestRunPlans([config], process.cwd());
+
+    expect(plans).toHaveLength(expectedTelegramTestProcessCount());
+    expect(plans.every((plan) => plan.config === config)).toBe(true);
+    expect(
+      plans.every(
+        (plan) => (plan.includePatterns?.length ?? 0) <= TELEGRAM_TEST_PROCESS_FILE_LIMIT,
+      ),
+    ).toBe(true);
+    expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
+      listExtensionTestFilesForRoots(["extensions/telegram"]),
+    );
+  });
+
+  it("turns a five-file Telegram include file into five one-file run specs", () => {
+    const config = "test/vitest/vitest.extension-telegram.config.ts";
+    const files = listExtensionTestFilesForRoots(["extensions/telegram"]).slice(0, 5);
+    expect(files).toHaveLength(5);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-include-specs-"));
+    try {
+      const includeFile = path.join(tempDir, "ci-shard.json");
+      fs.writeFileSync(includeFile, JSON.stringify(files));
+      const specs = createVitestRunSpecs([config], {
+        baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+      });
+
+      expect(specs).toHaveLength(5);
+      expect(
+        specs.every((spec) => spec.config === config && (spec.includePatterns?.length ?? 0) === 1),
+      ).toBe(true);
+      expect(specs.map((spec) => spec.includePatterns?.[0])).toEqual(files);
+      expect(new Set(specs.map((spec) => spec.env.OPENCLAW_VITEST_INCLUDE_FILE)).size).toBe(5);
+      expect(specs.every((spec) => spec.env.OPENCLAW_VITEST_INCLUDE_FILE !== includeFile)).toBe(
+        true,
+      );
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    {
+      channel: "Telegram",
+      config: "test/vitest/vitest.extension-telegram.config.ts",
+    },
+    { channel: "Matrix", config: "test/vitest/vitest.extension-matrix.config.ts" },
+  ])("preserves an externally scoped $channel config target", ({ config }) => {
+    expect(
+      buildVitestRunPlans([config], process.cwd(), () => [], {
+        env: { OPENCLAW_VITEST_INCLUDE_FILE: "ci-shard.json" },
+      }),
+    ).toEqual([
+      {
+        config,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      channel: "Telegram",
+      config: "test/vitest/vitest.extension-telegram.config.ts",
+      directory: "extensions/telegram",
+    },
+    {
+      channel: "Matrix",
+      config: "test/vitest/vitest.extension-matrix.config.ts",
+      directory: "extensions/matrix",
+    },
+  ])("preserves an externally scoped $channel directory run spec", ({ config, directory }) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-external-test-scope-"));
+    try {
+      const includeFile = path.join(tempDir, "ci-shard.json");
+      fs.writeFileSync(includeFile, JSON.stringify([`${directory}/src/example.test.ts`]));
+      const [spec] = createVitestRunSpecs([directory], {
+        baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+      });
+
+      expect(spec).toMatchObject({
+        config,
+        env: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+        includeFilePath: null,
+        includePatterns: null,
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("bounds an explicit Matrix directory target across process lifetimes", () => {
@@ -2088,6 +2259,37 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
+  });
+
+  it("bounds an explicit Codex directory target across process lifetimes", () => {
+    const config = "test/vitest/vitest.extension-codex.config.ts";
+    const plans = buildVitestRunPlans(["extensions/codex"], process.cwd());
+
+    expect(plans.length).toBeGreaterThan(1);
+    expect(plans).toHaveLength(expectedCodexTestProcessCount());
+    expect(plans.every((plan) => plan.config === config)).toBe(true);
+    expect(
+      plans.every((plan) => (plan.includePatterns?.length ?? 0) <= CODEX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
+    expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
+      listExtensionTestFilesForRoots(["extensions/codex"]),
+    );
+  });
+
+  it("keeps an explicit Codex file target in one process", () => {
+    const testFile = listExtensionTestFilesForRoots(["extensions/codex"])[0];
+    if (!testFile) {
+      throw new Error("expected a Codex test fixture");
+    }
+
+    expect(buildVitestRunPlans([testFile], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.extension-codex.config.ts",
+        forwardedArgs: [],
+        includePatterns: [testFile],
+        watchMode: false,
+      },
+    ]);
   });
 
   it("keeps grouped Matrix targets covered when bounding the directory", () => {
@@ -2263,7 +2465,7 @@ describe("scripts/test-projects changed-target routing", () => {
       includePatterns: ["ui/src/e2e/**/*.test.ts"],
     });
 
-    expect(buildVitestArgs(["ui/src/e2e"])).toContain("--configLoader");
+    expect(createVitestRunSpecs(["ui/src/e2e"])[0]?.pnpmArgs).toContain("--configLoader");
   });
 
   it("routes auto-reply route source files to route regression tests", () => {
@@ -2333,7 +2535,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "src/commands/doctor-memory-search.test.ts",
-        "packages/memory-host-sdk/src/host/embeddings.test.ts",
+        "extensions/memory-core/src/memory/embeddings.test.ts",
       ],
     );
   });
@@ -2378,13 +2580,11 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("uses collision-resistant include-file names for scoped Vitest specs", () => {
-    const tempDir = path.join("tmp", "openclaw-vitest-specs");
     const [spec] = createVitestRunSpecs(["src/plugin-sdk/temp-path.test.ts"], {
       baseEnv: {},
-      tempDir,
     });
 
-    expect(path.dirname(spec?.includeFilePath ?? "")).toBe(tempDir);
+    expect(path.dirname(spec?.includeFilePath ?? "")).toBe(os.tmpdir());
     expect(path.basename(spec?.includeFilePath ?? "")).toMatch(
       /^openclaw-vitest-include-[0-9a-f-]{36}-0\.json$/u,
     );
@@ -2688,80 +2888,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ]);
     },
   );
-});
-
-describe("scripts/test-projects local heavy-check lock", () => {
-  const localCheckEnv = () => ({
-    ...process.env,
-    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: undefined,
-    OPENCLAW_TEST_PROJECTS_FORCE_LOCK: undefined,
-  });
-
-  it("skips the lock for a single scoped tooling run", () => {
-    expect(
-      shouldAcquireLocalHeavyCheckLock(
-        [
-          {
-            config: "test/vitest/vitest.tooling.config.ts",
-            includePatterns: ["test/scripts/gh-read.test.ts"],
-            watchMode: false,
-          },
-        ],
-        localCheckEnv(),
-      ),
-    ).toBe(false);
-  });
-
-  it("keeps the lock for non-tooling runs", () => {
-    expect(
-      shouldAcquireLocalHeavyCheckLock(
-        [
-          {
-            config: "test/vitest/vitest.unit.config.ts",
-            includePatterns: ["src/infra/vitest-config.test.ts"],
-            watchMode: false,
-          },
-        ],
-        localCheckEnv(),
-      ),
-    ).toBe(true);
-  });
-
-  it("skips the lock when a parent changed gate already holds it", () => {
-    expect(
-      shouldAcquireLocalHeavyCheckLock(
-        [
-          {
-            config: "test/vitest/vitest.unit.config.ts",
-            includePatterns: ["src/infra/vitest-config.test.ts"],
-            watchMode: false,
-          },
-        ],
-        {
-          ...localCheckEnv(),
-          OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("allows forcing the lock back on", () => {
-    expect(
-      shouldAcquireLocalHeavyCheckLock(
-        [
-          {
-            config: "test/vitest/vitest.tooling.config.ts",
-            includePatterns: ["test/scripts/gh-read.test.ts"],
-            watchMode: false,
-          },
-        ],
-        {
-          ...localCheckEnv(),
-          OPENCLAW_TEST_PROJECTS_FORCE_LOCK: "1",
-        },
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
@@ -3572,6 +3698,37 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
 });
 
 describe("scripts/test-projects Vitest cache isolation", () => {
+  it("keeps same-config process lifetimes on one restored cache", () => {
+    const specs = [
+      {
+        config: "test/vitest/vitest.extension-telegram.config.ts",
+        env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" },
+        includeFilePath: null,
+        includePatterns: ["extensions/telegram/src/a.test.ts"],
+        pnpmArgs: [],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.extension-telegram.config.ts",
+        env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" },
+        includeFilePath: null,
+        includePatterns: ["extensions/telegram/src/b.test.ts"],
+        pnpmArgs: [],
+        watchMode: false,
+      },
+    ];
+
+    const configured = applyDefaultMultiSpecVitestCachePaths(specs, {
+      cwd: "/repo",
+      env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache" },
+    });
+
+    expect(configured.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
+      "/tmp/cache",
+      "/tmp/cache",
+    ]);
+  });
+
   it("assigns isolated fs-module caches to multi-spec non-watch runs", () => {
     const specs = applyDefaultMultiSpecVitestCachePaths(
       [

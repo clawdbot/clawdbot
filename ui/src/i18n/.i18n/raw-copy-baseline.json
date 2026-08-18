@@ -186,167 +186,6 @@
     {
       "count": 1,
       "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "agents_list"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "apply_patch"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "browser"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "canvas"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "cron"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "edit"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "exec"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "gateway"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "image"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "memory_get"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "memory_search"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "message"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "nodes"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "process"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "read"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "session_status"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "sessions_history"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "sessions_list"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "sessions_send"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "sessions_spawn"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "web_fetch"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "web_search"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "write"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
       "name": "description",
       "path": "ui/src/lib/chat/commands.ts",
       "text": "Abort and restart with a new message"
@@ -418,6 +257,41 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateConfiguredUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateRateLimited"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateUnverified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateVerified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
       "path": "ui/src/pages/channels/hub-meta.ts",
       "text": "@BotFather"
     },
@@ -455,13 +329,6 @@
       "name": "text",
       "path": "ui/src/pages/channels/view.nostr.ts",
       "text": "NIP-05"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-bubble.ts",
-      "text": "JSON"
     },
     {
       "count": 1,
@@ -511,6 +378,13 @@
       "name": "text",
       "path": "ui/src/pages/config/mcp.ts",
       "text": "openclaw mcp status --verbose"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/updates.ts",
+      "text": "openclaw update status --json openclaw update"
     },
     {
       "count": 1,
@@ -574,6 +448,13 @@
       "name": "text",
       "path": "ui/src/pages/devices/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/model-providers/default-models-view.ts",
+      "text": "i"
     },
     {
       "count": 4,

@@ -529,6 +529,16 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
   return false;
 }
 
+function respondArtifactNotFound(respond: RespondFn, requestedArtifactId: string): void {
+  respond(
+    false,
+    undefined,
+    artifactError("artifact_not_found", "artifact not found", {
+      artifactId: requestedArtifactId,
+    }),
+  );
+}
+
 async function runArtifactSessionOperation<T>(
   respond: RespondFn,
   operation: () => Promise<T> | T,
@@ -619,13 +629,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const { artifact } = found.value;
     if (!artifact) {
-      respond(
-        false,
-        undefined,
-        artifactError("artifact_not_found", "artifact not found", {
-          artifactId: params.artifactId,
-        }),
-      );
+      respondArtifactNotFound(respond, params.artifactId);
       return;
     }
     respond(true, { artifact: toSummary(artifact) });
@@ -685,6 +689,8 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         });
         return;
       }
+      respondArtifactNotFound(respond, params.artifactId);
+      return;
     }
     const found = await runArtifactSessionOperation(respond, () =>
       findArtifact(admittedQuery, cfg, { downloadArtifactId: params.artifactId }),
@@ -694,13 +700,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const { artifact } = found.value;
     if (!artifact) {
-      respond(
-        false,
-        undefined,
-        artifactError("artifact_not_found", "artifact not found", {
-          artifactId: params.artifactId,
-        }),
-      );
+      respondArtifactNotFound(respond, params.artifactId);
       return;
     }
     if (artifact.download.mode === "unsupported") {

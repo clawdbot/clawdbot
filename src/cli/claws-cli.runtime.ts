@@ -66,6 +66,7 @@ import type {
   ClawsRemoveOptions,
   ClawsStatusOptions,
 } from "./claws-cli.js";
+import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
 type DiagnosticLike = { level: string; code: string; path: string; message: string };
@@ -497,6 +498,9 @@ export async function runClawsAddCommand(
   }
 
   let addResult;
+  if (!opts.json) {
+    logExperimentalWarning(runtime);
+  }
   try {
     addResult = await applyClawAddPlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
@@ -506,7 +510,7 @@ export async function runClawsAddCommand(
       cronGateway: {
         add: async (input) => await callGatewayFromCli("cron.add", {}, input),
         list: async (agentId) =>
-          await callGatewayFromCli("cron.list", {}, { agentId, includeDisabled: true }),
+          await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
         waitUntilAgentAvailable: async () => await waitUntilGatewayConfigApplied(),
       },
     });
@@ -530,7 +534,6 @@ export async function runClawsAddCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, addResult);
   } else {
-    logExperimentalWarning(runtime);
     runtime.log(`Added agent: ${addResult.agent.finalId}`);
     runtime.log(`Workspace: ${addResult.agent.workspace}`);
     runtime.log(`Status: ${addResult.status}`);

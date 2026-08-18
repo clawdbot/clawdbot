@@ -4,7 +4,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { serializeSidebarEntry, subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForPluginsHubTab, pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -30,7 +30,7 @@ import {
   type McpServerSummary,
   type McpServersPatchBuildResult,
 } from "../../lib/config/mcp-servers.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
@@ -51,6 +51,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
+import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs, type PluginsHubTab } from "./plugins-hub.ts";
 import type { ConnectorSuggestion } from "./presentation.ts";
 import { pluginArtPath } from "./presentation.ts";
@@ -111,7 +112,10 @@ function mutationSuccessMessage(
     ? `pluginsPage.${action}Restart`
     : `pluginsPage.${action}Success`;
   const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-  const lines = [t(key, { name: result.plugin.name }), ...warnings];
+  const lines = [
+    t(key, { name: result.plugin.name }),
+    ...warnings.map((warning) => formatUiExternalText(warning)),
+  ];
   return lines.filter(Boolean).join("\n");
 }
 
@@ -696,18 +700,6 @@ class PluginsPage extends OpenClawLightDomElement {
     this.replaceResult(withPlugin(this.result, result.plugin), true);
   }
 
-  private pinEnabledPluginRoute(pluginId: string) {
-    const navigation = this.context.navigation;
-    if (pluginId !== "workboard" || !navigation) {
-      return;
-    }
-    const entry = serializeSidebarEntry({ type: "route", route: "workboard" });
-    const current = navigation.snapshot.sidebarEntries;
-    if (!current.includes(entry)) {
-      navigation.update({ sidebarEntries: [...current, entry] });
-    }
-  }
-
   /** Plugin changes can affect both catalog state and route visibility (for example Workboard). */
   private async refreshCatalogAfterMutation(client: GatewayBrowserClient): Promise<void> {
     this.error = null;
@@ -736,6 +728,7 @@ class PluginsPage extends OpenClawLightDomElement {
         text: formatUiError(error),
       });
     },
+    options: { preserveMessageWhilePending?: boolean } = {},
   ): Promise<void> {
     const scope = this.gateway.capture();
     if (!scope || !this.canMutate() || this.busy[rowKey]) {
@@ -746,7 +739,9 @@ class PluginsPage extends OpenClawLightDomElement {
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.mutationTokens.get(rowKey) === mutationToken;
     this.setBusy(rowKey, true);
-    this.setMessage(rowKey, null);
+    if (!options.preserveMessageWhilePending) {
+      this.setMessage(rowKey, null);
+    }
     try {
       const mutation = await runPluginConfigMutation(
         this.context.runtimeConfig,
@@ -769,23 +764,36 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async install(rowKey: string, request: PluginInstallRequest): Promise<void> {
+  private async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
     await this.runPluginMutation(
-      rowKey,
+      installIdentity,
       (client) => installPlugin(client, request),
       async (result, refreshError, client) => {
+        const installedPluginKey = pluginRowKey(result.plugin.id);
         this.applyMutationResult(result);
+        if (installedPluginKey !== installIdentity) {
+          this.setMessage(installIdentity, null);
+        }
         this.setMessage(
-          rowKey,
+          installedPluginKey,
           committedMutationMessage(mutationSuccessMessage("installed", result), refreshError),
         );
         await this.refreshCatalogAfterMutation(client);
       },
       (error) => {
+        const policyWarning = readPluginInstallPolicyWarning(error);
+        if (policyWarning) {
+          this.setMessage(installIdentity, {
+            kind: "warning",
+            text: policyWarning.reason,
+            installPolicyWarning: { details: policyWarning, request },
+          });
+          return;
+        }
         const trust = readPluginInstallTrustError(error);
         const packageName = request.source === "clawhub" ? request.packageName : null;
         if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
-          this.setMessage(rowKey, {
+          this.setMessage(installIdentity, {
             kind: "error",
             text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
             acknowledge: {
@@ -795,10 +803,13 @@ class PluginsPage extends OpenClawLightDomElement {
           });
           return;
         }
-        this.setMessage(rowKey, {
+        this.setMessage(installIdentity, {
           kind: "error",
           text: formatUiError(error),
         });
+      },
+      {
+        preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
       },
     );
   }
@@ -820,9 +831,6 @@ class PluginsPage extends OpenClawLightDomElement {
             refreshError,
           ),
         );
-        if (enabled) {
-          this.pinEnabledPluginRoute(pluginId);
-        }
         await this.refreshCatalogAfterMutation(client);
         if (isCurrent() && !result.restartRequired) {
           // Plugin tabs come from hello; reconnect after the registry refresh.
@@ -843,7 +851,7 @@ class PluginsPage extends OpenClawLightDomElement {
           kind: "success",
           text: [
             t("pluginsPage.removedRestart", { name: result.pluginId }),
-            ...(result.warnings ?? []),
+            ...(result.warnings ?? []).map((warning) => formatUiExternalText(warning)),
             refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
           ]
             .filter(Boolean)
@@ -1029,7 +1037,8 @@ class PluginsPage extends OpenClawLightDomElement {
           },
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
-          onInstall: (rowKey, request) => void this.install(rowKey, request),
+          onInstall: (request, installIdentity) => void this.install(request, installIdentity),
+          onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
           onRequestUninstall: (rowKey) => this.setPendingRemoval(rowKey, true),
           onCancelUninstall: (rowKey) => this.setPendingRemoval(rowKey, false),
           onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),

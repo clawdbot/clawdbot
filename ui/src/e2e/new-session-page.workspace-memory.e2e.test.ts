@@ -17,6 +17,7 @@ import {
   pollLocatorText,
   projectProofArtifactDir,
   waitForCommittedChatRoute,
+  waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -100,7 +101,7 @@ async function withNewSessionPage(
 }
 
 suite.define(() => {
-  it("keeps the mobile footer controls separated and reveals session modes on hover or focus", async () => {
+  it("keeps rail privacy visible and reveals the mobile footer mode on hover or focus", async () => {
     await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
       await installMockGateway(page, {
         models: [
@@ -139,35 +140,40 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       await expect
         .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      await expect
+        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("0");
       await footer.hover();
       await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       await page.mouse.move(0, 0);
       await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("0");
       await message.focus();
       await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
+      expect(
+        await incognito.evaluate(
+          (element) => element.closest(".new-session-page__incognito-rail") != null,
+        ),
+      ).toBe(true);
 
-      const [footerBox, attachBox, draftBox, incognitoBox, modelBox] = await Promise.all([
+      const [footerBox, attachBox, draftBox, modelBox] = await Promise.all([
         footer.boundingBox(),
         attach.boundingBox(),
         draft.boundingBox(),
-        incognito.boundingBox(),
         model.boundingBox(),
       ]);
       expect(footerBox).not.toBeNull();
       expect(attachBox).not.toBeNull();
       expect(draftBox).not.toBeNull();
-      expect(incognitoBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
       expect((attachBox?.x ?? 0) + (attachBox?.width ?? 0)).toBeLessThanOrEqual(draftBox?.x ?? 0);
-      expect((draftBox?.x ?? 0) + (draftBox?.width ?? 0)).toBeLessThanOrEqual(incognitoBox?.x ?? 0);
-      for (const control of [attachBox, draftBox, incognitoBox, modelBox]) {
+      for (const control of [attachBox, draftBox, modelBox]) {
         expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
         expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
           (footerBox?.x ?? 0) + (footerBox?.width ?? 0),
@@ -214,8 +220,10 @@ suite.define(() => {
         modelSelect.evaluate(
           (element) => element.closest("details")?.hasAttribute("open") ?? false,
         );
+      const modelMenu = page.locator(".chat-controls__model-menu");
+      await expect.poll(() => modelMenu.isVisible()).toBe(true);
       const modelTriggerBox = await modelSelect.boundingBox();
-      const modelMenuBox = await page.locator(".chat-controls__model-menu").boundingBox();
+      const modelMenuBox = await modelMenu.boundingBox();
       expect(modelTriggerBox).not.toBeNull();
       expect(modelMenuBox).not.toBeNull();
       expect(modelMenuBox?.x ?? 0).toBeLessThanOrEqual(modelTriggerBox?.x ?? 0);
@@ -424,6 +432,7 @@ suite.define(() => {
       const effortSelect = page.locator('[data-chat-thinking-select="true"]');
       await effortSelect.click();
       const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await thinkingSlider.press("End");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
 
@@ -470,9 +479,8 @@ suite.define(() => {
       }, WORKSPACE);
       await gateway.setMethodResponse("agents.list", mainAgentList(WORKSPACE, false));
       await page.reload();
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
-      const storedWorktree = (await readMainPreference(page))?.worktree;
-      expect(storedWorktree).toBe(false);
+      await expect.poll(async () => (await readMainPreference(page))?.worktree).toBe(false);
+      await expect.poll(() => placeTrigger.count()).toBe(0);
     });
   });
 
@@ -773,11 +781,14 @@ suite.define(() => {
       // A failed lookup disables the worktree toggle, so restoring the stored
       // choice would strand the draft behind a control the user cannot clear.
       // The draft drops it and stays submittable; storage keeps the preference.
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => placeTrigger.count()).toBe(0);
       await expect.poll(() => start.isDisabled()).toBe(false);
+      await waitForCommittedNewSessionDraft(page, "keep both remembered choices", 0);
 
       await page.reload();
-      await page.locator(".new-session-page__message").fill("keep both remembered choices");
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("keep both remembered choices");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");

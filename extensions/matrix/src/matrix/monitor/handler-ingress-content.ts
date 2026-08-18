@@ -28,7 +28,7 @@ import {
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import { logInboundDrop } from "./runtime-api.js";
-import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
+import type { MatrixRawEvent } from "./types.js";
 
 export async function resolveMatrixIngressContent(config: {
   handler: MatrixHandlerRuntimeConfig;
@@ -95,6 +95,7 @@ export async function resolveMatrixIngressContent(config: {
     effectiveGroupAllowFrom,
     effectiveRoomUsers,
   } = access;
+  const { messageIngress, resolveMessageIngress } = accessState;
   let content = accessContent;
   let pollSnapshotPromise: Promise<MatrixPollSnapshot | null> | null = null;
   const getPollSnapshot = async (): Promise<MatrixPollSnapshot | null> => {
@@ -371,7 +372,7 @@ export async function resolveMatrixIngressContent(config: {
     content = {
       msgtype: "m.text",
       body: pollSnapshot.text,
-    } as unknown as RoomMessageEventContent;
+    };
   }
 
   let media: {
@@ -521,6 +522,8 @@ export async function resolveMatrixIngressContent(config: {
   const triggerSnapshot = preparedTrigger;
 
   return {
+    messageIngress,
+    resolveMessageIngress,
     route: _route,
     hasExplicitSessionBinding,
     roomConfig,

@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from "vitest";
-import type { OpenClawPluginApi } from "./plugin-entry.js";
+import type { OpenClawPluginApi, WorkerMachineOption } from "./plugin-entry.js";
 import type { PluginHookAgentTrigger } from "./types.js";
 
 function registerScopedReplyHook(api: OpenClawPluginApi): void {
@@ -17,5 +17,11 @@ describe("plugin-entry reply trigger contract", () => {
   it("exposes the scoped option through the public plugin API", () => {
     expectTypeOf<OpenClawPluginApi["on"]>().toBeFunction();
     expectTypeOf<PluginHookAgentTrigger>().toEqualTypeOf<"cron" | "heartbeat" | "user">();
+    expectTypeOf<WorkerMachineOption>().toEqualTypeOf<{
+      readonly id: string;
+      readonly label: string;
+      readonly description?: string;
+      readonly default?: boolean;
+    }>();
   });
 });

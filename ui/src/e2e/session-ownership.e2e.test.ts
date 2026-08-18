@@ -1,4 +1,4 @@
-// Control UI E2E tests cover session ownership dormancy and creator filtering.
+// Control UI E2E tests cover session ownership dormancy and owner filtering.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -15,14 +15,14 @@ const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "drafts-ux");
 
 let page: Page | undefined;
-function sessionsList(creators: [string, string]) {
-  const creatorFacet = [
-    { id: creators[0], label: "Ada" },
-    ...(creators[1] === creators[0] ? [] : [{ id: creators[1], label: "Bob" }]),
+function sessionsList(owners: [string, string]) {
+  const ownerFacet = [
+    { type: "human" as const, id: owners[0], label: "Ada" },
+    ...(owners[1] === owners[0] ? [] : [{ type: "human" as const, id: owners[1], label: "Bob" }]),
   ];
   return {
     count: 2,
-    creators: creatorFacet,
+    owners: ownerFacet,
     defaults: { contextTokens: null, model: null, modelProvider: null },
     path: "",
     sessions: [
@@ -31,7 +31,8 @@ function sessionsList(creators: [string, string]) {
         kind: "direct",
         label: "Ada research",
         category: "Research",
-        createdActor: { type: "human", id: creators[0], label: "Ada" },
+        createdActor: { type: "human", id: owners[0], label: "Ada" },
+        owner: { actor: { type: "human", id: owners[0], label: "Ada" } },
         updatedAt: 2,
       },
       {
@@ -41,8 +42,15 @@ function sessionsList(creators: [string, string]) {
         category: "Operations",
         createdActor: {
           type: "human",
-          id: creators[1],
-          label: creators[1] === creators[0] ? "Ada" : "Bob",
+          id: owners[1],
+          label: owners[1] === owners[0] ? "Ada" : "Bob",
+        },
+        owner: {
+          actor: {
+            type: "human",
+            id: owners[1],
+            label: owners[1] === owners[0] ? "Ada" : "Bob",
+          },
         },
         updatedAt: 1,
       },
@@ -120,10 +128,10 @@ suite.define(() => {
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
-    const creatorMenu = await openSidebarSortMenu(currentPage);
-    await creatorMenu.locator('[value="sort:people"]').waitFor();
+    const ownerMenu = await openSidebarSortMenu(currentPage);
+    await ownerMenu.locator('[value="sort:people"]').waitFor();
     await captureUiProof(currentPage, "00-people-sort-available.png");
-    await creatorMenu.evaluate((element) =>
+    await ownerMenu.evaluate((element) =>
       element.dispatchEvent(
         new CustomEvent("wa-select", {
           bubbles: true,
@@ -137,12 +145,12 @@ suite.define(() => {
       "true",
     );
     await captureUiProof(currentPage, "01-people-sort-selected.png");
-    await peopleMenu.locator('[value="creator:profile-ada"]').waitFor();
+    await peopleMenu.locator('[value="owner:profile-ada"]').waitFor();
     await peopleMenu.evaluate((element) =>
       element.dispatchEvent(
         new CustomEvent("wa-select", {
           bubbles: true,
-          detail: { item: { value: "creator:profile-ada" } },
+          detail: { item: { value: "owner:profile-ada" } },
         }),
       ),
     );
@@ -158,13 +166,13 @@ suite.define(() => {
       .poll(async () =>
         (await gateway.getRequests("sessions.list")).some(
           (request) =>
-            (request.params as { creatorId?: unknown } | undefined)?.creatorId === "profile-ada",
+            (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
         ),
       )
       .toBe(true);
   });
 
-  it("renders zero ownership chrome for a single creator", async () => {
+  it("renders zero ownership chrome for a single owner", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -179,16 +187,16 @@ suite.define(() => {
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    const creatorMenu = await openSidebarSortMenu(currentPage);
+    const ownerMenu = await openSidebarSortMenu(currentPage);
     await captureUiProof(currentPage, "00-people-sort-hidden.png");
     expect(
-      await creatorMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
+      await ownerMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
     ).toBe(0);
-    expect(await creatorMenu.locator('[value^="creator:"]').count()).toBe(0);
+    expect(await ownerMenu.locator('[value^="owner:"]').count()).toBe(0);
     expect(await currentPage.locator("openclaw-session-owner-chip").count()).toBe(0);
   });
 
-  it("keeps grouped single-creator thread actions accessible to keyboard users", async () => {
+  it("keeps grouped single-owner thread actions accessible to keyboard users", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -211,7 +219,7 @@ suite.define(() => {
 
     const menu = currentPage.locator(".sidebar-session-sort-menu");
     await menu.waitFor();
-    expect(await menu.locator('[value^="creator:"]').count()).toBe(0);
+    expect(await menu.locator('[value^="owner:"]').count()).toBe(0);
     await menu.getByRole("menuitemradio", { name: "None" }).click();
 
     await expect
@@ -479,16 +487,23 @@ suite.define(() => {
     }
     Object.assign(activeSession, { visibility: "shared", sharingRole: "owner" });
     sessions.count = 1;
-    sessions.creators = [{ id: "profile-ada", label: "Ada" }];
+    sessions.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
     sessions.sessions = [activeSession];
-    const humanIdentities = Array.from({ length: 30 }, (_, index) => ({
-      type: "human" as const,
-      id: `profile-member-${index}`,
-      label: `Member ${index + 1}`,
-    }));
-    const channelIdentities = [
-      { type: "human" as const, id: "channel:chn_design", label: "Design" },
-      { type: "human" as const, id: "discord:channel:operations", label: "Operations" },
+    const longMemberLabel =
+      "Alexandria Montgomery-Santiago from the International Collaboration Working Group";
+    const longMemberId = `profile:${"member-without-a-display-name-".repeat(6)}`;
+    const humanIdentities = [
+      { type: "human" as const, id: "profile-long-name", label: longMemberLabel },
+      { type: "human" as const, id: longMemberId },
+      ...Array.from({ length: 28 }, (_, index) => ({
+        type: "human" as const,
+        id: `profile-member-${index}`,
+        label: `Member ${index + 1}`,
+      })),
+    ];
+    const nonHumanIdentities = [
+      { type: "agent" as const, id: "agent-design", label: "Design" },
+      { type: "system" as const, id: "system-operations", label: "Operations" },
     ];
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "agent:main:ada",
@@ -502,13 +517,42 @@ suite.define(() => {
         "session.visibility.set",
       ],
       operatorScopes: ["operator.read", "operator.write"],
-      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      historyMessages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Share the launch review with the design and operations groups, then summarize the open decisions.",
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "I prepared the rollout summary, linked the review notes, and kept the workspace visible to collaborators.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Add the remaining members and confirm the sharing policy before the handoff.",
+            },
+          ],
+        },
+        { role: "assistant", content: [{ type: "text", text: "Ready." }] },
+      ],
       methodResponses: {
         "sessions.list": sessions,
         "session.members.list": {
           sessionKey: "agent:main:ada",
-          members: [],
-          identities: [...humanIdentities, ...channelIdentities],
+          members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
+          identities: [...humanIdentities, ...nonHumanIdentities],
           role: "owner",
           allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
         },
@@ -526,9 +570,29 @@ suite.define(() => {
       const animations = [...element.getAnimations(), ...(menu?.getAnimations() ?? [])];
       await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
     });
+    const longNameItem = dropdown.locator('wa-dropdown-item[value="member:profile-long-name"]');
+    const longIdItem = dropdown.locator(`wa-dropdown-item[value="member:${longMemberId}"]`);
+
+    await longIdItem.scrollIntoViewIfNeeded();
+    const selectedIndicator = longIdItem.locator('[slot="details"]');
+    await expectBrowser(selectedIndicator).toBeVisible();
+    const selectedIndicatorContained = await longIdItem.evaluate((item) => {
+      const indicator = item.querySelector<HTMLElement>('[slot="details"]');
+      const itemRect = item.getBoundingClientRect();
+      const indicatorRect = indicator?.getBoundingClientRect();
+      return Boolean(
+        indicatorRect &&
+        indicatorRect.left >= itemRect.left &&
+        indicatorRect.right <= itemRect.right,
+      );
+    });
+    expect(selectedIndicatorContained).toBe(true);
 
     const beforeScroll = await dropdown.evaluate((element) => {
       const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      if (menu) {
+        menu.scrollTop = 0;
+      }
       const visibilityTitle = element.querySelector<HTMLElement>(
         ".chat-pane__sharing-visibility-title",
       );
@@ -537,6 +601,10 @@ suite.define(() => {
       ];
       const membersTitle = element.querySelector<HTMLElement>(".chat-pane__sharing-members-title");
       const firstMember = element.querySelector<HTMLElement>(".chat-pane__sharing-member");
+      const longLabels = [
+        ...element.querySelectorAll<HTMLElement>(".chat-pane__sharing-member-label"),
+      ].slice(0, 2);
+      const menuRect = menu?.getBoundingClientRect();
       const previousVisibilityRect = visibilityItems.at(-2)?.getBoundingClientRect();
       const lastVisibilityRect = visibilityItems.at(-1)?.getBoundingClientRect();
       const membersTitleRect = membersTitle?.getBoundingClientRect();
@@ -545,6 +613,13 @@ suite.define(() => {
         menuTop: menu?.getBoundingClientRect().top ?? 0,
         scrollHeight: menu?.scrollHeight ?? 0,
         clientHeight: menu?.clientHeight ?? 0,
+        scrollWidth: menu?.scrollWidth ?? 0,
+        clientWidth: menu?.clientWidth ?? 0,
+        longLabelsContained: longLabels.every((label) => {
+          const rect = label.getBoundingClientRect();
+          return menuRect ? rect.left >= menuRect.left && rect.right <= menuRect.right : false;
+        }),
+        longLabelsOverflow: longLabels.every((label) => label.scrollWidth > label.clientWidth),
         firstMemberTop: firstMember?.getBoundingClientRect().top ?? 0,
         groupGap:
           membersTitleRect && lastVisibilityRect
@@ -594,6 +669,9 @@ suite.define(() => {
 
     expect(beforeScroll.menuHeight).toBeLessThanOrEqual(421);
     expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight);
+    expect(beforeScroll.scrollWidth).toBe(beforeScroll.clientWidth);
+    expect(beforeScroll.longLabelsContained).toBe(true);
+    expect(beforeScroll.longLabelsOverflow).toBe(true);
     expect(beforeScroll.membersTitleInset).toBe(beforeScroll.firstMemberInset);
     expect(beforeScroll.groupGap).toBeGreaterThanOrEqual(8);
     expect(beforeScroll.groupGap).toBeGreaterThan(beforeScroll.rowGap + 6);
@@ -607,7 +685,17 @@ suite.define(() => {
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
     ).toHaveCount(30);
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-channel-icon")).toHaveCount(2);
+    // Agent and system identities render the non-human icon from identity.type,
+    // not from an ID-string heuristic; owner-chip presentation is human-only.
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
+    expect(
+      await longNameItem.locator(".chat-pane__sharing-member-label").getAttribute("title"),
+    ).toBe(longMemberLabel);
+    expect(await longIdItem.locator(".chat-pane__sharing-member-label").getAttribute("title")).toBe(
+      longMemberId,
+    );
+    await expectBrowser(selectedIndicator).toHaveCount(1);
+    expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
   });
 
   it("clears a selected draft mode when sharing policy becomes unavailable", async () => {
@@ -639,7 +727,7 @@ suite.define(() => {
     expect(await draftToggle.isChecked()).toBe(false);
   });
 
-  it("keeps create-as-draft dormant for one creator", async () => {
+  it("keeps create-as-draft dormant for one owner", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;

@@ -89,16 +89,33 @@ describe("heartbeat payload execution", () => {
       createStartedCronServiceWithFinishedBarrier({ storePath, logger: noopLogger });
     try {
       await cron.start();
-      const added = await cron.add({
-        declarationKey: heartbeatTaskDeclarationKey("main", "inbox"),
-        name: "inbox",
-        agentId: "main",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        payload: { kind: "systemEvent", text: "Check urgent inbox items" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-      });
+      const declarationKey = heartbeatTaskDeclarationKey("main", "inbox");
+      await expect(
+        cron.add({
+          declarationKey,
+          name: "ordinary automation",
+          agentId: "main",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "systemEvent", text: "This must use normal cron delivery" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+        }),
+      ).rejects.toThrow(/system-owned/);
+
+      const added = await cron.add(
+        {
+          declarationKey,
+          name: "inbox",
+          agentId: "main",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "systemEvent", text: "Check urgent inbox items" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+        },
+        { systemOwned: true },
+      );
       const job = "job" in added ? added.job : added;
 
       await expect(cron.run(job.id, "force")).resolves.toMatchObject({ ok: true });

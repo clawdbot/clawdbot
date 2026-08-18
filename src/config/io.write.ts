@@ -63,7 +63,7 @@ import type {
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
-import { formatConfigValidationFailure } from "./io.write-errors.js";
+import { createConfigValidationFailedError } from "./io.write-errors.js";
 import {
   preserveIncludeOwnedConfigForWrite,
   resolvePersistCandidateForWrite,
@@ -123,7 +123,6 @@ export async function writeConfigFileFromContext(
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
   let nextConfig = cfg;
-  let persistCandidate: unknown;
   const snapshotRead = options.baseSnapshot
     ? {
         snapshot: options.baseSnapshot,
@@ -279,13 +278,14 @@ export async function writeConfigFileFromContext(
     );
   }
   const cronOwnerRefusal = persistOwnership
-    ? await prepareCronOwnerWriteRefusal({
+    ? await prepareCronOwnerWriteRefusal(snapshot.config, {
         storePath: resolveCronJobsStorePathFromConfig(nextConfig, deps.env),
+        ...(retainedFleetOwner ? { provenOwnerAgentId: retainedFleetOwner } : {}),
         env: deps.env,
       })
     : undefined;
 
-  persistCandidate = nextConfig;
+  let persistCandidate: unknown = nextConfig;
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();
   collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);
@@ -365,10 +365,7 @@ export async function writeConfigFileFromContext(
     preservedLegacyRootKeys: options.preservedLegacyRootKeys,
   });
   if (!validated.ok) {
-    const issue = validated.issues[0];
-    throw new Error(
-      formatConfigValidationFailure(issue?.path || "<root>", issue?.message ?? "invalid"),
-    );
+    throw createConfigValidationFailedError(validated.issues);
   }
   const previousWarningFingerprint = loggedConfigWarningFingerprints.get(configPath);
   // Capture before commit so rollback cannot restore a watcher-updated slot.

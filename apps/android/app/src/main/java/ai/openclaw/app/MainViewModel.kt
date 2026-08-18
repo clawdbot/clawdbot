@@ -7,7 +7,7 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
@@ -676,7 +676,7 @@ class MainViewModel private constructor(
   val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
     runtimeState(initial = emptyMap()) { it.chatSubagentActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
-  val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
+  val chatProgressCard: StateFlow<ChatProgressCard?> = runtimeState(initial = null) { it.chatProgressCard }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val chatSwarmGroups: StateFlow<List<ChatSwarmGroup>> = runtimeState(initial = emptyList()) { it.chatSwarmGroups }
   val chatSessionBranches: StateFlow<List<SessionBranch>> = runtimeState(initial = emptyList()) { it.chatSessionBranches }
@@ -1686,7 +1686,8 @@ class MainViewModel private constructor(
   suspend fun forkChatSession(
     parentKey: String,
     ownerAgentId: String? = null,
-  ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId)
+    fromLastCompleted: Boolean = false,
+  ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId, fromLastCompleted)
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = ensureRuntime().rewindChatAtEntry(entryId)
 

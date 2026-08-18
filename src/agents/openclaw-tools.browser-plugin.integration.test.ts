@@ -9,6 +9,8 @@ import {
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
@@ -44,6 +46,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     vi.unstubAllEnvs();
     clearSecretsRuntimeSnapshot();
     resetConfigRuntimeState();
+    resetPluginRuntimeStateForTest();
   });
 
   it("keeps the browser tool returned by plugin resolution", () => {
@@ -163,6 +166,20 @@ describe("createOpenClawTools browser plugin integration", () => {
 
     expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
     expect(firstResolvePluginToolsParams().allowGatewaySubagentBinding).toBe(true);
+  });
+
+  it("forwards the lifecycle registry to workspace-scoped plugin tools", () => {
+    hoisted.resolvePluginTools.mockReturnValue([]);
+    const config = { plugins: { enabled: true } } as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(pluginRegistry, "gateway", "gateway-bindable", "/gateway-workspace");
+
+    resolveOpenClawPluginToolsForOptions({
+      options: { config, workspaceDir: "/session-workspace" },
+      resolvedConfig: config,
+    });
+
+    expect(firstResolvePluginToolsParams().runtimeRegistry).toBe(pluginRegistry);
   });
 
   it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {

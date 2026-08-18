@@ -293,6 +293,47 @@ struct GatewayChannelConnectTests {
         #expect(params["pathEnv"] as? String == "/opt/homebrew/bin:/usr/bin:/bin")
     }
 
+    @Test func `node connect forwards the selected computer-use descriptor`() async throws {
+        let recorder = ConnectParamsRecorder()
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { _, message, sendIndex in
+                        guard sendIndex == 0 else { return }
+                        recorder.record(message)
+                    })
+            })
+        let descriptor = OpenClawProtocol.AnyCodable([
+            "contractVersion": OpenClawProtocol.AnyCodable(2),
+            "provider": OpenClawProtocol.AnyCodable([
+                "id": OpenClawProtocol.AnyCodable("cua-computer"),
+            ]),
+        ])
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["screen", "computer"],
+            commands: ["screen.snapshot", "computer.act"],
+            computerUse: descriptor,
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: options)
+
+        try await channel.connect()
+
+        let params = try #require(recorder.snapshot())
+        let computerUse = try #require(params["computerUse"] as? [String: Any])
+        #expect(computerUse["contractVersion"] as? Int == 2)
+        #expect((computerUse["provider"] as? [String: Any])?["id"] as? String == "cua-computer")
+    }
+
     @Test func `concurrent connect shares failure`() async throws {
         let session = self.makeSession(response: .invalid(delayMs: 200))
         let channel = try GatewayChannelActor(

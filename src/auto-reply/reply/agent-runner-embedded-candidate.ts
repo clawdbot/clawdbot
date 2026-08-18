@@ -43,6 +43,7 @@ import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
+import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import {
   bindSourceReplyDeliveryRuntime,
   readSourceReplyDeliveryRuntime,
@@ -195,6 +196,8 @@ export async function runEmbeddedFallbackCandidate(params: {
     }),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
+  const toolAuthorityRoute = { provider: embeddedRunProvider, model: params.model };
+  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   try {
     // Profiler milestone. Exposes pre-dispatch delay without normal-path logging.
     params.timing.logMilestoneIfSlow({
@@ -237,9 +240,13 @@ export async function runEmbeddedFallbackCandidate(params: {
         onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,
+        explicitSkillSelections: turn.followupRun.explicitSkillSelections,
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+        // Heartbeat ambient routes are delivery context, never implicit message recipients.
+        // Omit false so subagent sessions keep their downstream default.
+        ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
         silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
         suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
         onUserMessagePersisted: params.notifyUserMessagePersisted,
@@ -256,6 +263,10 @@ export async function runEmbeddedFallbackCandidate(params: {
           turn.opts?.shouldSuppressToolErrorWarnings ?? turn.opts?.suppressToolErrorWarnings,
         toolsAllow: turn.opts?.toolsAllow,
         disableTools: turn.opts?.disableTools,
+        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
+          turn.followupRun,
+          toolAuthorityRoute,
+        ),
         enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,

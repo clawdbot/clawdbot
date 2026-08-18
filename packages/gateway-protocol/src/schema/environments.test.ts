@@ -11,6 +11,7 @@ import {
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
 } from "../index.js";
+import { WorkerSlotSummarySchema } from "./environments.js";
 
 const workerStates = [
   "requested",
@@ -114,6 +115,67 @@ describe("worker environment protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("accepts only redacted node worker bundle status", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "2026.8.9" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "missing" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: {
+          status: "installed",
+          version: "2026.8.9",
+          bundleHash: "a".repeat(64),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts only bounded closed worker slot summaries", () => {
+    const slots = { total: 2, available: 1 };
+    expect(Value.Check(WorkerSlotSummarySchema, slots)).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: slots,
+      }),
+    ).toBe(true);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 0, available: 0 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 3 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 1_025 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { ...slots, busy: 1 })).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: { total: 2, available: 3 },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
     const node = {
       id: "node:build-mac",
@@ -162,7 +224,21 @@ describe("worker environment protocol schemas", () => {
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            trust: "disposable",
+            machines: [
+              {
+                id: "standard",
+                label: "Standard",
+                description: "Cheap smoke checks and small repos",
+                default: true,
+              },
+            ],
+          },
+        ],
       }),
     ).toBe(true);
     expect(
@@ -177,6 +253,18 @@ describe("worker environment protocol schemas", () => {
         profiles: [{ id: "aws", providerId: "crabbox", trust: "temporary" }],
       }),
     ).toBe(false);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            machines: [{ id: "standard", label: "Standard", cpu: 32 }],
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("preserves summaries without worker metadata and rejects malformed worker metadata", () => {
@@ -187,6 +275,29 @@ describe("worker environment protocol schemas", () => {
         status: "available",
       }),
     ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [
+          {
+            code: "update-required",
+            action: "update-and-reconnect",
+            updateCommand: "openclaw update",
+            headlessReconnectCommand: "openclaw node restart",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [{ code: "update-required", action: "run-legacy-worker" }],
+      }),
+    ).toBe(false);
     expect(
       Value.Check(EnvironmentSummarySchema, {
         ...workerSummary("ready", "available"),

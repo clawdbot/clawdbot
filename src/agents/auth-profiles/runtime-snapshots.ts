@@ -144,6 +144,7 @@ function ownerState(
       | "runtimePersistedProfileIds"
       | "runtimeExternalProfileIds"
       | "runtimeExternalProfileIdsAuthoritative"
+      | "runtimeExternalCliProfileIds"
       | "runtimeLocalProfileIds"
       | "runtimeInheritsMainState"
     >
@@ -157,6 +158,7 @@ function ownerState(
     runtimePersistedProfileIds: store.runtimePersistedProfileIds,
     runtimeExternalProfileIds: store.runtimeExternalProfileIds,
     runtimeExternalProfileIdsAuthoritative: store.runtimeExternalProfileIdsAuthoritative,
+    runtimeExternalCliProfileIds: store.runtimeExternalCliProfileIds,
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
     runtimeInheritsMainState: store.runtimeInheritsMainState,
   };

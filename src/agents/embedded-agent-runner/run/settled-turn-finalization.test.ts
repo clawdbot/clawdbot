@@ -187,6 +187,42 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
   });
 
+  it("preserves the settled runtime context window through isolated finalization", async () => {
+    const attempt = {
+      ...settledFailedAttempt(),
+      agentHarnessId: "codex",
+      contextTokens: 1_000_000,
+      contextTokensSource: "runtime" as const,
+    };
+    const input = finalizationInput(attempt);
+    input.terminalBase.outerContextTokenMeta = { contextTokens: 272_000 };
+    input.finalization.preparedAttempt.agentHarnessId = "codex";
+    const finalAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "The exec tool failed: post-processing error." }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValueOnce({
+      outcome: "answered",
+      result: {
+        assistant: finalAssistant,
+        usage: finalAssistant.usage,
+        diagnosticTrace: { traceId: "trace-final", spanId: "span-final" },
+      },
+    });
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(result.attempt).toMatchObject({
+      agentHarnessId: "codex",
+      contextTokens: 1_000_000,
+      contextTokensSource: "runtime",
+    });
+    expect(result.prepared.agentMeta).toMatchObject({
+      agentHarnessId: "codex",
+      contextTokens: 1_000_000,
+      contextTokensSource: "runtime",
+    });
+  });
+
   it("fails closed and preserves the initial terminal preparation", async () => {
     const attempt = settledFailedAttempt();
     backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("finalizer failed"));

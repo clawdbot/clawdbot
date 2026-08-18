@@ -64,13 +64,14 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
     return false;
   }
   const headers = req.headers ?? {};
-  return Boolean(
-    headers.forwarded ||
-    headers["x-real-ip"] ||
-    Object.keys(headers).some((header) =>
-      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
-    ),
-  );
+  return Object.keys(headers).some((header) => {
+    const normalized = normalizeLowercaseStringOrEmpty(header);
+    return (
+      normalized === "forwarded" ||
+      normalized === "x-real-ip" ||
+      normalized.startsWith("x-forwarded-")
+    );
+  });
 }
 
 /** Return whether a request is a clean loopback request without forwarded identity headers. */

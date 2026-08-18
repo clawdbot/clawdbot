@@ -3,15 +3,16 @@ import type {
   DesktopSource,
   EnvironmentSummary,
   EnvironmentsListResult,
-  WorkerDesktopAppId,
   WorkerDesktopLaunchResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { createDockPanelLayout } from "../dock-panel-layout.ts";
 import {
@@ -21,7 +22,16 @@ import {
 import { DesktopClient, type DesktopConnectionHandle } from "./desktop-client.ts";
 import { desktopDocumentStyles } from "./desktop-document-styles.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
+import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
+import type {
+  DesktopAppId,
+  DesktopCredentials,
+  ObservedDesktopConnection,
+  PendingDesktopConnection,
+} from "./desktop-panel-connection.ts";
 import { desktopCredentialRequirement } from "./desktop-panel-credentials.ts";
+import { DesktopPanelEmbeddedController } from "./desktop-panel-embedded-controller.ts";
+import { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { desktopPanelLauncherStyles } from "./desktop-panel-launcher-styles.ts";
 import { type DesktopPanelState, renderDesktopPanelRecovery } from "./desktop-panel-state.ts";
 import { desktopPanelStyles } from "./desktop-panel-styles.ts";
@@ -32,7 +42,7 @@ import {
   renderDesktopPanelHeader,
   renderDesktopPicker,
 } from "./desktop-panel-view.ts";
-import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import { desktopSourceForEnvironment, resolveDesktopDocumentTarget } from "./desktop-source.ts";
 
 const panelLayout = createDockPanelLayout({
   storageKey: "openclaw.desktopPanel",
@@ -43,17 +53,6 @@ const panelLayout = createDockPanelLayout({
   defaultHeight: 420,
   defaultWidth: 560,
 });
-type DesktopAppId = WorkerDesktopAppId;
-type DesktopCredentials = { username?: string; password?: string };
-type PendingDesktopConnection = {
-  environmentId: string;
-  control: boolean;
-  observed?: DesktopObserveResult;
-  operationId: number;
-};
-type ObservedDesktopConnection = PendingDesktopConnection & { observed: DesktopObserveResult };
-const MOBILE_KEYBOARD_SENTINEL = "________________";
-
 /** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
 class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
@@ -61,7 +60,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ type: Boolean }) suppressed = false;
   @property({ type: Boolean }) documentMode = false;
   @property({ attribute: false }) documentSource: string | null = null;
+  @property({ attribute: false }) documentSession: string | null = null;
   @property({ type: Boolean }) documentControl = false;
+  /** Hosted by the chat side panel, which owns visibility and geometry. */
+  @property({ type: Boolean }) embedded = false;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
 
   /** Browser tests replace the transport without opening a real RFB socket. */
@@ -89,11 +91,21 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private launchOperationId = 0;
   private controlTakeoverRecoveryUsed = false;
   private documentSourceResolved = false;
-  private keyboardInputValue = MOBILE_KEYBOARD_SENTINEL;
+  private readonly embeddedPanel = new DesktopPanelEmbeddedController(this);
+  private readonly mobileKeyboard = new DesktopMobileKeyboard({
+    connection: () => this.connection,
+    controlling: () => this.controlling,
+    input: () => this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input"),
+  });
   private readonly dockLayout = new DockLayoutController(this, {
     layout: panelLayout,
     reservationPrefix: "desktop",
     isAvailable: () => this.available,
+    isFullscreen: () => this.fullscreenMode.active,
+  });
+  private readonly fullscreenMode = new DesktopPanelFullscreenController(this, {
+    section: () => this.renderRoot.querySelector<HTMLElement>("section.bp"),
+    onChange: () => this.dockLayout.syncReservation(),
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
 
@@ -102,11 +114,14 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     desktopPanelLauncherStyles,
     desktopPanelStyles,
     desktopDocumentStyles,
+    scrollbarShadowStyles,
   ];
 
   override connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    if (!this.embedded) {
+      window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    }
     this.dockLayout.setSuppressed(this.suppressed);
     if (this.documentMode && this.available) {
       void this.refreshEnvironments();
@@ -116,6 +131,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   override disconnectedCallback(): void {
+    this.embeddedPanel.clearRefresh();
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.disconnectConnection();
     this.credentials = undefined;
@@ -123,6 +139,13 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   override updated(changed: Map<string, unknown>): void {
+    if (changed.has("embedded")) {
+      if (this.embedded) {
+        window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      } else {
+        window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      }
+    }
     if (changed.has("suppressed")) {
       const restored = this.dockLayout.setSuppressed(this.suppressed);
       if (this.suppressed) {
@@ -131,13 +154,14 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         void this.refreshEnvironments();
       }
     }
-    if (changed.has("documentSource")) {
+    if (changed.has("documentSource") || changed.has("documentSession")) {
       this.documentSourceResolved = false;
     }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
     const documentPresentationChanged =
       changed.has("documentMode") ||
       changed.has("documentSource") ||
+      changed.has("documentSession") ||
       changed.has("documentControl");
     if (this.documentMode && (gatewayAvailabilityChanged || documentPresentationChanged)) {
       if (!this.available) {
@@ -146,6 +170,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       } else {
         void this.refreshEnvironments();
       }
+    } else if (this.embedded && gatewayAvailabilityChanged) {
+      this.embeddedPanel.handleAvailabilityChange();
     } else if (gatewayAvailabilityChanged) {
       if (!this.available && this.dockLayout.open) {
         this.dockLayout.hideWithoutPersisting();
@@ -165,6 +191,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as DesktopPanelToggleDetail)
         : null;
+    if (this.embeddedPanel.handleToggle(detail)) {
+      return;
+    }
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dockLayout.setDock(detail.dock, false);
     }
@@ -191,7 +220,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.dockLayout.setOpen(false);
   }
 
-  private returnToPicker(): void {
+  returnToPicker(): void {
     this.disconnectConnection();
     this.clearLaunchState();
     this.state = "picker";
@@ -210,7 +239,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     const connection = this.connection;
     this.connection = null;
     connection?.disconnect();
-    this.resetDocumentKeyboardInput();
+    this.mobileKeyboard.reset();
   }
 
   private clearLaunchState(): void {
@@ -219,7 +248,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.launchErrorText = null;
   }
 
-  private async refreshEnvironments(expectedOperationId?: number): Promise<boolean> {
+  async refreshEnvironments(expectedOperationId?: number): Promise<boolean> {
     const client = this.client;
     if (!client || !this.available) {
       return false;
@@ -238,7 +267,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     } catch (error) {
       if (operationId === this.operationId) {
         this.errorText = t("desktop.errors.listFailed", { error: formatUiError(error) });
-        if (this.documentMode && this.documentSource !== null) {
+        if (this.documentMode && (this.documentSource !== null || this.documentSession !== null)) {
+          // A session key only names a machine once the inventory loads, so it stays out of
+          // `environmentId`; document-mode retry refreshes the inventory rather than reconnecting.
           this.environmentId = this.documentSource;
           this.state = "inventory-error";
         }
@@ -259,8 +290,36 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       return;
     }
     this.documentSourceResolved = true;
-    const requestedSource = this.documentSource;
+    let session: GatewaySessionRow | undefined;
+    if (this.documentSource === null && this.documentSession !== null) {
+      // `sessions.describe` is the exact-key lookup; a `sessions.list` search would have to
+      // page past same-agent keys that share this one's prefix before it could rule it out.
+      try {
+        const described = await this.client?.request<{ session?: GatewaySessionRow | null }>(
+          "sessions.describe",
+          { key: this.documentSession },
+        );
+        session = described?.session ?? undefined;
+      } catch {
+        session = undefined;
+      }
+      if (operationId !== this.operationId) {
+        return;
+      }
+    }
+    const requestedSource = resolveDesktopDocumentTarget(
+      {
+        source: this.documentSource,
+        session: this.documentSession,
+        control: this.documentControl,
+      },
+      session,
+    );
     if (requestedSource === null) {
+      if (this.documentSession !== null) {
+        this.state = "picker";
+        this.noticeText = t("desktop.sourceUnavailable");
+      }
       return;
     }
     if (!this.environments.some((environment) => environment.id === requestedSource)) {
@@ -277,7 +336,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     void this.refreshEnvironments();
   }
 
-  private async connectRequestedEnvironment(environmentId: string): Promise<void> {
+  async connectRequestedEnvironment(environmentId: string): Promise<void> {
     this.returnToPicker();
     this.environmentId = environmentId;
     this.state = "connecting";
@@ -418,7 +477,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         onSecurityFailure: (detail) => {
           if (pending.operationId === this.operationId) {
             this.errorText = t("desktop.errors.securityFailed", {
-              reason: detail.reason ?? t("desktop.unknownReason"),
+              reason: formatUiExternalText(detail.reason, t("desktop.unknownReason")),
             });
           }
         },
@@ -487,7 +546,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       };
       this.state = "credentials";
       this.errorText = t("desktop.errors.securityFailed", {
-        reason: reason || t("desktop.unknownReason"),
+        reason: formatUiExternalText(reason, t("desktop.unknownReason")),
       });
       return;
     }
@@ -506,7 +565,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     this.state = "disconnected";
     this.disconnectedReason =
-      reason || (code ? t("desktop.closeCode", { code: String(code) }) : null);
+      formatUiExternalText(reason, code ? t("desktop.closeCode", { code: String(code) }) : "") ||
+      null;
   }
 
   private async launchApp(app: DesktopAppId): Promise<void> {
@@ -542,57 +602,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
   }
 
-  private handleDocumentKeyboardEvent(event: KeyboardEvent): void {
-    if (!this.controlling || !this.connection?.sendKeyboardEvent) {
-      return;
-    }
-    this.connection.sendKeyboardEvent(event);
-    event.preventDefault();
-  }
-
-  private handleDocumentKeyboardInput(event: InputEvent): void {
-    const input = event.currentTarget as HTMLTextAreaElement;
-    if (!this.controlling) {
-      this.resetDocumentKeyboardInput(input);
-      return;
-    }
-    const previousValue = this.keyboardInputValue;
-    const nextValue = input.value;
-    let prefixLength = 0;
-    const comparableLength = Math.min(previousValue.length, nextValue.length);
-    while (
-      prefixLength < comparableLength &&
-      previousValue.charAt(prefixLength) === nextValue.charAt(prefixLength)
-    ) {
-      prefixLength += 1;
-    }
-    const removedCount = previousValue.length - prefixLength;
-    for (let index = 0; index < removedCount; index += 1) {
-      this.connection?.sendBackspace?.();
-    }
-    this.connection?.sendText?.(nextValue.slice(prefixLength));
-    if (nextValue.length < 1 || nextValue.length > MOBILE_KEYBOARD_SENTINEL.length * 2) {
-      this.resetDocumentKeyboardInput(input);
-      return;
-    }
-    this.keyboardInputValue = nextValue;
-  }
-
-  private resetDocumentKeyboardInput(input?: HTMLTextAreaElement): void {
-    this.keyboardInputValue = MOBILE_KEYBOARD_SENTINEL;
-    const target =
-      input ?? this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input");
-    if (target) {
-      target.value = MOBILE_KEYBOARD_SENTINEL;
-    }
-  }
-
-  private focusDocumentKeyboard(): void {
-    const input = this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input");
-    input?.focus({ preventScroll: true });
-    input?.setSelectionRange(input.value.length, input.value.length);
-  }
-
   private toggleDocumentScale(): void {
     this.scaleViewport = !this.scaleViewport;
     this.connection?.setScaleViewport?.(this.scaleViewport);
@@ -602,7 +611,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (!this.available) {
       return nothing;
     }
-    const notice = renderDesktopNotice(this.launchErrorText ?? this.errorText, this.noticeText);
+    const notice = renderDesktopNotice(
+      this.fullscreenMode.errorText ?? this.launchErrorText ?? this.errorText,
+      this.noticeText,
+    );
     const picker = renderDesktopPicker({
       environments: this.environments,
       loading: this.loading,
@@ -618,15 +630,15 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       inventoryError: this.state === "inventory-error",
       reason: this.disconnectedReason,
       onRetry: () => {
+        if (this.state === "inventory-error" && this.documentMode) {
+          this.retryDocumentInventory();
+          return;
+        }
         if (!this.environmentId) {
           return;
         }
         if (this.state === "inventory-error") {
-          if (this.documentMode) {
-            this.retryDocumentInventory();
-          } else {
-            void this.connectRequestedEnvironment(this.environmentId);
-          }
+          void this.connectRequestedEnvironment(this.environmentId);
           return;
         }
         void this.connectEnvironment(this.environmentId, this.controlling);
@@ -652,7 +664,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         state: this.state,
         controlling: this.controlling,
         scaleViewport: this.scaleViewport,
-        keyboardInputValue: this.keyboardInputValue,
+        keyboardInputValue: this.mobileKeyboard.value,
         notice,
         picker,
         credentials,
@@ -662,27 +674,39 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
             void this.connectEnvironment(this.environmentId, !this.controlling);
           }
         },
-        onKeyboardFocus: () => this.focusDocumentKeyboard(),
-        onKeyboardEvent: (event) => this.handleDocumentKeyboardEvent(event),
-        onKeyboardInput: (event) => this.handleDocumentKeyboardInput(event),
+        onKeyboardFocus: () => this.mobileKeyboard.focus(),
+        onKeyboardEvent: (event) => this.mobileKeyboard.handleKeyboardEvent(event),
+        onKeyboardInput: (event) => this.mobileKeyboard.handleInput(event),
         onScaleToggle: () => this.toggleDocumentScale(),
         onClose: () => this.onDocumentClose?.(),
       });
     }
-    if (!this.dockLayout.open) {
+    if (!this.embedded && !this.dockLayout.open) {
       return nothing;
     }
     const dock = this.dockLayout.dock;
-    const style =
-      dock === "bottom" ? `height:${this.dockLayout.height}px` : `width:${this.dockLayout.width}px`;
+    const style = this.embedded
+      ? ""
+      : this.fullscreenMode.active
+        ? ""
+        : dock === "bottom"
+          ? `height:${this.dockLayout.height}px`
+          : `width:${this.dockLayout.width}px`;
     return html`
-      <section class="bp bp--${dock}" style=${style} aria-label=${t("desktop.title")}>
-        ${this.dockLayout.renderResizer("bp", t("desktop.resize"))}
-        ${renderDesktopPanelHeader({
-          dock,
-          onDock: (nextDock) => this.dockLayout.setDock(nextDock),
-          onClose: () => this.closePanel(),
-        })}
+      <section
+        class="bp bp--${this.embedded ? "embedded" : dock}"
+        style=${style}
+        aria-label=${t("desktop.title")}
+      >
+        ${this.embedded ? nothing : this.dockLayout.renderResizer("bp", t("desktop.resize"))}
+        ${this.embedded
+          ? nothing
+          : renderDesktopPanelHeader({
+              dock,
+              fullscreenControl: this.fullscreenMode.renderButton(),
+              onDock: (nextDock) => this.dockLayout.setDock(nextDock),
+              onClose: () => this.closePanel(),
+            })}
         <div class="desktop-content">
           ${notice}
           ${this.state === "picker"
