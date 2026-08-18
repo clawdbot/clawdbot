@@ -198,6 +198,9 @@ const messageActionContextSchema = z.object({
   sourceReplySessionKey: ignoredOptionalStringSchema,
   requesterAccountId: ignoredOptionalStringSchema,
   requesterSenderId: ignoredOptionalStringSchema,
+  requesterSenderName: ignoredOptionalStringSchema,
+  requesterSenderUsername: ignoredOptionalStringSchema,
+  requesterSenderE164: ignoredOptionalStringSchema,
   toolContext: messageActionToolContextSchema.optional(),
 });
 const cronSelfManagementContextSchema = z.object({
@@ -291,6 +294,9 @@ function decodeMessageActionContext(
     sourceReplySessionKey: value.sourceReplySessionKey,
     requesterAccountId: value.requesterAccountId,
     requesterSenderId: value.requesterSenderId,
+    requesterSenderName: value.requesterSenderName,
+    requesterSenderUsername: value.requesterSenderUsername,
+    requesterSenderE164: value.requesterSenderE164,
     toolContext: value.toolContext,
   };
   if (value.sourceReplyFinal === true) {

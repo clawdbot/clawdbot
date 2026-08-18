@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { buildOutboundMediaLoadOptions } from "./load-options.js";
@@ -22,6 +23,8 @@ const channelPluginMocks = vi.hoisted(() => ({
       | undefined
   >(() => undefined),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: () => undefined,
@@ -212,7 +215,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
   });
 
   it("blocks denied workspace attachments while preserving managed artifacts", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-sender-policy-"));
+    const baseDir = tempDirs.make("openclaw-media-sender-policy-");
     const stateDir = path.join(baseDir, "state");
     const workspaceDir = path.join(baseDir, "workspace");
     const workspaceFile = path.join(workspaceDir, "private.bin");
@@ -230,36 +233,29 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       agents: { list: [{ id: "restricted", workspace: workspaceDir }] },
     };
 
-    try {
-      const deniedAccess = resolveAgentScopedOutboundMediaAccess({
-        cfg,
-        agentId: "restricted",
-        messageProvider: "requestchat",
-        requesterSenderId: "attacker",
-        mediaSources: [workspaceFile],
-      });
-      await expect(
-        loadWebMediaRaw(
-          workspaceFile,
-          buildOutboundMediaLoadOptions({ mediaAccess: deniedAccess }),
-        ),
-      ).rejects.toThrow(/not under an allowed directory/i);
+    const deniedAccess = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: "restricted",
+      messageProvider: "requestchat",
+      requesterSenderId: "attacker",
+      mediaSources: [workspaceFile],
+    });
+    await expect(
+      loadWebMediaRaw(workspaceFile, buildOutboundMediaLoadOptions({ mediaAccess: deniedAccess })),
+    ).rejects.toThrow(/not under an allowed directory/i);
 
-      const managedAccess = resolveAgentScopedOutboundMediaAccess({
-        cfg,
-        agentId: "restricted",
-        messageProvider: "requestchat",
-        requesterSenderId: "attacker",
-        mediaSources: [managedFile],
-      });
-      const loaded = await loadWebMediaRaw(
-        managedFile,
-        buildOutboundMediaLoadOptions({ mediaAccess: managedAccess }),
-      );
-      expect(loaded.buffer.toString()).toBe("managed");
-    } finally {
-      await fs.rm(baseDir, { recursive: true, force: true });
-    }
+    const managedAccess = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: "restricted",
+      messageProvider: "requestchat",
+      requesterSenderId: "attacker",
+      mediaSources: [managedFile],
+    });
+    const loaded = await loadWebMediaRaw(
+      managedFile,
+      buildOutboundMediaLoadOptions({ mediaAccess: managedAccess }),
+    );
+    expect(loaded.buffer.toString()).toBe("managed");
   });
 
   it("honors plugin-owned group tool policy with channel metadata", () => {

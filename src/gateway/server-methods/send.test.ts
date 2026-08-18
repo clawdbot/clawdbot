@@ -14,6 +14,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
+import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
+import { loadWebMediaRaw } from "../../media/web-media.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
@@ -319,6 +321,9 @@ async function runMessageActionRequest(
           sourceReplyToolCallId?: string;
           requesterAccountId?: string;
           requesterSenderId?: string;
+          requesterSenderName?: string;
+          requesterSenderUsername?: string;
+          requesterSenderE164?: string;
           toolContext?: Record<string, unknown>;
         };
       };
@@ -4167,6 +4172,84 @@ describe("gateway send mirroring", () => {
     expect(actionCall?.mediaAccess.workspaceDir).toBe(TEST_AGENT_WORKSPACE);
     expect(actionCall?.mediaAccess).not.toHaveProperty("readFile");
     expect(actionCall).not.toHaveProperty("mediaReadFile");
+  });
+
+  it("applies signed sender aliases to gateway attachment media policy", async () => {
+    registerMessageActionPlugin({ registrySuffix: "message-action-signed-sender-alias-policy" });
+    const sessionKey = "agent:work:telegram:direct:123";
+
+    await withTempOpenClawStateDir(async (stateDir) => {
+      const workspaceFile = path.join(
+        TEST_AGENT_WORKSPACE,
+        `gateway-alias-denied-${process.pid}.bin`,
+      );
+      const managedFile = path.join(stateDir, "media", "outbound", "managed.bin");
+      await fs.mkdir(TEST_AGENT_WORKSPACE, { recursive: true });
+      await fs.mkdir(path.dirname(managedFile), { recursive: true });
+      await fs.writeFile(workspaceFile, "private");
+      await fs.writeFile(managedFile, "managed");
+
+      try {
+        const { respond } = await runMessageActionRequest(
+          {
+            channel: "telegram",
+            action: "send",
+            params: { to: "123", message: "chart", mediaUrl: workspaceFile },
+            requesterSenderId: "forged-allowed-sender",
+            sessionKey,
+            agentId: "work",
+            idempotencyKey: "idem-message-action-signed-sender-alias-policy",
+          },
+          {
+            internal: {
+              agentRuntimeIdentity: {
+                kind: "agentRuntime",
+                agentId: "work",
+                sessionKey,
+                messageActionContext: {
+                  expiresAtMs: Date.now() + 60_000,
+                  requesterSenderId: "allowed-id",
+                  requesterSenderName: "Blocked Sender",
+                  requesterSenderUsername: "blocked-user",
+                  requesterSenderE164: "+15551234567",
+                },
+              },
+            },
+          },
+          {
+            ...makeContext(),
+            getRuntimeConfig: () => ({
+              agents: { list: [{ id: "main" }, { id: "work" }] },
+              tools: {
+                allow: ["read"],
+                toolsBySender: { "username:blocked-user": { deny: ["read"] } },
+              },
+            }),
+          } as GatewayRequestContext,
+        );
+
+        expect(firstRespondCall(respond)[0]).toBe(true);
+        const actionCall = lastDispatchChannelMessageActionCall();
+        expect(actionCall).toMatchObject({
+          requesterSenderId: "allowed-id",
+          requesterSenderName: "Blocked Sender",
+          requesterSenderUsername: "blocked-user",
+          requesterSenderE164: "+15551234567",
+        });
+        const mediaAccess = actionCall?.mediaAccess;
+        expect(mediaAccess.localRoots).not.toContain(TEST_AGENT_WORKSPACE);
+        await expect(
+          loadWebMediaRaw(workspaceFile, buildOutboundMediaLoadOptions({ mediaAccess })),
+        ).rejects.toThrow(/not under an allowed directory/i);
+        const managed = await loadWebMediaRaw(
+          managedFile,
+          buildOutboundMediaLoadOptions({ mediaAccess }),
+        );
+        expect(managed.buffer.toString()).toBe("managed");
+      } finally {
+        await fs.rm(workspaceFile, { force: true });
+      }
+    });
   });
 
   it("materializes buffer-only message.action sends on the gateway before plugin dispatch", async () => {

@@ -14,16 +14,19 @@ const MAX_ACTIVE_CAPABILITIES = 4096;
 const RUN_LIFETIME_EXPIRES_AT_MS = Number.MAX_SAFE_INTEGER;
 const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
 
-type AgentRuntimeMessageActionContextBase = {
-  expiresAtMs: number;
-  sessionId?: string;
-  /** Durable session entry that owns restart-recovery receipt state. */
-  sourceReplySessionKey?: string;
+type MessageActionRequesterIdentity = {
   requesterAccountId?: string;
   requesterSenderId?: string;
   requesterSenderName?: string;
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
+};
+
+type AgentRuntimeMessageActionContextBase = MessageActionRequesterIdentity & {
+  expiresAtMs: number;
+  sessionId?: string;
+  /** Durable session entry that owns restart-recovery receipt state. */
+  sourceReplySessionKey?: string;
   toolContext?: InternalChannelThreadingToolContext;
 };
 
@@ -40,8 +43,8 @@ export type AgentRuntimeMessageActionContext = AgentRuntimeMessageActionContextB
   );
 
 export function selectMessageActionRequesterIdentity(
-  context: AgentRuntimeMessageActionContext | undefined,
-) {
+  context: MessageActionRequesterIdentity | undefined,
+): MessageActionRequesterIdentity {
   return {
     requesterAccountId: context?.requesterAccountId,
     requesterSenderId: context?.requesterSenderId,
