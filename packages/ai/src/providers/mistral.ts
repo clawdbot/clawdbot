@@ -147,10 +147,20 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         getAiTransportHost().buildModelFetch(model) ?? fetch,
       );
       let mistralResponse: Response | undefined;
+      let reportedResponse: Response | undefined;
       const responseCapturingFetcher: Fetcher = async (input, init) => {
         const response =
           init == null ? await boundedFetcher(input) : await boundedFetcher(input, init);
         mistralResponse = response;
+        if (!response.ok) {
+          await notifyProviderHttpResponse({
+            options,
+            response,
+            model,
+            accepted: false,
+          });
+          reportedResponse = response;
+        }
         return response;
       };
       // Intentionally per-request: avoids shared SDK mutable state across concurrent consumers.
@@ -188,9 +198,9 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         headers,
         signal: options?.signal,
       });
-      if (mistralResponse) {
+      if (mistralResponse && mistralResponse !== reportedResponse) {
         await notifyProviderHttpResponse({ options, response: mistralResponse, model });
-      } else {
+      } else if (!mistralResponse) {
         await notifyProviderStreamOpened({ options, model });
       }
       stream.push({ type: "start", partial: output });

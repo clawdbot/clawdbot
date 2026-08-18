@@ -45,7 +45,12 @@ vi.mock("@mistralai/mistralai", async () => {
                 httpClient?: { request(request: Request): Promise<Response> };
               }
             ).httpClient;
-            await httpClient?.request(new Request("https://api.mistral.ai/chat"));
+            const response = await httpClient?.request(new Request("https://api.mistral.ai/chat"));
+            if (response && !response.ok) {
+              throw Object.assign(new Error(`Mistral HTTP ${response.status}`), {
+                statusCode: response.status,
+              });
+            }
           }
           if (mistralMockState.streamResult !== undefined) {
             return mistralMockState.streamResult;
@@ -311,6 +316,36 @@ describe("Mistral provider", () => {
       {
         status: 200,
         headers: expect.objectContaining({ "x-mistral-request-id": "req-1" }),
+      },
+      expect.objectContaining({ provider: "mistral" }),
+    );
+    expect(hostFetch).toHaveBeenCalledOnce();
+  });
+
+  it("reports a rejected HTTP response without marking it accepted", async () => {
+    mistralMockState.requestThroughHttpClient = true;
+    const hostFetch = vi.fn<typeof fetch>(
+      async () =>
+        new Response("rate limited", {
+          status: 429,
+          headers: { "x-mistral-request-id": "req-rejected" },
+        }),
+    );
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    const onProviderAccepted = vi.fn();
+    const onResponse = vi.fn();
+
+    const result = await runSimpleMistralFixture(context, {
+      onProviderAccepted,
+      onResponse,
+    });
+
+    expect(result.stopReason).toBe("error");
+    expect(onProviderAccepted).not.toHaveBeenCalled();
+    expect(onResponse).toHaveBeenCalledWith(
+      {
+        status: 429,
+        headers: expect.objectContaining({ "x-mistral-request-id": "req-rejected" }),
       },
       expect.objectContaining({ provider: "mistral" }),
     );

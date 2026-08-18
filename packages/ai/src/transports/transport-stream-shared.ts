@@ -160,12 +160,13 @@ async function awaitProviderLifecycleCallback(
   }
 }
 
-/** Report a real HTTP response before its body stream is consumed. */
+/** Report a real HTTP response before body consumption; rejected responses use only onResponse. */
 export async function notifyProviderHttpResponse(params: {
   options?: ProviderAcceptanceOptions;
   response: Response;
   model: Model;
   signal?: AbortSignal;
+  accepted?: boolean;
 }): Promise<void> {
   if (!params.options?.onProviderAccepted && !params.options?.onResponse) {
     return;
@@ -175,7 +176,7 @@ export async function notifyProviderHttpResponse(params: {
   const signal = params.signal ?? params.options?.signal;
   try {
     await awaitProviderLifecycleCallback(
-      params.options.onProviderAccepted
+      params.accepted !== false && params.options.onProviderAccepted
         ? () =>
             params.options?.onProviderAccepted?.(
               { kind: "http_response", status, headers },

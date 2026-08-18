@@ -31,6 +31,23 @@ describe("notifyProviderHttpResponse", () => {
     },
   );
 
+  it("reports a rejected HTTP response without marking it accepted", async () => {
+    const onProviderAccepted = vi.fn();
+    const onResponse = vi.fn();
+    const options: StreamOptions = { onProviderAccepted, onResponse };
+    const response = new Response("rejected", { status: 429 });
+
+    await notifyProviderHttpResponse({
+      options,
+      response,
+      model,
+      accepted: false,
+    });
+
+    expect(onProviderAccepted).not.toHaveBeenCalled();
+    expect(onResponse).toHaveBeenCalledWith(expect.objectContaining({ status: 429 }), model);
+  });
+
   it("uses the option signal to abort a pending HTTP acceptance callback", async () => {
     const controller = new AbortController();
     const abortReason = Object.assign(new Error("operator canceled"), {
