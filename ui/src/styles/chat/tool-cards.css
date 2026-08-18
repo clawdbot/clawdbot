@@ -185,6 +185,15 @@
   opacity: 1;
 }
 
+.chat-activity-group__body .chat-tool-row__chevron {
+  opacity: 0;
+}
+
+.chat-activity-group__body .chat-tool-msg-summary:hover .chat-tool-row__chevron,
+.chat-activity-group__body .chat-tool-msg-summary:focus-within .chat-tool-row__chevron {
+  opacity: 1;
+}
+
 .chat-tool-disclosure--overflowing {
   width: 100%;
 }
