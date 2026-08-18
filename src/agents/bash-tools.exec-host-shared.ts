@@ -270,15 +270,19 @@ function resolveExecApprovalUnavailableState(params: {
   };
 }
 
-/** Creates, registers, and normalizes a default approval request context. */
-export async function createAndRegisterDefaultExecApprovalRequest(params: {
+type DefaultExecApprovalRequestParams = {
   warnings: string[];
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
   turnSourceChannel?: string;
   turnSourceAccountId?: string;
   register: (approvalId: string) => Promise<ExecApprovalRegistration>;
-}): Promise<RegisteredExecApprovalRequestContext> {
+};
+
+/** Creates, registers, and normalizes a default approval request context. */
+async function createAndRegisterDefaultExecApprovalRequest(
+  params: DefaultExecApprovalRequestParams,
+): Promise<RegisteredExecApprovalRequestContext> {
   const {
     approvalId,
     approvalSlug,
@@ -403,7 +407,7 @@ type ExecApprovalDecisionState<TTimeoutContext> = ReturnType<
 > & { timeoutContext: TTimeoutContext | undefined };
 
 /** Resolves explicit, timeout-fallback, and strict-human approval policy in one owner. */
-export async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
+async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
   params: ExecApprovalDecisionParams<TTimeoutContext>,
 ): Promise<ExecApprovalDecisionState<TTimeoutContext>> {
   const initial = createExecApprovalDecisionState({
@@ -442,6 +446,27 @@ export async function resolveExecApprovalDecisionState<TTimeoutContext = undefin
   };
 }
 
+type ExecApprovalRequestRoute<TTimeoutContext> =
+  | (Omit<RegisteredExecApprovalRequestContext, "preResolvedDecision"> & {
+      kind: "inline";
+      preResolvedDecision: null;
+      state: ExecApprovalDecisionState<TTimeoutContext>;
+    })
+  | (RegisteredExecApprovalRequestContext & { kind: "wait" });
+
+/** Registers an approval and resolves terminal no-route fallback through the shared policy owner. */
+export async function createExecApprovalRequestRoute<TTimeoutContext = undefined>(
+  params: DefaultExecApprovalRequestParams &
+    Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision">,
+): Promise<ExecApprovalRequestRoute<TTimeoutContext>> {
+  const request = await createAndRegisterDefaultExecApprovalRequest(params);
+  if (request.unavailableReason !== "no-approval-route" || request.preResolvedDecision !== null) {
+    return { ...request, kind: "wait" };
+  }
+  const state = await resolveExecApprovalDecisionState({ ...params, decision: null });
+  return { ...request, kind: "inline", preResolvedDecision: null, state };
+}
+
 /** Waits for an approval and normalizes cancellation, request failure, and resolved policy. */
 export async function resolveExecApprovalWaitOutcome<TTimeoutContext = undefined>(
   params: Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision"> & {
@@ -472,16 +497,6 @@ export async function resolveExecApprovalWaitOutcome<TTimeoutContext = undefined
   }
   const state = await resolveExecApprovalDecisionState({ ...params, decision });
   return params.signal?.aborted ? { kind: "run-aborted" } : { kind: "resolved", decision, state };
-}
-
-/** Returns true when registration proved no approval decision can arrive later. */
-export function shouldResolveExecApprovalUnavailableInline(params: {
-  unavailableReason: ExecApprovalUnavailableReason | null;
-  preResolvedDecision: string | null | undefined;
-}): boolean {
-  // finalDecision:null is emitted only after the gateway expires a no-route record.
-  // Resolve fallback inline; an async wait can never observe a later decision.
-  return params.unavailableReason === "no-approval-route" && params.preResolvedDecision === null;
 }
 
 /** Builds the denial copy for headless runs that cannot wait for approval. */

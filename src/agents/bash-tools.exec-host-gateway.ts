@@ -63,12 +63,10 @@ import {
   buildHeadlessExecApprovalDeniedMessage,
   buildExecApprovalFollowupTarget,
   buildExecApprovalPendingToolResult,
-  createAndRegisterDefaultExecApprovalRequest,
-  resolveExecApprovalDecisionState,
+  createExecApprovalRequestRoute,
   resolveExecApprovalWaitOutcome,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
-  shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
 import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import {
@@ -994,6 +992,27 @@ export async function processGatewayAllowlist(
         ),
         ...buildExecApprovalTurnSourceContext(params),
       });
+    const approvalRoute = await createExecApprovalRequestRoute({
+      warnings: params.warnings,
+      approvalRunningNoticeMs: params.approvalRunningNoticeMs,
+      createApprovalSlug,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceAccountId: params.turnSourceAccountId,
+      register: registerGatewayApproval,
+      askFallback,
+      resolveTimedOut: (state) => {
+        const adjusted = applyTimedOutAllowlistFallback(state);
+        return {
+          approvedByAsk: adjusted.approvedByAsk,
+          deniedReason: adjusted.deniedReason,
+        };
+      },
+      requiresExplicitApproval: requiresInlineEvalApproval,
+      requiresAutoReviewHumanApproval:
+        autoReviewRequiresHumanApproval ||
+        requiresHeredocApproval ||
+        timedOutFallbackRequiresHeredocApproval,
+    });
     const {
       approvalId,
       approvalSlug,
@@ -1003,14 +1022,7 @@ export async function processGatewayAllowlist(
       initiatingSurface,
       sentApproverDms,
       unavailableReason,
-    } = await createAndRegisterDefaultExecApprovalRequest({
-      warnings: params.warnings,
-      approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-      createApprovalSlug,
-      turnSourceChannel: params.turnSourceChannel,
-      turnSourceAccountId: params.turnSourceAccountId,
-      register: registerGatewayApproval,
-    });
+    } = approvalRoute;
     emitGatewayExecApprovalSecurityEvent({
       action: "exec.approval.requested",
       outcome: "success",
@@ -1022,28 +1034,8 @@ export async function processGatewayAllowlist(
       segmentCount: allowlistEval.segments.length,
       trigger: params.trigger,
     });
-    if (
-      shouldResolveExecApprovalUnavailableInline({
-        unavailableReason,
-        preResolvedDecision,
-      })
-    ) {
-      const strictInlineEvalDecision = await resolveExecApprovalDecisionState({
-        decision: preResolvedDecision ?? null,
-        askFallback,
-        resolveTimedOut: (state) => {
-          const adjusted = applyTimedOutAllowlistFallback(state);
-          return {
-            approvedByAsk: adjusted.approvedByAsk,
-            deniedReason: adjusted.deniedReason,
-          };
-        },
-        requiresExplicitApproval: requiresInlineEvalApproval,
-        requiresAutoReviewHumanApproval:
-          autoReviewRequiresHumanApproval ||
-          requiresHeredocApproval ||
-          timedOutFallbackRequiresHeredocApproval,
-      });
+    if (approvalRoute.kind === "inline") {
+      const strictInlineEvalDecision = approvalRoute.state;
 
       if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
         const inlineDeniedReason = strictInlineEvalDecision.deniedReason ?? "approval-required";
@@ -1096,22 +1088,17 @@ export async function processGatewayAllowlist(
         host: "gateway",
         segmentCount: allowlistEval.segments.length,
         trigger: params.trigger,
-        decision: preResolvedDecision,
+        decision: null,
       });
       await commitExecutionAuthorization({
-        source: preResolvedDecision === null ? "ask-fallback" : "explicit-approval",
+        source: "ask-fallback",
         resolvedPath: resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
         ),
-        ...(preResolvedDecision === "allow-always"
-          ? { allowAlwaysDecision: approvalAllowAlwaysPersistence }
-          : {}),
       });
       const execCommandOverride =
-        preResolvedDecision === null && fallbackSecurity === "allowlist"
-          ? fallbackEnforcedCommand
-          : enforcedCommand;
+        fallbackSecurity === "allowlist" ? fallbackEnforcedCommand : enforcedCommand;
       return {
         execCommandOverride,
         allowWithoutEnforcedCommand: execCommandOverride === undefined,
