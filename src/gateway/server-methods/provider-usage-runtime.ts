@@ -26,7 +26,7 @@ import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 
 type ResolvedDirectApiKey = { apiKey: string; source: string };
 
-export type ProviderUsageRuntimeSnapshot = {
+type ProviderUsageRuntimeSnapshot = {
   agentDir: string;
   agentId: string;
   configRef: OpenClawConfig;
@@ -48,7 +48,7 @@ function sortedRecordEntries<T>(value: Record<string, T> | undefined) {
   return Object.entries(value ?? {}).toSorted(([left], [right]) => left.localeCompare(right));
 }
 
-export function fingerprintProviderUsageCredentials(params: {
+function fingerprintProviderUsageCredentials(params: {
   cfg: OpenClawConfig;
   directApiKeys: ReadonlyMap<string, ResolvedDirectApiKey>;
   store: AuthProfileStore;

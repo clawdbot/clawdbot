@@ -1,14 +1,11 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
-  type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
@@ -21,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   listProviderUsagePluginDescriptors: vi.fn(),
   loadProviderUsageSummary: vi.fn(),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../agents/auth-profiles.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
@@ -49,9 +47,9 @@ vi.mock("../../infra/provider-usage.load.js", () => ({
 
 import {
   clearModelAuthStatusUsageCache,
-  fingerprintProviderUsageCredentials,
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
+import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import { usageHandlers } from "./usage.js";
 
 const config = {
@@ -191,7 +189,7 @@ describe("usage.status provider usage cache", () => {
   });
 
   it("rebuilds prepared usage facts once after an auth-store write", async () => {
-    const writtenAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-auth-"));
+    const writtenAgentDir = tempDirs.make("openclaw-usage-auth-");
     try {
       replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: writtenAgentDir, store }]);
 
@@ -207,7 +205,6 @@ describe("usage.status provider usage cache", () => {
       expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(2);
     } finally {
       closeOpenClawAgentDatabasesForTest();
-      fs.rmSync(writtenAgentDir, { recursive: true, force: true });
     }
   });
 
@@ -245,11 +242,7 @@ describe("usage.status provider usage cache", () => {
       agentId,
       agentDir,
       configRef: config,
-      credentialKey: fingerprintProviderUsageCredentials({
-        cfg: config,
-        directApiKeys: new Map(),
-        store: store as AuthProfileStore,
-      }),
+      credentialKey: getProviderUsageRuntimeSnapshot({ config }).credentialKey,
       providerIds: ["openai"],
       now,
     });

@@ -15,8 +15,6 @@ import {
   getProviderUsageRuntimeSnapshot,
 } from "./provider-usage-runtime.js";
 
-export { fingerprintProviderUsageCredentials } from "./provider-usage-runtime.js";
-
 const log = createSubsystemLogger("provider-usage-cache");
 const USAGE_CACHE_TTL_MS = 60_000;
 
