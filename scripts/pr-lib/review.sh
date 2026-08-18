@@ -22,7 +22,7 @@ review_claim() {
   # shared canonical checkout with no scripts/pr-owned .local, so a stray artifact
   # there can never be mistaken for this flow's output. Claiming still works on a
   # cold PR because enter_worktree provisions both the worktree and .local.
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
 
   local reviewer=""
   local max_attempts=3
@@ -73,10 +73,10 @@ review_claim() {
 
 review_checkout_main() {
   local pr="$1"
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
   mark_pr_operation_side_effects_started
   git fetch origin main
-  git checkout --detach origin/main
+  checkout_pr_worktree_target "$pr" origin/main || return 1
   set_review_mode main
 
   echo "review mode set to main baseline"
@@ -86,10 +86,10 @@ review_checkout_main() {
 
 review_checkout_pr() {
   local pr="$1"
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
   mark_pr_operation_side_effects_started
   git fetch origin "pull/$pr/head:pr-$pr" --force
-  git checkout --detach "pr-$pr"
+  checkout_pr_worktree_target "$pr" "pr-$pr" || return 1
   set_review_mode pr
 
   echo "review mode set to PR head"
@@ -314,7 +314,7 @@ review_tests() {
 review_init() {
   local pr="$1"
   mark_pr_operation_side_effects_started
-  enter_worktree "$pr" true
+  enter_worktree "$pr" true || return 1
 
   local json pr_url
   json=$(pr_meta_json "$pr")
