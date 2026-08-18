@@ -92,7 +92,13 @@ type ResponsesStreamClient = {
 
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
-  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse" | "sessionId"
+  | "signal"
+  | "timeoutMs"
+  | "maxRetries"
+  | "onPayload"
+  | "onProviderAccepted"
+  | "onResponse"
+  | "sessionId"
 > &
   Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected"> &
   FirstStreamEventInternalOptions;

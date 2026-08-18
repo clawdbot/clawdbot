@@ -1,3 +1,4 @@
+import type { ProviderAcceptance } from "@openclaw/llm-core";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
@@ -85,7 +86,7 @@ export type ModelCallUsage = NonNullable<
 >;
 export type ModelCallObservationState = {
   requestPayloadBytes?: number;
-  providerAcceptanceKind?: "http_response" | "provider_stream_opened";
+  providerAcceptanceKind?: ProviderAcceptance["kind"];
   responseStatus?: number;
   responseStreamBytes: number;
   timeToFirstByteMs?: number;

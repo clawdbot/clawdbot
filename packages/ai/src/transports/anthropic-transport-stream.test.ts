@@ -4350,7 +4350,7 @@ describe("anthropic transport stream", () => {
     expect(startIndex).toBeGreaterThanOrEqual(0);
     expect(eventTypes.slice(0, startIndex).some((t) => t === "error")).toBe(false);
     expect(onProviderAccepted).toHaveBeenCalledWith(
-      { kind: "provider_stream_opened", httpMetadata: "unavailable" },
+      { kind: "provider_stream_opened" },
       expect.objectContaining({ provider: "anthropic" }),
     );
     expect(onResponse).not.toHaveBeenCalled();

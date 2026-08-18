@@ -3,7 +3,13 @@
  *
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
-import type { AssistantMessage, Model, StreamOptions, Usage } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  Model,
+  ProviderResponse,
+  StreamOptions,
+  Usage,
+} from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
@@ -160,38 +166,58 @@ async function awaitProviderLifecycleCallback(
   }
 }
 
-/** Report a real HTTP response before body consumption; rejected responses use only onResponse. */
-export async function notifyProviderHttpResponse(params: {
+/** Report observed HTTP metadata; rejected responses use only onResponse. */
+export async function notifyProviderHttpMetadata(params: {
   options?: ProviderAcceptanceOptions;
-  response: Response;
+  response: ProviderResponse;
   model: Model;
   signal?: AbortSignal;
 }): Promise<void> {
   if (!params.options?.onProviderAccepted && !params.options?.onResponse) {
     return;
   }
-  const status = params.response.status;
-  const headers = headersToRecord(params.response.headers);
+  const { status, headers } = params.response;
   const signal = params.signal ?? params.options?.signal;
+  const accepted = status >= 200 && status < 300;
+  await awaitProviderLifecycleCallback(
+    accepted && params.options.onProviderAccepted
+      ? () =>
+          params.options?.onProviderAccepted?.(
+            { kind: "http_response", status, headers },
+            params.model,
+          )
+      : undefined,
+    signal,
+  );
+  await awaitProviderLifecycleCallback(
+    params.options.onResponse
+      ? () => params.options?.onResponse?.({ status, headers }, params.model)
+      : undefined,
+    signal,
+  );
+}
+
+/** Report a real HTTP response before body consumption. */
+export async function notifyProviderHttpResponse(params: {
+  options?: ProviderAcceptanceOptions;
+  response: Response;
+  model: Model;
+  signal?: AbortSignal;
+}): Promise<void> {
   try {
-    await awaitProviderLifecycleCallback(
-      params.response.ok && params.options.onProviderAccepted
-        ? () =>
-            params.options?.onProviderAccepted?.(
-              { kind: "http_response", status, headers },
-              params.model,
-            )
-        : undefined,
-      signal,
-    );
-    await awaitProviderLifecycleCallback(
-      params.options.onResponse
-        ? () => params.options?.onResponse?.({ status, headers }, params.model)
-        : undefined,
-      signal,
-    );
+    await notifyProviderHttpMetadata({
+      options: params.options,
+      response: {
+        status: params.response.status,
+        headers: headersToRecord(params.response.headers),
+      },
+      model: params.model,
+      signal: params.signal,
+    });
   } catch (error) {
-    await params.response.body?.cancel(error).catch(() => undefined);
+    // Cancellation is best-effort cleanup; a stalled body must not retain the request owner
+    // or delay the callback failure that made the body unreadable.
+    void params.response.body?.cancel(error).catch(() => undefined);
     throw error;
   }
 }
@@ -204,11 +230,7 @@ export async function notifyProviderStreamOpened(params: {
 }): Promise<void> {
   await awaitProviderLifecycleCallback(
     params.options?.onProviderAccepted
-      ? () =>
-          params.options?.onProviderAccepted?.(
-            { kind: "provider_stream_opened", httpMetadata: "unavailable" },
-            params.model,
-          )
+      ? () => params.options?.onProviderAccepted?.({ kind: "provider_stream_opened" }, params.model)
       : undefined,
     params.signal ?? params.options?.signal,
   );

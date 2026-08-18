@@ -71,10 +71,7 @@ export type ProviderAcceptance =
       status: number;
       headers: Record<string, string>;
     }
-  | {
-      kind: "provider_stream_opened";
-      httpMetadata: "unavailable";
-    };
+  | { kind: "provider_stream_opened" };
 
 /** Request options shared by text streaming providers. */
 export interface StreamOptions {

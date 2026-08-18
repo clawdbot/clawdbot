@@ -226,16 +226,13 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
         _context: Parameters<StreamFn>[1],
         options: Parameters<StreamFn>[2],
       ) => {
-        return options?.onProviderAccepted?.(
-          { kind: "provider_stream_opened", httpMetadata: "unavailable" },
-          model,
-        );
+        return options?.onProviderAccepted?.({ kind: "provider_stream_opened" }, model);
       }) as unknown as StreamFn,
       {
         runId: "run-timeline-accepted",
-        provider: "mistral",
-        model: "mistral-large-latest",
-        api: "mistral-conversations",
+        provider: "google",
+        model: "gemini-2.5-pro",
+        api: "google-generative-ai",
         trace: createDiagnosticTraceContext(),
         nextCallId: () => "call-timeline-accepted",
       },
@@ -243,15 +240,15 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
 
     const events = await collectProviderTimelineEvents(async () => {
       await wrapped(
-        { id: "mistral-large-latest" } as never,
+        { id: "gemini-2.5-pro" } as never,
         {} as never,
         { onProviderAccepted: originalOnProviderAccepted } as never,
       );
     });
 
     expect(originalOnProviderAccepted).toHaveBeenCalledWith(
-      { kind: "provider_stream_opened", httpMetadata: "unavailable" },
-      { id: "mistral-large-latest" },
+      { kind: "provider_stream_opened" },
+      { id: "gemini-2.5-pro" },
     );
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({

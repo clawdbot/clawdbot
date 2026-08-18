@@ -70,7 +70,10 @@ import {
   createDeferredEventBuffer,
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { describeToolResultMediaPlaceholder } from "openclaw/plugin-sdk/provider-transport-runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  notifyProviderHttpMetadata,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
@@ -283,12 +286,11 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         if (response.$metadata.requestId) {
           responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
         }
-        const status = response.$metadata.httpStatusCode;
-        await options?.onProviderAccepted?.(
-          { kind: "http_response", status, headers: responseHeaders },
+        await notifyProviderHttpMetadata({
+          options,
+          response: { status: response.$metadata.httpStatusCode, headers: responseHeaders },
           model,
-        );
-        await options?.onResponse?.({ status, headers: responseHeaders }, model);
+        });
       }
 
       let sawMessageStop = false;

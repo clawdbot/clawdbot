@@ -198,13 +198,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     }
 
     expect(order).toEqual(["accepted", "start", "done"]);
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "provider_stream_opened",
-        httpMetadata: "unavailable",
-      },
-      model,
-    );
+    expect(onProviderAccepted).toHaveBeenCalledWith({ kind: "provider_stream_opened" }, model);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

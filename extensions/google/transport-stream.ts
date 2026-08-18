@@ -1177,16 +1177,16 @@ async function openGoogleSseAttempt(params: {
   } catch (error) {
     return handleTimedOperationError(error);
   }
-  if (!response.ok) {
-    attemptSignal?.cleanup();
-    throw await createProviderHttpError(response, params.errorPrefix);
-  }
   attemptSignal?.pauseDeadline();
   try {
     await notifyGoogleTransportHttpResponse(params.model, params.options, response, signal);
   } catch (error) {
     attemptSignal?.cleanup();
     throw error;
+  }
+  if (!response.ok) {
+    attemptSignal?.cleanup();
+    throw await createProviderHttpError(response, params.errorPrefix);
   }
   attemptSignal?.resumeDeadline();
   const chunks = parseGoogleSseChunks(response, signal);
@@ -1232,15 +1232,15 @@ async function openGoogleSseChunks(params: {
       body: serializeGoogleRequest(params.request, params.videoSlots),
       signal: params.options?.signal,
     });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
     await notifyGoogleTransportHttpResponse(
       params.model,
       params.options,
       response,
       params.options?.signal,
     );
+    if (!response.ok) {
+      throw await createProviderHttpError(response, errorPrefix);
+    }
     return {
       type: "ready",
       chunks: parseGoogleSseChunks(response, params.options?.signal),
@@ -1255,15 +1255,15 @@ async function openGoogleSseChunks(params: {
       body: serializeGoogleRequest(params.request, params.videoSlots),
       signal: params.options?.signal,
     });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
     await notifyGoogleTransportHttpResponse(
       params.model,
       params.options,
       response,
       params.options?.signal,
     );
+    if (!response.ok) {
+      throw await createProviderHttpError(response, errorPrefix);
+    }
     return {
       type: "ready",
       chunks: parseGoogleSseChunks(response, params.options?.signal),

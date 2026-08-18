@@ -654,6 +654,34 @@ describe("google transport stream", () => {
     );
   });
 
+  it("reports rejected HTTP responses without marking them accepted", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response('{"error":{"message":"rate limited"}}', {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "x-request-id": "req-rejected",
+        },
+      }),
+    );
+    const onProviderAccepted = vi.fn();
+    const onResponse = vi.fn();
+
+    const result = await runGeminiStreamResult({
+      options: { onProviderAccepted, onResponse },
+    });
+
+    expect(result.stopReason).toBe("error");
+    expect(onProviderAccepted).not.toHaveBeenCalled();
+    expect(onResponse).toHaveBeenCalledWith(
+      {
+        status: 429,
+        headers: expect.objectContaining({ "x-request-id": "req-rejected" }),
+      },
+      expect.objectContaining({ provider: "google" }),
+    );
+  });
+
   it("uses the guarded fetch transport and parses Gemini SSE output", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([

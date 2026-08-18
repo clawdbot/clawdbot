@@ -31,6 +31,31 @@ describe("notifyProviderHttpResponse", () => {
     },
   );
 
+  it("does not wait for unread response cancellation after a callback fails", async () => {
+    const hookError = new Error("acceptance failed");
+    let markCancelStarted!: () => void;
+    const cancelStarted = new Promise<void>((resolve) => {
+      markCancelStarted = resolve;
+    });
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          markCancelStarted();
+          return new Promise<void>(() => {});
+        },
+      }),
+      { status: 200 },
+    );
+    const notification = notifyProviderHttpResponse({
+      options: { onProviderAccepted: () => Promise.reject(hookError) },
+      response,
+      model,
+    });
+
+    await cancelStarted;
+    await expect(notification).rejects.toBe(hookError);
+  });
+
   it("reports a rejected HTTP response without marking it accepted", async () => {
     const onProviderAccepted = vi.fn();
     const onResponse = vi.fn();

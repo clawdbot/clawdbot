@@ -354,10 +354,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     );
 
     expect(result.stopReason).toBe("stop");
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      { kind: "provider_stream_opened", httpMetadata: "unavailable" },
-      model,
-    );
+    expect(onProviderAccepted).toHaveBeenCalledWith({ kind: "provider_stream_opened" }, model);
   });
 
   it("continues past provider-only output metadata with one socket and only new input", async () => {

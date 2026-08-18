@@ -599,10 +599,32 @@ describe("runGoogleGenerateContentLifecycle", () => {
     );
 
     expect(result.stopReason).toBe("stop");
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      { kind: "provider_stream_opened", httpMetadata: "unavailable" },
-      model,
-    );
+    expect(onProviderAccepted).toHaveBeenCalledWith({ kind: "provider_stream_opened" }, model);
+  });
+
+  it("closes an unread SDK stream without waiting when acceptance fails", async () => {
+    const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));
+    const googleStream = {
+      next: vi.fn(),
+      return: close,
+      throw: vi.fn(),
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    } as unknown as AsyncGenerator<GenerateContentResponse>;
+
+    const { result } = await runGoogleFixture([], {
+      options: {
+        onProviderAccepted: () => Promise.reject(new Error("acceptance callback failed")),
+      },
+      generateContentStream: async () => googleStream,
+    });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance callback failed",
+    });
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it.each(["google-generative-ai", "google-vertex"] as const)(

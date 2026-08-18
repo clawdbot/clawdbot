@@ -15,7 +15,6 @@ import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
   notifyProviderHttpResponse,
-  notifyProviderStreamOpened,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
 import type {
@@ -148,29 +147,22 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       );
       let mistralResponse: Response | undefined;
       let reportedResponse: Response | undefined;
-      const responseCapturingFetcher: Fetcher = async (input, init) => {
-        const response =
-          init == null ? await boundedFetcher(input) : await boundedFetcher(input, init);
+      const httpClient = new HTTPClient({ fetcher: boundedFetcher });
+      httpClient.addHook("response", async (response) => {
         mistralResponse = response;
         if (!response.ok) {
           await notifyProviderHttpResponse({ options, response, model });
           reportedResponse = response;
         }
-        return response;
-      };
+      });
       // Intentionally per-request: avoids shared SDK mutable state across concurrent consumers.
       const mistral = new Mistral({
         apiKey,
         serverURL: model.baseUrl,
         // Bound the streamed Mistral response body at 16 MiB so a hostile or
-        // malfunctioning endpoint cannot exhaust memory. The fetcher is
-        // injected via the SDK's `HTTPClient` (see
-        // `@mistralai/mistralai/lib/sdks.ts` `ClientSDK` constructor: when
-        // `httpClient` is passed, `ClientSDK.#httpClient` is set from it and
-        // every `chat.stream` / `complete` call routes through
-        // `HTTPClient.request` → `this.fetcher(req)`).
-        // Mistral accepts HTTPClient.fetcher, so compose guarded egress with the byte cap.
-        httpClient: new HTTPClient({ fetcher: responseCapturingFetcher }),
+        // malfunctioning endpoint cannot exhaust memory. The HTTPClient is the
+        // SDK's public fetch and response-hook boundary for every chat.stream attempt.
+        httpClient,
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
@@ -195,8 +187,6 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       });
       if (mistralResponse && mistralResponse !== reportedResponse) {
         await notifyProviderHttpResponse({ options, response: mistralResponse, model });
-      } else if (!mistralResponse) {
-        await notifyProviderStreamOpened({ options, model });
       }
       stream.push({ type: "start", partial: output });
       await consumeChatStream(model, output, stream, mistralStream);

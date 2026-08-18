@@ -19,6 +19,7 @@ export {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  notifyProviderHttpMetadata,
   notifyProviderHttpResponse,
   notifyProviderStreamOpened,
   sanitizeTransportPayloadText,
