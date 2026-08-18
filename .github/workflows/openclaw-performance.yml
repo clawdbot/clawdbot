@@ -94,11 +94,21 @@ jobs:
       kova_config_contract: ${{ steps.resolve.outputs.kova_config_contract }}
       kova_ref_trusted_for_live: ${{ steps.resolve.outputs.kova_ref_trusted_for_live }}
     steps:
+      - name: Checkout target metadata
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.target_ref || github.sha }}
+          path: .artifacts/performance-target
+          sparse-checkout: src/config/zod-schema.agent-defaults.ts
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Resolve OpenClaw target ref
         id: resolve
         env:
-          GH_TOKEN: ${{ github.token }}
           TARGET_REF_INPUT: ${{ inputs.target_ref }}
+          TARGET_CHECKOUT_DIR: ${{ github.workspace }}/.artifacts/performance-target
           KOVA_REF_INPUT: ${{ inputs.kova_ref }}
           KOVA_CONFIG_CONTRACT_INPUT: ${{ inputs.kova_config_contract }}
         shell: bash
@@ -109,17 +119,8 @@ jobs:
             echo "::error::target_ref must be a single line."
             exit 1
           fi
-          if [[ -z "$requested" ]]; then
-            resolved_sha="$GITHUB_SHA"
-            tested_ref="$GITHUB_REF_NAME"
-          else
-            encoded_ref="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$requested")"
-            if ! resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"; then
-              echo "::error::Unable to resolve OpenClaw target_ref '${requested}'."
-              exit 1
-            fi
-            tested_ref="$requested"
-          fi
+          resolved_sha="$(git -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD)"
+          tested_ref="${requested:-$GITHUB_REF_NAME}"
           if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::OpenClaw target ref resolved to invalid SHA '${resolved_sha}'."
             exit 1
@@ -137,11 +138,9 @@ jobs:
           fi
 
           if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then
-            if schema_content="$({
-              gh api "repos/${GITHUB_REPOSITORY}/contents/src/config/zod-schema.agent-defaults.ts?ref=${resolved_sha}" --jq '.content' |
-                base64 --decode
-            })"; then
-              :
+            schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"
+            if [[ -f "$schema_path" ]]; then
+              schema_content="$(cat "$schema_path")"
             elif [[ -z "$kova_ref" ]]; then
               echo "::error::Unable to inspect the Kova config-fixture contract for target ${resolved_sha}. Supply kova_ref explicitly and optionally set kova_config_contract for that producer."
               exit 1
