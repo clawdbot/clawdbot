@@ -513,14 +513,16 @@ export async function runEmbeddedAttemptSettledPhase(
         compactionOccurredThisAttempt: settledStream.compactionOccurredThisAttempt,
       },
     });
-    const noteAlreadyPersisted = activeSession.messages.some(
-      (message) =>
-        message.role === "custom" &&
-        message.customType === FAILED_PROMPT_MEDIA_NOTE_TYPE &&
-        asOptionalRecord(message.details)?.source === FAILED_PROMPT_MEDIA_NOTE_SOURCE &&
-        asOptionalRecord(message.details)?.runId === attempt.runId,
-    );
-    if (sessionRuntimeState.currentTurnImageFailureCount > 0 && !noteAlreadyPersisted) {
+    if (
+      sessionRuntimeState.currentTurnImageFailureCount > 0 &&
+      !activeSession.messages.some(
+        (message) =>
+          message.role === "custom" &&
+          message.customType === FAILED_PROMPT_MEDIA_NOTE_TYPE &&
+          asOptionalRecord(message.details)?.source === FAILED_PROMPT_MEDIA_NOTE_SOURCE &&
+          asOptionalRecord(message.details)?.runId === attempt.runId,
+      )
+    ) {
       const note = {
         role: "custom" as const,
         customType: FAILED_PROMPT_MEDIA_NOTE_TYPE,
