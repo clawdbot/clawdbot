@@ -56,6 +56,38 @@ function writeFileText(filePath: string, text: string): void {
   writeFileSync(filePath, text, "utf8");
 }
 
+type NpmPackResult = { filename: string; files: Array<{ path: string }> };
+
+function parseNpmPackResult(stdout: string): NpmPackResult {
+  const parsed = JSON.parse(stdout) as unknown;
+  const candidates = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && "files" in parsed
+      ? [parsed]
+      : parsed && typeof parsed === "object"
+        ? Object.values(parsed)
+        : [];
+  const [packResult] = candidates;
+  if (
+    !packResult ||
+    typeof packResult !== "object" ||
+    !("filename" in packResult) ||
+    typeof packResult.filename !== "string" ||
+    !("files" in packResult) ||
+    !Array.isArray(packResult.files) ||
+    !packResult.files.every(
+      (file: unknown) =>
+        file !== null &&
+        typeof file === "object" &&
+        "path" in file &&
+        typeof file.path === "string",
+    )
+  ) {
+    throw new Error("npm pack --json did not return a package result");
+  }
+  return packResult as NpmPackResult;
+}
+
 function listNpmPackDryRunFiles(packageDir: string): string[] {
   const invocation = resolvePluginNpmCommand(["pack", "--dry-run", "--json", "--ignore-scripts"]);
   const result = spawnSync(invocation.command, invocation.args, {
@@ -74,19 +106,7 @@ function listNpmPackDryRunFiles(packageDir: string): string[] {
   if (result.status !== 0) {
     throw new Error(result.stderr.trim() || `npm pack failed with exit ${result.status}`);
   }
-  const parsed = JSON.parse(result.stdout) as unknown;
-  const packResult = (
-    Array.isArray(parsed)
-      ? parsed[0]
-      : parsed && typeof parsed === "object" && "files" in parsed
-        ? parsed
-        : parsed && typeof parsed === "object"
-          ? Object.values(parsed)[0]
-          : undefined
-  ) as { files?: { path?: string }[] } | undefined;
-  return (packResult?.files ?? []).flatMap((entry) =>
-    typeof entry.path === "string" ? [entry.path] : [],
-  );
+  return parseNpmPackResult(result.stdout).files.map((entry) => entry.path);
 }
 
 function writePublishablePluginPackage(repoDir: string): string {
@@ -546,9 +566,7 @@ describe("plugin npm package manifest staging", () => {
           : {}),
       });
       expect(pack.status, pack.stderr).toBe(0);
-      const [packedPackage] = JSON.parse(pack.stdout) as [
-        { filename: string; files: Array<{ path: string }> },
-      ];
+      const packedPackage = parseNpmPackResult(pack.stdout);
       const packedFiles = packedPackage.files.map((file) => file.path);
       expect(packedFiles).toContain("dist/configured-state.cjs");
       expect(packedFiles).toContain("dist/auth-presence.cjs");
@@ -679,7 +697,13 @@ withAugmentedPluginNpmManifestForPackage(
         : {}),
     });
     if (pack.status !== 0) throw new Error(pack.stderr || "npm pack failed");
-    const [packedPackage] = JSON.parse(pack.stdout);
+    const parsedPack = JSON.parse(pack.stdout);
+    const packedPackage = Array.isArray(parsedPack)
+      ? parsedPack[0]
+      : parsedPack.files
+        ? parsedPack
+        : Object.values(parsedPack)[0];
+    if (!packedPackage?.files) throw new Error("npm pack --json did not return a package result");
     const packedFiles = packedPackage.files.map((file) => file.path);
     if (!packedFiles.includes("node_modules/local-runtime-dep/package.json")) {
       throw new Error("bundled runtime dependency was not packed");
