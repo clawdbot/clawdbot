@@ -37,8 +37,6 @@ export function estimateBase64DecodedBytes(base64: string): number {
   return Math.max(0, estimated);
 }
 
-const CANONICALIZE_BASE64_CHUNK_SIZE = 8192;
-
 function isBase64DataChar(code: number): boolean {
   return (
     (code >= 0x41 && code <= 0x5a) ||
@@ -67,25 +65,24 @@ function base64DataValue(code: number): number {
  * base64 only when the input has valid alphabet, padding, and length.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
-  const chunks: string[] = [];
-  let current = "";
+  // Validate in a single pass and collect contiguous non-whitespace runs as
+  // slices. Appending per character instead (`current += char`) allocates one
+  // V8 cons-string node (~25 bytes) per input character, all live at once —
+  // enough to OOM the process on multi-megabyte attachment payloads.
+  const runs: string[] = [];
+  let runStart = -1;
   let cleanedLength = 0;
   let padding = 0;
   let sawPadding = false;
   let lastDataCode = 0;
 
-  const append = (char: string): void => {
-    current += char;
-    cleanedLength += 1;
-    if (current.length >= CANONICALIZE_BASE64_CHUNK_SIZE) {
-      chunks.push(current);
-      current = "";
-    }
-  };
-
   for (let i = 0; i < base64.length; i += 1) {
     const code = base64.charCodeAt(i);
     if (code <= 0x20) {
+      if (runStart >= 0) {
+        runs.push(base64.slice(runStart, i));
+        runStart = -1;
+      }
       continue;
     }
     if (code === 0x3d) {
@@ -94,32 +91,33 @@ export function canonicalizeBase64(base64: string): string | undefined {
         return undefined;
       }
       sawPadding = true;
-      append("=");
-      continue;
-    }
-    if (sawPadding || !isBase64DataChar(code)) {
+    } else if (sawPadding || !isBase64DataChar(code)) {
       return undefined;
+    } else {
+      lastDataCode = code;
     }
-    lastDataCode = code;
-    append(base64[i] ?? "");
+    if (runStart < 0) {
+      runStart = i;
+    }
+    cleanedLength += 1;
+  }
+  if (runStart >= 0) {
+    runs.push(runStart === 0 ? base64 : base64.slice(runStart));
   }
   if (cleanedLength === 0) {
     return undefined;
   }
   const remainder = cleanedLength % 4;
-  if (remainder !== 0) {
-    if (sawPadding || remainder === 1) {
-      return undefined;
-    }
-    current += "=".repeat(4 - remainder);
+  if (remainder !== 0 && (sawPadding || remainder === 1)) {
+    return undefined;
   }
   const effectivePadding = remainder === 0 ? padding : 4 - remainder;
   const padBitMask = effectivePadding === 2 ? 0x0f : effectivePadding === 1 ? 0x03 : 0;
   if (padBitMask !== 0 && (base64DataValue(lastDataCode) & padBitMask) !== 0) {
     return undefined;
   }
-  if (current) {
-    chunks.push(current);
-  }
-  return chunks.join("");
+  // Already-canonical input (the common case: encoder output with no
+  // whitespace) is returned as-is without copying.
+  const cleaned = runs.length === 1 ? (runs[0] ?? "") : runs.join("");
+  return remainder === 0 ? cleaned : cleaned + "=".repeat(4 - remainder);
 }

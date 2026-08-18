@@ -13,6 +13,28 @@ describe("base64 helpers", () => {
     expect(canonicalizeBase64(encoded)).toBe(encoded);
   });
 
+  it("canonicalizeBase64 handles attachment-sized payloads without heap blow-up", () => {
+    // Regression guard: the previous per-character append built one cons-string
+    // node per input character (~25 bytes each, all live at once), so this
+    // 16 MiB payload (21.3 M base64 chars) transiently needed >500 MB of heap.
+    // The threshold is deliberately generous; the run-slicing implementation
+    // allocates nothing for already-canonical input.
+    const encoded = Buffer.alloc(16 * 1024 * 1024, 0xab).toString("base64");
+    const before = process.memoryUsage().heapUsed;
+
+    expect(canonicalizeBase64(encoded)).toBe(encoded);
+
+    const delta = process.memoryUsage().heapUsed - before;
+    expect(delta).toBeLessThan(100 * 1024 * 1024);
+  });
+
+  it("canonicalizeBase64 cleans whitespace inside large payloads", () => {
+    const encoded = Buffer.alloc(1_000_000, 0xab).toString("base64");
+    const wrapped = encoded.replace(/(.{76})/g, "$1\r\n");
+
+    expect(canonicalizeBase64(wrapped)).toBe(encoded);
+  });
+
   it.each([
     {
       name: "canonicalizeBase64 normalizes whitespace and keeps valid base64",
@@ -37,6 +59,36 @@ describe("base64 helpers", () => {
     {
       name: "canonicalizeBase64 rejects nonzero pad bits",
       actual: canonicalizeBase64("ZE=="),
+      expected: undefined,
+    },
+    {
+      name: "canonicalizeBase64 rejects nonzero pad bits on auto-padded input",
+      actual: canonicalizeBase64("ZE"),
+      expected: undefined,
+    },
+    {
+      name: "canonicalizeBase64 trims leading and trailing whitespace",
+      actual: canonicalizeBase64("\n\tSGVsbG8=  "),
+      expected: "SGVsbG8=",
+    },
+    {
+      name: "canonicalizeBase64 rejects data chars after padding",
+      actual: canonicalizeBase64("QQ==QQ=="),
+      expected: undefined,
+    },
+    {
+      name: "canonicalizeBase64 rejects more than two padding chars",
+      actual: canonicalizeBase64("===="),
+      expected: undefined,
+    },
+    {
+      name: "canonicalizeBase64 rejects a data: URL prefix",
+      actual: canonicalizeBase64("data:image/png;base64,QUJD"),
+      expected: undefined,
+    },
+    {
+      name: "canonicalizeBase64 rejects whitespace-only input",
+      actual: canonicalizeBase64(" \r\n\t"),
       expected: undefined,
     },
     {
