@@ -74,8 +74,6 @@ export function visibleCatalogHosts(
 export type CatalogBackingSessionDisplay = {
   label: string;
   subtitle?: string;
-  meta: string;
-  title: string;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };
 

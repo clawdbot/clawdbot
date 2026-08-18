@@ -270,7 +270,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps the hover surface closed when the session has no progress card", async () => {
+  it("does not fall back to a native tooltip when the session has no progress card", async () => {
     const sessionKey = "agent:main:no-progress-card";
 
     await suite.withPage(
@@ -300,6 +300,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
         await row.waitFor({ state: "visible" });
+        expect(await row.locator(".sidebar-recent-session__link").getAttribute("title")).toBeNull();
         await row.hover();
 
         await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);

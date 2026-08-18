@@ -402,8 +402,6 @@ function renderCatalogSessionRow(
     const label = session.name || session.threadId;
     return params.renderLiveRow(adoptedRow, {
       label,
-      meta: formatSidebarTimestamp(timestamp),
-      title: `${label} · ${host.label}`,
       ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
     });
   }
@@ -467,7 +465,6 @@ function renderCatalogSessionRow(
       <a
         href=${href}
         class="sidebar-recent-session__link"
-        title=${[`${label} · ${host.label}`, stateDescription].filter(Boolean).join(" · ")}
         aria-current=${active ? "page" : nothing}
         aria-describedby=${stateId ?? nothing}
         @click=${(event: MouseEvent) => {
