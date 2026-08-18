@@ -318,6 +318,8 @@ export async function runDoctorConfigPreflight(
       ) {
         await ensureStartupMigrationLease();
       }
+      // Commit the admitted config repair under the startup lease before state migration. The
+      // canonical write changes the snapshot identity, so derive every checkpoint from its reread.
       const preflightSnapshot = configSnapshotRead.snapshot;
       const automaticUpgradeRepair = gatewayStartupCheckpointRequired
         ? planUpgradeConfigRepair(preflightSnapshot)

@@ -507,7 +507,10 @@ async function migrateWithExclusiveStateOwnership(params: {
   };
 }
 
-/** Import the retired primary identity under explicit Doctor or startup authority. */
+/**
+ * Import a verified retired primary identity under explicit Doctor or startup authority.
+ * Startup authority cannot repair or replace an invalid canonical identity.
+ */
 export async function migrateLegacyDeviceIdentity(params: {
   detected: LegacyDeviceIdentityDetection;
   stateDir: string;

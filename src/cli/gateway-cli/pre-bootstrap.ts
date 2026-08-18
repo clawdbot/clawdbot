@@ -753,6 +753,8 @@ export async function recheckGatewayRunBootstrap(
   if (!current) {
     return false;
   }
+  // The writer-stamped repair is the only config mutation allowed between selection and launch;
+  // accepting a broader difference here would turn the drift guard into an invalid-config bypass.
   if (
     (await isSameGatewayRunConfigSnapshot(expected, current, {
       allowPathChange: params.snapshot !== undefined,
