@@ -94,7 +94,7 @@
   gap: 7px;
   width: fit-content;
   max-width: 100%;
-  padding: 5px 0;
+  padding: 3px 0;
   list-style: none;
   appearance: none;
   -webkit-appearance: none;
@@ -1146,7 +1146,7 @@
 .chat-activity-group__body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
   max-height: min(420px, 58vh);
   margin: 6px 0 0;
   padding-left: 0;
