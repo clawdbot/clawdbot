@@ -704,7 +704,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     ...config.realtime?.agentContext,
     files: config.realtime?.agentContext?.files ?? defaults.realtime.agentContext.files,
   };
-  return VoiceCallConfigSchema.parse({
+  return {
     ...defaults,
     ...config,
     allowFrom: config.allowFrom ?? defaults.allowFrom,
@@ -746,7 +746,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
       providers: realtimeProviders,
     },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
-  });
+  };
 }
 
 export type VoiceCallCoreSessionConfig = { mainKey?: string; scope?: SessionScope };
