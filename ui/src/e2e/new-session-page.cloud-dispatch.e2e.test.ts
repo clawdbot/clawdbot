@@ -162,12 +162,7 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
       await page.keyboard.press("Escape");
-      const detailTrigger = page.locator("#new-session-detail-trigger");
-      await detailTrigger.click();
-      const detail = page.locator("wa-popover.new-session-page__detail-popover");
-      expect(await detail.getByRole("button", { name: "Worktree" }).isDisabled()).toBe(true);
-      await detail.getByText("Cloud workers require a managed worktree", { exact: true }).waitFor();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("main");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
 
       const effortSelect = page.locator(
         '.new-session-page__composer [data-chat-thinking-select="true"]',
@@ -202,14 +197,21 @@ suite.define(() => {
       await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
-      await detailTrigger.click();
-      await pollLocatorText(detail.locator(".new-session-page__menu-note").last()).toContain(
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await projectTrigger.click();
+      await project.getByText("Advanced", { exact: true }).click();
+      await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("main");
+      await project.getByLabel("Base branch").fill("release");
+      await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("release");
+      await project.getByLabel("Base branch").fill("main");
+      await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs target-repo to the cloud worker",
       );
       await page.keyboard.press("Escape");
       await expect
-        .poll(() => detail.evaluate((element) => (element as HTMLElement & { open: boolean }).open))
+        .poll(() =>
+          project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+        )
         .toBe(false);
 
       await projectTrigger.click();
@@ -221,9 +223,11 @@ suite.define(() => {
       await project.getByRole("button", { name: "OpenClaw", exact: true }).click();
       await expect.poll(() => projectTrigger.getAttribute("data-project-id")).toBe("openclaw");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
-      await detailTrigger.click();
-      await pollLocatorText(detail.locator(".new-session-page__menu-note").last()).toContain(
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await projectTrigger.click();
+      await project.getByText("Advanced", { exact: true }).click();
+      await project.getByLabel("Checkout name").fill("cloud-e2e");
+      await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs OpenClaw to the cloud worker",
       );
       await captureUiProof(page, "01-cloud-worker-target.png");
@@ -264,6 +268,7 @@ suite.define(() => {
         projectId: "openclaw",
         worktree: true,
         worktreeBaseRef: "main",
+        worktreeName: "cloud-e2e",
         thinkingLevel: "high",
       });
       expect(create.params).not.toHaveProperty("attachments");
