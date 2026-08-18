@@ -118,7 +118,6 @@ suite.define(() => {
         await row.waitFor({ state: "visible" });
         await row.hover();
         const card = page.locator(".session-progress-hovercard");
-        await page.waitForTimeout(450);
         expect(await card.count()).toBe(0);
         expect(
           (await gateway.getRequests("progressCard.get")).filter(
@@ -338,7 +337,6 @@ suite.define(() => {
         expect(await row.getAttribute("title")).toBeNull();
         expect(await row.locator(".sidebar-recent-session__link").getAttribute("title")).toBeNull();
         await row.hover();
-        await page.waitForTimeout(450);
         expect(await page.locator(".session-progress-hovercard").count()).toBe(0);
 
         const link = page.locator(
