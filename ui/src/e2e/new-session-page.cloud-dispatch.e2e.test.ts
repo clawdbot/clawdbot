@@ -225,8 +225,16 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
       await projectTrigger.click();
-      await project.getByText("Advanced", { exact: true }).click();
-      await project.getByLabel("Checkout name").fill("cloud-e2e");
+      await expect
+        .poll(() =>
+          project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+        )
+        .toBe(true);
+      const checkoutName = project.getByLabel("Checkout name");
+      if (!(await checkoutName.isVisible())) {
+        await project.getByText("Advanced", { exact: true }).click();
+      }
+      await checkoutName.fill("cloud-e2e");
       await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs OpenClaw to the cloud worker",
       );
