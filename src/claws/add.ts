@@ -7,10 +7,12 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { resolveUserPath } from "../utils.js";
+import { releaseUnclaimedClawAdoption } from "./add-adoption-release.js";
 import {
   CLAW_ADD_RESULT_SCHEMA_VERSION,
   type ClawAddApplyOptions,
   type ClawAddResult,
+  partialResult,
 } from "./add-contract.js";
 import {
   hasUnsupportedMutationActions,
@@ -103,43 +105,6 @@ function assertWorkspacePathUnchanged(workspace: string): void {
   }
 }
 
-function partialResult(params: {
-  plan: ClawAddPlan;
-  installRecord: PersistedClawInstall;
-  workspaceCreated: boolean;
-  configCommitted: boolean;
-  workspaceFiles?: PersistedClawWorkspaceFile[];
-  packages?: PersistedClawPackageRef[];
-  installStatus?: ClawInstallStatus;
-  mcpServers?: PersistedClawMcpServerRef[];
-  cronJobs?: PersistedClawCronRef[];
-  error: ClawAddResult["error"];
-  nowMs?: number;
-}): ClawAddResult {
-  return {
-    schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-    stability: CLAW_OUTPUT_STABILITY,
-    dryRun: false,
-    mutationAllowed: true,
-    planIntegrity: params.plan.planIntegrity,
-    status: "partial",
-    claw: params.plan.claw,
-    agent: params.plan.agent,
-    workspaceCreated: params.workspaceCreated,
-    configCommitted: params.configCommitted,
-    workspaceFiles: params.workspaceFiles ?? [],
-    packages: params.packages ?? [],
-    mcpServers: params.mcpServers ?? [],
-    cronJobs: params.cronJobs ?? [],
-    installRecord: {
-      ...params.installRecord,
-      status: params.installStatus ?? "partial",
-      updatedAtMs: params.nowMs ?? Date.now(),
-    },
-    error: params.error,
-  };
-}
-
 export async function applyClawAddPlan(
   plan: ClawAddPlan,
   options: ClawAddApplyOptions = {},
@@ -171,7 +136,7 @@ export async function applyClawAddPlan(
       deferLegacyPlanUpgrade: options.resumePlan !== undefined,
     });
   } catch (error) {
-    throw new ClawAddMutationError("provenance_failed", (error as Error).message);
+    throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
   }
 
   const agentAdoption = planAdoptsAgent(plan);
@@ -217,7 +182,7 @@ export async function applyClawAddPlan(
     }
     throw new ClawAddMutationError(
       "workspace_parent_failed",
-      `Could not inspect workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
+      `Could not inspect workspace ${JSON.stringify(workspace)}: ${coerceErrorMessage(error)}`,
     );
   }
 
@@ -265,7 +230,7 @@ export async function applyClawAddPlan(
         );
       } catch (error) {
         clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
-        throw new ClawAddMutationError("provenance_failed", (error as Error).message);
+        throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
       }
     }
   }
@@ -348,7 +313,7 @@ export async function applyClawAddPlan(
           message:
             error instanceof ClawAddMutationError
               ? error.message
-              : `Could not create parent directory for workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
+              : `Could not create parent directory for workspace ${JSON.stringify(workspace)}: ${coerceErrorMessage(error)}`,
         },
         nowMs: options.nowMs,
       });
@@ -359,7 +324,7 @@ export async function applyClawAddPlan(
     }
     throw new ClawAddMutationError(
       "workspace_parent_failed",
-      `Could not create parent directory for workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
+      `Could not create parent directory for workspace ${JSON.stringify(workspace)}: ${coerceErrorMessage(error)}`,
     );
   }
 
@@ -377,7 +342,7 @@ export async function applyClawAddPlan(
         packages,
         error: {
           code: "workspace_collision",
-          message: `Could not create new workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
+          message: `Could not create new workspace ${JSON.stringify(workspace)}: ${coerceErrorMessage(error)}`,
         },
         nowMs: options.nowMs,
       });
@@ -403,15 +368,18 @@ export async function applyClawAddPlan(
           // Preserve the phase-write failure if the unowned attempt cannot be reconciled.
         }
       }
-      throw new ClawAddMutationError("provenance_failed", (error as Error).message);
+      throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
     }
   }
 
+  let bootstrapSeeded: boolean;
+  let workspaceFiles: PersistedClawWorkspaceFile[] = [];
   try {
-    await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
-      ...options,
-      ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
-    });
+    bootstrapSeeded =
+      (await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
+        ...options,
+        ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+      })) === "seeded";
   } catch (error) {
     markInstallStatus(
       plan.agent.finalId,
@@ -434,7 +402,6 @@ export async function applyClawAddPlan(
     });
   }
 
-  let workspaceFiles: PersistedClawWorkspaceFile[] = [];
   try {
     const configCommit = await commitClawAgentConfig({
       plan,
@@ -447,6 +414,11 @@ export async function applyClawAddPlan(
     });
     configCommitted = configCommit.committed;
     reservedAgentConfig = configCommit.reservedConfig;
+    // The transform runs again on every write retry, so only a returned commit proves the write
+    // landed; setting this inside the transform kept a stale claim after a losing retry.
+    // Creation provenance belongs to whoever created the agent. Adoption claims an agent the
+    // operator already made, so recording "claw" here would rewrite that origin and make a later
+    // remove treat pre-existing config as Claw-created.
     if (!agentAdoption) {
       try {
         recordAgentProvenance(plan.agent.finalId, { createdVia: "claw" }, options);
@@ -484,9 +456,33 @@ export async function applyClawAddPlan(
       error instanceof ClawAddMutationError || error instanceof ClawAddConfigCommitError
         ? error.code
         : "config_commit_failed";
+    let releaseNote = "";
+    let releasedRecord = false;
+    if (!configCommitted && agentAdoption) {
+      const release = await releaseUnclaimedClawAdoption({
+        plan,
+        install: installRecord,
+        workspaceFiles,
+        packages,
+        bootstrapSeeded,
+        options,
+      });
+      if (release.released) {
+        installStatus = "partial";
+        workspaceFiles = [];
+        packages = [];
+        releasedRecord = true;
+        releaseNote = ` Claw released its unclaimed adoption of agent ${JSON.stringify(plan.agent.finalId)}; the agent and its workspace were left as they are.`;
+      } else {
+        markInstallStatus(plan.agent.finalId, "partial", ["workspace_ready", "partial"], options);
+        installStatus = "partial";
+        workspaceFiles = workspaceFiles.filter((file) => release.retained.includes(file.path));
+        releaseNote = ` Claw still owns ${release.retained.join(", ")}; restore agent ${JSON.stringify(plan.agent.finalId)} to its recorded configuration, then preview again to retry or remove.`;
+      }
+    }
     return partialResult({
       plan,
-      installRecord,
+      installRecord: releasedRecord ? undefined : installRecord,
       workspaceCreated,
       configCommitted,
       workspaceFiles,
@@ -494,7 +490,7 @@ export async function applyClawAddPlan(
       installStatus,
       error: {
         code: errorCode,
-        message: coerceErrorMessage(error),
+        message: `${coerceErrorMessage(error)}${releaseNote}`,
       },
       nowMs: options.nowMs,
     });
@@ -660,7 +656,7 @@ export async function applyClawAddPlan(
       packages,
       mcpServers,
       cronJobs,
-      error: { code: "provenance_failed", message: (error as Error).message },
+      error: { code: "provenance_failed", message: coerceErrorMessage(error) },
     });
   }
 }

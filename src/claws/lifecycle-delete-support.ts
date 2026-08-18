@@ -544,8 +544,11 @@ export function releaseClawRemoveRows(
   files: RemovedWorkspaceFile[],
   complete: boolean,
   options: OpenClawStateDatabaseOptions,
+  retainHistoricalAgentState = false,
 ): void {
-  if (complete) {
+  // Adopted removal keeps the agent database and its sessions, so the durable discovery
+  // registration that finds them must survive too; only Claw-created agents lose it here.
+  if (complete && !retainHistoricalAgentState) {
     // Keep the install record as the retry owner until database discovery is released.
     unregisterOpenClawAgentDatabases({ agentId, env: options.env });
   }

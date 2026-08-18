@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  registerOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
@@ -94,6 +98,45 @@ describe("Claw remove after configured-agent adoption", () => {
         expect.objectContaining({ kind: "workspace", action: "retain", blocked: false }),
       ]),
     );
+  });
+
+  it("keeps durable database discovery for the retained adopted agent", async () => {
+    const current = await adoptedAgentFixture();
+    const agent = current.getConfig().agents?.entries?.worker;
+    if (!agent) {
+      throw new Error("fixture agent missing");
+    }
+    current.setConfig({ agents: { entries: { WORKER: agent } } });
+    const databasePath = join(
+      current.env.OPENCLAW_STATE_DIR,
+      "agents",
+      "worker",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    registerOpenClawAgentDatabase({ agentId: "worker", path: databasePath, env: current.env });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+
+    const result = await applyClawRemovePlan(plan, {
+      env: current.env,
+      config: current.getConfig(),
+      consentPlanIntegrity: plan.planIntegrity,
+      commitConfig: async (transform) => {
+        current.setConfig(transform(current.getConfig()));
+      },
+      purgeSessions: vi.fn(),
+      trashPath: vi.fn(async () => true),
+    });
+
+    expect(result.status).toBe("complete");
+    // Removal retains the adopted agent's database and sessions, so the registration that finds
+    // them must survive; unregistering here would orphan state the operator still owns.
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env: current.env }).map((entry) => entry.agentId),
+    ).toEqual(["worker"]);
   });
 
   it("removes managed config without purging or trashing historical state", async () => {

@@ -141,6 +141,25 @@ describe("claws configured-agent adoption CLI", () => {
     expect(add?.options.some((option) => option.long === "--adopt-existing-agent")).toBe(true);
   });
 
+  it("uses mode-neutral consent text for adoption adds", async () => {
+    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
+    await mkdir(workspace);
+    await writeFile(join(workspace, "AGENTS.md"), "# Demo\n", "utf8");
+    mocks.loadConfig.mockReturnValue({
+      agents: { entries: { "demo-agent": { name: "Demo Agent", workspace } } },
+    });
+
+    await runAdd(root, { workspace, adoptExistingAgent: true, json: true });
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      ok: false,
+      error: {
+        code: "consent_required",
+        message: expect.stringContaining("apply the reviewed Claw add plan"),
+      },
+    });
+  });
+
   it("passes the exact configured entry into adoption planning", async () => {
     const { root, workspace, plan } = await prepareAdoptionResume();
     expect(plan.agent.config).toMatchObject({ default: true, workspace });

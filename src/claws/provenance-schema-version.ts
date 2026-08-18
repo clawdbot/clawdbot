@@ -4,6 +4,9 @@ import { stableStringify } from "@openclaw/normalization-core";
 const LEGACY_CLAW_INSTALL_RECORD_SCHEMA_VERSION = "openclaw.clawInstallRecord.v1" as const;
 export const CLAW_INSTALL_RECORD_SCHEMA_VERSION = "openclaw.clawInstallRecord.v2" as const;
 export const CLAW_ADOPTED_INSTALL_RECORD_SCHEMA_VERSION = "openclaw.clawInstallRecord.v3" as const;
+
+/** Whether Claw created the agent it owns or adopted one the operator already configured. */
+export type ClawAgentOrigin = "created" | "adopted";
 type ClawInstallRecordSchemaVersion =
   | typeof LEGACY_CLAW_INSTALL_RECORD_SCHEMA_VERSION
   | typeof CLAW_INSTALL_RECORD_SCHEMA_VERSION

@@ -1,43 +1,41 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as installRecordSchema from "./provenance-schema-version.js";
-import type { PersistedClawInstall } from "./provenance.js";
+import type { ClawAgentOrigin } from "./provenance-schema-version.js";
 import type { ClawAddPlan } from "./types.js";
+
+function ownedPathList(payload: unknown): string[] | undefined {
+  return Array.isArray(payload) && payload.every((path) => typeof path === "string")
+    ? payload
+    : undefined;
+}
+
+function adoptedOwnedPathList(payload: unknown): string[] | undefined {
+  if (!isRecord(payload) || Array.isArray(payload)) {
+    return undefined;
+  }
+  return payload.origin === "adopted" ? ownedPathList(payload.paths) : undefined;
+}
 
 export function decodeClawAgentOwnership(schemaValue: string, payloadJson: string) {
   const schemaVersion = installRecordSchema.parseClawInstallRecordSchemaVersion(schemaValue);
   const payload = JSON.parse(payloadJson) as unknown;
   const adopted = schemaVersion === installRecordSchema.CLAW_ADOPTED_INSTALL_RECORD_SCHEMA_VERSION;
-  const valid = adopted
-    ? typeof payload === "object" &&
-      payload !== null &&
-      !Array.isArray(payload) &&
-      "origin" in payload &&
-      payload.origin === "adopted" &&
-      "paths" in payload &&
-      Array.isArray(payload.paths) &&
-      payload.paths.every((path) => typeof path === "string")
-    : Array.isArray(payload) && payload.every((path) => typeof path === "string");
-  if (!valid) {
+  const paths = adopted ? adoptedOwnedPathList(payload) : ownedPathList(payload);
+  if (!paths) {
     throw new Error(
       `Invalid Claw agent ownership payload for schema ${JSON.stringify(schemaVersion)}.`,
     );
   }
-  return {
-    schemaVersion,
-    origin: adopted ? ("adopted" as const) : ("created" as const),
-    paths: adopted ? (payload as { paths: string[] }).paths : (payload as string[]),
-  };
+  return { schemaVersion, origin: adopted ? ("adopted" as const) : ("created" as const), paths };
 }
 
-export function clawAgentOrigin(plan: ClawAddPlan): PersistedClawInstall["agentOrigin"] {
+export function clawAgentOrigin(plan: ClawAddPlan): ClawAgentOrigin {
   return plan.actions.some((action) => action.kind === "agent" && action.action === "adopt")
     ? "adopted"
     : "created";
 }
 
-export function encodeClawAgentOwnership(
-  origin: PersistedClawInstall["agentOrigin"],
-  paths: string[],
-) {
+export function encodeClawAgentOwnership(origin: ClawAgentOrigin, paths: string[]) {
   return origin === "adopted"
     ? {
         schemaVersion: installRecordSchema.CLAW_ADOPTED_INSTALL_RECORD_SCHEMA_VERSION,

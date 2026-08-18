@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ClawCronUpdateError } from "./cron-update.js";
 import type { buildClawAddPlan } from "./lifecycle.js";
 import {
@@ -19,6 +20,7 @@ import { applyClawUpdatePlan } from "./update-apply.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 const source: ClawSourceIdentity = {
   kind: "package",
@@ -1039,5 +1041,6 @@ describe("applyClawUpdatePlan", () => {
     ).rejects.toMatchObject({ code: "update_blocked" });
   });
 });
+/* eslint-disable max-lines -- Existing update coverage is at the limit; this PR adds Windows DB cleanup. */
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";

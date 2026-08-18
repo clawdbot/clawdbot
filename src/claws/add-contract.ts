@@ -7,12 +7,13 @@ import type { installClawMcpServers, PersistedClawMcpServerRef } from "./mcp.js"
 import type { installClawPackages } from "./packages.js";
 import type {
   deleteClawInstallRecord,
+  ClawInstallStatus,
   PersistedClawInstall,
   PersistedClawPackageRef,
   persistClawInstallRecord,
   updateClawInstallRecordStatus,
 } from "./provenance.js";
-import type { ClawAddPlan } from "./types.js";
+import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
 import type {
   createClawWorkspaceFiles,
   PersistedClawWorkspaceFile,
@@ -64,3 +65,47 @@ export type ClawAddResult = {
     diagnostics?: ClawWorkspaceWriteError["diagnostics"];
   };
 };
+// Shapes every aborted apply into the same result, so callers read one contract whether the
+// failure happened before the workspace, after the config commit, or anywhere between.
+export function partialResult(params: {
+  plan: ClawAddPlan;
+  // Absent once an attempt has released its record: the result must not report ownership
+  // that no longer exists in the state database.
+  installRecord: PersistedClawInstall | undefined;
+  workspaceCreated: boolean;
+  configCommitted: boolean;
+  workspaceFiles?: PersistedClawWorkspaceFile[];
+  packages?: PersistedClawPackageRef[];
+  installStatus?: ClawInstallStatus;
+  mcpServers?: PersistedClawMcpServerRef[];
+  cronJobs?: PersistedClawCronRef[];
+  error: ClawAddResult["error"];
+  nowMs?: number;
+}): ClawAddResult {
+  return {
+    schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
+    stability: CLAW_OUTPUT_STABILITY,
+    dryRun: false,
+    mutationAllowed: true,
+    planIntegrity: params.plan.planIntegrity,
+    status: "partial",
+    claw: params.plan.claw,
+    agent: params.plan.agent,
+    workspaceCreated: params.workspaceCreated,
+    configCommitted: params.configCommitted,
+    workspaceFiles: params.workspaceFiles ?? [],
+    packages: params.packages ?? [],
+    mcpServers: params.mcpServers ?? [],
+    cronJobs: params.cronJobs ?? [],
+    ...(params.installRecord
+      ? {
+          installRecord: {
+            ...params.installRecord,
+            status: params.installStatus ?? "partial",
+            updatedAtMs: params.nowMs ?? Date.now(),
+          },
+        }
+      : {}),
+    error: params.error,
+  };
+}
