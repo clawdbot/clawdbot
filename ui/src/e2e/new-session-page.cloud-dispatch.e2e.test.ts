@@ -208,8 +208,16 @@ suite.define(() => {
         "Syncs target-repo to the cloud worker",
       );
       await page.keyboard.press("Escape");
+      await expect
+        .poll(() => detail.evaluate((element) => (element as HTMLElement & { open: boolean }).open))
+        .toBe(false);
 
       await projectTrigger.click();
+      await expect
+        .poll(() =>
+          project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+        )
+        .toBe(true);
       await project.getByRole("button", { name: "OpenClaw", exact: true }).click();
       await expect.poll(() => projectTrigger.getAttribute("data-project-id")).toBe("openclaw");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
