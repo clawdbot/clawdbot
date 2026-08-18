@@ -222,8 +222,6 @@ export function createDiscordMessageDispatcher(
             const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
             if (ids.length > 0) {
               ctx.batchMessageIds = ids;
-              ctx.batchMessageIdFirst = ids[0];
-              ctx.batchMessageIdLast = ids[ids.length - 1];
             }
             messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
           } catch (error) {

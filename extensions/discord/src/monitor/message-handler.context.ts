@@ -91,8 +91,6 @@ export async function buildDiscordMessageProcessContext(params: {
     baseText,
     preflightAudioTranscript,
     batchMessageIds,
-    batchMessageIdFirst,
-    batchMessageIdLast,
     threadChannel,
     threadParentId,
     threadParentName,
@@ -515,8 +513,8 @@ export async function buildDiscordMessageProcessContext(params: {
   }
   if (batchMessageIds && batchMessageIds.length > 1) {
     ctxPayload.MessageSids = batchMessageIds;
-    ctxPayload.MessageSidFirst = batchMessageIdFirst ?? batchMessageIds[0];
-    ctxPayload.MessageSidLast = batchMessageIdLast ?? batchMessageIds.at(-1);
+    ctxPayload.MessageSidFirst = batchMessageIds[0];
+    ctxPayload.MessageSidLast = batchMessageIds.at(-1);
   }
 
   return {

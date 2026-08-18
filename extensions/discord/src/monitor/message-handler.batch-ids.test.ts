@@ -71,8 +71,6 @@ describe("discord debounced batch message ids", () => {
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
     expect(processDiscordMessageMock.mock.calls[0]?.[0]).toMatchObject({
       batchMessageIds: ["m-batch-1", "m-batch-2"],
-      batchMessageIdFirst: "m-batch-1",
-      batchMessageIdLast: "m-batch-2",
     });
   });
 });

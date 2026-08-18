@@ -220,8 +220,6 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
   it("projects queued batch message ids into the finalized payload", async () => {
     const ctx = await createBaseDiscordMessageContext({
       batchMessageIds: ["m-2", "m-3"],
-      batchMessageIdFirst: "m-2",
-      batchMessageIdLast: "m-3",
     });
 
     const result = await buildDiscordMessageProcessContext({

@@ -61,8 +61,6 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   messageText: string;
   preflightAudioTranscript?: string;
   batchMessageIds?: string[];
-  batchMessageIdFirst?: string;
-  batchMessageIdLast?: string;
   // Keep one required receipt-time snapshot: queued processing must never
   // fall back to Discord's expiring attachment URLs.
   preparedMedia: DiscordMediaInfo[];
