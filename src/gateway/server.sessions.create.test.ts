@@ -3049,8 +3049,8 @@ test("sessions.create rejects spawnDepth without parentSessionKey", async () => 
 });
 
 test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
-  await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "per-channel-peer" };
+  await createSessionStoreDir();
 
   const created = await directSessionReq<{
     entry?: { parentSessionKey?: string };
@@ -3061,8 +3061,8 @@ test("sessions.create leaves dashboard sessions unparented under per-channel-pee
 });
 
 test("sessions.create leaves dashboard sessions unparented under global session scope", async () => {
-  await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "main", scope: "global" };
+  await createSessionStoreDir();
 
   const created = await directSessionReq<{
     entry?: { parentSessionKey?: string };
@@ -3073,8 +3073,8 @@ test("sessions.create leaves dashboard sessions unparented under global session 
 });
 
 test("sessions.create does not parent the main session to itself", async () => {
-  await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "main" };
+  await createSessionStoreDir();
 
   const created = await directSessionReq<{
     key?: string;
