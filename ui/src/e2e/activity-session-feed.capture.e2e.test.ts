@@ -52,6 +52,18 @@ suite.define(() => {
               lastInputSeconds: 640,
               watchedSessions: [],
             },
+            {
+              id: "profile-carol",
+              name: "Carol Singh",
+              lastInputSeconds: 14,
+              watchedSessions: [releaseKey],
+            },
+            {
+              id: "profile-dan",
+              name: "Dan Wu",
+              lastInputSeconds: 70,
+              watchedSessions: [designKey],
+            },
           ],
           methodResponses: {
             "sessions.list": {
@@ -150,7 +162,13 @@ suite.define(() => {
           .poll(() =>
             page.locator(".sidebar-online .viewer-facepile").getAttribute("data-viewer-count"),
           )
-          .toBe("2");
+          .toBe("4");
+        await expect
+          .poll(() => page.locator(".sidebar-online .viewer-avatar--overflow").count())
+          .toBe(1);
+        await expect
+          .poll(() => page.locator(".sidebar-online .viewer-avatar--overflow").textContent())
+          .toContain("+2");
         await mkdir(outputDir, { recursive: true });
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
@@ -160,7 +178,7 @@ suite.define(() => {
         await onlineToggle.focus();
         await page.keyboard.press("Enter");
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
         await expect
           .poll(() => page.locator('[data-online-user-id="profile-bob"]').getAttribute("class"))
           .toContain("sidebar-online__person--away");
@@ -193,7 +211,7 @@ suite.define(() => {
         await onlineToggle.focus();
         await page.keyboard.press("Space");
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         await page.locator(".sidebar").screenshot({
           animations: "disabled",

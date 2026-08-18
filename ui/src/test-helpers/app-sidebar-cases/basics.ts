@@ -183,6 +183,9 @@ describe("AppSidebar viewer presence", () => {
       presence: [
         { instanceId: "self-instance", user: { id: "self", name: "Self" } },
         { instanceId: "alice-instance", user: { id: "alice", name: "Alice" } },
+        { instanceId: "bob-instance", user: { id: "bob", name: "Bob" } },
+        { instanceId: "carol-instance", user: { id: "carol", name: "Carol" } },
+        { instanceId: "dave-instance", user: { id: "dave", name: "Dave" } },
       ],
     });
     await sidebar.updateComplete;
@@ -195,8 +198,10 @@ describe("AppSidebar viewer presence", () => {
     const facepile = sidebar.querySelector<HTMLElement>(".sidebar-online openclaw-viewer-facepile");
     await (facepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete;
     expect(facepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count")).toBe(
-      "1",
+      "4",
     );
+    expect(facepile?.querySelectorAll("[data-viewer-id]")).toHaveLength(2);
+    expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+2");
   });
 
   it("renders the self user's avatar route in the footer identity chip", async () => {

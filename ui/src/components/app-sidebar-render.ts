@@ -33,6 +33,7 @@ import {
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import { renderSidebarPluginTab } from "./app-sidebar-nav-menus.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
@@ -273,29 +274,36 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   }
   return html`
     <section class="sidebar-online" aria-label=${label} data-session-section=${sectionId}>
-      <div class="sidebar-recent-sessions__head">
-        <button
-          type="button"
-          class="sidebar-session-group-toggle"
-          aria-expanded=${String(!collapsed)}
-          aria-label=${label}
-          @click=${() => host.toggleSection(sectionId)}
-        >
-          <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
-            <span class="sidebar-session-group-toggle__icon"
-              >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-            >
-          </span>
-          <span class="sidebar-recent-sessions__label-text">${label}</span>
-          ${collapsed
-            ? html`<openclaw-viewer-facepile
-                class="sidebar-online__facepile"
-                .staticUsers=${users}
-                .maxVisible=${users.length}
-              ></openclaw-viewer-facepile>`
-            : nothing}
-        </button>
-      </div>
+      ${renderSidebarSessionSectionHeader({
+        sectionId,
+        draggable: false,
+        onStartDrag: () => undefined,
+        onFinishDrag: () => undefined,
+        content: html`
+          <button
+            type="button"
+            class="sidebar-session-group-toggle"
+            aria-expanded=${String(!collapsed)}
+            aria-label=${label}
+            @click=${() => host.toggleSection(sectionId)}
+          >
+            <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
+              <span class="sidebar-session-group-toggle__icon"
+                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+              >
+            </span>
+            <span class="sidebar-recent-sessions__label-text">${label}</span>
+            ${collapsed
+              ? html`<span class="sidebar-online__facepile">
+                  <openclaw-viewer-facepile
+                    .staticUsers=${users}
+                    .maxVisible=${2}
+                  ></openclaw-viewer-facepile>
+                </span>`
+              : nothing}
+          </button>
+        `,
+      })}
       ${collapsed
         ? nothing
         : html`<div class="sidebar-online__list">

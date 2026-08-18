@@ -1399,7 +1399,8 @@ body.update-dialog-open .sidebar-update-card__status {
   padding: 0;
 }
 
-.sidebar-sessions {
+.sidebar-sessions,
+.sidebar-online {
   --sidebar-inset: 8px;
   --sidebar-lead: 20px;
   --sidebar-row-gap: 8px;
@@ -2464,7 +2465,9 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-online__facepile {
+  display: inline-flex;
   min-width: 0;
+  margin-left: auto;
   overflow: hidden;
 }
 
@@ -4307,6 +4310,22 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
 .sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__name,
 .sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__subtitle {
+  color: color-mix(in srgb, var(--danger) 86%, var(--text));
+}
+
+.sidebar-recent-session__subtitle--narration {
+  animation: sidebar-narration-arrive var(--duration-fast) ease-out;
+}
+
+@keyframes sidebar-narration-arrive {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+itle {
   color: color-mix(in srgb, var(--danger) 86%, var(--text));
 }
 
