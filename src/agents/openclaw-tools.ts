@@ -446,12 +446,11 @@ export function createOpenClawTools(
       allowlist: explicitFactoryAllowlist,
       denylist: explicitFactoryDenylist,
     });
-  const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest;
   const sessionLookupToolOptions = {
     agentSessionKey: options?.agentSessionKey,
     sandboxed: options?.sandboxed,
     config: resolvedConfig,
-    callGateway: effectiveCallGateway,
+    callGateway: embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest,
     sessionLinkBase: resolveControlUiSessionLinkBase(resolvedConfig),
   };
   const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
