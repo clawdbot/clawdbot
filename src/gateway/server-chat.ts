@@ -1718,6 +1718,44 @@ export function createAgentEventHandler({
           },
         );
       }
+      // Review plugins emit `<plugin>.audit` agent events to surface step-level
+      // audit rejections. Show a visible chat notice so users understand why the
+      // agent appears to redo a step instead of finalizing its output.
+      if (
+        !isAborted &&
+        typeof evt.stream === "string" &&
+        evt.stream.endsWith(".audit") &&
+        evt.data?.kind === "reject"
+      ) {
+        const turnIndex = evt.data.turnIndex ?? "?";
+        const summary =
+          typeof evt.data.summary === "string" && evt.data.summary.trim()
+            ? evt.data.summary.trim()
+            : "output rejected by audit";
+        const issueCount = Array.isArray(evt.data.errors) ? evt.data.errors.length : 0;
+        const text =
+          `Audit rejected output (turn ${turnIndex})` +
+          (issueCount > 0
+            ? ` with ${issueCount} issue${issueCount === 1 ? "" : "s"}`
+            : "") +
+          `: ${summary} The rejected output was rolled back; ` +
+          `the agent is redoing the step automatically.`;
+        sendChatPayload(
+          sessionKey,
+          {
+            runId: eventRunId,
+            sessionKey,
+            ...(sessionKey === "global" && sessionAgentId ? { agentId: sessionAgentId } : {}),
+            seq: (agentRunSeq.get(evt.runId) ?? 0) + 1,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: Date.now(),
+            },
+          },
+          { agentId: sessionAgentId, controlUiVisible: isControlUiVisible },
+        );
+      }
     }
 
     if (lifecyclePhase === "error") {
