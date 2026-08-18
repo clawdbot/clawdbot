@@ -3971,7 +3971,7 @@ function buildOpenAIUltraWireProviderOverride(params: {
     baseUrl: firstCapture?.baseUrl ?? merged.baseUrl,
     models: merged.models?.map((model) => {
       const capture = params.capturesByModel.get(model.id);
-      return capture ? { ...model, baseUrl: capture.baseUrl } : model;
+      return capture ? Object.assign({}, model, { baseUrl: capture.baseUrl }) : model;
     }),
   };
 }
