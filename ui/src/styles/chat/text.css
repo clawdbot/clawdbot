@@ -5,7 +5,7 @@
 .chat-thinking {
   margin-bottom: 10px;
   padding: 10px 12px;
-  border-radius: var(--radius-md);
+  border-radius: 50%;
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
@@ -55,7 +55,7 @@
 }
 
 .chat-message-disclosure__toggle:hover {
-  background: transparent;
+  background: color-mix(in srgb, currentColor 8%, transparent);
   color: var(--text);
 }
 
