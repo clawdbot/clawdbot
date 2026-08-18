@@ -741,6 +741,13 @@
   gap: 0;
 }
 
+/* Memory subviews vary substantially in height. Keep the shared hero anchored
+   when switching between a view that needs the content scrollbar and one that
+   does not. */
+.shell--settings .content:has(.memory-page) {
+  scrollbar-gutter: stable;
+}
+
 .memory-page__panel {
   display: grid;
   gap: 14px;
