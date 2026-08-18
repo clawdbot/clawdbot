@@ -13,6 +13,28 @@ fixture setup and reporting. Let the human drive OpenClaw and judge quality.
 Use one editable Markdown worksheet as the entire run record. Do not create
 `run.json`, mission state, receipts, or other tracking files.
 
+## Start the run
+
+At the start of every **Validate release** run, give a concise introduction:
+this skill creates an isolated copy of a gateway, upgrades that copy to the
+selected beta, reports upgrade problems, then helps the tester manually check
+the release and submit one consolidated feedback comment. The source gateway is
+not modified.
+
+Use the agent's available native checklist or plan tool to show progress and
+check items off as they complete. Start with this visible checklist:
+
+1. Confirm the beta and shared campaign
+2. Choose a gateway to copy
+3. Copy, upgrade, and verify readiness
+4. Create the testing worksheet
+5. Test surfaces and record feedback
+6. Finish validation and publish feedback
+
+For **Initialize campaign**, instead explain that the run creates the shared
+issue and worksheet for a beta, then ends; use a corresponding three-item
+checklist: identify beta, create or reuse campaign, close older campaigns.
+
 ## Workflows
 
 Choose the workflow from the request:
@@ -283,8 +305,12 @@ Then give this compact orientation, using the actual worksheet contents:
   after restart`). The agent adds those notes to that surface's **Testing
   notes** cell. They do not need to edit the file themselves.
 
-Finish by asking which surface they want to test first and reminding them to
-reply exactly `finish validation` when they are done.
+Finish with the exit instruction: **You can stop after any amount of testing;
+you do not need to cover every surface. When you are ready to wrap up, reply
+exactly `finish validation`.** That tells the agent to collect any missing
+promotion feedback, stop the disposable fixture, restore any source gateway it
+stopped, and post one consolidated release-feedback comment. Then ask which
+surface they want to test first.
 
 This worksheet is the only checklist and note store. If readiness is verified,
 continue to human-driven testing. If readiness is blocked, state that testing
