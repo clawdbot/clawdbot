@@ -272,7 +272,7 @@ describe("buildCliSpeechProvider", () => {
 
   it.each([
     { transport: "stdout", audio: [...Buffer.from("ID3audio")], writeFile: false },
-    { transport: "templated file", audio: [0xff, 0xfb], writeFile: true },
+    { transport: "templated file", audio: [0xff, 0xfb, 0x90, 0x64], writeFile: true },
   ])("converts detected MP3 bytes from $transport to configured WAV", async (testCase) => {
     const fixture = createRawAudioFixture(testCase.audio);
     try {
@@ -380,8 +380,11 @@ describe("buildCliSpeechProvider", () => {
     }
   });
 
-  it("rejects unrecognized stdout with supported-format guidance", async () => {
-    const fixture = createRawAudioFixture([...Buffer.from("not audio")]);
+  it.each([
+    { label: "plain bytes", audio: [...Buffer.from("not audio")] },
+    { label: "reserved MP3 layer", audio: [0xff, 0xf1, 0x90, 0x64] },
+  ])("rejects $label on stdout with supported-format guidance", async ({ audio }) => {
+    const fixture = createRawAudioFixture(audio);
     try {
       await expect(
         synthesize({

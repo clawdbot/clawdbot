@@ -160,7 +160,18 @@ function detectAudioFormat(buffer: Buffer): SourceFormat | null {
   if (prefix.startsWith("RIFF") && prefix.slice(8, 12) === "WAVE") {
     return "wav";
   }
-  if (prefix.startsWith("ID3") || (buffer[0] === 0xff && ((buffer[1] ?? 0) & 0xe0) === 0xe0)) {
+  const mpegHeader = buffer[1] ?? 0;
+  const mpegFormat = buffer[2] ?? 0;
+  const hasMp3FrameHeader =
+    buffer.length >= 4 &&
+    buffer[0] === 0xff &&
+    (mpegHeader & 0xe0) === 0xe0 &&
+    (mpegHeader & 0x18) !== 0x08 &&
+    (mpegHeader & 0x06) !== 0 &&
+    (mpegFormat & 0xf0) !== 0 &&
+    (mpegFormat & 0xf0) !== 0xf0 &&
+    (mpegFormat & 0x0c) !== 0x0c;
+  if (prefix.startsWith("ID3") || hasMp3FrameHeader) {
     return "mp3";
   }
   if (!prefix.startsWith("OggS")) {
