@@ -7,9 +7,19 @@ export type TerminalEventSink = (connId: string, event: string, payload: unknown
 
 export type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "detached" | "error";
 
-export type TerminalOwner =
-  | { kind: "conn"; connId: string }
-  | { kind: "agent"; agentSessionKey: string; agentId?: string };
+export type AgentTerminalOwner = {
+  kind: "agent";
+  agentSessionKey: string;
+  agentSessionId: string;
+  agentId: string;
+};
+
+export type TerminalOwner = { kind: "conn"; connId: string } | AgentTerminalOwner;
+
+export type AgentTerminalSessionDrain = {
+  hasWork(): boolean;
+  release(): void;
+};
 
 export type TerminalSession = {
   id: string;

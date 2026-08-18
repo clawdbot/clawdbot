@@ -21,6 +21,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
 import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-internal.js";
+import type { AgentTerminalSessionDrain } from "../terminal/session-manager.types.js";
 import {
   beginWorkerInferenceSessionDrain,
   type WorkerInferenceSessionDrain,
@@ -71,6 +72,7 @@ export type SessionArchiveLifecycleDrain = {
 function hasAuthoritativeSessionWork(
   params: SessionArchiveLifecycleParams,
   workerDrain: WorkerInferenceSessionDrain | undefined,
+  terminalDrain: AgentTerminalSessionDrain | undefined,
   workIdentities: string[],
 ): boolean {
   const sessionId = params.sessionId;
@@ -94,7 +96,8 @@ function hasAuthoritativeSessionWork(
       sessionId &&
       params.context.workerSessionPlacementService?.getMany([sessionId]).get(sessionId)?.turnClaim,
     ) ||
-    workerDrain?.hasWork() === true
+    workerDrain?.hasWork() === true ||
+    terminalDrain?.hasWork() === true
   );
 }
 
@@ -111,6 +114,7 @@ export async function prepareSessionArchiveLifecycle(
   const workerService = params.context.workerEnvironmentService;
   const workerControl = asWorkerInferenceControl(workerService);
   let workerDrain: WorkerInferenceSessionDrain | undefined;
+  let terminalDrain: AgentTerminalSessionDrain | undefined;
   if (params.sessionId) {
     // Lightweight contexts may expose the drain directly without widening the public service.
     workerDrain =
@@ -119,6 +123,12 @@ export async function prepareSessionArchiveLifecycle(
     if (!workerDrain && workerControl?.hasInferenceForSession(params.sessionId) === true) {
       throw new Error("Worker inference drain is unavailable");
     }
+    terminalDrain = params.context.terminalSessions?.beginAgentSessionDrain({
+      kind: "agent",
+      agentSessionKey: params.sessionKey,
+      agentSessionId: params.sessionId,
+      agentId: params.agentId,
+    });
   }
 
   try {
@@ -203,10 +213,15 @@ export async function prepareSessionArchiveLifecycle(
     // Fresh exact placement must be reclaimed before archivedAt can commit.
     await prepareSessionWorkerPlacementForArchive({ ...params, reclaimActive: true });
     return {
-      release: () => workerDrain?.release(),
-      hasAuthoritativeWork: () => hasAuthoritativeSessionWork(params, workerDrain, workIdentities),
+      release: () => {
+        terminalDrain?.release();
+        workerDrain?.release();
+      },
+      hasAuthoritativeWork: () =>
+        hasAuthoritativeSessionWork(params, workerDrain, terminalDrain, workIdentities),
     };
   } catch (error) {
+    terminalDrain?.release();
     workerDrain?.release();
     throw error;
   }

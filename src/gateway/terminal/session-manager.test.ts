@@ -4,6 +4,7 @@ import type { TerminalBackend } from "./backend.js";
 import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalSessionManager } from "./session-manager.js";
 import {
+  agentTerminalOwner,
   baseOpenRequest as baseRequest,
   type FakeTerminalPty,
   makeFakePty,
@@ -133,6 +134,30 @@ describe("TerminalSessionManager", () => {
     expect(kill).toHaveBeenCalledOnce();
 
     onExit?.({ exitCode: 0 });
+    expect(manager.size).toBe(0);
+  });
+
+  it("retains manager ownership until backend teardown has been invoked", async () => {
+    const manager = new TerminalSessionManager({ emit: vi.fn() });
+    const kill = vi.fn(() => {
+      expect(manager.size).toBe(1);
+    });
+    const backend: TerminalBackend = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      kill,
+      onData: vi.fn(),
+      onExit: vi.fn(),
+    };
+    const opened = await manager.open(baseRequest({ createBackend: async () => backend }));
+    if (!opened.ok) {
+      throw new Error("expected relay backend open");
+    }
+
+    expect(manager.close("conn-1", opened.sessionId)).toBe(true);
+    expect(kill).toHaveBeenCalledOnce();
     expect(manager.size).toBe(0);
   });
 
@@ -569,7 +594,7 @@ describe("TerminalSessionManager", () => {
 });
 
 describe("TerminalSessionManager agent ownership", () => {
-  const agentOwner = { kind: "agent", agentSessionKey: "agent:main:main" } as const;
+  const agentOwner = agentTerminalOwner("agent:main:main");
 
   it("continues live offsets after output buffered before the first viewer", async () => {
     vi.useFakeTimers();
@@ -631,9 +656,9 @@ describe("TerminalSessionManager agent ownership", () => {
       expect(manager.size).toBe(1);
       expect(fake.killed).toBe(false);
       expect(emit).not.toHaveBeenCalled();
-      expect(manager.snapshotAgent("agent:main:main", outcome.sessionId)).toBe("visiblebuffered");
+      expect(manager.snapshotAgent(agentOwner, outcome.sessionId)).toBe("visiblebuffered");
 
-      expect(manager.closeAgent("agent:main:main", outcome.sessionId)).toEqual({ ok: true });
+      expect(manager.closeAgent(agentOwner, outcome.sessionId)).toEqual({ ok: true });
       expect(fake.killed).toBe(true);
       expect(manager.size).toBe(0);
     } finally {
