@@ -3,6 +3,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { normalizeConfigPaths } from "./normalize-paths.js";
+import type { OpenClawConfig } from "./types.js";
 
 describe("normalizeConfigPaths", () => {
   it("expands tilde for path-ish keys only", async () => {
@@ -87,7 +88,8 @@ describe("normalizeConfigPaths", () => {
       },
     };
 
-    const normalized = normalizeConfigPaths(cfg);
+    // Runtime catalogs can be deeply frozen even though the public config type is mutable.
+    const normalized = normalizeConfigPaths(cfg as unknown as OpenClawConfig);
 
     expect(normalized).toBe(cfg);
     expect(normalized.models?.providers?.mock?.models?.[0]?.compat).toBe(compat);
