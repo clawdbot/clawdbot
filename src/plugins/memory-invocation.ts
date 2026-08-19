@@ -29,7 +29,11 @@ import {
   hydrateMemoryRunExposureFromLedger,
   persistMemoryRunExposureBeforeContent,
 } from "./memory-run-exposure-ledger.js";
-import { prepareMemoryRunExposure, publishMemoryRunExposure } from "./memory-run-exposure.js";
+import {
+  captureDurableMemoryAuthorizationFacts,
+  prepareMemoryRunExposure,
+  publishMemoryRunExposure,
+} from "./memory-run-exposure.js";
 import { resolveSelectedMemoryCapabilityRegistration } from "./memory-state.js";
 import type {
   MemoryPluginCapability,
@@ -284,6 +288,7 @@ function readTranscriptExposure(params: {
     egressRegistryRevision: context.delivery.egressRegistryRevision,
     sessionIdentityRevision: context.sessionIdentityRevision,
     subjectRevision: context.subjectRevision,
+    ...captureDurableMemoryAuthorizationFacts(context),
   });
 }
 

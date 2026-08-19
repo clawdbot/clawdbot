@@ -923,6 +923,38 @@ BEGIN
   SELECT RAISE(ABORT, 'memory policy sets cannot be deleted');
 END;
 
+-- A policy-set id is an immutable retention handle, not an everlasting grant.
+-- Its members retain the stable policy identity and the exact active revision
+-- expected at exposure time; readers revalidate both against current policy state.
+CREATE TABLE IF NOT EXISTS memory_policy_set_members (
+  policy_set_id TEXT NOT NULL,
+  policy_id TEXT NOT NULL,
+  expected_revision_id TEXT NOT NULL,
+  expected_revocation_epoch INTEGER NOT NULL CHECK (expected_revocation_epoch >= 0),
+  audience_intersection_json TEXT NOT NULL,
+  retention_state TEXT NOT NULL CHECK (retention_state IN ('retained', 'quarantined')),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (policy_set_id, policy_id),
+  FOREIGN KEY (policy_set_id) REFERENCES memory_policy_sets(policy_set_id) ON DELETE RESTRICT,
+  FOREIGN KEY (policy_id) REFERENCES memory_policies(policy_id) ON DELETE RESTRICT,
+  FOREIGN KEY (expected_revision_id) REFERENCES memory_policy_revisions(revision_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_policy_set_members_policy
+  ON memory_policy_set_members(policy_id, expected_revision_id, expected_revocation_epoch);
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_set_members_no_update
+BEFORE UPDATE ON memory_policy_set_members
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy set members are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_set_members_no_delete
+BEFORE DELETE ON memory_policy_set_members
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy set members cannot be deleted');
+END;
+
 CREATE TABLE IF NOT EXISTS memory_run_exposures (
   exposure_set_id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
@@ -958,6 +990,34 @@ CREATE TRIGGER IF NOT EXISTS memory_run_exposures_no_delete
 BEFORE DELETE ON memory_run_exposures
 BEGIN
   SELECT RAISE(ABORT, 'memory run exposures cannot be deleted');
+END;
+
+-- Resource-to-exposure rows make revocation and expiry impact analysis a
+-- durable join, rather than an opaque array scan over transcript history.
+CREATE TABLE IF NOT EXISTS memory_run_exposure_resources (
+  exposure_set_id TEXT NOT NULL,
+  resource_revision_id TEXT NOT NULL,
+  policy_set_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (exposure_set_id, resource_revision_id),
+  FOREIGN KEY (exposure_set_id) REFERENCES memory_run_exposures(exposure_set_id) ON DELETE RESTRICT,
+  FOREIGN KEY (resource_revision_id) REFERENCES memory_resource_revisions(revision_id) ON DELETE RESTRICT,
+  FOREIGN KEY (policy_set_id) REFERENCES memory_policy_sets(policy_set_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_run_exposure_resources_revision
+  ON memory_run_exposure_resources(resource_revision_id, exposure_set_id);
+
+CREATE TRIGGER IF NOT EXISTS memory_run_exposure_resources_no_update
+BEFORE UPDATE ON memory_run_exposure_resources
+BEGIN
+  SELECT RAISE(ABORT, 'memory run exposure resources are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_run_exposure_resources_no_delete
+BEFORE DELETE ON memory_run_exposure_resources
+BEGIN
+  SELECT RAISE(ABORT, 'memory run exposure resources cannot be deleted');
 END;
 
 -- Selected-plugin content is never returned until this content-free ledger row commits.
@@ -1002,6 +1062,31 @@ BEGIN
   SELECT RAISE(ABORT, 'pre-output memory exposure ledger cannot be deleted');
 END;
 
+-- Trusted host facts are captured before content release. Keep their audit-only
+-- projection separate from the old ledger table so existing agent databases can
+-- install it lazily without a schema-version migration.
+CREATE TABLE IF NOT EXISTS memory_preoutput_exposure_authorization_facts (
+  exposure_set_id TEXT NOT NULL PRIMARY KEY,
+  actor_evidence_json TEXT NOT NULL,
+  delegation_snapshot_json TEXT NOT NULL,
+  host_facts_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (exposure_set_id)
+    REFERENCES memory_preoutput_exposure_ledger(exposure_set_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_authorization_facts_no_update
+BEFORE UPDATE ON memory_preoutput_exposure_authorization_facts
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output exposure authorization facts are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_authorization_facts_no_delete
+BEFORE DELETE ON memory_preoutput_exposure_authorization_facts
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output exposure authorization facts cannot be deleted');
+END;
+
 CREATE TABLE IF NOT EXISTS transcript_event_memory_policies (
   session_id TEXT NOT NULL,
   event_seq INTEGER NOT NULL,
@@ -1044,6 +1129,94 @@ CREATE TABLE IF NOT EXISTS transcript_event_memory_policies (
 
 CREATE INDEX IF NOT EXISTS idx_transcript_event_memory_policies_status
   ON transcript_event_memory_policies(session_id, authorization_status, event_seq);
+
+-- The narrow P1C row remains the hot replay filter. This companion holds the
+-- full opaque retention evidence without making transcript JSON authoritative.
+CREATE TABLE IF NOT EXISTS transcript_event_memory_policy_details (
+  session_id TEXT NOT NULL,
+  event_seq INTEGER NOT NULL,
+  actor_evidence_json TEXT NOT NULL,
+  delegation_snapshot_json TEXT NOT NULL,
+  exposed_resource_revisions_json TEXT NOT NULL,
+  exposure_receipt_ids_json TEXT NOT NULL,
+  egress_receipt_ids_json TEXT NOT NULL,
+  normalized_audience_intersection_json TEXT NOT NULL,
+  finalized_delivery_audiences_json TEXT NOT NULL,
+  retention_state TEXT NOT NULL CHECK (retention_state IN ('retained', 'quarantined')),
+  source_session_id TEXT NOT NULL,
+  source_event_seq INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, event_seq),
+  FOREIGN KEY (session_id, event_seq)
+    REFERENCES transcript_event_memory_policies(session_id, event_seq) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_transcript_event_memory_policy_details_source
+  ON transcript_event_memory_policy_details(source_session_id, source_event_seq);
+
+CREATE TRIGGER IF NOT EXISTS transcript_event_memory_policy_details_no_update
+BEFORE UPDATE ON transcript_event_memory_policy_details
+BEGIN
+  SELECT RAISE(ABORT, 'transcript memory policy details are immutable');
+END;
+
+-- The immutable detail lives exactly as long as its transcript event. The
+-- transcript owner deletes both through the foreign-key cascade during a
+-- reset/rewind/replace; blocking that cascade would leave the session unable
+-- to enforce its own retention lifecycle.
+DROP TRIGGER IF EXISTS transcript_event_memory_policy_details_no_delete;
+
+-- A new session identity cannot reuse a parent's direct companion. Transition
+-- provenance records the exact source event and both immutable identities so
+-- readers can revalidate the origin without treating copied JSON as authority.
+CREATE TABLE IF NOT EXISTS transcript_event_memory_policy_transitions (
+  session_id TEXT NOT NULL,
+  event_seq INTEGER NOT NULL,
+  source_session_id TEXT NOT NULL,
+  source_event_seq INTEGER NOT NULL,
+  transition_kind TEXT NOT NULL CHECK (transition_kind IN (
+    'parent-fork', 'fork', 'rewind', 'switch', 'checkpoint'
+  )),
+  source_session_identity_revision TEXT NOT NULL,
+  target_session_identity_revision TEXT NOT NULL,
+  subject_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, event_seq),
+  FOREIGN KEY (session_id, event_seq)
+    REFERENCES transcript_event_memory_policies(session_id, event_seq) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_transcript_event_memory_policy_transitions_source
+  ON transcript_event_memory_policy_transitions(source_session_id, source_event_seq);
+
+CREATE TRIGGER IF NOT EXISTS transcript_event_memory_policy_transitions_no_update
+BEFORE UPDATE ON transcript_event_memory_policy_transitions
+BEGIN
+  SELECT RAISE(ABORT, 'transcript memory policy transitions are immutable');
+END;
+
+-- Compaction creates its own derived policy in Phase 2C. The table is owned
+-- now so transitions can preserve the reference without inventing sidecars.
+CREATE TABLE IF NOT EXISTS memory_compaction_policies (
+  compaction_policy_id TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  source_policy_set_id TEXT NOT NULL,
+  retention_state TEXT NOT NULL CHECK (retention_state IN ('retained', 'quarantined')),
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (source_policy_set_id) REFERENCES memory_policy_sets(policy_set_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS memory_compaction_policies_no_update
+BEFORE UPDATE ON memory_compaction_policies
+BEGIN
+  SELECT RAISE(ABORT, 'memory compaction policies are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_compaction_policies_no_delete
+BEFORE DELETE ON memory_compaction_policies
+BEGIN
+  SELECT RAISE(ABORT, 'memory compaction policies cannot be deleted');
+END;
 
 CREATE TABLE IF NOT EXISTS standing_intents (
   intent_key INTEGER PRIMARY KEY,

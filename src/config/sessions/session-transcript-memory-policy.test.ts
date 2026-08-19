@@ -5,10 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runDoctorMemoryIsolation } from "../../commands/doctor-memory-isolation.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetMemoryIsolationCutoverForTest } from "../../plugins/memory-cutover.js";
-import { persistMemoryRunExposureBeforeContentInDatabase } from "../../plugins/memory-run-exposure-ledger.js";
+import {
+  persistMemoryRunExposureBeforeContentInDatabase,
+  readDurableMemoryRunExposure,
+} from "../../plugins/memory-run-exposure-ledger.js";
 import {
   clearMemoryRunExposureForTest,
-  recordMemoryRunExposure,
+  prepareMemoryRunExposure,
 } from "../../plugins/memory-run-exposure.js";
 import { createCurrentMemorySessionContext } from "../../state/memory-session-subject.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -28,10 +31,13 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { readActiveTranscriptAppendParentId } from "./session-accessor.sqlite-transcript-store.js";
 import {
+  appendSqliteTranscriptEvent,
   appendSqliteTranscriptMessage,
+  replaceSqliteTranscriptEvents,
   trimSqliteTranscriptForManualCompact,
 } from "./session-accessor.sqlite-transcript-write.js";
 import {
+  preserveTranscriptMemoryPolicyTransitionInTransaction,
   readAuthorizedTranscriptEventSeqs,
   resetTranscriptMemoryPolicyForTest,
 } from "./session-transcript-memory-policy.js";
@@ -80,8 +86,67 @@ function markCutOver(env: NodeJS.ProcessEnv) {
        VALUES (?, ?, ?, ?, 1)`,
     )
     .run(SESSION_ID, SESSION_KEY, SUBJECT_REVISION, SESSION_IDENTITY_REVISION);
+  // The transcript companion resolves stable policy identity from the exposed
+  // resource revision. Test receipts intentionally stay opaque plugin payloads.
+  database.db.exec(/* sqlite-allow-raw: test fixture establishes durable policy lineage. */ `
+    INSERT INTO memory_storage_roots
+      (storage_root_id, agent_id, backend_kind, opaque_locator, path_key_version, path_key,
+       authority_kind, authority_owner_id, default_capabilities_json, lifecycle_state, created_at, updated_at)
+    VALUES ('root-1', 'main', 'builtin', 'builtin:v1:test', 1, 's1_test_fixture_path_key_000',
+            'user', 'alice', '["read"]', 'active', 1, 1);
+    INSERT INTO memory_policies
+      (policy_id, agent_id, current_revision_id, revocation_epoch, lifecycle_state, created_at, updated_at)
+    VALUES ('policy-1', 'main', 'policy-revision-1', 0, 'active', 1, 1);
+    INSERT INTO memory_policy_revisions
+      (revision_id, policy_id, revision_number, revocation_epoch, lifecycle_state,
+       actor_kind, actor_id, reason, created_at)
+    VALUES ('policy-revision-1', 'policy-1', 1, 0, 'active', 'human', 'alice', 'fixture', 1);
+    INSERT INTO memory_stores
+      (store_id, agent_id, storage_root_id, policy_id, scope_kind, audience_kind, audience_id,
+       lifecycle_state, created_at, updated_at)
+    VALUES ('store-1', 'main', 'root-1', 'policy-1', 'user', 'user', 'alice', 'active', 1, 1);
+    INSERT INTO memory_resources
+      (resource_id, agent_id, store_id, logical_locator, source, created_at)
+    VALUES ('resource-1', 'main', 'store-1', 'memory/fixture.md', 'memory', 1);
+    INSERT INTO memory_resource_revisions
+      (revision_id, resource_id, revision_number, artifact_locator, content_hash, content_bytes,
+       policy_revision_id, policy_revocation_epoch, source_policy_set_id, lifecycle_state,
+       actor_kind, actor_id, expires_at, created_at, activated_at, retired_at)
+    VALUES ('resource-revision-1', 'resource-1', 1, 'fixture.md', 'fixture', 7,
+            'policy-revision-1', 0, 'plugin-policy-set-1', 'active', 'human', 'alice', NULL, 1, 1, NULL);
+  `);
   resetTranscriptMemoryPolicyForTest(database.db);
   return database;
+}
+
+function seedTranscriptPolicyFixture(database: OpenClawAgentDatabase): void {
+  database.db.exec(/* sqlite-allow-raw: test fixture establishes durable policy lineage. */ `
+    INSERT INTO memory_storage_roots
+      (storage_root_id, agent_id, backend_kind, opaque_locator, path_key_version, path_key,
+       authority_kind, authority_owner_id, default_capabilities_json, lifecycle_state, created_at, updated_at)
+    VALUES ('root-shadow', 'main', 'builtin', 'builtin:v1:shadow', 1, 's1_shadow_fixture_path_key_000',
+            'user', 'alice', '["read"]', 'active', 1, 1);
+    INSERT INTO memory_policies
+      (policy_id, agent_id, current_revision_id, revocation_epoch, lifecycle_state, created_at, updated_at)
+    VALUES ('policy-shadow', 'main', 'policy-shadow-revision-1', 0, 'active', 1, 1);
+    INSERT INTO memory_policy_revisions
+      (revision_id, policy_id, revision_number, revocation_epoch, lifecycle_state,
+       actor_kind, actor_id, reason, created_at)
+    VALUES ('policy-shadow-revision-1', 'policy-shadow', 1, 0, 'active', 'human', 'alice', 'fixture', 1);
+    INSERT INTO memory_stores
+      (store_id, agent_id, storage_root_id, policy_id, scope_kind, audience_kind, audience_id,
+       lifecycle_state, created_at, updated_at)
+    VALUES ('store-shadow', 'main', 'root-shadow', 'policy-shadow', 'agent', 'agent', 'main', 'active', 1, 1);
+    INSERT INTO memory_resources
+      (resource_id, agent_id, store_id, logical_locator, source, created_at)
+    VALUES ('resource-shadow', 'main', 'store-shadow', 'memory/shadow.md', 'memory', 1);
+    INSERT INTO memory_resource_revisions
+      (revision_id, resource_id, revision_number, artifact_locator, content_hash, content_bytes,
+       policy_revision_id, policy_revocation_epoch, source_policy_set_id, lifecycle_state,
+       actor_kind, actor_id, expires_at, created_at, activated_at, retired_at)
+    VALUES ('resource-revision-1', 'resource-shadow', 1, 'shadow.md', 'shadow', 6,
+            'policy-shadow-revision-1', 0, 'plugin-policy-set-1', 'active', 'human', 'alice', NULL, 1, 1, NULL);
+  `);
 }
 
 function recordExposure(params: {
@@ -89,7 +154,7 @@ function recordExposure(params: {
   subjectRevision?: string;
   sessionIdentityRevision?: string;
 }) {
-  return recordMemoryRunExposure({
+  return prepareMemoryRunExposure({
     agentId: AGENT_ID,
     sessionId: SESSION_ID,
     sessionKey: SESSION_KEY,
@@ -106,6 +171,16 @@ function recordExposure(params: {
     egressRegistryRevision: "egress-registry-revision-1",
     sessionIdentityRevision: params.sessionIdentityRevision ?? SESSION_IDENTITY_REVISION,
     subjectRevision: params.subjectRevision ?? SUBJECT_REVISION,
+    actorEvidence: {
+      version: 1,
+      kind: "principal",
+      actorKind: "human",
+      principalId: "alice",
+      assurance: "gateway-profile",
+      evidenceRevision: "actor-revision-1",
+    },
+    delegationSnapshot: { version: 1, kind: "none" },
+    hostFactsRevision: "host-facts-1",
   });
 }
 
@@ -139,6 +214,53 @@ async function appendWithRun(params: { env: NodeJS.ProcessEnv; runId: string; te
   );
 }
 
+function copyPendingTranscriptForTransition(params: {
+  database: OpenClawAgentDatabase;
+  sourceSessionId?: string;
+  subjectRevision?: string;
+  targetSessionId: string;
+}): void {
+  const sourceSessionId = params.sourceSessionId ?? SESSION_ID;
+  const targetSessionKey = `${SESSION_KEY}:transition:${params.targetSessionId}`;
+  const subjectRevision = params.subjectRevision ?? SUBJECT_REVISION;
+  params.database.db
+    .prepare(
+      `INSERT INTO session_memory_subjects
+        (session_key, subject_kind, binding_id, principal_id, subject_revision, created_at)
+       VALUES (?, 'user', 'binding-transition', 'alice', ?, 1)`,
+    )
+    .run(targetSessionKey, subjectRevision);
+  writeSessionEntry(params.database, targetSessionKey, {
+    sessionId: params.targetSessionId,
+    updatedAt: 1,
+  });
+  const sourceRows = params.database.db
+    .prepare(
+      `SELECT created_at, event_json, seq
+         FROM transcript_events
+        WHERE session_id = ?
+        ORDER BY seq ASC`,
+    )
+    .all(sourceSessionId) as Array<{ created_at: number; event_json: string; seq: number }>;
+  for (const row of sourceRows) {
+    params.database.db
+      .prepare(
+        `INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(params.targetSessionId, row.seq, row.event_json, row.created_at);
+    params.database.db
+      .prepare(
+        `INSERT INTO transcript_event_memory_policies
+          (session_id, event_seq, authorization_status, source_policy_set_id, run_exposure_set_id,
+           run_exposure_revision, delivery_audiences_json, session_identity_revision,
+           subject_revision, run_id, context_fingerprint, created_at)
+         VALUES (?, ?, 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)`,
+      )
+      .run(params.targetSessionId, row.seq, row.created_at);
+  }
+}
+
 afterEach(() => {
   clearMemoryRunExposureForTest();
   resetMemoryIsolationCutoverForTest();
@@ -170,6 +292,7 @@ describe("transcript memory policy companions", () => {
 
     writeSession(alice);
     const database = openOpenClawAgentDatabase(options);
+    seedTranscriptPolicyFixture(database);
     const aliceContext = createCurrentMemorySessionContext({ ...alice, options });
     expect(aliceContext.kind).toBe("current");
     if (aliceContext.kind !== "current") {
@@ -205,7 +328,7 @@ describe("transcript memory policy companions", () => {
       }).hits,
     ).toEqual([]);
 
-    const shadowExposure = recordMemoryRunExposure({
+    const shadowExposure = prepareMemoryRunExposure({
       agentId: AGENT_ID,
       sessionId: alice.sessionId,
       sessionKey: alice.sessionKey,
@@ -222,6 +345,16 @@ describe("transcript memory policy companions", () => {
       egressRegistryRevision: "egress-registry-revision-1",
       sessionIdentityRevision: aliceContext.context.sessionIdentityRevision,
       subjectRevision: aliceContext.context.subjectRevision,
+      actorEvidence: {
+        version: 1,
+        kind: "principal",
+        actorKind: "human",
+        principalId: aliceContext.context.principalId,
+        assurance: "gateway-profile",
+        evidenceRevision: "shadow-actor-revision-1",
+      },
+      delegationSnapshot: { version: 1, kind: "none" },
+      hostFactsRevision: "shadow-host-facts-1",
     });
     expect(
       persistMemoryRunExposureBeforeContentInDatabase({ database, snapshot: shadowExposure }),
@@ -295,6 +428,13 @@ describe("transcript memory policy companions", () => {
     persistExposure(database, { runId: "stale-run", subjectRevision: "stale-subject-revision" });
     await appendWithRun({ env, runId: "stale-run", text: "stale exposure content" });
     const authorizedExposure = persistExposure(database, { runId: "authorized-run" });
+    expect(
+      readDurableMemoryRunExposure({
+        database,
+        sessionId: SESSION_ID,
+        runId: "authorized-run",
+      }),
+    ).toMatchObject({ exposureSetId: authorizedExposure.exposureSetId });
     await appendWithRun({ env, runId: "authorized-run", text: "authorized exposure content" });
 
     const policyRows = database.db
@@ -416,8 +556,8 @@ describe("transcript memory policy companions", () => {
     const database = markCutOver(env);
     persistExposure(database, { runId: "authorized-run" });
     database.db.exec(/* sqlite-allow-raw: test-only atomicity fault injection. */ `
-      CREATE TRIGGER reject_transcript_memory_policy_for_test
-      BEFORE INSERT ON transcript_event_memory_policies
+      CREATE TRIGGER reject_transcript_memory_policy_detail_for_test
+      BEFORE INSERT ON transcript_event_memory_policy_details
       BEGIN
         SELECT RAISE(ABORT, 'test companion persistence failure');
       END;
@@ -430,8 +570,11 @@ describe("transcript memory policy companions", () => {
     for (const table of [
       "transcript_events",
       "transcript_event_memory_policies",
+      "transcript_event_memory_policy_details",
       "memory_policy_sets",
+      "memory_policy_set_members",
       "memory_run_exposures",
+      "memory_run_exposure_resources",
     ]) {
       expect(database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
         count: 0,
@@ -441,6 +584,11 @@ describe("transcript memory policy companions", () => {
     // transcript transaction; a later companion rollback must not erase its audit fact.
     expect(
       database.db.prepare("SELECT COUNT(*) AS count FROM memory_preoutput_exposure_ledger").get(),
+    ).toEqual({ count: 1 });
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM memory_preoutput_exposure_authorization_facts")
+        .get(),
     ).toEqual({ count: 1 });
   });
 
@@ -583,7 +731,317 @@ describe("transcript memory policy companions", () => {
       sessionId: SESSION_ID,
     });
     expect(plan).not.toBeNull();
-    const materialized = await materializeSqliteSessionStateDeletePlans([plan!]);
-    expect(materialized[0]?.archivedTranscript).toBeNull();
+    const sourceEventCount = database.db
+      .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
+      .get(SESSION_ID);
+    await expect(materializeSqliteSessionStateDeletePlans([plan!])).rejects.toThrow(
+      `Unauthorized transcript policy archive event for ${SESSION_ID}`,
+    );
+    // Archive failure preserves the raw source rather than leaking it or deleting it.
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
+        .get(SESSION_ID),
+    ).toEqual(sourceEventCount);
+  });
+
+  it("records complete policy evidence for every readable transcript event class", async () => {
+    const env = createEnv();
+    const database = markCutOver(env);
+    persistExposure(database, { runId: "event-classes-run" });
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          agentId: AGENT_ID,
+          expectedWriterRunId: "event-classes-run",
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+        },
+        withTranscriptWrite: async (run) => await run(),
+      },
+      async () => {
+        await appendSqliteTranscriptMessage(scope(env), {
+          message: { role: "user", content: [{ type: "text", text: "user event" }] },
+        });
+        await appendSqliteTranscriptMessage(scope(env), {
+          message: { role: "assistant", content: [{ type: "text", text: "assistant event" }] },
+        });
+        for (const type of ["tool-result", "summary", "checkpoint", "system"] as const) {
+          await appendSqliteTranscriptEvent(scope(env), { type, value: `${type} event` });
+        }
+      },
+    );
+
+    const companions = database.db
+      .prepare(
+        `SELECT policy.authorization_status, detail.actor_evidence_json, detail.delegation_snapshot_json,
+                detail.exposed_resource_revisions_json, detail.normalized_audience_intersection_json,
+                detail.finalized_delivery_audiences_json, detail.source_session_id, detail.source_event_seq
+           FROM transcript_event_memory_policies AS policy
+           JOIN transcript_event_memory_policy_details AS detail
+             ON detail.session_id = policy.session_id AND detail.event_seq = policy.event_seq
+          WHERE policy.session_id = ?
+          ORDER BY policy.event_seq`,
+      )
+      .all(SESSION_ID) as Array<{
+      actor_evidence_json: string;
+      authorization_status: string;
+      delegation_snapshot_json: string;
+      exposed_resource_revisions_json: string;
+      finalized_delivery_audiences_json: string;
+      normalized_audience_intersection_json: string;
+      source_event_seq: number;
+      source_session_id: string;
+    }>;
+    // Header plus six requested classes all carry one atomic, evaluable row.
+    expect(companions).toHaveLength(7);
+    expect(companions.every((companion) => companion.authorization_status === "authorized")).toBe(
+      true,
+    );
+    for (const companion of companions) {
+      expect(JSON.parse(companion.actor_evidence_json)).toMatchObject({ principalId: "alice" });
+      expect(JSON.parse(companion.delegation_snapshot_json)).toMatchObject({ kind: "none" });
+      expect(JSON.parse(companion.exposed_resource_revisions_json)).toEqual([
+        "resource-revision-1",
+      ]);
+      expect(companion.normalized_audience_intersection_json).toBe(
+        companion.finalized_delivery_audiences_json,
+      );
+      expect(companion.source_session_id).toBe(SESSION_ID);
+      expect(companion.source_event_seq).toBeGreaterThanOrEqual(0);
+    }
+    expect(readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID)?.size).toBe(7);
+  });
+
+  it("uses the captured trusted actor and token-free delegation rather than reconstructing session facts", async () => {
+    const env = createEnv();
+    const database = markCutOver(env);
+    const captured = recordExposure({ runId: "delegated-run" });
+    const exposure = {
+      ...captured,
+      actorEvidence: {
+        version: 1,
+        kind: "principal",
+        actorKind: "agent",
+        principalId: "support-agent",
+        assurance: "service",
+        evidenceRevision: "actor-evidence-42",
+      },
+      delegationSnapshot: {
+        version: 1,
+        kind: "delegated",
+        rootPrincipalId: "alice",
+        rootContextId: "root-context-42",
+        parentContextId: "parent-context-42",
+        parentMemoryPlanId: "parent-plan-42",
+        capabilitySnapshotId: "capability-42",
+        allowedOperations: ["derive", "read"],
+        maximumAudiences: [
+          { kind: "role", id: "writer" },
+          { kind: "user", id: "alice" },
+        ],
+        depth: 1,
+      },
+      hostFactsRevision: "host-facts-42",
+    } as typeof captured;
+    expect(persistMemoryRunExposureBeforeContentInDatabase({ database, snapshot: exposure })).toBe(
+      true,
+    );
+
+    await appendWithRun({ env, runId: "delegated-run", text: "delegated durable evidence" });
+
+    const row = database.db
+      .prepare(
+        `SELECT actor_evidence_json, delegation_snapshot_json
+           FROM transcript_event_memory_policy_details
+          WHERE session_id = ?
+          ORDER BY event_seq DESC
+          LIMIT 1`,
+      )
+      .get(SESSION_ID) as { actor_evidence_json: string; delegation_snapshot_json: string };
+    expect(JSON.parse(row.actor_evidence_json)).toEqual(exposure.actorEvidence);
+    expect(JSON.parse(row.delegation_snapshot_json)).toEqual(exposure.delegationSnapshot);
+    expect(JSON.stringify(row)).not.toContain("binding-alice");
+    expect(JSON.stringify(row)).not.toContain("storeCapToken");
+  });
+
+  it("withdraws replay eligibility when the captured stable policy revision or epoch changes", async () => {
+    const env = createEnv();
+    const database = markCutOver(env);
+    persistExposure(database, { runId: "policy-revision-run" });
+    await appendWithRun({ env, runId: "policy-revision-run", text: "revision-bound secret" });
+    expect(readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID)?.size).toBeGreaterThan(0);
+
+    database.db.exec(/* sqlite-allow-raw: test mutates the active policy owner after capture. */ `
+      UPDATE memory_policy_revisions
+         SET lifecycle_state = 'superseded'
+       WHERE revision_id = 'policy-revision-1';
+      INSERT INTO memory_policy_revisions
+        (revision_id, policy_id, revision_number, revocation_epoch, lifecycle_state,
+         actor_kind, actor_id, reason, created_at)
+      VALUES ('policy-revision-2', 'policy-1', 2, 1, 'active', 'human', 'alice', 'revoked', 2);
+      UPDATE memory_policies
+         SET current_revision_id = 'policy-revision-2', revocation_epoch = 1, updated_at = 2
+       WHERE policy_id = 'policy-1';
+    `);
+
+    expect(readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID)).toEqual(new Set());
+    expect(loadSqliteTranscriptEventsSync(scope(env))).toEqual([]);
+    expect(
+      searchSessionTranscripts({ agentId: AGENT_ID, env, query: "revision-bound secret" }).hits,
+    ).toEqual([]);
+  });
+
+  it("withdraws dependent events when an exposed resource expires", async () => {
+    const env = createEnv();
+    const database = markCutOver(env);
+    persistExposure(database, { runId: "resource-expiry-run" });
+    await appendWithRun({ env, runId: "resource-expiry-run", text: "resource-bound secret" });
+    expect(readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID)?.size).toBeGreaterThan(0);
+
+    database.db.exec(/* sqlite-allow-raw: test advances an immutable lease past expiry. */ `
+      DROP TRIGGER memory_resource_revisions_immutable_fields;
+      UPDATE memory_resource_revisions
+         SET expires_at = ${Date.now() - 1}
+       WHERE revision_id = 'resource-revision-1';
+    `);
+
+    expect(readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID)).toEqual(new Set());
+    expect(loadSqliteTranscriptEventsSync(scope(env))).toEqual([]);
+  });
+
+  it("preserves only exact same-session replacement lineage and leaves new rows pending", async () => {
+    const env = createEnv();
+    const database = markCutOver(env);
+    persistExposure(database, { runId: "replace-lineage-run" });
+    await appendWithRun({ env, runId: "replace-lineage-run", text: "retained source" });
+
+    const original = loadSqliteTranscriptEventsSync(scope(env));
+    const retainedMessage = original.find(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "message" in event &&
+        (event as { message?: { content?: Array<{ text?: string }> } }).message?.content?.[0]
+          ?.text === "retained source",
+    );
+    expect(retainedMessage).toBeDefined();
+    await replaceSqliteTranscriptEvents(scope(env), [retainedMessage!]);
+
+    expect(readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID)).toEqual(new Set([0]));
+    expect(
+      database.db
+        .prepare(
+          `SELECT source_event_seq
+             FROM transcript_event_memory_policy_details
+            WHERE session_id = ? AND event_seq = 0`,
+        )
+        .get(SESSION_ID),
+    ).toEqual({ source_event_seq: 1 });
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          agentId: AGENT_ID,
+          expectedWriterRunId: "replace-lineage-run",
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+        },
+        withTranscriptWrite: async (run) => await run(),
+      },
+      async () => {
+        await replaceSqliteTranscriptEvents(scope(env), [
+          {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "new derived content" }],
+            },
+          },
+        ]);
+      },
+    );
+    expect(readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID)).toEqual(new Set());
+    expect(
+      database.db
+        .prepare(
+          `SELECT authorization_status
+             FROM transcript_event_memory_policies
+            WHERE session_id = ? AND event_seq = 0`,
+        )
+        .get(SESSION_ID),
+    ).toEqual({ authorization_status: "pending" });
+  });
+
+  it("preserves a cross-session transition only with matching immutable subject provenance", async () => {
+    const env = createEnv();
+    const database = markCutOver(env);
+    persistExposure(database, { runId: "transition-run" });
+    await appendWithRun({ env, runId: "transition-run", text: "transition source" });
+    const sourceSeqs = readAuthorizedTranscriptEventSeqs(database.db, SESSION_ID);
+    expect(sourceSeqs?.size).toBeGreaterThan(0);
+
+    const targetSessionId = "transition-target";
+    copyPendingTranscriptForTransition({
+      database,
+      targetSessionId,
+    });
+    expect(
+      preserveTranscriptMemoryPolicyTransitionInTransaction({
+        database,
+        sourceSessionId: SESSION_ID,
+        targetSessionId,
+        transitionKind: "fork",
+      }),
+    ).toBe(sourceSeqs?.size);
+    expect(readAuthorizedTranscriptEventSeqs(database.db, targetSessionId)).toEqual(sourceSeqs);
+    expect(
+      database.db
+        .prepare(
+          `SELECT source_session_id, source_event_seq, transition_kind
+             FROM transcript_event_memory_policy_transitions
+            WHERE session_id = ?
+            ORDER BY event_seq ASC`,
+        )
+        .all(targetSessionId),
+    ).toEqual(
+      [...(sourceSeqs ?? [])].map((sourceEventSeq) => ({
+        source_session_id: SESSION_ID,
+        source_event_seq: sourceEventSeq,
+        transition_kind: "fork",
+      })),
+    );
+  });
+
+  it("leaves a cross-session copy pending when its target subject differs", async () => {
+    const env = createEnv();
+    const database = markCutOver(env);
+    persistExposure(database, { runId: "transition-mismatch-run" });
+    await appendWithRun({ env, runId: "transition-mismatch-run", text: "isolated source" });
+
+    const targetSessionId = "transition-mismatched-subject";
+    copyPendingTranscriptForTransition({
+      database,
+      subjectRevision: "different-subject-revision",
+      targetSessionId,
+    });
+    expect(
+      preserveTranscriptMemoryPolicyTransitionInTransaction({
+        database,
+        sourceSessionId: SESSION_ID,
+        targetSessionId,
+        transitionKind: "parent-fork",
+      }),
+    ).toBe(0);
+    expect(readAuthorizedTranscriptEventSeqs(database.db, targetSessionId)).toEqual(new Set());
+    expect(
+      database.db
+        .prepare(
+          `SELECT COUNT(*) AS count
+             FROM transcript_event_memory_policy_transitions
+            WHERE session_id = ?`,
+        )
+        .get(targetSessionId),
+    ).toEqual({ count: 0 });
   });
 });

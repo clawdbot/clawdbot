@@ -6,7 +6,10 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
-import { isTranscriptMemoryPolicyEnforcedInDatabase } from "./session-transcript-memory-policy.js";
+import {
+  isTranscriptMemoryPolicyEnforcedInDatabase,
+  readAuthorizedTranscriptEventSeqs,
+} from "./session-transcript-memory-policy.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   startSessionTranscriptIndexReconcile,
@@ -112,7 +115,7 @@ export function searchSessionTranscripts(params: {
   // rebuilds them (indexing=true tells the caller to retry).
   const statement = database.db.prepare(/* sqlite-allow-raw: FTS5 MATCH/snippet/bm25 */ `
     SELECT session_windows.session_key AS session_key, session_transcript_fts.session_id AS session_id,
-      message_id, role, timestamp,
+      message_id, role, timestamp, identity.seq AS event_seq,
       snippet(session_transcript_fts, 0, '', '', ' … ', 48) AS snippet,
       bm25(session_transcript_fts) AS rank
     FROM session_transcript_fts
@@ -129,6 +132,7 @@ export function searchSessionTranscripts(params: {
   `);
   const values = [toFtsQuery(query), ...sessionKeys, limit + 1];
   const rows = statement.all(...values) as Array<{
+    event_seq: unknown;
     message_id: unknown;
     rank: unknown;
     role: unknown;
@@ -137,15 +141,27 @@ export function searchSessionTranscripts(params: {
     snippet: unknown;
     timestamp: unknown;
   }>;
+  const authorizedEventSeqsBySession = new Map<string, Set<number> | undefined>();
   const hits = rows.flatMap((row): SessionTranscriptSearchHit[] => {
     if (
       typeof row.session_key !== "string" ||
       typeof row.session_id !== "string" ||
       typeof row.message_id !== "string" ||
+      typeof row.event_seq !== "number" ||
       (row.role !== "user" && row.role !== "assistant") ||
       typeof row.snippet !== "string"
     ) {
       return [];
+    }
+    if (isTranscriptMemoryPolicyEnforcedInDatabase(database.db)) {
+      let authorized = authorizedEventSeqsBySession.get(row.session_id);
+      if (authorized === undefined && !authorizedEventSeqsBySession.has(row.session_id)) {
+        authorized = readAuthorizedTranscriptEventSeqs(database.db, row.session_id);
+        authorizedEventSeqsBySession.set(row.session_id, authorized);
+      }
+      if (!authorized?.has(row.event_seq)) {
+        return [];
+      }
     }
     const timestamp = typeof row.timestamp === "number" ? row.timestamp : Number(row.timestamp);
     const rank = typeof row.rank === "number" ? row.rank : Number(row.rank);

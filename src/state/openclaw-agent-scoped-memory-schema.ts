@@ -17,9 +17,15 @@ export const AGENT_SCOPED_MEMORY_TABLES = [
   "memory_audit_outbox",
   "memory_migrations",
   "memory_policy_sets",
+  "memory_policy_set_members",
   "memory_run_exposures",
+  "memory_run_exposure_resources",
   "memory_preoutput_exposure_ledger",
+  "memory_preoutput_exposure_authorization_facts",
   "transcript_event_memory_policies",
+  "transcript_event_memory_policy_details",
+  "transcript_event_memory_policy_transitions",
+  "memory_compaction_policies",
 ] as const;
 
 export const AGENT_SCOPED_MEMORY_FTS_TABLE = "memory_scoped_chunks_fts";

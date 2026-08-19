@@ -1,5 +1,48 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { AudienceRef } from "../memory-host-sdk/host/authorization.js";
+import {
+  MEMORY_OPERATIONS,
+  type AudienceRef,
+  type MemoryAccessContext,
+  type MemoryActorEvidence,
+  type MemoryOperation,
+} from "../memory-host-sdk/host/authorization.js";
+
+/** Immutable, serializable actor facts captured from the trusted access context. */
+export type DurableMemoryActorEvidence =
+  | Readonly<{
+      version: 1;
+      kind: "principal";
+      actorKind: "human" | "agent" | "service" | "system";
+      principalId: string;
+      assurance: "gateway-profile" | "adapter-attested" | "oidc" | "service";
+      evidenceRevision: string;
+      expiresAt?: string;
+    }>
+  | Readonly<{
+      version: 1;
+      kind: "unattributed";
+      transportAuditRef: string;
+      evidenceRevision: string;
+    }>;
+
+/**
+ * Delegation facts needed for an audit trail. The bearer token is intentionally
+ * absent: durable transcript lineage proves authority without becoming authority.
+ */
+export type DurableMemoryDelegationSnapshot =
+  | Readonly<{ version: 1; kind: "none" }>
+  | Readonly<{
+      version: 1;
+      kind: "delegated";
+      rootPrincipalId: string;
+      rootContextId: string;
+      parentContextId: string;
+      parentMemoryPlanId: string;
+      capabilitySnapshotId: string;
+      allowedOperations: readonly MemoryOperation[];
+      maximumAudiences: readonly AudienceRef[];
+      depth: number;
+    }>;
 
 export type MemoryRunExposureSnapshot = Readonly<{
   exposureSetId: string;
@@ -22,6 +65,9 @@ export type MemoryRunExposureSnapshot = Readonly<{
   egressRegistryRevision: string;
   sessionIdentityRevision: string;
   subjectRevision: string;
+  actorEvidence: DurableMemoryActorEvidence;
+  delegationSnapshot: DurableMemoryDelegationSnapshot;
+  hostFactsRevision: string;
   createdAt: number;
 }>;
 
@@ -64,6 +110,95 @@ function sortedAudiences(audiences: readonly AudienceRef[]): readonly AudienceRe
       )
       .map((audience) => Object.freeze({ ...audience })),
   );
+}
+
+function requireText(value: string, label: string): string {
+  if (!value.trim()) {
+    throw new TypeError(`${label} must be non-empty`);
+  }
+  return value;
+}
+
+function canonicalIsoDate(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const time = Date.parse(value);
+  if (!Number.isFinite(time) || new Date(time).toISOString() !== value) {
+    throw new TypeError("actor.expiresAt must be a canonical ISO date");
+  }
+  return value;
+}
+
+function captureActorEvidence(actor: MemoryActorEvidence): DurableMemoryActorEvidence {
+  if (actor.kind === "principal") {
+    const expiresAt = canonicalIsoDate(actor.expiresAt);
+    return Object.freeze({
+      version: 1,
+      kind: "principal",
+      actorKind: actor.actorKind,
+      principalId: requireText(actor.principalId, "actor.principalId"),
+      assurance: actor.assurance,
+      evidenceRevision: requireText(actor.evidenceRevision, "actor.evidenceRevision"),
+      ...(expiresAt ? { expiresAt } : {}),
+    });
+  }
+  return Object.freeze({
+    version: 1,
+    kind: "unattributed",
+    transportAuditRef: requireText(actor.transportAuditRef, "actor.transportAuditRef"),
+    evidenceRevision: requireText(actor.evidenceRevision, "actor.evidenceRevision"),
+  });
+}
+
+function captureDelegation(
+  delegation: MemoryAccessContext["delegation"],
+): DurableMemoryDelegationSnapshot {
+  if (!delegation) {
+    return Object.freeze({ version: 1, kind: "none" });
+  }
+  const allowedOperations = Object.freeze([...new Set(delegation.allowedOperations)].toSorted());
+  if (
+    allowedOperations.length !== delegation.allowedOperations.length ||
+    allowedOperations.some((operation) => !MEMORY_OPERATIONS.includes(operation))
+  ) {
+    throw new TypeError("delegation.allowedOperations must be canonical");
+  }
+  const maximumAudiences = sortedAudiences(delegation.maximumAudiences);
+  if (maximumAudiences.length !== delegation.maximumAudiences.length) {
+    throw new TypeError("delegation.maximumAudiences must be canonical");
+  }
+  if (!Number.isSafeInteger(delegation.depth) || delegation.depth < 0) {
+    throw new TypeError("delegation.depth must be a nonnegative integer");
+  }
+  return Object.freeze({
+    version: 1,
+    kind: "delegated",
+    rootPrincipalId: requireText(delegation.rootPrincipalId, "delegation.rootPrincipalId"),
+    rootContextId: requireText(delegation.rootContextId, "delegation.rootContextId"),
+    parentContextId: requireText(delegation.parentContextId, "delegation.parentContextId"),
+    parentMemoryPlanId: requireText(delegation.parentMemoryPlanId, "delegation.parentMemoryPlanId"),
+    capabilitySnapshotId: requireText(
+      delegation.capabilitySnapshotId,
+      "delegation.capabilitySnapshotId",
+    ),
+    allowedOperations,
+    maximumAudiences,
+    depth: delegation.depth,
+  });
+}
+
+/** Captures only the durable audit subset of a trusted access context. */
+export function captureDurableMemoryAuthorizationFacts(context: MemoryAccessContext): Readonly<{
+  actorEvidence: DurableMemoryActorEvidence;
+  delegationSnapshot: DurableMemoryDelegationSnapshot;
+  hostFactsRevision: string;
+}> {
+  return Object.freeze({
+    actorEvidence: captureActorEvidence(context.actor),
+    delegationSnapshot: captureDelegation(context.delegation),
+    hostFactsRevision: requireText(context.hostFactsRevision, "hostFactsRevision"),
+  });
 }
 
 /** Prepares an immutable run-exposure revision without publishing it to process state. */

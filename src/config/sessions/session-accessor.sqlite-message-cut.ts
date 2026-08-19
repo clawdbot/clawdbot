@@ -39,6 +39,7 @@ import type {
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { preserveTranscriptMemoryPolicyTransitionInTransaction } from "./session-transcript-memory-policy.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -326,13 +327,6 @@ function mutateSqliteSessionAtMessageInTransaction(
             targetId: params.mode === "switch" ? params.entryId : (cut?.parentId ?? null),
           },
         ];
-  appendTranscriptEventsInTransaction(database, targetScope, nextEvents);
-  if (params.mode !== "fork") {
-    reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
-  }
-
-  // Rotating transcript identity fences stale live managers: later snapshot-replace writes
-  // target the old session and cannot erase this leaf repoint from the active session.
   const nextEntry = {
     ...cloneMessageCutSessionEntry({
       currentEntry,
@@ -351,7 +345,23 @@ function mutateSqliteSessionAtMessageInTransaction(
       ? buildSessionCreationStamp(params.creation)
       : {}),
   };
+  // The new identity snapshot must exist before copied events can receive
+  // transition provenance. If the write fails, the enclosing transaction leaves
+  // the old session untouched rather than treating raw replay as authorized.
   writeSessionEntry(database, params.targetKey, nextEntry);
+  appendTranscriptEventsInTransaction(database, targetScope, nextEvents);
+  preserveTranscriptMemoryPolicyTransitionInTransaction({
+    database,
+    sourceSessionId: currentEntry.sessionId,
+    targetSessionId: nextSessionId,
+    transitionKind: params.mode,
+  });
+  if (params.mode !== "fork") {
+    reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
+  }
+
+  // Rotating transcript identity fences stale live managers: later snapshot-replace writes
+  // target the old session and cannot erase this leaf repoint from the active session.
   return {
     status: "created",
     key: params.targetKey,

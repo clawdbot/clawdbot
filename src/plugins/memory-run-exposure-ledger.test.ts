@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ensureMemoryPreoutputExposureLedgerSchemaInTransaction } from "../state/openclaw-agent-db-schema-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   database: undefined as
@@ -39,6 +40,7 @@ let database: DatabaseSync | undefined;
 
 beforeEach(() => {
   database = new DatabaseSync(":memory:");
+  ensureMemoryPreoutputExposureLedgerSchemaInTransaction(database);
   mocks.database = {
     agentId: "main",
     db: database,
@@ -72,6 +74,16 @@ function prepare(sessionId: string) {
     egressRegistryRevision: "egress-1",
     sessionIdentityRevision: "identity-1",
     subjectRevision: "subject-1",
+    actorEvidence: {
+      version: 1,
+      kind: "principal",
+      actorKind: "human",
+      principalId: "alice",
+      assurance: "gateway-profile",
+      evidenceRevision: "actor-revision-1",
+    },
+    delegationSnapshot: { version: 1, kind: "none" },
+    hostFactsRevision: "host-facts-1",
   });
 }
 
@@ -135,6 +147,116 @@ describe("memory pre-output exposure ledger", () => {
         exposed_resource_revisions_json: '["revision-1"]',
       },
     ]);
+  });
+
+  it("persists token-free delegated facts and rehydrates them after restart", () => {
+    const base = prepare("session-a");
+    const snapshot = {
+      ...base,
+      delegationSnapshot: {
+        version: 1,
+        kind: "delegated",
+        rootPrincipalId: "alice",
+        rootContextId: "root-context",
+        parentContextId: "parent-context",
+        parentMemoryPlanId: "parent-plan",
+        capabilitySnapshotId: "capability-snapshot",
+        allowedOperations: ["derive", "read"],
+        maximumAudiences: [
+          { kind: "user", id: "alice" },
+          { kind: "role", id: "writer" },
+        ],
+        depth: 1,
+      },
+    } as typeof base;
+    expect(persistMemoryRunExposureBeforeContent(snapshot)).toBe(true);
+    const canonicalDelegation = {
+      ...snapshot.delegationSnapshot,
+      maximumAudiences: [
+        { kind: "role", id: "writer" },
+        { kind: "user", id: "alice" },
+      ],
+    };
+
+    const persisted = database
+      ?.prepare(
+        `SELECT actor_evidence_json, delegation_snapshot_json, host_facts_revision
+           FROM memory_preoutput_exposure_authorization_facts
+          WHERE exposure_set_id = ?`,
+      )
+      .get(snapshot.exposureSetId) as {
+      actor_evidence_json: string;
+      delegation_snapshot_json: string;
+      host_facts_revision: string;
+    };
+    expect(JSON.parse(persisted.actor_evidence_json)).toEqual(snapshot.actorEvidence);
+    expect(JSON.parse(persisted.delegation_snapshot_json)).toEqual(canonicalDelegation);
+    expect(persisted.host_facts_revision).toBe("host-facts-1");
+    expect(JSON.stringify(persisted)).not.toContain("storeCapToken");
+
+    clearMemoryRunExposureForTest();
+    expect(
+      readDurableMemoryRunExposure({
+        database: mocks.database as never,
+        sessionId: "session-a",
+        runId: "shared-run-id",
+      }),
+    ).toMatchObject({
+      delegationSnapshot: canonicalDelegation,
+      actorEvidence: snapshot.actorEvidence,
+      hostFactsRevision: "host-facts-1",
+    });
+  });
+
+  it("fails closed rather than accepting missing, token-bearing, or partial authorization facts", () => {
+    const base = prepare("session-a");
+    const tokenBearing = {
+      ...base,
+      delegationSnapshot: {
+        version: 1,
+        kind: "none",
+        storeCapToken: "must-never-persist",
+      } as never,
+    };
+    expect(persistMemoryRunExposureBeforeContent(tokenBearing)).toBe(false);
+    expect(
+      database?.prepare("SELECT count(*) AS count FROM memory_preoutput_exposure_ledger").get(),
+    ).toEqual({ count: 0 });
+
+    const snapshot = prepare("session-a");
+    expect(persistMemoryRunExposureBeforeContent(snapshot)).toBe(true);
+    database?.exec(/* sqlite-allow-raw: test corrupts immutable proof to assert fail-closed read. */ `
+      DROP TRIGGER memory_preoutput_exposure_authorization_facts_no_delete;
+      DELETE FROM memory_preoutput_exposure_authorization_facts
+       WHERE exposure_set_id = '${snapshot.exposureSetId}';
+    `);
+    expect(
+      readLatestDurableMemoryRunExposure({
+        agentId: "main",
+        sessionId: "session-a",
+        runId: "shared-run-id",
+      }),
+    ).toEqual({ kind: "unavailable" });
+  });
+
+  it("rolls back both ledger rows when durable authorization-fact persistence fails", () => {
+    database?.exec(/* sqlite-allow-raw: test-only atomicity fault injection. */ `
+      CREATE TRIGGER reject_exposure_authorization_facts_for_test
+      BEFORE INSERT ON memory_preoutput_exposure_authorization_facts
+      BEGIN
+        SELECT RAISE(ABORT, 'test authorization facts failure');
+      END;
+    `);
+
+    expect(persistMemoryRunExposureBeforeContent(prepare("session-a"))).toBe(false);
+    for (const table of [
+      "memory_preoutput_exposure_ledger",
+      "memory_preoutput_exposure_authorization_facts",
+    ]) {
+      expect(database?.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
+        count: 0,
+      });
+    }
   });
 
   it("fails closed on a duplicate revision without adding a partial row", () => {

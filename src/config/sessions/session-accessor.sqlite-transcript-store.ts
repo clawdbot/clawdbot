@@ -34,7 +34,11 @@ import {
   indexAppendedTranscriptEventInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
-import { recordTranscriptMemoryPolicyInTransaction } from "./session-transcript-memory-policy.js";
+import {
+  readPreservedTranscriptMemoryPoliciesInTransaction,
+  recordTranscriptMemoryPolicyInTransaction,
+  type PreservedTranscriptMemoryPolicy,
+} from "./session-transcript-memory-policy.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { resolveVisibleTranscriptAppendParentId } from "./transcript-visible-events.js";
@@ -191,6 +195,8 @@ function appendTranscriptEventRowInTransaction(
   seq: number,
   state: { seenEventIds: Set<string>; seenMessageIdempotencyKeys: Set<string> },
   createdAtOverride?: number,
+  inheritedMemoryPolicy?: PreservedTranscriptMemoryPolicy,
+  replacementMemoryPolicy?: boolean,
 ): boolean {
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
   const db = getSessionKysely(database.db);
@@ -214,6 +220,8 @@ function appendTranscriptEventRowInTransaction(
     sessionKey: scope.sessionKey,
     eventSeq: seq,
     createdAt,
+    ...(inheritedMemoryPolicy ? { inherited: inheritedMemoryPolicy } : {}),
+    ...(replacementMemoryPolicy ? { replacement: true } : {}),
   });
   indexAppendedTranscriptEventInTransaction(database.db, {
     sessionId: scope.sessionId,
@@ -300,6 +308,10 @@ export function replaceSqliteTranscriptEventsInTransaction(
       ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
       : undefined;
   const previousGeneration = readTranscriptGenerationInTransaction(database, resolved.sessionId);
+  const preservedPolicies = readPreservedTranscriptMemoryPoliciesInTransaction(
+    database,
+    resolved.sessionId,
+  );
   const deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
   if (events.length === 0) {
     if (deleted || previousGeneration) {
@@ -324,6 +336,12 @@ export function replaceSqliteTranscriptEventsInTransaction(
   const seenEventIds = new Set<string>();
   const seenMessageIdempotencyKeys = new Set<string>();
   for (const [eventIndex, event] of events.entries()) {
+    const persistedEvent = canonicalizeTranscriptEventMedia(event);
+    const preservedForEvent = preservedPolicies.get(JSON.stringify(persistedEvent));
+    // Consume one matching source row per replacement row. Duplicate event
+    // payloads are distinguishable only by their durable source queue; a new
+    // duplicate has no queue entry and is intentionally pending.
+    const inheritedMemoryPolicy = preservedForEvent?.shift();
     if (
       appendTranscriptEventRowInTransaction(
         database,
@@ -335,6 +353,8 @@ export function replaceSqliteTranscriptEventsInTransaction(
           seenMessageIdempotencyKeys,
         },
         options.createdAtByIndex?.[eventIndex],
+        inheritedMemoryPolicy,
+        true,
       )
     ) {
       seq += 1;

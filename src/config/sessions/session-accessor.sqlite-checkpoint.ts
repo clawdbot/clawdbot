@@ -26,6 +26,7 @@ import {
   appendTranscriptEventsInTransaction,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-transcript-store.js";
+import { preserveTranscriptMemoryPolicyTransitionInTransaction } from "./session-transcript-memory-policy.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
@@ -197,26 +198,32 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   if (!checkpoint) {
     return { status: "missing-checkpoint" };
   }
+  let nextEntry: SessionEntry | undefined;
   const forked = forkSqliteCheckpointTranscriptInTransaction(database, params.resolved, {
     checkpoint,
     legacySource: params.legacySource,
     targetSessionKey: params.targetKey,
+    beforeAppend: ({ sessionId, totalTokens }) => {
+      const label = currentEntry.label?.trim()
+        ? `${currentEntry.label.trim()} (checkpoint)`
+        : "Checkpoint branch";
+      nextEntry = cloneSqliteCheckpointSessionEntry({
+        currentEntry,
+        label,
+        nextSessionId: sessionId,
+        parentSessionKey: params.parentSessionKey,
+        totalTokens,
+      });
+      writeSessionEntry(database, params.targetKey, nextEntry);
+    },
   });
   if (forked.status !== "created") {
     return forked;
   }
 
-  const label = currentEntry.label?.trim()
-    ? `${currentEntry.label.trim()} (checkpoint)`
-    : "Checkpoint branch";
-  const nextEntry = cloneSqliteCheckpointSessionEntry({
-    currentEntry,
-    label,
-    nextSessionId: forked.sessionId,
-    parentSessionKey: params.parentSessionKey,
-    totalTokens: forked.totalTokens,
-  });
-  writeSessionEntry(database, params.targetKey, nextEntry);
+  if (!nextEntry) {
+    return { status: "failed" };
+  }
   return {
     status: "created",
     key: params.targetKey,
@@ -253,22 +260,28 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
   if (!checkpoint) {
     return { status: "missing-checkpoint" };
   }
+  let nextEntry: SessionEntry | undefined;
   const restored = forkSqliteCheckpointTranscriptInTransaction(database, params.resolved, {
     checkpoint,
     legacySource: params.legacySource,
     targetSessionKey: params.targetKey,
+    beforeAppend: ({ sessionId, totalTokens }) => {
+      nextEntry = cloneSqliteCheckpointSessionEntry({
+        currentEntry,
+        nextSessionId: sessionId,
+        preserveCompactionCheckpoints: true,
+        totalTokens,
+      });
+      writeSessionEntry(database, params.targetKey, nextEntry);
+    },
   });
   if (restored.status !== "created") {
     return restored;
   }
 
-  const nextEntry = cloneSqliteCheckpointSessionEntry({
-    currentEntry,
-    nextSessionId: restored.sessionId,
-    preserveCompactionCheckpoints: true,
-    totalTokens: restored.totalTokens,
-  });
-  writeSessionEntry(database, params.targetKey, nextEntry);
+  if (!nextEntry) {
+    return { status: "failed" };
+  }
   return {
     status: "created",
     key: params.targetKey,
@@ -282,6 +295,7 @@ function forkSqliteCheckpointTranscriptInTransaction(
   resolved: ResolvedSqliteScope,
   params: {
     checkpoint: SessionCompactionCheckpoint;
+    beforeAppend?: (transcript: { sessionId: string; totalTokens?: number }) => void;
     legacySource?: SqliteCompactionCheckpointLegacySource;
     targetSessionKey: string;
   },
@@ -331,6 +345,10 @@ function forkSqliteCheckpointTranscriptInTransaction(
   const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
   const selectedEvents = selected?.rows ?? legacySource?.events ?? [];
   const totalTokens = selected?.source.totalTokens ?? legacySource?.totalTokens;
+  params.beforeAppend?.({
+    sessionId,
+    ...(typeof totalTokens === "number" ? { totalTokens } : {}),
+  });
   appendTranscriptEventsInTransaction(database, targetScope, [
     createSessionTranscriptHeader({
       cwd: readTranscriptHeaderCwd(selectedEvents),
@@ -338,6 +356,14 @@ function forkSqliteCheckpointTranscriptInTransaction(
     }),
     ...selectedEvents.filter((event) => !isSessionTranscriptHeader(event)),
   ]);
+  if (selected) {
+    preserveTranscriptMemoryPolicyTransitionInTransaction({
+      database,
+      sourceSessionId: selected.source.sessionId,
+      targetSessionId: sessionId,
+      transitionKind: "checkpoint",
+    });
+  }
   return {
     status: "created",
     sessionId,

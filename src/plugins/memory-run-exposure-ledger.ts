@@ -1,4 +1,8 @@
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { logWarn } from "../logger.js";
 import type { AudienceRef } from "../memory-host-sdk/host/authorization.js";
@@ -10,6 +14,8 @@ import {
 import {
   createMemoryRunExposureScopeId,
   reconcileMemoryRunExposureWithDurableLedger,
+  type DurableMemoryActorEvidence,
+  type DurableMemoryDelegationSnapshot,
   type MemoryRunExposureSnapshot,
 } from "./memory-run-exposure.js";
 
@@ -34,6 +40,13 @@ type MemoryPreoutputExposureLedgerDatabase = {
     egress_registry_revision: string;
     session_identity_revision: string;
     subject_revision: string;
+    created_at: number;
+  };
+  memory_preoutput_exposure_authorization_facts: {
+    exposure_set_id: string;
+    actor_evidence_json: string;
+    delegation_snapshot_json: string;
+    host_facts_revision: string;
     created_at: number;
   };
 };
@@ -136,6 +149,160 @@ function parseCanonicalAudiences(value: string): readonly AudienceRef[] | undefi
   }
 }
 
+function hasExactKeys(value: object, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).toSorted();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function canonicalActorEvidence(value: DurableMemoryActorEvidence): string | undefined {
+  if (value.kind === "principal") {
+    if (
+      !hasExactKeys(
+        value,
+        value.expiresAt === undefined
+          ? ["actorKind", "assurance", "evidenceRevision", "kind", "principalId", "version"]
+          : [
+              "actorKind",
+              "assurance",
+              "evidenceRevision",
+              "expiresAt",
+              "kind",
+              "principalId",
+              "version",
+            ],
+      )
+    ) {
+      return undefined;
+    }
+    if (
+      !["human", "agent", "service", "system"].includes(value.actorKind) ||
+      !["gateway-profile", "adapter-attested", "oidc", "service"].includes(value.assurance) ||
+      !value.principalId.trim() ||
+      !value.evidenceRevision.trim()
+    ) {
+      return undefined;
+    }
+    if (
+      value.expiresAt !== undefined &&
+      (!Number.isFinite(Date.parse(value.expiresAt)) ||
+        new Date(Date.parse(value.expiresAt)).toISOString() !== value.expiresAt)
+    ) {
+      return undefined;
+    }
+    return JSON.stringify({
+      version: 1,
+      kind: "principal",
+      actorKind: value.actorKind,
+      principalId: value.principalId,
+      assurance: value.assurance,
+      evidenceRevision: value.evidenceRevision,
+      ...(value.expiresAt ? { expiresAt: value.expiresAt } : {}),
+    });
+  }
+  if (!hasExactKeys(value, ["evidenceRevision", "kind", "transportAuditRef", "version"])) {
+    return undefined;
+  }
+  return value.transportAuditRef.trim() && value.evidenceRevision.trim()
+    ? JSON.stringify({
+        version: 1,
+        kind: "unattributed",
+        transportAuditRef: value.transportAuditRef,
+        evidenceRevision: value.evidenceRevision,
+      })
+    : undefined;
+}
+
+function canonicalDelegationSnapshot(value: DurableMemoryDelegationSnapshot): string | undefined {
+  if (value.kind === "none") {
+    return hasExactKeys(value, ["kind", "version"])
+      ? JSON.stringify({ version: 1, kind: "none" })
+      : undefined;
+  }
+  if (
+    !hasExactKeys(value, [
+      "allowedOperations",
+      "capabilitySnapshotId",
+      "depth",
+      "kind",
+      "maximumAudiences",
+      "parentContextId",
+      "parentMemoryPlanId",
+      "rootContextId",
+      "rootPrincipalId",
+      "version",
+    ])
+  ) {
+    return undefined;
+  }
+  const allowedOperations = [...new Set(value.allowedOperations)].toSorted();
+  const maximumAudiences = canonicalAudiences({ deliveryAudiences: value.maximumAudiences });
+  if (
+    allowedOperations.length !== value.allowedOperations.length ||
+    allowedOperations.some(
+      (operation) =>
+        ![
+          "read",
+          "append",
+          "replace",
+          "derive",
+          "deposit",
+          "project",
+          "publish",
+          "import",
+          "export",
+          "delete",
+          "sync",
+          "status",
+          "policy-admin",
+        ].includes(operation),
+    ) ||
+    !maximumAudiences ||
+    !value.rootPrincipalId.trim() ||
+    !value.rootContextId.trim() ||
+    !value.parentContextId.trim() ||
+    !value.parentMemoryPlanId.trim() ||
+    !value.capabilitySnapshotId.trim() ||
+    !Number.isSafeInteger(value.depth) ||
+    value.depth < 0
+  ) {
+    return undefined;
+  }
+  return JSON.stringify({
+    version: 1,
+    kind: "delegated",
+    rootPrincipalId: value.rootPrincipalId,
+    rootContextId: value.rootContextId,
+    parentContextId: value.parentContextId,
+    parentMemoryPlanId: value.parentMemoryPlanId,
+    capabilitySnapshotId: value.capabilitySnapshotId,
+    allowedOperations,
+    maximumAudiences: JSON.parse(maximumAudiences),
+    depth: value.depth,
+  });
+}
+
+function parseCanonicalActorEvidence(value: string): DurableMemoryActorEvidence | undefined {
+  try {
+    const parsed = JSON.parse(value) as DurableMemoryActorEvidence;
+    const canonical = canonicalActorEvidence(parsed);
+    return canonical === value ? Object.freeze(parsed) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseCanonicalDelegationSnapshot(
+  value: string,
+): DurableMemoryDelegationSnapshot | undefined {
+  try {
+    const parsed = JSON.parse(value) as DurableMemoryDelegationSnapshot;
+    const canonical = canonicalDelegationSnapshot(parsed);
+    return canonical === value ? Object.freeze(parsed) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function isDurableSnapshot(snapshot: MemoryRunExposureSnapshot): boolean {
   return Boolean(
     snapshot.agentId.trim() &&
@@ -149,6 +316,7 @@ function isDurableSnapshot(snapshot: MemoryRunExposureSnapshot): boolean {
     snapshot.egressRegistryRevision.trim() &&
     snapshot.sessionIdentityRevision.trim() &&
     snapshot.subjectRevision.trim() &&
+    snapshot.hostFactsRevision.trim() &&
     snapshot.revisionNumber > 0 &&
     snapshot.revisionNumber === (snapshot.previous?.revisionNumber ?? 0) + 1 &&
     snapshot.durableRunScopeId === createMemoryRunExposureScopeId(snapshot) &&
@@ -167,6 +335,8 @@ function persistMemoryRunExposureInTransaction(params: {
   exposureReceiptIdsJson: string;
   egressReceiptIdsJson: string;
   deliveryAudiencesJson: string;
+  actorEvidenceJson: string;
+  delegationSnapshotJson: string;
 }): void {
   const { database, snapshot } = params;
   ensureMemoryPreoutputExposureLedgerSchemaInTransaction(database.db);
@@ -204,6 +374,22 @@ function persistMemoryRunExposureInTransaction(params: {
   if (inserted.numAffectedRows !== 1n) {
     throw new Error("memory exposure revision already has a durable ledger row");
   }
+  const factsInserted = executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("memory_preoutput_exposure_authorization_facts")
+      .values({
+        exposure_set_id: snapshot.exposureSetId,
+        actor_evidence_json: params.actorEvidenceJson,
+        delegation_snapshot_json: params.delegationSnapshotJson,
+        host_facts_revision: snapshot.hostFactsRevision,
+        created_at: snapshot.createdAt,
+      })
+      .onConflict((conflict) => conflict.column("exposure_set_id").doNothing()),
+  );
+  if (factsInserted.numAffectedRows !== 1n) {
+    throw new Error("memory exposure revision already has durable authorization facts");
+  }
 }
 
 /**
@@ -218,13 +404,17 @@ export function persistMemoryRunExposureBeforeContent(
   const exposureReceiptIdsJson = canonicalStrings(snapshot.exposureReceiptIds);
   const egressReceiptIdsJson = canonicalStrings(snapshot.egressReceiptIds);
   const deliveryAudiencesJson = canonicalAudiences(snapshot);
+  const actorEvidenceJson = canonicalActorEvidence(snapshot.actorEvidence);
+  const delegationSnapshotJson = canonicalDelegationSnapshot(snapshot.delegationSnapshot);
   if (
     !isDurableSnapshot(snapshot) ||
     !sourcePolicySetIdsJson ||
     !exposedResourceRevisionsJson ||
     !exposureReceiptIdsJson ||
     !egressReceiptIdsJson ||
-    !deliveryAudiencesJson
+    !deliveryAudiencesJson ||
+    !actorEvidenceJson ||
+    !delegationSnapshotJson
   ) {
     return false;
   }
@@ -250,6 +440,8 @@ export function persistMemoryRunExposureBeforeContentInDatabase(params: {
   const exposureReceiptIdsJson = canonicalStrings(snapshot.exposureReceiptIds);
   const egressReceiptIdsJson = canonicalStrings(snapshot.egressReceiptIds);
   const deliveryAudiencesJson = canonicalAudiences(snapshot);
+  const actorEvidenceJson = canonicalActorEvidence(snapshot.actorEvidence);
+  const delegationSnapshotJson = canonicalDelegationSnapshot(snapshot.delegationSnapshot);
   if (
     database.agentId !== snapshot.agentId ||
     !isDurableSnapshot(snapshot) ||
@@ -257,7 +449,9 @@ export function persistMemoryRunExposureBeforeContentInDatabase(params: {
     !exposedResourceRevisionsJson ||
     !exposureReceiptIdsJson ||
     !egressReceiptIdsJson ||
-    !deliveryAudiencesJson
+    !deliveryAudiencesJson ||
+    !actorEvidenceJson ||
+    !delegationSnapshotJson
   ) {
     return false;
   }
@@ -271,6 +465,8 @@ export function persistMemoryRunExposureBeforeContentInDatabase(params: {
         exposureReceiptIdsJson,
         egressReceiptIdsJson,
         deliveryAudiencesJson,
+        actorEvidenceJson,
+        delegationSnapshotJson,
       });
     });
     return true;
@@ -345,12 +541,32 @@ function readDurableMemoryRunExposureOrThrow(params: {
     const exposureReceiptIds = parseCanonicalStrings(row.exposure_receipt_ids_json);
     const egressReceiptIds = parseCanonicalStrings(row.egress_receipt_ids_json);
     const deliveryAudiences = parseCanonicalAudiences(row.delivery_audiences_json);
+    const facts = executeSqliteQueryTakeFirstSync(
+      params.database.db,
+      db
+        .selectFrom("memory_preoutput_exposure_authorization_facts")
+        .select([
+          "actor_evidence_json",
+          "delegation_snapshot_json",
+          "host_facts_revision",
+          "created_at",
+        ])
+        .where("exposure_set_id", "=", row.exposure_set_id)
+        .limit(1),
+    );
+    const actorEvidence = facts && parseCanonicalActorEvidence(facts.actor_evidence_json);
+    const delegationSnapshot =
+      facts && parseCanonicalDelegationSnapshot(facts.delegation_snapshot_json);
     if (
       !sourcePolicySetIds ||
       !exposedResourceRevisions ||
       !exposureReceiptIds ||
       !egressReceiptIds ||
       !deliveryAudiences ||
+      !actorEvidence ||
+      !delegationSnapshot ||
+      !facts?.host_facts_revision.trim() ||
+      facts.created_at !== row.created_at ||
       !row.session_key.trim() ||
       !row.context_fingerprint.trim() ||
       !row.plan_id.trim() ||
@@ -389,6 +605,9 @@ function readDurableMemoryRunExposureOrThrow(params: {
       egressRegistryRevision: row.egress_registry_revision,
       sessionIdentityRevision: row.session_identity_revision,
       subjectRevision: row.subject_revision,
+      actorEvidence,
+      delegationSnapshot,
+      hostFactsRevision: facts.host_facts_revision,
       createdAt: row.created_at,
     }) satisfies MemoryRunExposureSnapshot;
   }

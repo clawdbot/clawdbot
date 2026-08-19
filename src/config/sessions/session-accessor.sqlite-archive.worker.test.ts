@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { resetMemoryIsolationCutoverForTest } from "../../plugins/memory-cutover.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -24,6 +25,7 @@ import {
 } from "./session-accessor.js";
 import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { materializeSqliteTranscriptArchiveInWorker } from "./session-accessor.sqlite-archive.worker.js";
+import { importConfirmedSqliteTranscriptPolicyArchive } from "./session-accessor.sqlite-import.js";
 import {
   deleteMaterializedSqliteSessionStatePlans,
   planSqliteSessionStateDeleteIfUnreferenced,
@@ -31,6 +33,14 @@ import {
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  readAuthorizedTranscriptEventSeqs,
+  resetTranscriptMemoryPolicyForTest,
+} from "./session-transcript-memory-policy.js";
+import {
+  parseTranscriptPolicyArchive,
+  restoreConfirmedTranscriptPolicyArchiveInTransaction,
+} from "./session-transcript-policy-archive.js";
 
 type TestTranscriptEvent = {
   id: string;
@@ -47,6 +57,7 @@ describe("SQLite transcript archive worker", () => {
   });
 
   afterEach(() => {
+    resetMemoryIsolationCutoverForTest();
     closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -174,6 +185,213 @@ describe("SQLite transcript archive worker", () => {
     expect(result.archivedTranscripts.map((archive) => archive.archivedPath)).toEqual([
       archivedPath,
     ]);
+  });
+
+  it("keeps legacy archives raw JSONL and exports enforced events with immutable companions", async () => {
+    const legacySessionId = "legacy-policy-archive-session";
+    const legacySessionKey = "agent:main:legacy-policy-archive";
+    const legacyEvent = createTranscriptEvent(legacySessionId, "legacy archive bytes");
+    await replaceSessionEntry(
+      { sessionKey: legacySessionKey, storePath },
+      { sessionId: legacySessionId, updatedAt: Date.now() },
+    );
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: legacySessionKey, sessionId: legacySessionId, storePath },
+      [legacyEvent],
+    );
+    const database = openLifecycleTestDatabase(storePath);
+    const legacyArchive = materializeSqliteTranscriptArchiveInWorker(
+      planArchiveWorker(database, path.dirname(storePath), legacySessionId),
+    );
+    expect(readArchiveLines(legacyArchive.archivedPath)).toEqual([JSON.stringify(legacyEvent)]);
+
+    const sessionId = "enforced-policy-archive-session";
+    const sessionKey = "agent:main:enforced-policy-archive";
+    const event = createTranscriptEvent(sessionId, "audited archive bytes");
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [event]);
+    const { eventSeq } = seedEnforcedArchivePolicy(database, { sessionId });
+
+    const archive = materializeSqliteTranscriptArchiveInWorker(
+      planArchiveWorker(database, path.dirname(storePath), sessionId),
+    );
+    const lines = readArchiveLines(archive.archivedPath);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe(JSON.stringify(event));
+    expect(JSON.parse(lines[1] ?? "")).toMatchObject({
+      type: "openclaw.memory-policy-archive-v1",
+      version: 1,
+      agentId: "main",
+      sessionId,
+      eventSeq,
+      subject: expect.objectContaining({
+        sessionKey,
+        sessionIdentityRevision: expect.any(String),
+        subjectRevision: expect.any(String),
+      }),
+      policy: expect.objectContaining({
+        runExposureSetId: "archive-exposure-set",
+        sourcePolicySetId: "archive-policy-set",
+      }),
+      detail: expect.objectContaining({
+        sourceEventSeq: eventSeq,
+        sourceSessionId: sessionId,
+      }),
+    });
+
+    const parsed = parseTranscriptPolicyArchive(
+      readSessionArchiveContentSync(archive.archivedPath ?? ""),
+    );
+    expect(parsed).toBeDefined();
+    if (!parsed) {
+      throw new Error("expected a confirmed archive envelope");
+    }
+    database.db.exec(/* sqlite-allow-raw: fixture resets a just-restored pending companion. */ `
+      DELETE FROM transcript_event_memory_policy_details
+       WHERE session_id = '${sessionId}';
+      UPDATE transcript_event_memory_policies
+         SET authorization_status = 'pending',
+             source_policy_set_id = NULL,
+             run_exposure_set_id = NULL,
+             run_exposure_revision = NULL,
+             delivery_audiences_json = NULL,
+             session_identity_revision = NULL,
+             subject_revision = NULL,
+             run_id = NULL,
+             context_fingerprint = NULL
+       WHERE session_id = '${sessionId}';
+    `);
+    runOpenClawAgentWriteTransaction(
+      (transactionDatabase) =>
+        restoreConfirmedTranscriptPolicyArchiveInTransaction({
+          archive: parsed,
+          database: transactionDatabase,
+          sessionId,
+          sessionKey,
+        }),
+      { agentId: database.agentId, path: database.path },
+    );
+    expect(readAuthorizedTranscriptEventSeqs(database.db, sessionId)).toEqual(new Set([eventSeq]));
+    expect(readArchiveLines(archive.archivedPath)).toHaveLength(2);
+  });
+
+  it("restores a confirmed archive only through its original immutable session subject", async () => {
+    const sessionId = "confirmed-policy-archive-session";
+    const sessionKey = "agent:main:confirmed-policy-archive";
+    const event = createTranscriptEvent(sessionId, "confirmed archive restore bytes");
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [event]);
+    const database = openLifecycleTestDatabase(storePath);
+    const { eventSeq } = seedEnforcedArchivePolicy(database, { sessionId });
+    const archive = materializeSqliteTranscriptArchiveInWorker(
+      planArchiveWorker(database, path.dirname(storePath), sessionId),
+    );
+    const archiveContent = readSessionArchiveContentSync(archive.archivedPath ?? "");
+    const sourceSnapshot = database.db
+      .prepare(
+        `SELECT session_identity_revision, subject_revision
+           FROM session_memory_subject_snapshots
+          WHERE session_id = ?`,
+      )
+      .get(sessionId);
+
+    // Lifecycle deletion removes rows owned by the old session window while the
+    // immutable subject snapshot remains available for a confirmed same-agent restore.
+    database.db.exec(/* sqlite-allow-raw: fixture simulates post-archive lifecycle reclamation. */ `
+      DELETE FROM session_nodes WHERE session_key = '${sessionKey}';
+      DELETE FROM session_windows WHERE session_id = '${sessionId}';
+    `);
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM session_memory_subjects WHERE session_key = ?")
+        .get(sessionKey),
+    ).toEqual({ count: 1 });
+
+    await expect(
+      importConfirmedSqliteTranscriptPolicyArchive({
+        agentId: database.agentId,
+        archiveContent,
+        entry: { sessionId, updatedAt: Date.now() },
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toEqual({ sessionId, sessionKey, transcriptEvents: 1 });
+    expect(readAuthorizedTranscriptEventSeqs(database.db, sessionId)).toEqual(new Set([eventSeq]));
+    expect(
+      database.db
+        .prepare(
+          `SELECT session_identity_revision, subject_revision
+             FROM session_memory_subject_snapshots
+            WHERE session_id = ?`,
+        )
+        .get(sessionId),
+    ).toEqual(sourceSnapshot);
+  });
+
+  it("rolls a confirmed archive import back when the retained policy is no longer current", async () => {
+    const sessionId = "revoked-confirmed-policy-archive-session";
+    const sessionKey = "agent:main:revoked-confirmed-policy-archive";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      createTranscriptEvent(sessionId, "revoked confirmed archive restore bytes"),
+    ]);
+    const database = openLifecycleTestDatabase(storePath);
+    seedEnforcedArchivePolicy(database, { sessionId });
+    const archive = materializeSqliteTranscriptArchiveInWorker(
+      planArchiveWorker(database, path.dirname(storePath), sessionId),
+    );
+    const archiveContent = readSessionArchiveContentSync(archive.archivedPath ?? "");
+    database.db
+      .exec(/* sqlite-allow-raw: fixture revokes after archive confirmation materializes. */ `
+      DELETE FROM session_nodes WHERE session_key = '${sessionKey}';
+      DELETE FROM session_windows WHERE session_id = '${sessionId}';
+      DROP TRIGGER memory_resource_revisions_immutable_fields;
+      UPDATE memory_resource_revisions SET expires_at = 1 WHERE revision_id = 'archive-resource-revision';
+    `);
+
+    await expect(
+      importConfirmedSqliteTranscriptPolicyArchive({
+        agentId: database.agentId,
+        archiveContent,
+        entry: { sessionId, updatedAt: Date.now() },
+        sessionKey,
+        storePath,
+      }),
+    ).rejects.toThrow("confirmed transcript archive policy is no longer authorized");
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey),
+    ).toEqual({ count: 0 });
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
+        .get(sessionId),
+    ).toEqual({ count: 0 });
+  });
+
+  it.each([
+    ["missing companion", {}],
+    ["expired exposed resource", { expiresAt: 1 }],
+  ])("fails closed for an enforced archive with %s", async (_name, options) => {
+    const sessionId = `blocked-policy-archive-${_name.replaceAll(" ", "-")}`;
+    const sessionKey = `agent:main:${sessionId}`;
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      createTranscriptEvent(sessionId, "must remain in the source database"),
+    ]);
+    const database = openLifecycleTestDatabase(storePath);
+    seedEnforcedArchivePolicy(database, {
+      sessionId,
+      includeDetail: _name !== "missing companion",
+      ...options,
+    });
+
+    expect(() =>
+      materializeSqliteTranscriptArchiveInWorker(
+        planArchiveWorker(database, path.dirname(storePath), sessionId),
+      ),
+    ).toThrow(`Unauthorized transcript policy archive event for ${sessionId}`);
   });
 
   it("archives a logical agent transcript through the exact database's physical owner", async () => {
@@ -752,6 +970,116 @@ function openLifecycleTestDatabase(storePath: string) {
     agentId: target.agentId ?? "main",
     path: target.path,
   });
+}
+
+function seedEnforcedArchivePolicy(
+  database: ReturnType<typeof openLifecycleTestDatabase>,
+  params: { sessionId: string; includeDetail?: boolean; expiresAt?: number },
+): { eventSeq: number } {
+  const session = database.db
+    .prepare(
+      `SELECT session_identity_revision, session_key, subject_revision
+         FROM session_memory_subject_snapshots
+        WHERE session_id = ?`,
+    )
+    .get(params.sessionId) as
+    | { session_identity_revision: string; session_key: string; subject_revision: string }
+    | undefined;
+  if (!session) {
+    throw new Error(`expected session subject snapshot for ${params.sessionId}`);
+  }
+  const event = database.db
+    .prepare(
+      `SELECT seq
+         FROM transcript_events
+        WHERE session_id = ?
+        ORDER BY seq ASC
+        LIMIT 1`,
+    )
+    .get(params.sessionId) as { seq: number } | undefined;
+  if (!event) {
+    throw new Error(`expected transcript event for ${params.sessionId}`);
+  }
+  database.db.exec(/* sqlite-allow-raw: fixture establishes one evaluable archive lineage. */ `
+    INSERT INTO memory_migrations
+      (migration_id, source_kind, source_hash, phase, classification_json, plan_hash,
+       verified_at, cutover_at, updated_at)
+    VALUES ('archive-cutover', 'test', 'archive-source', 'cutover', '{}', 'archive-plan', 1, 1, 1);
+    INSERT INTO memory_policies
+      (policy_id, agent_id, current_revision_id, revocation_epoch, lifecycle_state, created_at, updated_at)
+    VALUES ('archive-policy', 'main', 'archive-policy-revision', 0, 'active', 1, 1);
+    INSERT INTO memory_policy_revisions
+      (revision_id, policy_id, revision_number, revocation_epoch, lifecycle_state,
+       actor_kind, actor_id, reason, created_at)
+    VALUES ('archive-policy-revision', 'archive-policy', 1, 0, 'active', 'human', 'alice', 'fixture', 1);
+    INSERT INTO memory_policy_sets
+      (policy_set_id, agent_id, memory_policy_revision, member_policy_set_ids_json, created_at)
+    VALUES ('archive-policy-set', 'main', 'archive-policy-revision', '["plugin-policy-set"]', 1);
+    INSERT INTO memory_policy_set_members
+      (policy_set_id, policy_id, expected_revision_id, expected_revocation_epoch,
+       audience_intersection_json, retention_state, created_at)
+    VALUES ('archive-policy-set', 'archive-policy', 'archive-policy-revision', 0,
+            '[{"id":"alice","kind":"user"}]', 'retained', 1);
+    INSERT INTO memory_storage_roots
+      (storage_root_id, agent_id, backend_kind, opaque_locator, path_key_version, path_key,
+       authority_kind, authority_owner_id, default_capabilities_json, lifecycle_state, created_at, updated_at)
+    VALUES ('archive-root', 'main', 'builtin', 'builtin:v1:archive', 1,
+            's1_archive_fixture_path_key_000', 'user', 'alice', '["read"]', 'active', 1, 1);
+    INSERT INTO memory_stores
+      (store_id, agent_id, storage_root_id, policy_id, scope_kind, audience_kind, audience_id,
+       lifecycle_state, created_at, updated_at)
+    VALUES ('archive-store', 'main', 'archive-root', 'archive-policy', 'user', 'user', 'alice', 'active', 1, 1);
+    INSERT INTO memory_resources
+      (resource_id, agent_id, store_id, logical_locator, source, created_at)
+    VALUES ('archive-resource', 'main', 'archive-store', 'memory/archive.md', 'memory', 1);
+    INSERT INTO memory_resource_revisions
+      (revision_id, resource_id, revision_number, artifact_locator, content_hash, content_bytes,
+       policy_revision_id, policy_revocation_epoch, source_policy_set_id, lifecycle_state,
+       actor_kind, actor_id, expires_at, created_at, activated_at, retired_at)
+    VALUES ('archive-resource-revision', 'archive-resource', 1, 'archive.md', 'archive', 7,
+            'archive-policy-revision', 0, 'plugin-policy-set', 'active', 'human', 'alice',
+            ${params.expiresAt ?? "NULL"}, 1, 1, NULL);
+    INSERT INTO memory_run_exposures
+      (exposure_set_id, agent_id, run_id, context_fingerprint, plan_id, revision_number,
+       previous_exposure_set_id, source_policy_set_ids_json, effective_source_policy_set_id,
+       exposed_resource_revisions_json, exposure_receipt_ids_json, egress_receipt_ids_json,
+       delivery_audiences_json, delivery_revision, egress_registry_revision, created_at)
+    VALUES ('archive-exposure-set', 'main', 'archive-run', 'archive-context', 'archive-plan', 1,
+            NULL, '["plugin-policy-set"]', 'archive-policy-set',
+            '["archive-resource-revision"]', '["archive-exposure"]', '["archive-egress"]',
+            '[{"id":"alice","kind":"user"}]', 'delivery-1', 'egress-1', 1);
+    INSERT INTO memory_run_exposure_resources
+      (exposure_set_id, resource_revision_id, policy_set_id, created_at)
+    VALUES ('archive-exposure-set', 'archive-resource-revision', 'archive-policy-set', 1);
+  `);
+  database.db
+    .prepare(
+      `INSERT INTO transcript_event_memory_policies
+        (session_id, event_seq, authorization_status, source_policy_set_id, run_exposure_set_id,
+         run_exposure_revision, delivery_audiences_json, session_identity_revision,
+         subject_revision, run_id, context_fingerprint, created_at)
+       VALUES (?, ?, 'authorized', 'archive-policy-set', 'archive-exposure-set', 1,
+               '[{"id":"alice","kind":"user"}]', ?, ?, 'archive-run', 'archive-context', 1)`,
+    )
+    .run(params.sessionId, event.seq, session.session_identity_revision, session.subject_revision);
+  if (params.includeDetail !== false) {
+    database.db
+      .prepare(
+        `INSERT INTO transcript_event_memory_policy_details
+          (session_id, event_seq, actor_evidence_json, delegation_snapshot_json,
+           exposed_resource_revisions_json, exposure_receipt_ids_json, egress_receipt_ids_json,
+           normalized_audience_intersection_json, finalized_delivery_audiences_json, retention_state,
+           source_session_id, source_event_seq, created_at)
+         VALUES (?, ?, '{"version":1}', '{"kind":"none","version":1}',
+                 '["archive-resource-revision"]', '["archive-exposure"]', '["archive-egress"]',
+                 '[{"id":"alice","kind":"user"}]', '[{"id":"alice","kind":"user"}]',
+                 'retained', ?, ?, 1)`,
+      )
+      .run(params.sessionId, event.seq, params.sessionId, event.seq);
+  }
+  resetMemoryIsolationCutoverForTest();
+  resetTranscriptMemoryPolicyForTest(database.db);
+  return { eventSeq: event.seq };
 }
 
 function planArchiveWorker(

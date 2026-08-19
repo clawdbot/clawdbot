@@ -157,6 +157,14 @@ export interface MemoryAuditOutbox {
   updated_at: number;
 }
 
+export interface MemoryCompactionPolicies {
+  compaction_policy_id: string;
+  created_at: number;
+  retention_state: string;
+  session_id: string;
+  source_policy_set_id: string;
+}
+
 export interface MemoryEmbeddingCache {
   dims: number | null;
   embedding: string;
@@ -263,6 +271,16 @@ export interface MemoryPolicyRevisions {
   revocation_epoch: number;
 }
 
+export interface MemoryPolicySetMembers {
+  audience_intersection_json: string;
+  created_at: number;
+  expected_revision_id: string;
+  expected_revocation_epoch: number;
+  policy_id: string;
+  policy_set_id: string;
+  retention_state: string;
+}
+
 export interface MemoryPolicySets {
   agent_id: string;
   created_at: number;
@@ -292,6 +310,14 @@ export interface MemoryPreoutputExposureLedger {
   session_key: string;
   source_policy_set_ids_json: string;
   subject_revision: string;
+}
+
+export interface MemoryPreoutputExposureAuthorizationFacts {
+  actor_evidence_json: string;
+  created_at: number;
+  delegation_snapshot_json: string;
+  exposure_set_id: string;
+  host_facts_revision: string;
 }
 
 export interface MemoryResourceRevisions {
@@ -329,6 +355,13 @@ export interface MemoryResources {
   resource_id: string;
   source: Generated<string>;
   store_id: string;
+}
+
+export interface MemoryRunExposureResources {
+  created_at: number;
+  exposure_set_id: string;
+  policy_set_id: string;
+  resource_revision_id: string;
 }
 
 export interface MemoryRunExposures {
@@ -721,6 +754,34 @@ export interface TranscriptEventMemoryPolicies {
   subject_revision: string | null;
 }
 
+export interface TranscriptEventMemoryPolicyDetails {
+  actor_evidence_json: string;
+  created_at: number;
+  delegation_snapshot_json: string;
+  egress_receipt_ids_json: string;
+  event_seq: number;
+  exposed_resource_revisions_json: string;
+  exposure_receipt_ids_json: string;
+  finalized_delivery_audiences_json: string;
+  normalized_audience_intersection_json: string;
+  retention_state: string;
+  session_id: string;
+  source_event_seq: number;
+  source_session_id: string;
+}
+
+export interface TranscriptEventMemoryPolicyTransitions {
+  created_at: number;
+  event_seq: number;
+  session_id: string;
+  source_event_seq: number;
+  source_session_id: string;
+  source_session_identity_revision: string;
+  subject_revision: string;
+  target_session_identity_revision: string;
+  transition_kind: string;
+}
+
 export interface TranscriptEvents {
   created_at: number;
   event_json: string;
@@ -746,6 +807,7 @@ export interface DB {
   conversations: Conversations;
   heartbeat_outcomes: HeartbeatOutcomes;
   memory_audit_outbox: MemoryAuditOutbox;
+  memory_compaction_policies: MemoryCompactionPolicies;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunk_provenance: MemoryIndexChunkProvenance;
   memory_index_chunk_recall_metadata: MemoryIndexChunkRecallMetadata;
@@ -757,11 +819,14 @@ export interface DB {
   memory_policies: MemoryPolicies;
   memory_policy_entries: MemoryPolicyEntries;
   memory_policy_revisions: MemoryPolicyRevisions;
+  memory_policy_set_members: MemoryPolicySetMembers;
   memory_policy_sets: MemoryPolicySets;
+  memory_preoutput_exposure_authorization_facts: MemoryPreoutputExposureAuthorizationFacts;
   memory_preoutput_exposure_ledger: MemoryPreoutputExposureLedger;
   memory_resource_revisions: MemoryResourceRevisions;
   memory_resource_subjects: MemoryResourceSubjects;
   memory_resources: MemoryResources;
+  memory_run_exposure_resources: MemoryRunExposureResources;
   memory_run_exposures: MemoryRunExposures;
   memory_scoped_chunk_vectors: MemoryScopedChunkVectors;
   memory_scoped_chunks: MemoryScopedChunks;
@@ -801,6 +866,8 @@ export interface DB {
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
   transcript_event_memory_policies: TranscriptEventMemoryPolicies;
+  transcript_event_memory_policy_details: TranscriptEventMemoryPolicyDetails;
+  transcript_event_memory_policy_transitions: TranscriptEventMemoryPolicyTransitions;
   transcript_events: TranscriptEvents;
   transcript_rewrite_watermarks: TranscriptRewriteWatermarks;
 }

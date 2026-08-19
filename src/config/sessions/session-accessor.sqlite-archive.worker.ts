@@ -15,7 +15,56 @@ import { readSqliteSessionStateDeleteSnapshot } from "./session-accessor.sqlite-
 import { readAuthorizedTranscriptEventSeqs } from "./session-transcript-memory-policy.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
 
-type TranscriptArchiveDatabase = Pick<OpenClawAgentKyselyDatabase, "transcript_events">;
+type TranscriptArchiveDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  | "session_memory_subject_snapshots"
+  | "transcript_events"
+  | "transcript_event_memory_policies"
+  | "transcript_event_memory_policy_details"
+  | "transcript_event_memory_policy_transitions"
+>;
+
+const TRANSCRIPT_MEMORY_POLICY_ARCHIVE_RECORD_TYPE = "openclaw.memory-policy-archive-v1";
+
+type TranscriptMemoryPolicyArchiveRecord = Readonly<{
+  agentId: string;
+  type: typeof TRANSCRIPT_MEMORY_POLICY_ARCHIVE_RECORD_TYPE;
+  version: 1;
+  sessionId: string;
+  eventSeq: number;
+  subject: Readonly<{
+    sessionKey: string;
+    sessionIdentityRevision: string;
+    subjectRevision: string;
+  }>;
+  policy: Readonly<{
+    contextFingerprint: string;
+    deliveryAudiencesJson: string;
+    runExposureRevision: number;
+    runExposureSetId: string;
+    runId: string;
+    sourcePolicySetId: string;
+  }>;
+  detail: Readonly<{
+    actorEvidenceJson: string;
+    delegationSnapshotJson: string;
+    egressReceiptIdsJson: string;
+    exposedResourceRevisionsJson: string;
+    exposureReceiptIdsJson: string;
+    finalizedDeliveryAudiencesJson: string;
+    normalizedAudienceIntersectionJson: string;
+    sourceEventSeq: number;
+    sourceSessionId: string;
+  }>;
+  transition?: Readonly<{
+    sourceEventSeq: number;
+    sourceSessionId: string;
+    sourceSessionIdentityRevision: string;
+    subjectRevision: string;
+    targetSessionIdentityRevision: string;
+    kind: string;
+  }>;
+}>;
 
 function isSqliteTranscriptArchiveWorkerData(value: unknown): boolean {
   return (
@@ -90,6 +139,7 @@ function parseWorkerPlans(value: unknown): SqliteTranscriptArchiveWorkerPlan[] |
 
 function readTranscriptArchiveContent(
   database: import("node:sqlite").DatabaseSync,
+  agentId: string,
   sessionId: string,
 ): string {
   const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database);
@@ -104,11 +154,169 @@ function readTranscriptArchiveContent(
   // An archive is an export surface. Once cut over, a raw row without a
   // current companion label must not become a durable bypass of the replay fence.
   const authorizedSeqs = readAuthorizedTranscriptEventSeqs(database, sessionId);
-  return serializeJsonlLines(
-    (authorizedSeqs ? lines.filter((row) => authorizedSeqs.has(row.seq)) : lines).map(
-      (row) => row.event_json,
-    ),
+  if (!authorizedSeqs) {
+    return serializeJsonlLines(lines.map((row) => row.event_json));
+  }
+  const authorizedRows = lines.filter((row) => authorizedSeqs.has(row.seq));
+  if (authorizedRows.length !== lines.length) {
+    // Deletion must not turn a pending, stale, or revoked event into either a
+    // durable raw bypass or silent data loss. Keep the source rows until an
+    // explicit repair/confirmed import establishes their lineage.
+    throw new Error(`Unauthorized transcript policy archive event for ${sessionId}`);
+  }
+  const records = readTranscriptMemoryPolicyArchiveRecords(
+    database,
+    agentId,
+    sessionId,
+    authorizedSeqs,
   );
+  if (records.size !== authorizedRows.length) {
+    // Policy-enforced archives are later import candidates. Refuse to emit any
+    // raw event whose immutable companion cannot travel with its lineage.
+    throw new Error(`Missing transcript policy archive companion for ${sessionId}`);
+  }
+  return serializeJsonlLines(
+    authorizedRows.flatMap((row) => {
+      const record = records.get(row.seq);
+      if (!record) {
+        throw new Error(`Missing transcript policy archive record for ${sessionId}:${row.seq}`);
+      }
+      return [row.event_json, JSON.stringify(record)];
+    }),
+  );
+}
+
+function readTranscriptMemoryPolicyArchiveRecords(
+  database: import("node:sqlite").DatabaseSync,
+  agentId: string,
+  sessionId: string,
+  authorizedSeqs: ReadonlySet<number>,
+): ReadonlyMap<number, TranscriptMemoryPolicyArchiveRecord> {
+  const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database);
+  const rows = executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom("transcript_event_memory_policies as policy")
+      .innerJoin("transcript_event_memory_policy_details as detail", (join) =>
+        join
+          .onRef("detail.session_id", "=", "policy.session_id")
+          .onRef("detail.event_seq", "=", "policy.event_seq"),
+      )
+      .innerJoin(
+        "session_memory_subject_snapshots as subject",
+        "subject.session_id",
+        "policy.session_id",
+      )
+      .leftJoin("transcript_event_memory_policy_transitions as transition", (join) =>
+        join
+          .onRef("transition.session_id", "=", "policy.session_id")
+          .onRef("transition.event_seq", "=", "policy.event_seq"),
+      )
+      .select([
+        "policy.event_seq",
+        "policy.context_fingerprint",
+        "policy.delivery_audiences_json",
+        "policy.run_exposure_revision",
+        "policy.run_exposure_set_id",
+        "policy.run_id",
+        "policy.source_policy_set_id",
+        "subject.session_identity_revision",
+        "subject.session_key",
+        "subject.subject_revision",
+        "detail.actor_evidence_json",
+        "detail.delegation_snapshot_json",
+        "detail.egress_receipt_ids_json",
+        "detail.exposed_resource_revisions_json",
+        "detail.exposure_receipt_ids_json",
+        "detail.finalized_delivery_audiences_json",
+        "detail.normalized_audience_intersection_json",
+        "detail.source_event_seq",
+        "detail.source_session_id",
+        "transition.source_event_seq as transition_source_event_seq",
+        "transition.source_session_id as transition_source_session_id",
+        "transition.source_session_identity_revision as transition_source_session_identity_revision",
+        "transition.subject_revision as transition_subject_revision",
+        "transition.target_session_identity_revision as transition_target_session_identity_revision",
+        "transition.transition_kind",
+      ])
+      .where("policy.session_id", "=", sessionId)
+      .where("policy.authorization_status", "=", "authorized")
+      .where("detail.retention_state", "=", "retained"),
+  ).rows;
+  const records = new Map<number, TranscriptMemoryPolicyArchiveRecord>();
+  for (const row of rows) {
+    if (
+      !authorizedSeqs.has(row.event_seq) ||
+      row.context_fingerprint === null ||
+      row.delivery_audiences_json === null ||
+      row.run_exposure_revision === null ||
+      row.run_exposure_set_id === null ||
+      row.run_id === null ||
+      row.source_policy_set_id === null ||
+      row.source_event_seq === null ||
+      row.source_session_id === null
+    ) {
+      continue;
+    }
+    const hasTransition = row.transition_source_session_id !== null;
+    if (
+      hasTransition &&
+      (row.transition_source_event_seq === null ||
+        row.transition_source_session_identity_revision === null ||
+        row.transition_subject_revision === null ||
+        row.transition_target_session_identity_revision === null ||
+        row.transition_kind === null)
+    ) {
+      continue;
+    }
+    records.set(
+      row.event_seq,
+      Object.freeze({
+        agentId,
+        type: TRANSCRIPT_MEMORY_POLICY_ARCHIVE_RECORD_TYPE,
+        version: 1,
+        sessionId,
+        eventSeq: row.event_seq,
+        subject: Object.freeze({
+          sessionKey: row.session_key,
+          sessionIdentityRevision: row.session_identity_revision,
+          subjectRevision: row.subject_revision,
+        }),
+        policy: Object.freeze({
+          contextFingerprint: row.context_fingerprint,
+          deliveryAudiencesJson: row.delivery_audiences_json,
+          runExposureRevision: row.run_exposure_revision,
+          runExposureSetId: row.run_exposure_set_id,
+          runId: row.run_id,
+          sourcePolicySetId: row.source_policy_set_id,
+        }),
+        detail: Object.freeze({
+          actorEvidenceJson: row.actor_evidence_json,
+          delegationSnapshotJson: row.delegation_snapshot_json,
+          egressReceiptIdsJson: row.egress_receipt_ids_json,
+          exposedResourceRevisionsJson: row.exposed_resource_revisions_json,
+          exposureReceiptIdsJson: row.exposure_receipt_ids_json,
+          finalizedDeliveryAudiencesJson: row.finalized_delivery_audiences_json,
+          normalizedAudienceIntersectionJson: row.normalized_audience_intersection_json,
+          sourceEventSeq: row.source_event_seq,
+          sourceSessionId: row.source_session_id,
+        }),
+        ...(hasTransition
+          ? {
+              transition: Object.freeze({
+                sourceEventSeq: row.transition_source_event_seq!,
+                sourceSessionId: row.transition_source_session_id!,
+                sourceSessionIdentityRevision: row.transition_source_session_identity_revision!,
+                subjectRevision: row.transition_subject_revision!,
+                targetSessionIdentityRevision: row.transition_target_session_identity_revision!,
+                kind: row.transition_kind!,
+              }),
+            }
+          : {}),
+      }),
+    );
+  }
+  return records;
 }
 
 export function materializeSqliteTranscriptArchiveInWorker(
@@ -127,7 +335,7 @@ export function materializeSqliteTranscriptArchiveInWorker(
             `SQLite session state changed before archive materialization for ${plan.sessionId}`,
           );
         }
-        const content = readTranscriptArchiveContent(database.db, plan.sessionId);
+        const content = readTranscriptArchiveContent(database.db, plan.agentId, plan.sessionId);
         database.db.exec("COMMIT"); // sqlite-allow-raw: closes the consistent read snapshot.
         transactionOpen = false;
         return { content, snapshot };

@@ -1359,22 +1359,37 @@ Add:
 
 Phase 2B is complete only when all of the following are demonstrated:
 
-- [ ] Every readable user, assistant, tool-result, summary, checkpoint, and
+- [x] Every readable user, assistant, tool-result, summary, checkpoint, and
       system event has an atomic, evaluable policy companion row.
-- [ ] Every scoped exposure can be mapped to the durable events, policy-set
+- [x] Every scoped exposure can be mapped to the durable events, policy-set
       revision, delivery audience, and run exposure revision it influenced.
-- [ ] Stable policy IDs are revalidated against current active revisions and
+- [x] Stable policy IDs are revalidated against current active revisions and
       revocation epochs; captured historical allows are not permanent grants.
-- [ ] Reset, rollover, fork, rewind, checkpoint restore, archive, export, and
+- [x] Reset, rollover, fork, rewind, checkpoint restore, archive, export, and
       confirmed import preserve subject and policy lineage exactly.
-- [ ] Missing, invalid, stale, or authorization-pending labels exclude events
+- [x] Missing, invalid, stale, or authorization-pending labels exclude events
       from replay, search, compaction, export, and derivation.
-- [ ] Authorization is never reconstructed from session-key shape, transcript
+- [x] Authorization is never reconstructed from session-key shape, transcript
       JSON, rendered prompt text, or `InputProvenance`.
-- [ ] No plugin call or async work occurs inside the transcript commit
+- [x] No plugin call or async work occurs inside the transcript commit
       transaction.
-- [ ] Atomic-write, transition, policy-revision, revoke-race, session-rebound,
+- [x] Atomic-write, transition, policy-revision, revoke-race, session-rebound,
       and legacy-unlabeled transcript tests pass.
+
+Proof (2026-08-14): policy companion/evidence and current-policy tests in
+`src/config/sessions/session-transcript-memory-policy.test.ts`; archive/export
+and confirmed-import rollback tests in
+`src/config/sessions/session-accessor.sqlite-archive.worker.test.ts`; canonical
+archive parsing in `src/config/sessions/session-transcript-policy-archive.test.ts`;
+checkpoint and parent-fork lifecycle coverage in
+`src/config/sessions/session-accessor.conformance.test.ts` and
+`src/config/sessions/session-accessor.parent-fork.test.ts`; durable actor and
+delegation ledger coverage in `src/plugins/memory-run-exposure-ledger.test.ts`;
+and enforced archive-ingestion quarantine in
+`extensions/memory-core/src/session-ingestion.test.ts`. Blacksmith Testbox
+`tbx_01kzzhjsz3x1fsrrrm035egekp` passed 104 runtime-config and 10 plugin-ledger
+tests for these files. `src/config/sessions/session-transcript-memory-policy.ts`
+keeps policy evaluation and all plugin work outside the synchronous transaction.
 
 ### Phase 2B rollback
 

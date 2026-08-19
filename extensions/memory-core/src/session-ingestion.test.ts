@@ -1,7 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const isLegacyMemorySurfaceDisabled = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
+  isLegacyMemorySurfaceDisabled,
+}));
 import {
   foreignSessionIngestionSource,
   scanSessionIngestionSource,
@@ -11,6 +18,8 @@ import {
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  isLegacyMemorySurfaceDisabled.mockReset();
+  isLegacyMemorySurfaceDisabled.mockReturnValue(false);
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -25,6 +34,28 @@ describe("session ingestion", () => {
     });
 
     expect(source?.scope).toBe("main:foo.jsonl");
+  });
+
+  it("excludes unconfirmed archive artifacts from cut-over derivation", () => {
+    isLegacyMemorySurfaceDisabled.mockReturnValue(true);
+
+    expect(
+      sessionIngestionSourceFromCorpus({
+        agentId: "main",
+        artifactKind: "archive-artifact",
+        sessionFile: path.join(os.tmpdir(), "archived.jsonl.deleted.2026-08-14"),
+        sessionId: "archived",
+        sessionKind: "interactive",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects caller-supplied archive files after cut-over with a visible transfer outcome", () => {
+    isLegacyMemorySurfaceDisabled.mockReturnValue(true);
+
+    expect(() => foreignSessionIngestionSource("main", "/tmp/archived.jsonl")).toThrow(
+      "confirmed transcript import is available",
+    );
   });
 
   it("verifies backfill content despite an unchanged size and mtime", async () => {

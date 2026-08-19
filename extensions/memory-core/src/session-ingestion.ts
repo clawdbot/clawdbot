@@ -9,6 +9,7 @@ import {
   statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { isLegacyMemorySurfaceDisabled } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
@@ -91,6 +92,12 @@ function sessionPathFromCorpus(entry: SessionTranscriptCorpusEntry): string {
 export function sessionIngestionSourceFromCorpus(
   entry: SessionTranscriptCorpusEntry,
 ): SessionIngestionSource | null {
+  // Archive JSONL has no confirmed transfer package yet. In cut-over mode it
+  // cannot carry a currently revalidated transcript policy, so deny it before
+  // any parser turns the bytes into derivable memory.
+  if (entry.artifactKind === "archive-artifact" && isLegacyMemorySurfaceDisabled(entry.agentId)) {
+    return null;
+  }
   const sessionPath = sessionPathFromCorpus(entry);
   if (entry.sessionKind !== "interactive") {
     return null;
@@ -133,6 +140,11 @@ export function foreignSessionIngestionSource(
   agentId: string,
   archiveFile: string,
 ): SessionIngestionSource {
+  if (isLegacyMemorySurfaceDisabled(agentId)) {
+    throw new Error(
+      "Archive-file session backfill is unavailable after scoped-memory cutover; retain the archive until a confirmed transcript import is available.",
+    );
+  }
   const absolutePath = path.resolve(archiveFile);
   const normalizedPath = absolutePath.replaceAll("\\", "/");
   return {
