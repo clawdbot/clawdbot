@@ -156,12 +156,13 @@ export function sanitizeChatHistoryContentBlock(
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   if (isToolResultHistoryBlockType(entry.type) && "details" in entry) {
     const projectedDetails = projectToolResultDetails(entry.details, maxChars);
-    if (projectedDetails) {
-      entry.details = projectedDetails;
+    if (projectedDetails.details) {
+      entry.details = projectedDetails.details;
     } else {
       delete entry.details;
     }
     changed = true;
+    truncated ||= projectedDetails.truncated;
   }
   if (typeof entry.text === "string") {
     if (!preserveExactToolPayload) {
@@ -416,17 +417,19 @@ export function sanitizeChatHistoryMessage(
     typeof entry.tool_call_id === "string";
 
   if ("details" in entry) {
-    const projectedDetails =
-      projectWorkspaceConflictDetails(entry) ??
-      (messageHasToolResultShape(entry)
+    const conflictDetails = projectWorkspaceConflictDetails(entry);
+    const toolResultDetails =
+      !conflictDetails && messageHasToolResultShape(entry)
         ? projectToolResultDetails(entry.details, maxChars)
-        : undefined);
+        : undefined;
+    const projectedDetails = conflictDetails ?? toolResultDetails?.details;
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
       delete entry.details;
     }
     changed = true;
+    truncated ||= toolResultDetails?.truncated === true;
   }
 
   if (entry.role !== "assistant") {

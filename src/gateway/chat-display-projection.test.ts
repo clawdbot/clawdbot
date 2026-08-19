@@ -405,6 +405,34 @@ describe("transcript metadata projection", () => {
     expect(projected?.["__openclaw"]).toBeUndefined();
   });
 
+  it("marks display-cap truncation of a tool-result diff on both tool-result shapes", () => {
+    const longDiff = "+line\n".repeat(40);
+    const [blockShaped, messageShaped] = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolResult", toolName: "edit", details: { changed: true, diff: longDiff } },
+          ],
+        },
+        { role: "toolResult", toolName: "edit", details: { changed: true, diff: longDiff } },
+      ],
+      32,
+    ) as Record<string, unknown>[];
+    for (const projected of [blockShaped, messageShaped]) {
+      expect(JSON.stringify(projected)).toContain("...(truncated)...");
+      expect(projected?.["__openclaw"]).toMatchObject({ truncated: true, reason: "display-cap" });
+    }
+  });
+
+  it("leaves a tool-result diff within the cap unmarked", () => {
+    const [projected] = sanitizeChatHistoryMessages(
+      [{ role: "toolResult", toolName: "edit", details: { changed: true, diff: "+ok" } }],
+      32,
+    ) as Record<string, unknown>[];
+    expect(projected?.["__openclaw"]).toBeUndefined();
+  });
+
   it("does not overwrite an upstream oversized reason with display-cap", () => {
     const [projected] = sanitizeChatHistoryMessages(
       [
