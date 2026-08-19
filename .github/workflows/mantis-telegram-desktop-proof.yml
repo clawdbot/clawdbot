@@ -328,7 +328,8 @@ jobs:
           set -euo pipefail
           bash scripts/mantis/build-telegram-desktop-image.sh
 
-      - name: Prepare proof worktrees with pinned toolchain
+      - name: Create exact proof worktrees
+        id: proof_worktrees
         env:
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
           CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
@@ -349,34 +350,82 @@ jobs:
           git cat-file -e "${CANDIDATE_SHA}^{commit}"
           git worktree add --detach "$baseline_root" "$BASELINE_SHA"
           git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"
+          {
+            echo "baseline_root=$baseline_root"
+            echo "lockfile_sha256=$(sha256sum "$baseline_root/pnpm-lock.yaml" | cut -d ' ' -f1)"
+            echo "node_version=$($toolchain_dir/node --version)"
+            echo "pnpm_version=$($toolchain_dir/pnpm --version)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact baseline build
+        id: baseline_build_cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .artifacts/mantis-baseline-build.tar
+          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v2-${{ needs.validate_refs.outputs.baseline_revision }}-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}
+
+      - name: Prepare baseline proof build
+        env:
+          BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-baseline-build.tar
+          BASELINE_BUILD_CACHE_HIT: ${{ steps.baseline_build_cache.outputs.cache-hit }}
+          BASELINE_ROOT: ${{ steps.proof_worktrees.outputs.baseline_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain_dir=/usr/local/lib/mantis-toolchain
+          corepack_home="${RUNNER_TEMP}/mantis-corepack"
+
+          mkdir -p "${RUNNER_TEMP}/mantis-baseline-home"
+          cd "$BASELINE_ROOT"
+          env -i \
+            CI=1 \
+            COREPACK_HOME="$corepack_home" \
+            HOME="${RUNNER_TEMP}/mantis-baseline-home" \
+            OPENCLAW_BUILD_PRIVATE_QA=1 \
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+            PATH="$toolchain_dir:/usr/bin:/bin" \
+            "$toolchain_dir/pnpm" install --frozen-lockfile
+          if [[ "$BASELINE_BUILD_CACHE_HIT" == "true" ]]; then
+            tar -xf "$BASELINE_BUILD_ARCHIVE"
+          else
+            env -i \
+              CI=1 \
+              COREPACK_HOME="$corepack_home" \
+              HOME="${RUNNER_TEMP}/mantis-baseline-home" \
+              OPENCLAW_BUILD_PRIVATE_QA=1 \
+              OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+              PATH="$toolchain_dir:/usr/bin:/bin" \
+              "$toolchain_dir/pnpm" build
+            mkdir -p "$(dirname "$BASELINE_BUILD_ARCHIVE")"
+            tar -cf "$BASELINE_BUILD_ARCHIVE" dist dist-runtime packages/*/dist
+            find extensions -type f -path '*/src/host/*' \
+              \( -name '.bundle.hash' -o -name '*.bundle.js' \) -print0 \
+              | tar --append --file="$BASELINE_BUILD_ARCHIVE" --null --files-from=-
+          fi
+          test -d dist-runtime
+          test -f dist/build-info.json
+          test -f dist/control-ui/index.html
+          test -f dist/index.js -o -f dist/index.mjs
+
+      - name: Save exact baseline build
+        if: steps.baseline_build_cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .artifacts/mantis-baseline-build.tar
+          key: ${{ steps.baseline_build_cache.outputs.cache-primary-key }}
+
+      - name: Prepare candidate proof build
+        env:
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          baseline_root="$worktree_root/baseline"
+          candidate_root="$worktree_root/candidate"
           candidate_git_link="$(cat "$candidate_root/.git")"
-
-          prepare_worktree() {
-            local repo_root="$1"
-            local safe_home="$2"
-            mkdir -p "$safe_home"
-            (
-              cd "$repo_root"
-              env -i \
-                CI=1 \
-                COREPACK_HOME="$corepack_home" \
-                HOME="$safe_home" \
-                OPENCLAW_BUILD_PRIVATE_QA=1 \
-                OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
-                PATH="$toolchain_dir:/usr/bin:/bin" \
-                "$toolchain_dir/pnpm" install --frozen-lockfile
-              env -i \
-                CI=1 \
-                COREPACK_HOME="$corepack_home" \
-                HOME="$safe_home" \
-                OPENCLAW_BUILD_PRIVATE_QA=1 \
-                OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
-                PATH="$toolchain_dir:/usr/bin:/bin" \
-                "$toolchain_dir/pnpm" build
-            )
-          }
-
-          prepare_worktree "$baseline_root" "${RUNNER_TEMP}/mantis-baseline-home"
           sudo useradd --system --no-create-home --shell /usr/sbin/nologin mantis-builder
           sudo chown -R mantis-builder:mantis-builder "$candidate_root"
           sudo /usr/local/sbin/openclaw-mantis-sut-container build "$candidate_root"

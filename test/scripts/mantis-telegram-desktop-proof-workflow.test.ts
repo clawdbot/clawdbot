@@ -492,39 +492,63 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).not.toContain("OPENCLAW_TELEGRAM_USER_PROOF_CMD");
   });
 
-  it("prepares exact proof worktrees before agent secrets are available", () => {
+  it("reuses only the exact baseline build while always preparing both proof lanes", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
-    const step = workflowStep("Prepare proof worktrees with pinned toolchain");
-    const run = step.run ?? "";
+    const create = workflowStep("Create exact proof worktrees");
+    const restore = workflowStep("Restore exact baseline build");
+    const baseline = workflowStep("Prepare baseline proof build");
+    const save = workflowStep("Save exact baseline build");
+    const candidate = workflowStep("Prepare candidate proof build");
+    const createRun = create.run ?? "";
+    const baselineRun = baseline.run ?? "";
+    const candidateRun = candidate.run ?? "";
+    const stepIndex = (name: string) => steps.findIndex((step) => step.name === name);
 
-    expect(steps.findIndex((candidate) => candidate.name === step.name)).toBeLessThan(
-      steps.findIndex(
-        (candidate) => candidate.name === "Install TDLib and restore Telegram QA user",
-      ),
+    expect(stepIndex(create.name ?? "")).toBeLessThan(stepIndex(restore.name ?? ""));
+    expect(stepIndex(restore.name ?? "")).toBeLessThan(stepIndex(baseline.name ?? ""));
+    expect(stepIndex(baseline.name ?? "")).toBeLessThan(stepIndex(save.name ?? ""));
+    expect(stepIndex(save.name ?? "")).toBeLessThan(stepIndex(candidate.name ?? ""));
+    expect(stepIndex(candidate.name ?? "")).toBeLessThan(
+      stepIndex("Install TDLib and restore Telegram QA user"),
     );
 
-    expect(run).toContain('git cat-file -e "${BASELINE_SHA}^{commit}"');
-    expect(run).toContain('git fetch --no-tags origin "pull/${MANTIS_PR_NUMBER}/head"');
-    expect(run).toContain('git worktree add --detach "$baseline_root" "$BASELINE_SHA"');
-    expect(run).toContain('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"');
-    expect(run.match(/env -i/gu)).toHaveLength(2);
-    expect(run).toContain('"$toolchain_dir/pnpm" install --frozen-lockfile');
-    expect(run).toContain('"$toolchain_dir/pnpm" build');
-    expect(run).toContain('sudo chown -R mantis-builder:mantis-builder "$candidate_root"');
-    expect(run).toContain(
+    expect(createRun).toContain('git cat-file -e "${BASELINE_SHA}^{commit}"');
+    expect(createRun).toContain('git fetch --no-tags origin "pull/${MANTIS_PR_NUMBER}/head"');
+    expect(createRun).toContain('git worktree add --detach "$baseline_root" "$BASELINE_SHA"');
+    expect(createRun).toContain('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"');
+    expect(restore.uses).toContain("actions/cache/restore@");
+    expect(restore.with?.key).toContain("needs.validate_refs.outputs.baseline_revision");
+    expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.lockfile_sha256");
+    expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.node_version");
+    expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.pnpm_version");
+    expect(restore.with?.path).toBe(".artifacts/mantis-baseline-build.tar");
+    expect(baseline.if).toBeUndefined();
+    expect(baselineRun).toContain('"$toolchain_dir/pnpm" install --frozen-lockfile');
+    expect(baselineRun).toContain('if [[ "$BASELINE_BUILD_CACHE_HIT" == "true" ]]');
+    expect(baselineRun).toContain('tar -xf "$BASELINE_BUILD_ARCHIVE"');
+    expect(baselineRun).toContain('"$toolchain_dir/pnpm" build');
+    expect(baselineRun).toContain('tar -cf "$BASELINE_BUILD_ARCHIVE"');
+    expect(save.if).toBe("steps.baseline_build_cache.outputs.cache-hit != 'true'");
+    expect(save.uses).toContain("actions/cache/save@");
+    expect(save.with?.path).toBe(restore.with?.path);
+    expect(candidate.if).toBeUndefined();
+    expect(candidateRun).toContain('sudo chown -R mantis-builder:mantis-builder "$candidate_root"');
+    expect(candidateRun).toContain(
       'sudo /usr/local/sbin/openclaw-mantis-sut-container build "$candidate_root"',
     );
-    expect(run).not.toContain("sudo -u mantis-builder");
-    expect(run).not.toContain("sudo setfacl");
-    expect(run).toContain('test "$(cat "$candidate_root/.git")" = "$candidate_git_link"');
-    expect(run).toContain(
+    expect(candidateRun).not.toContain("sudo -u mantis-builder");
+    expect(candidateRun).not.toContain("sudo setfacl");
+    expect(candidateRun).toContain('test "$(cat "$candidate_root/.git")" = "$candidate_git_link"');
+    expect(candidateRun).toContain(
       'git -c safe.directory="$candidate_root" -C "$candidate_root" diff --exit-code',
     );
-    expect(run).not.toContain("GH_TOKEN");
-    expect(run).not.toContain("OPENAI_API_KEY");
-    expect(run).not.toContain("CRABBOX_");
-    expect(run).not.toContain("OPENCLAW_QA_");
+    for (const run of [createRun, baselineRun, candidateRun]) {
+      expect(run).not.toContain("GH_TOKEN");
+      expect(run).not.toContain("OPENAI_API_KEY");
+      expect(run).not.toContain("CRABBOX_");
+      expect(run).not.toContain("OPENCLAW_QA_");
+    }
   });
 
   it("keeps AWS Crabbox settings out of the local desktop proof", () => {
