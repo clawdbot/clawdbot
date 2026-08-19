@@ -333,10 +333,10 @@ describe("Crabbox worker provider", () => {
       name: "wrong PNG dimensions",
       bytes: (() => {
         const bytes = fs.readFileSync(WORKER_WALLPAPER_PATH);
-        bytes.writeUInt32BE(1919, 16);
+        bytes.writeUInt32BE(1023, 16);
         return bytes;
       })(),
-      message: "Crabbox worker wallpaper must be 1920x1080; got 1919x1080",
+      message: "Crabbox worker wallpaper must be 1024x576; got 1023x576",
     },
   ])("rejects $name during provider registration", ({ bytes, message }) => {
     const tempDir = tempDirs.make("openclaw-crabbox-wallpaper-");
