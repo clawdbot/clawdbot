@@ -736,12 +736,12 @@ describe.sequential("TUI PTY harness", () => {
     "preserves xAI account limit errors in terminal output",
     async () => {
       await fixture.run.write("xai limit proof\r");
-      await fixture.run.waitForOutput("monthly spending limit");
-      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
       );
+      await fixture.run.waitForOutput("monthly spending limit");
+      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
     },
     TEST_TIMEOUT_MS,
   );

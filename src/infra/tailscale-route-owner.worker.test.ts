@@ -63,12 +63,39 @@ describe("Tailscale route owner", () => {
         ],
         { execArgv: ["--import", "tsx"], stdio: ["ignore", "ignore", "ignore", "ipc"] },
       );
-      const messages: TailscaleRouteOwnerMessage[] = [];
-      worker.on("message", (message: TailscaleRouteOwnerMessage) => messages.push(message));
+      const ready = new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          worker.off("message", onMessage);
+          worker.off("error", onError);
+          worker.off("exit", onExit);
+        };
+        const onMessage = (message: TailscaleRouteOwnerMessage) => {
+          if (message.type === "ready") {
+            cleanup();
+            resolve();
+          } else if (message.type === "failed") {
+            cleanup();
+            reject(new Error(message.stderr || message.stdout || "route owner failed"));
+          }
+        };
+        const onError = (error: Error) => {
+          cleanup();
+          reject(error);
+        };
+        const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+          cleanup();
+          reject(
+            new Error(
+              `route owner exited before readiness (${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`})`,
+            ),
+          );
+        };
+        worker.on("message", onMessage);
+        worker.once("error", onError);
+        worker.once("exit", onExit);
+      });
       try {
-        await vi.waitFor(() => {
-          expect(messages).toContainEqual({ type: "ready" });
-        });
+        await ready;
         const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
           (resolve) => {
             worker.once("exit", (code, signal) => resolve({ code, signal }));

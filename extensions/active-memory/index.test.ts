@@ -726,12 +726,20 @@ describe("active-memory plugin", () => {
     expect(typeof hooks.agent_end).toBe("function");
   });
 
-  it("prewarms a cold lane-1 lookup before the first QA-channel turn budget starts", async () => {
+  it("completes lane-1 prewarm before the first QA-channel prompt hook", async () => {
     registerPluginConfig({ mode: "off" });
-    let cold = true;
-    const simulatedBudgetMs = 500;
-    const coldDelayMs = 650;
-    const runtimePreparationMs = 500;
+    let releaseLookup: () => void = () => {
+      throw new Error("lookup gate was not initialized");
+    };
+    let resolveLookupStarted: () => void = () => {
+      throw new Error("lookup start gate was not initialized");
+    };
+    const lookupGate = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    const lookupStarted = new Promise<void>((resolve) => {
+      resolveLookupStarted = resolve;
+    });
     const runId = "run-cold-qa-channel";
     const triggerEntry = {
       path: "MEMORY.md",
@@ -743,27 +751,18 @@ describe("active-memory plugin", () => {
       originClass: "agent" as const,
       triggers: "booking a flight",
     };
-    const warmLookup = async () => {
-      if (cold) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, coldDelayMs);
-        });
-        cold = false;
-      }
-    };
-    const search = vi.fn(async () => {
-      await warmLookup();
-      return [];
-    });
+    const search = vi.fn(async () => []);
     const listTriggerCandidates = vi.fn(async () => {
-      await warmLookup();
+      resolveLookupStarted();
+      await lookupGate;
       return [triggerEntry];
     });
     hoisted.getActiveMemorySearchManager.mockResolvedValue({
       manager: { search, listTriggerCandidates },
     } as never);
 
-    const prewarmResult = await requireHook("before_model_resolve")(
+    let prewarmHookReturned = false;
+    const prewarmHook = requireHook("before_model_resolve")(
       { prompt: "Help when booking a flight" },
       {
         agentId: "main",
@@ -773,14 +772,23 @@ describe("active-memory plugin", () => {
         messageProvider: "qa-channel",
         channelId: "owner",
       },
-    );
-    expect(prewarmResult).toBeUndefined();
-    expect(coldDelayMs).toBeGreaterThan(simulatedBudgetMs);
+    ).then((result: unknown) => {
+      prewarmHookReturned = true;
+      return result;
+    });
+    await lookupStarted;
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, runtimePreparationMs);
+      setImmediate(resolve);
     });
 
-    const startedAt = performance.now();
+    expect(prewarmHookReturned).toBe(true);
+    await expect(prewarmHook).resolves.toBeUndefined();
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(listTriggerCandidates).toHaveBeenCalledTimes(1);
+    releaseLookup();
+    await listTriggerCandidates.mock.results[0]?.value;
+    await Promise.resolve();
+
     const result = await runPromptBuild(
       { prompt: "Help when booking a flight" },
       {
@@ -790,11 +798,8 @@ describe("active-memory plugin", () => {
         runId,
       },
     );
-    const firstTurnMs = performance.now() - startedAt;
 
     expectPrependContextContains(result, "Prefer aisle seats.");
-    expect(cold).toBe(false);
-    expect(firstTurnMs).toBeLessThan(simulatedBudgetMs);
     expect(search).toHaveBeenCalledTimes(1);
     expect(listTriggerCandidates).toHaveBeenCalledTimes(1);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
