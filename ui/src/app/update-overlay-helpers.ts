@@ -3,7 +3,6 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { formatCountdown } from "../lib/format.ts";
-import type { ApplicationContext } from "./context.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
 
@@ -24,8 +23,29 @@ export type RecordedUpdateAttempt = {
   failure: UpdateFailureCause | null;
 };
 
+/**
+ * Structural leaf contract, not `Pick<ApplicationContext, ...>`: `context.ts`
+ * reaches this module through `overlays-types.ts`, so naming the context type
+ * here closes an import cycle. Naming only the fields the watcher reads keeps
+ * every real context assignable.
+ */
+type UpdateProgressSources = {
+  gateway: {
+    snapshot: { phase: string };
+    subscribe: (listener: () => void) => () => void;
+  };
+  overlays: {
+    snapshot: {
+      updateRunning: boolean;
+      updateReconciliationPending: boolean;
+      updateStatusBanner: ApplicationStatusBanner | null;
+    };
+    subscribe: (listener: () => void) => () => void;
+  };
+};
+
 export function createUpdateProgressWatcher(
-  context: Pick<ApplicationContext, "gateway" | "overlays">,
+  context: UpdateProgressSources,
 ): (listener: (progress: UpdateProgress) => void) => () => void {
   return (listener) => {
     const emit = () => {
