@@ -597,6 +597,17 @@ describe("TwilioProvider", () => {
     expect(parsed.turnToken).toBe("turn-xyz");
   });
 
+  it.each(["", "   ", "\t\n"])("does not emit blank speech results %#", (speechResult) => {
+    const provider = createProvider();
+    const body = new URLSearchParams({
+      CallSid: "CA-blank",
+      Direction: "inbound",
+      SpeechResult: speechResult,
+    }).toString();
+
+    expect(provider.parseWebhookEvent(createContext(body)).events).toEqual([]);
+  });
+
   it("does not coerce partial Twilio speech confidence values", () => {
     const provider = createProvider();
     const ctx = createContext("CallSid=CA223&Direction=inbound&SpeechResult=hello&Confidence=0.2x");
