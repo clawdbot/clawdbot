@@ -398,6 +398,7 @@ export function updateRegistryWorktree(
   patch: Partial<
     Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
   > & {
+    repositoryIdentity?: Pick<ManagedWorktreeRecord, "repoRoot" | "repoFingerprint">;
     provisionedPaths?: readonly string[];
     provisionedState?: readonly ProvisionedFileState[];
   },
@@ -417,6 +418,10 @@ export function updateRegistryWorktree(
   if ("runEndCleanup" in patch) {
     values.run_end_cleanup_json =
       patch.runEndCleanup === undefined ? null : JSON.stringify(patch.runEndCleanup);
+  }
+  if (patch.repositoryIdentity) {
+    values.repo_root = patch.repositoryIdentity.repoRoot;
+    values.repo_fingerprint = patch.repositoryIdentity.repoFingerprint;
   }
   if (patch.provisionedState !== undefined) {
     values.provisioned_paths_json = JSON.stringify(patch.provisionedState);

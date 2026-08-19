@@ -186,7 +186,6 @@ async function generateName(
 type ResolvedRepository = {
   repoRoot: string;
   sourceRoot: string;
-  commonDir: string;
   originUrl: string;
   fingerprint: string;
 };
@@ -216,7 +215,7 @@ async function resolveRepositoryFromRealPath(
     .update(`${commonDir}\n${originUrl}`)
     .digest("hex")
     .slice(0, 16);
-  return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
+  return { repoRoot: canonicalRoot, sourceRoot, originUrl, fingerprint };
 }
 
 async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> {
@@ -929,7 +928,7 @@ export class ManagedWorktreeService {
     claimToken?: string;
     runEndCleanup?: ManagedWorktreeRunEndCleanup;
   }): Promise<RemoveManagedWorktreeResult> {
-    const record = this.requireLiveRecord(params.id);
+    let record = this.requireLiveRecord(params.id);
     // Claim removal before any cleanliness or snapshot work so a live run lease
     // rejects it and an admitted run cannot start once the claim is held. The
     // opaque token makes the claim exclusive against competing removers; a caller
@@ -937,6 +936,7 @@ export class ManagedWorktreeService {
     const claimToken = params.claimToken ?? randomUUID();
     claimWorktreeRemoval(this.env, { worktreeId: record.id, token: claimToken });
     try {
+      record = await this.rebindLiveRepository(record);
       const state = await lockState(record);
       if (state.kind === "live" || state.kind === "foreign") {
         throw new Error(
@@ -1077,7 +1077,7 @@ export class ManagedWorktreeService {
   }
 
   async removeIfLossless(id: string): Promise<boolean> {
-    const record = this.requireLiveRecord(id);
+    let record = this.requireLiveRecord(id);
     const claimToken = randomUUID();
     const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
       // Retained/failed writes happen after this remover released or aborted its
@@ -1125,6 +1125,7 @@ export class ManagedWorktreeService {
       throw error;
     }
     try {
+      record = await this.rebindLiveRepository(record);
       const status = await requireGit(record.path, ["status", "--porcelain"]);
       const unpushed = await requireGit(record.path, [
         "log",
@@ -1366,6 +1367,27 @@ export class ManagedWorktreeService {
       throw new Error(`unknown active worktree: ${id}`);
     }
     return record;
+  }
+
+  private async rebindLiveRepository(
+    record: ManagedWorktreeRecord,
+  ): Promise<ManagedWorktreeRecord> {
+    const worktreePath = await fs.realpath(record.path);
+    const repository = await resolveRepositoryFromRealPath(worktreePath, record.path);
+    if (repository.sourceRoot !== worktreePath) {
+      throw new WorktreeRepositoryError(`repository does not own worktree: ${record.path}`);
+    }
+    const registeredRepository = await resolveRepository(record.repoRoot);
+    if (registeredRepository.originUrl !== repository.originUrl) {
+      throw new WorktreeRepositoryError(`repository origin does not match: ${record.path}`);
+    }
+    updateRegistryWorktree(this.env, record.id, {
+      repositoryIdentity: {
+        repoRoot: repository.repoRoot,
+        repoFingerprint: repository.fingerprint,
+      },
+    });
+    return { ...record, repoRoot: repository.repoRoot, repoFingerprint: repository.fingerprint };
   }
 
   private async reconcileOrphans(records: ManagedWorktreeRecord[]): Promise<number> {
