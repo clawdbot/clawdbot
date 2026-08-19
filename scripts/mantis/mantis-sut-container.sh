@@ -658,7 +658,7 @@ case "$command" in
     /bin/cp -a "$candidate_root/." "$isolated_root/"
     chown -R mantis-builder:mantis-builder "$isolated_root"
     create_public_only_network "$network_name"
-    run_network_probe "$network_name" 9
+    run_network_probe "$network_name"
     /usr/bin/timeout --signal=TERM --kill-after=30s 30m \
       "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${build_resource_args[@]}" \

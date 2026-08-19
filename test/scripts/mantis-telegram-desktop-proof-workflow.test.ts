@@ -769,6 +769,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain('connects("runner-host", 9)');
     expect(wrapper).toContain("--add-host runner-host:host-gateway");
     expect(wrapper).not.toContain("PROXY_PORT");
+    expect(wrapper.match(/run_network_probe "\$network_name"/gu)).toHaveLength(3);
+    expect(wrapper).not.toMatch(/run_network_probe "\$network_name"[ \t]+\S/u);
+    expect(wrapper).toContain('[[ $# -eq 0 ]] || die "check expects no arguments"');
+    expect(wrapper).toContain("[[ $# -eq 6 ]]");
     const stopSession = laneScript.slice(laneScript.indexOf("async function stopActiveLane"));
     expect(stopSession.indexOf("stopMantisSut(state.sut)")).toBeLessThan(
       stopSession.indexOf("preserveMantisSutRuntimeArtifacts(state.sut"),
