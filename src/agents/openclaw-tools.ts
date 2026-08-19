@@ -16,7 +16,6 @@ import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import {
@@ -167,8 +166,7 @@ export function createOpenClawTools(
     computerContextEpoch?: { value: number };
     /** Registers run-owned cleanup for tools that hold node resources. */
     registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
-    /** Internal review-run restrictions and proposal provenance. */
-    skillWorkshop?: SkillWorkshopRunOptions;
+    skillWorkshop?: import("../skills/workshop/types.js").SkillWorkshopRunOptions;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Trusted sender identity bit for channel action auth. */
@@ -593,6 +591,7 @@ export function createOpenClawTools(
             runId: options?.runId,
             messageId: options?.currentMessageId,
             run: options?.skillWorkshop,
+            modelContextWindowTokens: options?.modelContextWindowTokens,
           }),
         ]),
     ...collectPresentOpenClawTools([progressCardTool]),

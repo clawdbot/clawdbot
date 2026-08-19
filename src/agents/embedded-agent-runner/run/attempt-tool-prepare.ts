@@ -190,7 +190,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
     modelApi: attempt.model.api,
-    modelContextWindowTokens: attempt.model.contextWindow,
+    modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
     modelHasVision: attempt.model.input?.includes("image") ?? false,
     workspaceDir: params.effectiveWorkspace,
     cwd: params.effectiveCwd,
@@ -307,7 +307,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           },
           modelCompat: extractModelCompat(attempt.model),
           modelApi: attempt.model.api,
-          modelContextWindowTokens: attempt.model.contextWindow,
+          modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
           delegationCapability: attempt.delegationCapability,
           modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
             workspaceDir: params.effectiveWorkspace,
