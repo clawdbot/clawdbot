@@ -188,7 +188,6 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     const current = horizontal ? this.height : this.width;
     return html`<resizable-divider
       class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
-      edge="start"
       .orientation=${horizontal ? "horizontal" : "vertical"}
       .label=${label}
       .splitRatio=${1 - current / size}

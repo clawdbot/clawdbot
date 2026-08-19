@@ -603,7 +603,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         ? html`
             <resizable-divider
               class="sidebar-resizer"
-              edge="end"
               .label=${t("nav.resize")}
               .splitRatio=${navigationSnapshot.navWidth / shellWidth}
               .minRatio=${NAV_WIDTH_MIN / shellWidth}

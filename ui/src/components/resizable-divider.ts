@@ -14,7 +14,6 @@ class ResizableDivider extends OpenClawLitElement {
   @property({ type: Number }) maxRatio = 0.7;
   @property({ type: String }) label = "";
   @property({ type: String, reflect: true }) orientation: "vertical" | "horizontal" = "vertical";
-  @property({ type: String, reflect: true }) edge: "center" | "start" | "end" = "center";
   @property({ attribute: false }) measureRatio?: () => number;
   @property({ attribute: false }) measureSize?: () => number;
 
@@ -90,16 +89,18 @@ class ResizableDivider extends OpenClawLitElement {
         background 150ms ease-out,
         height 150ms ease-out;
     }
-    :host([edge="start"])::after {
+    :host(:is(.bp-resizer--right, .tp-resizer--right, .cp-resizer--right))::after {
       inset-inline-start: 0;
     }
-    :host([edge="end"])::after {
+    :host(:is(.sidebar-resizer, .sidebar-column__divider:not([orientation="horizontal"])))::after {
       inset-inline-start: 100%;
     }
-    :host([orientation="horizontal"][edge="start"])::after {
+    :host(
+      [orientation="horizontal"]:is(.bp-resizer--bottom, .tp-resizer--bottom, .cp-resizer--bottom)
+    )::after {
       top: 0;
     }
-    :host([orientation="horizontal"][edge="end"])::after {
+    :host([orientation="horizontal"].sidebar-column__divider)::after {
       top: 100%;
     }
     :host([orientation="horizontal"]:hover)::after,

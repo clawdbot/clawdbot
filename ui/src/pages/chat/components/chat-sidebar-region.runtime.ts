@@ -312,7 +312,6 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     };
     return renderChatResizableDivider({
       className: "sidebar-column__divider",
-      edge: "end",
       label: t("chat.sidePanel.resize"),
       orientation: dock === "bottom" ? "horizontal" : "vertical",
       splitRatio: 0.5,
