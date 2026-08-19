@@ -8,6 +8,7 @@ type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string
 export async function recoverGitHubPublicationWorkspace(
   row: PublicationRow,
   run: (argv: string[], options?: GitCommandOptions) => Promise<string>,
+  assertCurrent: () => void,
 ): Promise<void> {
   const worktree = managedWorktrees.findLiveById(row.worktree_id);
   if (
@@ -24,6 +25,7 @@ export async function recoverGitHubPublicationWorkspace(
     branch: row.branch,
     sourceHeadCommit: row.source_head_commit,
     workspaceTree: row.workspace_tree,
+    assertCurrent,
     run,
   });
 }

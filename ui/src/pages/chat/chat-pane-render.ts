@@ -470,9 +470,6 @@ export class ChatPane extends ChatPaneLayoutRender {
                 requestGitHubPublication(scope.client, {
                   sessionKey,
                   idempotencyKey,
-                  ...(this.sessionPullRequestsBranch?.branch
-                    ? { branch: this.sessionPullRequestsBranch.branch }
-                    : {}),
                 }),
               )
               .then((result) => {

@@ -236,12 +236,56 @@ describe("GitHub publication index update", () => {
       branch: "main",
       sourceHeadCommit: fixture.previousHead,
       workspaceTree: fixture.workspaceTree,
+      assertCurrent: () => undefined,
       run: async (argv, options) =>
         await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
     });
     expect(await git(fixture.cwd, ["write-tree"])).toBe(fixture.workspaceTree);
     expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
     await expect(fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).rejects.toThrow();
+  });
+
+  it("does not install a recovered index after authority changes during Git probes", async () => {
+    const fixture = await createFixture();
+
+    await expect(
+      updateGitHubPublicationBranchAndIndex({
+        ...publicationIndexParams(fixture),
+        updateRef: async () => {
+          await git(fixture.cwd, [
+            "update-ref",
+            "refs/heads/main",
+            fixture.headCommit,
+            fixture.previousHead,
+          ]);
+          throw new Error("response lost");
+        },
+      }),
+    ).rejects.toThrow("workspace recovery is pending");
+
+    let current = true;
+    await expect(
+      recoverGitHubPublicationBranchAndIndex({
+        cwd: fixture.cwd,
+        requestId: REQUEST_ID,
+        branch: "main",
+        sourceHeadCommit: fixture.previousHead,
+        workspaceTree: fixture.workspaceTree,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("publication authority changed");
+          }
+        },
+        run: async (argv, options) => {
+          const result = await git(fixture.cwd, argv.slice(1), options?.input, options?.env);
+          if (argv[1] === "show") {
+            current = false;
+          }
+          return result;
+        },
+      }),
+    ).rejects.toThrow("publication authority changed");
+    await expect(fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).resolves.toBeDefined();
   });
 
   it("does not claim another Git operation's byte-identical index lock", async () => {

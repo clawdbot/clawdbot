@@ -337,8 +337,8 @@ describeControlUiE2e("session pull request chips", () => {
     const request = await gateway.waitForRequest("sessions.github.publish");
     expect(request.params).toMatchObject({
       sessionKey: "main",
-      title: "Publish openclaw/reconciled-publication",
     });
+    expect(request.params).not.toHaveProperty("title");
     expect(JSON.stringify(request.params)).not.toContain("token");
     expect(request.params).not.toHaveProperty("repository");
     await expect
@@ -512,6 +512,8 @@ describeControlUiE2e("session pull request chips", () => {
             branch: "openclaw/rejected-publication",
             additions: 2,
             deletions: 1,
+            createUrl:
+              "https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication",
           },
           rateLimited: false,
           status: "ok",
@@ -526,6 +528,13 @@ describeControlUiE2e("session pull request chips", () => {
     await expect
       .poll(() => page.getByRole("button", { name: "Retry publication" }).count())
       .toBe(1);
+    await expect
+      .poll(() =>
+        page
+          .getByRole("link", { name: "Create a pull request for openclaw/rejected-publication" })
+          .getAttribute("href"),
+      )
+      .toBe("https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication");
     if (captureUiProof) {
       await mkdir(publicationProofDir, { recursive: true });
       await page.screenshot({

@@ -508,6 +508,43 @@ describe("Gateway GitHub publication boundaries", () => {
     expect(commands).toEqual([]);
   });
 
+  it("rejects unsafe Git configuration before starting recovery probes", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const coordinator = createTestGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({ database }),
+    });
+    coordinator.read("create-schema");
+    const requestId = "publication-unsafe-recovery";
+    seedLocalPublication(database, { requestId, status: "requested" });
+    mocks.findWorktreeById.mockReturnValue({
+      id: "worktree-1",
+      repoRoot: "/repo",
+      repoFingerprint: "fingerprint-1",
+      path: "/repo/worktree",
+      branch: BRANCH,
+      baseRef: "origin/main",
+      ownerKind: "session",
+      ownerId: SESSION_KEY,
+    });
+    const fallback = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      if (argv.includes("--local") && argv.includes("--get-regexp")) {
+        return commandResult("core.fsmonitor ./untrusted-monitor\n");
+      }
+      return await fallback(argv, options);
+    });
+
+    await coordinator.resumeLocalRequests();
+
+    expect(coordinator.read(requestId)).toMatchObject({
+      status: "failed",
+      code: "workspace_changed",
+    });
+    expect(commands.some((argv) => argv.join(" ") === "git rev-parse --git-path index")).toBe(
+      false,
+    );
+  });
+
   it("terminalizes an accepted request whose turn ended before workspace acceptance", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });

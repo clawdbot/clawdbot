@@ -371,6 +371,9 @@ describe("renderChatPullRequests", () => {
     expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.textContent).toContain(
       "Retry publication",
     );
+    expect(container.querySelector<HTMLAnchorElement>("a.chat-pr__create")?.href).toBe(
+      "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
+    );
 
     render(
       renderChatPullRequests({
@@ -382,6 +385,9 @@ describe("renderChatPullRequests", () => {
     const retry = container.querySelector<HTMLButtonElement>(".chat-pr__create");
     expect(retry?.textContent).toContain("Retry publication");
     expect(retry?.title).toBe("Repository write permission is missing.");
+    expect(container.querySelector<HTMLAnchorElement>("a.chat-pr__create")?.textContent).toContain(
+      "Create PR",
+    );
   });
 
   it("shows the live-turn route instead of a dead cloud-idle publication action", () => {
@@ -399,7 +405,9 @@ describe("renderChatPullRequests", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-pr__create")).toBeNull();
+    expect(container.querySelector<HTMLAnchorElement>("a.chat-pr__create")?.textContent).toContain(
+      "Create PR",
+    );
     expect(container.querySelector(".chat-pr__publication-outcome")?.textContent).toContain(
       "Start a live agent turn",
     );

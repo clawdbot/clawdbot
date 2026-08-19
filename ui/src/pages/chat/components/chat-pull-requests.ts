@@ -227,6 +227,22 @@ function renderRateLimitWarning() {
   `;
 }
 
+function renderCreatePullRequestLink(branch: ControlUiSessionBranch) {
+  return branch.createUrl
+    ? html`
+        <a
+          class="chat-pr__create"
+          href=${branch.createUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label=${t("chat.pullRequests.createPrLabel", { branch: branch.branch })}
+        >
+          ${t("chat.pullRequests.createPr")}
+        </a>
+      `
+    : nothing;
+}
+
 // Pre-PR state: the branch row mirrors PR chips and offers Gateway-owned
 // publication when available. While rate limited, "no PR found" is unreliable,
 // so the warning stays visible here.
@@ -282,8 +298,11 @@ function renderBranchRow(
                         ? t("chat.pullRequests.retryPublication")
                         : t("chat.pullRequests.publishPr")}
                 </button>
+                ${publication.error || publication.result?.status === "failed"
+                  ? renderCreatePullRequestLink(branch)
+                  : nothing}
               `
-            : nothing}
+            : renderCreatePullRequestLink(branch)}
       </span>
       ${publication?.result?.status === "failed"
         ? html`<div class="chat-pr__publication-outcome" data-state="failed" role="status">

@@ -95,8 +95,13 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
   branch: string;
   sourceHeadCommit: string;
   workspaceTree: string;
+  assertCurrent: () => void;
   run: (argv: string[], options?: GitCommandOptions) => Promise<string>;
 }): Promise<void> {
+  const mutate = async <T>(operation: () => Promise<T>): Promise<T> => {
+    params.assertCurrent();
+    return await operation();
+  };
   const rawIndexPath = await params.run(["git", "rev-parse", "--git-path", "index"], {
     cwd: params.cwd,
   });
@@ -121,7 +126,7 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
       branchHead === params.sourceHeadCommit ||
       (indexTree === params.workspaceTree && (await publicationCommitMatches(params, branchHead)))
     ) {
-      await fs.rm(recoveryPath, { force: true });
+      await mutate(async () => await fs.rm(recoveryPath, { force: true }));
       return;
     }
     throw new GitHubPublicationRecoveryPendingError(
@@ -133,8 +138,8 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
     { cwd: params.cwd },
   );
   if (branchHead === params.sourceHeadCommit) {
-    await fs.rm(lockPath, { force: true });
-    await fs.rm(recoveryPath, { force: true });
+    await mutate(async () => await fs.rm(lockPath, { force: true }));
+    await mutate(async () => await fs.rm(recoveryPath, { force: true }));
     await syncDirectory(path.dirname(indexPath));
     return;
   }
@@ -143,9 +148,9 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
       "GitHub publication workspace branch recovery is pending.",
     );
   }
-  await fs.rename(lockPath, indexPath);
+  await mutate(async () => await fs.rename(lockPath, indexPath));
   await syncDirectory(path.dirname(indexPath));
-  await fs.rm(recoveryPath, { force: true });
+  await mutate(async () => await fs.rm(recoveryPath, { force: true }));
 }
 
 async function publicationCommitMatches(

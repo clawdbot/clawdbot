@@ -14,8 +14,8 @@ import {
   captureGitHubPublicationWorkspaceSnapshot,
   executeGitHubPublication,
   matchesGitHubPublicationIdentityRow,
-  resolveGitHubPublicationFailure,
 } from "./github-publication-executor.js";
+import { resolveGitHubPublicationFailure } from "./github-publication-failure.js";
 import {
   claimGitHubPublicationExecution as claimExecution,
   digestGitHubPublicationRequest as digestRequest,
