@@ -1,5 +1,7 @@
-import { inferControlUiFocusBasePath } from "@openclaw/session-url-contract";
-import { matchControlUiCatalogSharePath } from "@openclaw/session-url-contract/share";
+import {
+  inferControlUiFocusBasePath,
+  matchControlUiCatalogSharePath,
+} from "@openclaw/session-url-contract";
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
@@ -268,11 +270,7 @@ export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): 
     pathname: normalizedPath,
     basePath: normalizedBasePath,
   });
-  return catalogShare &&
-    !catalogShare.shortId.includes("/") &&
-    !isReservedAppRouteSegment(catalogShare.routeSegment)
-    ? "chat"
-    : null;
+  return catalogShare && !isReservedAppRouteSegment(catalogShare.routeSegment) ? "chat" : null;
 }
 
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {

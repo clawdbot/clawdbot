@@ -101,11 +101,33 @@ const DYNAMIC_STARTUP_CASES = [
 }[];
 
 describe("Dynamic route startup bridge", () => {
-  it("keeps generic catalog share paths on chat without stealing existing routes", () => {
-    expect(routeIdFromPath("/beam/0123456789ab")).toBe("chat");
-    expect(routeIdFromPath("/beam/not-valid")).toBe("chat");
+  it("keeps plausible generic catalog share paths on chat", () => {
+    for (const pathname of [
+      "/beam/0123456789ab",
+      "/beam/ABCDEF012345",
+      "/beam/nothexvaluezz",
+      "/beam/0123456789abcdef0123456789abcdef0",
+    ]) {
+      expect(routeIdFromPath(pathname)).toBe("chat");
+    }
     expect(routeIdFromPath("/openclaw/beam/0123456789ab", "/openclaw")).toBe("chat");
     expect(inferBasePathFromPathname("/openclaw/beam/0123456789ab")).toBe("/openclaw");
+  });
+
+  it("does not steal mounted routes, docs, app resources, or reserved routes", () => {
+    for (const pathname of [
+      "/ui/chat",
+      "/ui/config",
+      "/concepts/agent-workspace",
+      "/api/files/1",
+      "/control/avatar/main",
+      "/plugins/diffs/view/id/token",
+      "/beam/0123456789a",
+      "/beam/not-valid",
+    ]) {
+      expect(routeIdFromPath(pathname)).toBeNull();
+    }
+    expect(routeIdFromPath("/control/avatar/main", "/control")).toBeNull();
     expect(routeIdFromPath("/settings/about")).toBe("about");
     expect(routeIdFromPath("/workboard/0123456789ab")).toBe("workboard");
     expect(routeIdFromPath("/plugin/0123456789ab")).toBeNull();

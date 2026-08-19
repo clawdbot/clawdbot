@@ -303,17 +303,26 @@ describe("matchControlUiCatalogSharePath", () => {
     });
   });
 
+  it.each(["/beam/0123456789AB", "/beam/0123456789abcdef0123456789abcdef0", "/beam/nothexvaluezz"])(
+    "parses the route owner before descriptor validation for %s",
+    (pathname) => {
+      expect(matchControlUiCatalogSharePath({ pathname })).toEqual({
+        routeSegment: "beam",
+        shortId: pathname.slice("/beam/".length),
+      });
+    },
+  );
+
   it.each([
+    "/ui/chat",
+    "/ui/config",
+    "/concepts/agent-workspace",
+    "/control/avatar/main",
     "/beam/0123456789a",
-    "/beam/0123456789AB",
-    "/beam/0123456789abcdef0123456789abcdef0",
     "/beam/not-hex-value",
     "/beam/0123456789ab/extra",
-  ])("parses the route owner before descriptor validation for %s", (pathname) => {
-    expect(matchControlUiCatalogSharePath({ pathname })).toEqual({
-      routeSegment: "beam",
-      shortId: pathname.slice("/beam/".length),
-    });
+  ])("rejects ordinary, resource, and implausible share paths for %s", (pathname) => {
+    expect(matchControlUiCatalogSharePath({ pathname })).toBeNull();
   });
 
   it.each(["/other/0123456789ab", "/beam/0123456789ab", "/wrong/openclaw/beam/0123456789ab"])(

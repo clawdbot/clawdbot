@@ -2,7 +2,7 @@ import {
   buildControlUiCatalogSharePath,
   isControlUiCatalogShareId,
   matchControlUiCatalogSharePath,
-} from "@openclaw/session-url-contract/share";
+} from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { INTERNAL_SESSION_PATH_PARAM, isReservedAppRouteSegment } from "../../app-route-paths.ts";
@@ -12,7 +12,7 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
-import type { ChatRouteData } from "./route-loader.ts";
+import type { ChatRouteData } from "./session-route-data.ts";
 
 function targetFromLocation(context: ApplicationContext, location: RouteLocation) {
   const matchPath = (pathname: string) =>

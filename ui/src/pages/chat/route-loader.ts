@@ -28,7 +28,6 @@ import type { SessionRouteContext as ApplicationContext } from "./route-loader-c
 import {
   missingSessionRouteData,
   querySessionReference,
-  type MissingSessionRouteData,
   uniqueShortIdPrefix,
 } from "./route-loader-session-reference.ts";
 import { findCachedShortSession, sessionKeyUuid } from "./route-loader-short-cache.ts";
@@ -38,43 +37,9 @@ import {
   type SessionRoutePresentation,
 } from "./route-loader-short-resolve.ts";
 
-type SessionCandidate = {
-  agentId: string;
-  displayName: string;
-  href: string;
-  idPrefix: string;
-};
+import type { ChatRouteData, SessionRouteCandidate } from "./session-route-data.ts";
 
-export type ChatRouteData =
-  | {
-      kind: "session";
-      sessionKey: string;
-      agentId?: string;
-      draft?: string;
-      focusComposer?: boolean;
-      face: BoardFace;
-      shortId?: string;
-      canonicalLocation?: RouteLocation;
-      canonicalLocationReady?: Promise<RouteLocation | null>;
-      canonicalLocationSource?: RouteLocation;
-    }
-  | {
-      kind: "ambiguous";
-      shortId: string;
-      candidates: SessionCandidate[];
-      truncated: boolean;
-      face: BoardFace;
-    }
-  | MissingSessionRouteData
-  | { kind: "route-error"; message: string; face: "chat" };
-
-export type SessionChatRouteData = Omit<
-  Extract<ChatRouteData, { kind: "session" }>,
-  "face" | "kind"
-> & {
-  face?: BoardFace;
-  kind?: "session";
-};
+export type { ChatRouteData, SessionChatRouteData } from "./session-route-data.ts";
 
 function isPreferenceDerivedFace(location: RouteLocation): boolean {
   return new URLSearchParams(location.search).get(SESSION_FACE_PREFERENCE_PARAM) === "1";
@@ -194,7 +159,7 @@ function candidatesForResolution(
   resolution: Extract<SessionReferenceResolution, { kind: "ambiguous" }>,
   location: RouteLocation,
   preferenceDerived: boolean,
-): SessionCandidate[] {
+): SessionRouteCandidate[] {
   const resolvedRows = resolution.sessions.flatMap((row) => {
     const uuid = sessionKeyUuid(row.key);
     return uuid ? [{ row, uuid }] : [];

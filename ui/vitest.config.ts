@@ -71,10 +71,6 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/parse.ts"),
   },
   {
-    find: "@openclaw/session-url-contract/share",
-    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/share.ts"),
-  },
-  {
     find: "@openclaw/session-url-contract",
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
   },

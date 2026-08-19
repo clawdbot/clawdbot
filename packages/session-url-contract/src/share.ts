@@ -3,6 +3,7 @@ import { normalizeControlUiBasePath } from "./grammar.js";
 
 const LOWERCASE_HEX_RE = /^[0-9a-f]+$/u;
 const CATALOG_SHARE_ROUTE_SEGMENT_RE = /^[a-z][a-z0-9-]*$/u;
+const CATALOG_SHARE_PATH_CANDIDATE_RE = /^[a-z0-9]{12,}$/iu;
 
 export type ControlUiCatalogShareRoute = {
   kind: "thread-id-prefix";
@@ -45,14 +46,16 @@ export function matchControlUiCatalogSharePath(params: {
     return null;
   }
   const [routeSegment, ...idSegments] = params.pathname.slice(prefix.length).split("/");
+  const shortId = idSegments[0];
   if (
     !routeSegment ||
     !isControlUiCatalogShareRouteSegment(routeSegment) ||
-    idSegments.length === 0
+    idSegments.length !== 1 ||
+    !shortId ||
+    !CATALOG_SHARE_PATH_CANDIDATE_RE.test(shortId)
   ) {
     return null;
   }
-  const shortId = idSegments.join("/");
   return {
     routeSegment,
     shortId,
