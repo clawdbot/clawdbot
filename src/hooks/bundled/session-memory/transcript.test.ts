@@ -1,9 +1,13 @@
 // Session-memory transcript extraction strips model/runtime artifacts before persistence.
 import { describe, expect, it } from "vitest";
-import {
-  getRecentSessionContentFromEvents,
-  getRecentSessionProjectionFromEvents,
-} from "./transcript.js";
+import { getRecentSessionProjectionFromEvents } from "./transcript.js";
+
+function getRecentSessionContentFromEvents(
+  events: readonly unknown[],
+  messageCount?: number,
+): string | null {
+  return getRecentSessionProjectionFromEvents(events, messageCount)?.content ?? null;
+}
 
 function message(role: "user" | "assistant", content: unknown) {
   return {

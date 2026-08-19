@@ -19,7 +19,14 @@ import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { getRecentSessionContentFromEvents } from "./transcript.js";
+import { getRecentSessionProjectionFromEvents } from "./transcript.js";
+
+function getRecentSessionContentFromEvents(
+  events: readonly unknown[],
+  messageCount?: number,
+): string | null {
+  return getRecentSessionProjectionFromEvents(events, messageCount)?.content ?? null;
+}
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({

@@ -5,22 +5,29 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { ensureDirectory, logVerboseCopy, resolveBuildCopyContext } from "./lib/copy-assets.ts";
+import { pathToFileURL } from "node:url";
+import { logVerboseCopy, resolveBuildCopyContext } from "./lib/copy-assets.ts";
 
 const context = resolveBuildCopyContext(import.meta.url);
 
-const srcBundled = path.join(context.projectRoot, "src", "hooks", "bundled");
-const distBundled = path.join(context.projectRoot, "dist", "bundled");
-
-function copyHookMetadata() {
-  if (!fs.existsSync(srcBundled)) {
-    console.warn(`${context.prefix} Source directory not found:`, srcBundled);
-    return;
+export function copyHookMetadata(
+  params: {
+    rootDir?: string;
+    fs?: typeof fs;
+    verbose?: boolean;
+  } = {},
+): number {
+  const rootDir = params.rootDir ?? context.projectRoot;
+  const fsImpl = params.fs ?? fs;
+  const srcBundled = path.join(rootDir, "src", "hooks", "bundled");
+  const distBundled = path.join(rootDir, "dist", "bundled");
+  if (!fsImpl.existsSync(srcBundled)) {
+    return 0;
   }
 
-  ensureDirectory(distBundled);
+  fsImpl.mkdirSync(distBundled, { recursive: true });
 
-  const entries = fs.readdirSync(srcBundled, { withFileTypes: true });
+  const entries = fsImpl.readdirSync(srcBundled, { withFileTypes: true });
   let copiedCount = 0;
 
   for (const entry of entries) {
@@ -34,19 +41,22 @@ function copyHookMetadata() {
     const srcHookMd = path.join(srcHookDir, "HOOK.md");
     const distHookMd = path.join(distHookDir, "HOOK.md");
 
-    if (!fs.existsSync(srcHookMd)) {
-      console.warn(`${context.prefix} No HOOK.md found for ${hookName}`);
+    if (!fsImpl.existsSync(srcHookMd)) {
       continue;
     }
 
-    ensureDirectory(distHookDir);
+    fsImpl.mkdirSync(distHookDir, { recursive: true });
 
-    fs.copyFileSync(srcHookMd, distHookMd);
+    fsImpl.copyFileSync(srcHookMd, distHookMd);
     copiedCount += 1;
-    logVerboseCopy(context, `Copied ${hookName}/HOOK.md`);
+    if (params.verbose) {
+      logVerboseCopy(context, `Copied ${hookName}/HOOK.md`);
+    }
   }
-
-  console.log(`${context.prefix} Copied ${copiedCount} hook metadata files.`);
+  return copiedCount;
 }
 
-copyHookMetadata();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const copiedCount = copyHookMetadata({ verbose: true });
+  console.log(`${context.prefix} Copied ${copiedCount} hook metadata files.`);
+}

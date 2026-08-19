@@ -198,11 +198,3 @@ export function getRecentSessionProjectionFromEvents(
       : "agent",
   };
 }
-
-/** Renders recent user/assistant transcript events into session memory text. */
-export function getRecentSessionContentFromEvents(
-  events: readonly unknown[],
-  messageCount = 15,
-): string | null {
-  return getRecentSessionProjectionFromEvents(events, messageCount)?.content ?? null;
-}
