@@ -7,6 +7,7 @@ import {
   listAgentEntriesWithSource,
   listAgentIds,
   resolveAgentConfig,
+  resolveAgentOperationAgentId,
   resolveAgentWorkspaceDir,
   resolveAmbientOwnerAgentId,
   resolveDefaultAgentDir,
@@ -152,6 +153,26 @@ describe("agent roster resolution", () => {
     } satisfies OpenClawConfig;
 
     expect(resolveDefaultAgentDir(config)).toBe("/tmp/openclaw-beta-agent");
+  });
+
+  it("preserves legacy default ownership for non-explicit CLI operations", () => {
+    const config = {
+      agents: {
+        entries: { main: {}, ops: { default: true } },
+      },
+    };
+
+    expect(resolveAgentOperationAgentId(config)).toBe("ops");
+    expect(
+      resolveAgentOperationAgentId({
+        ...config,
+        agents: {
+          ...config.agents,
+          ownership: "explicit" as const,
+          defaults: { systemAgent: { agentId: "main" } },
+        },
+      }),
+    ).toBe("main");
   });
 
   it("resolves defaults only for the rosterless implicit main agent", () => {

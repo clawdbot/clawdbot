@@ -242,6 +242,18 @@ export function resolveAmbientOwnerAgentId(
   return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
+/** Resolves a CLI operation owner while preserving legacy default markers outside explicit fleets. */
+export function resolveAgentOperationAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+  context?: AgentSelectionContext,
+): string {
+  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
+    return resolveSystemAgentTargetAgentId(cfg, requestedAgentId, context);
+  }
+  return resolveDefaultAgentId(cfg, context);
+}
+
 /**
  * @deprecated Ambient system work uses resolveAmbientOwnerAgentId so the configured
  * system agent is honored; explicit-selection surfaces use resolveSoleAgentId. This

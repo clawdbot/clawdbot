@@ -1,7 +1,7 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Implements guided and non-interactive `openclaw channels add` account setup.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
+import { resolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   applyPreparedChannelAccountConfiguration,
@@ -65,7 +65,7 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
         ({ listTrustedChannelPluginCatalogEntries }) =>
           listTrustedChannelPluginCatalogEntries({
             cfg,
-            workspaceDir: resolveAgentWorkspaceDir(cfg, resolveSystemAgentTargetAgentId(cfg)),
+            workspaceDir: resolveAgentWorkspaceDir(cfg, resolveAgentOperationAgentId(cfg)),
           }),
       )
     : await import("../../channels/plugins/catalog.js").then(
@@ -188,7 +188,7 @@ async function channelsAddCommandImpl(
   let channel = normalizeChannelId(rawChannel);
   let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
-    resolveAgentWorkspaceDir(nextConfig, resolveSystemAgentTargetAgentId(nextConfig));
+    resolveAgentWorkspaceDir(nextConfig, resolveAgentOperationAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.
   const loadScopedPlugin = async (
     channelId: ChannelId,

@@ -2,7 +2,7 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
-import { listAgentIds, resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
   listProfilesForProvider,
@@ -111,7 +111,7 @@ export function resolveCapabilityProviderAgentId(
   if (rawAgentId !== undefined && !requestedAgentId) {
     throw new Error("--agent must not be blank");
   }
-  const agentId = resolveAmbientOwnerAgentId(cfg, requestedAgentId, {
+  const agentId = resolveAgentOperationAgentId(cfg, requestedAgentId, {
     surface,
     hint: "Pass --agent <id> or set agents.defaults.systemAgent.agentId.",
   });
