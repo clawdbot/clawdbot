@@ -1939,6 +1939,64 @@ describe("createOpenClawCodingTools", () => {
     expect(policy?.allow).not.toContain("message");
   });
 
+  it("preserves the original requester across chained sessions_send handoffs", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    createOpenClawCodingTools({
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      runtimeToolAllowlist: ["read", "exec", "sessions_send"],
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:source",
+        sourceTool: "sessions_send",
+      },
+      trustedSessionHandoff: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "exec", "sessions_send"],
+          deny: [],
+        },
+        requester: {
+          messageProvider: "whatsapp",
+          senderId: "guest",
+        },
+      },
+    });
+    const chainedHandoff = latestCreateOpenClawToolsOptions().sessionsSendHandoff;
+
+    expect(chainedHandoff?.requester).toEqual({
+      messageProvider: "whatsapp",
+      senderId: "guest",
+    });
+    if (!chainedHandoff) {
+      throw new Error("expected chained sessions_send handoff");
+    }
+
+    const targetTools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "id:guest": { deny: ["exec"] },
+          },
+        },
+      },
+      messageProvider: "whatsapp",
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      runtimeToolAllowlist: chainedHandoff.inheritedToolPolicy.allow,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:intermediate",
+        sourceTool: "sessions_send",
+      },
+      trustedSessionHandoff: chainedHandoff,
+    });
+
+    expect(toolNameList(targetTools)).toContain("read");
+    expect(toolNameList(targetTools)).not.toContain("exec");
+  });
+
   it("filters session tools for sub-agent sessions by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",

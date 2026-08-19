@@ -873,21 +873,27 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             inheritedToolDenylist,
             sessionsSendHandoff: {
               inheritedToolPolicy: sessionsSendToolPolicy,
-              requester: {
-                ...(capabilityProfile.conversation.messageProvider
-                  ? { messageProvider: capabilityProfile.conversation.messageProvider }
-                  : {}),
-                ...(capabilityProfile.sender.id ? { senderId: capabilityProfile.sender.id } : {}),
-                ...(capabilityProfile.sender.name
-                  ? { senderName: capabilityProfile.sender.name }
-                  : {}),
-                ...(capabilityProfile.sender.username
-                  ? { senderUsername: capabilityProfile.sender.username }
-                  : {}),
-                ...(capabilityProfile.sender.e164
-                  ? { senderE164: capabilityProfile.sender.e164 }
-                  : {}),
-              },
+              // Chained sends retain the original authenticated requester. Replacing it with
+              // an internal target's ingress identity would widen sender policy on the next hop.
+              requester: options?.trustedSessionHandoff
+                ? { ...options.trustedSessionHandoff.requester }
+                : {
+                    ...(capabilityProfile.conversation.messageProvider
+                      ? { messageProvider: capabilityProfile.conversation.messageProvider }
+                      : {}),
+                    ...(capabilityProfile.sender.id
+                      ? { senderId: capabilityProfile.sender.id }
+                      : {}),
+                    ...(capabilityProfile.sender.name
+                      ? { senderName: capabilityProfile.sender.name }
+                      : {}),
+                    ...(capabilityProfile.sender.username
+                      ? { senderUsername: capabilityProfile.sender.username }
+                      : {}),
+                    ...(capabilityProfile.sender.e164
+                      ? { senderE164: capabilityProfile.sender.e164 }
+                      : {}),
+                  },
             },
             onYield: options?.onYield,
             claimYieldCompletion: options?.claimYieldCompletion,
