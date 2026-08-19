@@ -71,7 +71,7 @@ export function createResult(
     params.operation === "settled-tool-finalization"
       ? {
           hadPotentialSideEffects: false,
-          replaySafe: state.nativeReplayInvalid !== true && !transcriptPersistenceFailed,
+          replaySafe: !transcriptPersistenceFailed,
         }
       : computeReplayMetadata({
           priorReplayInvalid:

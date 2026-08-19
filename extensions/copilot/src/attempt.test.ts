@@ -1451,6 +1451,7 @@ describe("runCopilotAttempt", () => {
     expect(
       (requireResumeSessionConfig(sdk) as { continuePendingWork?: boolean }).continuePendingWork,
     ).toBe(false);
+    expect(requireResumeSessionConfig(sdk)).not.toHaveProperty("suppressResumeEvent");
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
     expect(result.replayMetadata.replaySafe).toBe(true);
     expect(
@@ -4540,7 +4541,15 @@ describe("runCopilotAttempt", () => {
       );
       const sdk = makeFakeSdk({
         onResumeSession: (session, _sessionId, config) => {
-          session.sendAndWait.mockImplementationOnce(async () => {
+          session.sendAndWait.mockImplementationOnce(async (options) => {
+            const systemMessage = (config.systemMessage as { content?: unknown } | undefined)
+              ?.content;
+            if (typeof systemMessage === "string") {
+              session.emit("system.message", {
+                __eventId: "finalization-system",
+                content: systemMessage,
+              });
+            }
             if (config.suppressResumeEvent !== true) {
               session.emit("assistant.message", {
                 __eventId: "prior-tool-assistant",
@@ -4558,6 +4567,12 @@ describe("runCopilotAttempt", () => {
                 toolCallId: "prior-tool-call",
               });
             }
+            const prompt = (options as { prompt?: unknown } | undefined)?.prompt;
+            session.emit("user.message", {
+              __eventId: "finalization-user",
+              content: typeof prompt === "string" ? prompt : "",
+              transformedContent: `sdk-wrapped:${typeof prompt === "string" ? prompt : ""}`,
+            });
             return makeAssistantMessageEvent("final answer");
           });
         },
@@ -4602,6 +4617,10 @@ describe("runCopilotAttempt", () => {
       expect(result.currentAttemptCompletedAssistant).toMatchObject({
         content: [{ type: "text", text: "final answer" }],
         stopReason: "stop",
+      });
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: false,
+        replaySafe: true,
       });
       expect({
         itemLifecycle: result.itemLifecycle,
