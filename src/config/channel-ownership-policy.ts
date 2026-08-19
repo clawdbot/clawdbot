@@ -3,12 +3,16 @@
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { collectPluginIdsForConfiguredChannel } from "./channel-activation-candidates.js";
 import {
   type ChannelOwnershipPolicy,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
+import {
+  hasMeaningfulChannelConfigShallow,
+  resolveChannelConfigRecord,
+} from "./channel-configured-shared.js";
 import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js";
-import { resolveConfiguredPluginAutoEnableCandidates } from "./plugin-auto-enable.shared.js";
 import {
   isPluginExplicitlySelected,
   isPluginPolicyDisabled,
@@ -36,32 +40,32 @@ export function createConfiguredChannelOwnershipPolicy(params: {
 
   // Auto-enable's per-channel candidate set is what activation actually selects from. Once any
   // claimant declares `preferOver`, that set narrows to the declaring pair, so a third claimant is
-  // never activated on that channel however close its origin sits. Ownership read only "not
+  // never auto-enabled on that channel however close its origin sits. Ownership read only "not
   // policy-disabled" and could hand it the strict schema anyway, leaving the operator's config
   // validated against a plugin the runtime never loads.
   //
-  // Built from `sourceConfig` for the reason above: the materialized config reports auto-enabled
-  // plugins as hand-picked. Computed once on first use — a channel-scoped predicate is called per
-  // claimant per channel, and candidate discovery walks the whole registry.
-  let candidatesByChannel: Map<string, Set<string>> | undefined;
+  // Read through the leaf contract rather than the auto-enable barrel: importing the barrel pulls
+  // the plugin loader graph into an import cycle, and re-deriving the rule here would let it drift
+  // from the one activation applies.
+  //
+  // Narrowing applies only to channels the authored config configures. The shallow check is
+  // deliberate: auto-enable also treats env and persisted state as presence signals, and being
+  // stricter here only means declining to narrow, which preserves the previous behavior.
+  const candidatesByChannel = new Map<string, Set<string>>();
   const channelCandidates = (channelId: string): Set<string> | undefined => {
-    if (!candidatesByChannel) {
-      candidatesByChannel = new Map();
-      for (const candidate of resolveConfiguredPluginAutoEnableCandidates({
-        config: sourceConfig,
-        env: params.env,
-        registry: params.registry,
-      })) {
-        if (candidate.kind !== "channel-configured") {
-          continue;
-        }
-        const key = normalizeChatChannelId(candidate.channelId) ?? candidate.channelId;
-        const forChannel = candidatesByChannel.get(key) ?? new Set<string>();
-        forChannel.add(candidate.pluginId);
-        candidatesByChannel.set(key, forChannel);
-      }
+    const key = normalizeChatChannelId(channelId) ?? channelId;
+    const cached = candidatesByChannel.get(key);
+    if (cached) {
+      return cached;
     }
-    return candidatesByChannel.get(normalizeChatChannelId(channelId) ?? channelId);
+    if (!hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(sourceConfig, key))) {
+      return undefined;
+    }
+    const candidates = new Set(
+      collectPluginIdsForConfiguredChannel(key, params.registry, params.env),
+    );
+    candidatesByChannel.set(key, candidates);
+    return candidates;
   };
 
   return {
@@ -69,13 +73,21 @@ export function createConfiguredChannelOwnershipPolicy(params: {
       if (isPluginPolicyDisabled(params.config, pluginId, resolveAlias)) {
         return false;
       }
+      const alias = resolveAlias(pluginId);
+      // An operator can activate a plugin by hand, which bypasses candidate discovery entirely:
+      // `plugins.entries.<id>.enabled: true` is explicit activation at startup. Narrowing to the
+      // auto-enable candidates alone would report such a claimant inactive while the runtime runs
+      // it, which is the same disagreement in the other direction.
+      if (isPluginExplicitlySelected(sourceConfig, alias)) {
+        return true;
+      }
       const candidates = channelCandidates(channelId);
       if (!candidates) {
         // The operator has not configured this channel, so activation materializes nothing to
         // narrow with. Policy disablement stays the only signal, as before.
         return true;
       }
-      return candidates.has(pluginId) || candidates.has(resolveAlias(pluginId));
+      return candidates.has(pluginId) || candidates.has(alias);
     },
     isPluginExplicitlySelected: (pluginId) =>
       isPluginExplicitlySelected(sourceConfig, resolveAlias(pluginId)),

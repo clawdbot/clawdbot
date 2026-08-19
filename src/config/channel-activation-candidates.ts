@@ -1,0 +1,67 @@
+// The per-channel candidate set activation selects from, as a leaf contract.
+//
+// Auto-enable owns activation, but channel schema ownership has to agree with it: a claimant
+// activation never selects must not supply the schema an operator's config is validated against.
+// Both sides import this module rather than one importing the other, because routing ownership
+// through the auto-enable barrel drags the whole plugin loader graph into an import cycle, and a
+// second copy of the rule would be free to drift from the one activation actually applies.
+import { normalizeChatChannelId } from "../channels/registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js";
+
+export function normalizeManifestChannelId(channelId: string): string {
+  return normalizeChatChannelId(channelId) ?? channelId;
+}
+
+export function collectPluginIdsForConfiguredChannel(
+  channelId: string,
+  registry: PluginManifestRegistry,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const normalizedChannelId = normalizeManifestChannelId(channelId);
+  const builtInId = normalizeChatChannelId(normalizedChannelId);
+  const claims: Array<{ plugin: PluginManifestRecord; preferOver: readonly string[] }> = [];
+  for (const record of registry.plugins) {
+    if (
+      (record.channels ?? []).some((id) => normalizeManifestChannelId(id) === normalizedChannelId)
+    ) {
+      claims.push({
+        plugin: record,
+        // Every source auto-enable honors, not just `channelConfigs`: a catalog-declared
+        // replacement has to reach the preferOver filter below or it is never a candidate, and
+        // channel schema ownership resolves the same facts.
+        preferOver: resolveChannelPreferOverIds({
+          record,
+          channelId: normalizedChannelId,
+          env,
+        }),
+      });
+    }
+  }
+
+  if (claims.length === 0) {
+    return builtInId ? [builtInId] : [];
+  }
+
+  const claimIds = new Set(claims.map((claim) => claim.plugin.id));
+  if (builtInId) {
+    claimIds.add(builtInId);
+  }
+  const preferredIds = new Set<string>();
+  for (const claim of claims) {
+    for (const preferredOverId of claim.preferOver) {
+      if (claimIds.has(preferredOverId)) {
+        // Keep both sides as candidates. The preferOver filter later disables
+        // the lower-priority plugin unless the preferred plugin is explicitly
+        // disabled/denied, preserving fallback to bundled channel support.
+        preferredIds.add(claim.plugin.id);
+        preferredIds.add(preferredOverId);
+      }
+    }
+  }
+
+  if (preferredIds.size > 0) {
+    return [...preferredIds].toSorted((left, right) => left.localeCompare(right));
+  }
+  return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
+}

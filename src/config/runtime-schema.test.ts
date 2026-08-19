@@ -864,4 +864,75 @@ describe("channel ownership excludes claimants activation never selects", () => 
 
     expect(clickclack?.properties).not.toHaveProperty("otherToken");
   });
+  // Codex P1 3809638011 on #123209: `plugins.entries.<id>.enabled: true` is explicit activation at
+  // startup (`config-activation-shared.ts:110`), which bypasses auto-enable candidate discovery
+  // entirely. Narrowing to the candidate set alone would report this claimant inactive while the
+  // runtime runs it — the same config/runtime disagreement, in the other direction.
+  it("keeps an explicitly enabled claimant active even when it is not a candidate", () => {
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      channels: { clickclack: { enabled: true, token: "x" } },
+      plugins: { entries: { "clickclack-other": { enabled: true } } },
+    });
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "clickclack-plus",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              preferOver: ["clickclack-core"],
+              schema: {
+                type: "object",
+                properties: { plusToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+        {
+          id: "clickclack-core",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { coreToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+        {
+          // Closest origin and hand-enabled by the operator, so startup activates it and channel
+          // registration keeps it as the first owner.
+          id: "clickclack-other",
+          origin: "config",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { otherToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = loadGatewayRuntimeConfigSchema().schema as {
+      properties?: Record<string, unknown>;
+    };
+    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+    const clickclack = channels?.properties?.clickclack as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(clickclack?.properties).toHaveProperty("otherToken");
+  });
 });

@@ -33,11 +33,12 @@ import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
-import { isChannelConfigured } from "./channel-configured.js";
 import {
-  resolveChannelPreferOverIds,
-  shouldSkipPreferredPluginAutoEnable,
-} from "./plugin-auto-enable.prefer-over.js";
+  collectPluginIdsForConfiguredChannel,
+  normalizeManifestChannelId,
+} from "./channel-activation-candidates.js";
+import { isChannelConfigured } from "./channel-configured.js";
+import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
@@ -241,63 +242,6 @@ function resolvePluginIdForConfiguredWebSearchProvider(
       (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProviderId,
     ),
   )?.id;
-}
-
-function normalizeManifestChannelId(channelId: string): string {
-  return normalizeChatChannelId(channelId) ?? channelId;
-}
-
-function collectPluginIdsForConfiguredChannel(
-  channelId: string,
-  registry: PluginManifestRegistry,
-  env: NodeJS.ProcessEnv,
-): string[] {
-  const normalizedChannelId = normalizeManifestChannelId(channelId);
-  const builtInId = normalizeChatChannelId(normalizedChannelId);
-  const claims: Array<{ plugin: PluginManifestRecord; preferOver: readonly string[] }> = [];
-  for (const record of registry.plugins) {
-    if (
-      (record.channels ?? []).some((id) => normalizeManifestChannelId(id) === normalizedChannelId)
-    ) {
-      claims.push({
-        plugin: record,
-        // Every source auto-enable honors, not just `channelConfigs`: a catalog-declared
-        // replacement has to reach the preferOver filter below or it is never a candidate, and
-        // channel schema ownership resolves the same facts.
-        preferOver: resolveChannelPreferOverIds({
-          record,
-          channelId: normalizedChannelId,
-          env,
-        }),
-      });
-    }
-  }
-
-  if (claims.length === 0) {
-    return builtInId ? [builtInId] : [];
-  }
-
-  const claimIds = new Set(claims.map((claim) => claim.plugin.id));
-  if (builtInId) {
-    claimIds.add(builtInId);
-  }
-  const preferredIds = new Set<string>();
-  for (const claim of claims) {
-    for (const preferredOverId of claim.preferOver) {
-      if (claimIds.has(preferredOverId)) {
-        // Keep both sides as candidates. The preferOver filter later disables
-        // the lower-priority plugin unless the preferred plugin is explicitly
-        // disabled/denied, preserving fallback to bundled channel support.
-        preferredIds.add(claim.plugin.id);
-        preferredIds.add(preferredOverId);
-      }
-    }
-  }
-
-  if (preferredIds.size > 0) {
-    return [...preferredIds].toSorted((left, right) => left.localeCompare(right));
-  }
-  return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
 }
 
 function collectConfiguredChannelIds(
