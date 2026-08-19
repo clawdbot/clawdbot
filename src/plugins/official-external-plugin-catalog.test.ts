@@ -2,11 +2,13 @@ import crypto from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import officialExternalChannelCatalog from "../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { PluginPackageInstall } from "./manifest.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   getOfficialExternalChannelSecretContract,
@@ -35,6 +37,7 @@ type ExtensionPackageMetadata = {
   name?: unknown;
   openclaw?: {
     build?: { bundledDist?: unknown };
+    install?: PluginPackageInstall;
     release?: { publishToClawHub?: unknown; publishToNpm?: unknown };
   };
 };
@@ -57,7 +60,11 @@ function resolveBundledCatalogIdentity(entry: BundledCatalogIdentity): string | 
   );
 }
 
-function listPublishedExternalPluginOwners(): Array<{ id: string; packageName: string }> {
+function listPublishedExternalPluginOwners(): Array<{
+  id: string;
+  packageName: string;
+  install: PluginPackageInstall;
+}> {
   const extensionsDir = new URL("../../extensions/", import.meta.url);
   return readdirSync(extensionsDir, { withFileTypes: true }).flatMap((entry) => {
     if (!entry.isDirectory()) {
@@ -83,6 +90,10 @@ function listPublishedExternalPluginOwners(): Array<{ id: string; packageName: s
     if (typeof packageName !== "string" || !packageName.trim()) {
       throw new Error(`${entry.name} publishes without a package name`);
     }
+    const install = packageJson.openclaw?.install;
+    if (!install) {
+      throw new Error(`${entry.name} publishes without install metadata`);
+    }
     let manifest: { id?: unknown };
     try {
       manifest = JSON.parse(
@@ -94,7 +105,7 @@ function listPublishedExternalPluginOwners(): Array<{ id: string; packageName: s
     if (typeof manifest.id !== "string" || !manifest.id.trim()) {
       throw new Error(`${entry.name} publishes without a manifest id`);
     }
-    return [{ id: manifest.id, packageName }];
+    return [{ id: manifest.id, packageName, install }];
   });
 }
 
@@ -339,15 +350,36 @@ describe("official external plugin catalog", () => {
     expectBundledFallback(fallback);
     const fallbackIds = fallback.entries.map(resolveOfficialExternalPluginId);
 
-    const gaps = listPublishedExternalPluginOwners().flatMap(({ id, packageName }) => {
+    const gaps = listPublishedExternalPluginOwners().flatMap(({ id, packageName, install }) => {
       const catalogMatches = catalogs.flatMap(([catalog, entries]) =>
-        entries.filter((entry) => resolveBundledCatalogIdentity(entry) === id).map(() => catalog),
+        entries
+          .filter((entry) => resolveBundledCatalogIdentity(entry) === id)
+          .map((entry) => ({ catalog, entry })),
       );
+      const catalogEntry = catalogMatches.length === 1 ? catalogMatches[0]?.entry : undefined;
+      const catalogInstall = catalogEntry
+        ? resolveOfficialExternalPluginInstall(catalogEntry)
+        : undefined;
       const official = isOfficialExternalPluginId(id);
       const bundledFallbackMatches = fallbackIds.filter((candidate) => candidate === id).length;
-      return catalogMatches.length === 1 && official && bundledFallbackMatches === 1
+      return catalogMatches.length === 1 &&
+        catalogEntry?.name === packageName &&
+        isDeepStrictEqual(catalogInstall, install) &&
+        official &&
+        bundledFallbackMatches === 1
         ? []
-        : [{ id, packageName, catalogMatches, official, bundledFallbackMatches }];
+        : [
+            {
+              id,
+              packageName,
+              install,
+              catalogMatches: catalogMatches.map(({ catalog }) => catalog),
+              catalogPackageName: catalogEntry?.name,
+              catalogInstall,
+              official,
+              bundledFallbackMatches,
+            },
+          ];
     });
 
     expect(gaps).toEqual([]);
