@@ -24,6 +24,7 @@ import {
 } from "../config/sessions/targets-read-availability.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
@@ -695,6 +696,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       : undefined;
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
   const entries = listManagedImageRecordEntries({ stateDir });
+  let pendingPreparedAttachmentIds: Set<string> | null | undefined;
 
   let deletedRecordCount = 0;
   let deletedFileCount = 0;
@@ -744,11 +746,19 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       shouldDelete = transcriptMatch === "missing";
     } else if (!entry.cleanupPending) {
       const createdAtMs = Date.parse(record.createdAt);
-      shouldDelete =
+      const otherwiseDeletable =
         Number.isFinite(createdAtMs) &&
         nowMs - createdAtMs >= transientMaxAgeMs &&
         params?.hasActiveSessionRun?.(record.sessionKey, record.agentId?.trim() || undefined) !==
           true;
+      if (otherwiseDeletable) {
+        if (pendingPreparedAttachmentIds === undefined) {
+          pendingPreparedAttachmentIds = await loadPendingPreparedAttachmentIds(stateDir);
+        }
+        shouldDelete =
+          pendingPreparedAttachmentIds !== null &&
+          !pendingPreparedAttachmentIds.has(record.attachmentId);
+      }
     }
 
     if (shouldDelete) {
@@ -899,6 +909,26 @@ function collectManagedOutgoingAttachmentRefs(
     }
   }
   return [...refs.values()];
+}
+
+async function loadPendingPreparedAttachmentIds(stateDir: string): Promise<Set<string> | null> {
+  try {
+    const attachmentIds = new Set<string>();
+    for (const entry of await loadPendingSessionDeliveries(stateDir)) {
+      if (entry.kind !== "agentTurn") {
+        continue;
+      }
+      for (const blocks of Object.values(entry.preparedMediaBlocks ?? {})) {
+        for (const ref of collectManagedOutgoingAttachmentRefs(blocks, entry.sessionKey)) {
+          attachmentIds.add(ref.attachmentId);
+        }
+      }
+    }
+    return attachmentIds;
+  } catch {
+    // Queue ownership must be readable before transient artifacts can be reaped safely.
+    return null;
+  }
 }
 
 function getCachedSessionManagedOutgoingAttachmentIndex(
@@ -1259,30 +1289,30 @@ export async function resolveManagedOutgoingMediaUrlDownload(params: {
   return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, params.stateDir);
 }
 
-export async function attachManagedOutgoingMediaToMessage(params: {
+export function attachManagedOutgoingMediaToMessage(params: {
   messageId: string;
   blocks?: readonly Record<string, unknown>[];
   stateDir?: string;
 }) {
   const messageId = params.messageId.trim();
   if (!messageId) {
-    return;
+    return false;
   }
   const refs = collectManagedOutgoingAttachmentRefs(params.blocks);
   if (refs.length === 0) {
-    return;
+    return false;
   }
-  await Promise.all(
-    refs.map(async ({ attachmentId, sessionKey }) => {
+  return refs
+    .map(({ attachmentId, sessionKey }) =>
       attachManagedImageRecordToMessage({
         attachmentId,
         sessionKey,
         messageId,
         updatedAt: new Date().toISOString(),
         stateDir: params.stateDir,
-      });
-    }),
-  );
+      }),
+    )
+    .every(Boolean);
 }
 
 export async function createManagedOutgoingMediaBlocks(params: {

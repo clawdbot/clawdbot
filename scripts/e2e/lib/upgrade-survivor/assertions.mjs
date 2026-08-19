@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
 const SCENARIOS = new Set([
@@ -20,6 +21,7 @@ const SCENARIOS = new Set([
   "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
   "cron-scheduled-authority",
+  "sqlite-volume",
   "auth-profile-v2026-7-2-beta-5",
 ]);
 
@@ -427,7 +429,7 @@ function assertConfigSurvived() {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
     assert(pluginAllow.includes("telegram"), "telegram plugin allow entry missing");
-    if (getScenario() === "configured-plugin-installs") {
+    if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
       assert(pluginAllow.includes("matrix"), "matrix plugin allow entry missing");
     } else {
       assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
@@ -490,7 +492,7 @@ function assertConfigSurvived() {
 
   if (
     acceptsIntent(coverage, "whatsapp-channel") &&
-    getScenario() !== "configured-plugin-installs"
+    !acceptsIntent(coverage, "configured-plugin-installs")
   ) {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "whatsapp enabled flag changed");
@@ -563,6 +565,9 @@ function assertStateSurvived() {
   }
   if (scenario === "cron-scheduled-authority") {
     assertCronScheduledAuthorityMigrated(stateDir, stage);
+  }
+  if (scenario === "sqlite-volume") {
+    assertUpgradeVolumeMigrated(stateDir, stage);
   }
   if (scenario === "auth-profile-v2026-7-2-beta-5") {
     assertAuthProfileMigrationSurvived(stateDir, stage);
@@ -1212,6 +1217,10 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
+} else if (command === "seed-volume") {
+  assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
+  const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+  seedUpgradeVolume(stateDir);
 } else if (command === "assert-config") {
   assertConfigSurvived();
 } else if (command === "assert-state") {

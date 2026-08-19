@@ -666,7 +666,11 @@ struct MacNodeModeCoordinatorTests {
 
         #expect(!caps.contains(OpenClawCapability.browser.rawValue))
         #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
-        #expect(commands.contains(OpenClawCanvasCommand.present.rawValue))
+        #expect(commands.filter { $0.hasPrefix("canvas.") } == [
+            OpenClawCanvasCommand.present.rawValue,
+            OpenClawCanvasCommand.hide.rawValue,
+            OpenClawCanvasCommand.navigate.rawValue,
+        ])
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
         #expect(!commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
         #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))

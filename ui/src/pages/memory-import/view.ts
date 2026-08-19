@@ -53,6 +53,7 @@ export type SessionBackfillRollbackResult = {
 
 type MemoryImportViewProps = {
   connected: boolean;
+  canAdmin: boolean;
   agents: GatewayAgentRow[];
   selectedAgentId: string | null;
   plan: MigrationsMemoryPlanResult | null;
@@ -675,6 +676,9 @@ function renderBackfillSection(props: MemoryImportViewProps) {
 export function renderMemoryImport(props: MemoryImportViewProps) {
   if (!props.connected) {
     return renderSettingsPage(renderSettingsEmpty(t("memoryImport.disconnected")));
+  }
+  if (!props.canAdmin) {
+    return renderSettingsPage(renderSettingsEmpty(t("memoryImport.adminRequired")));
   }
   return html`
     <div class="memory-import" data-test-id="memory-import-page">

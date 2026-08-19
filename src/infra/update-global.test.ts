@@ -213,9 +213,9 @@ describe("update global helpers", () => {
 
   it.each([
     ["11.12.0", "unflagged"],
-    ["11.13.0", "unsupported-transition"],
-    ["11.14.0", "unsupported-transition"],
-    ["11.15.9", "unsupported-transition"],
+    ["11.13.0", "unflagged"],
+    ["11.14.0", "unflagged"],
+    ["11.15.9", "unflagged"],
     ["11.16.0", "allow-scripts"],
     ["12.0.0", "allow-scripts"],
   ] as const)("binds npm %s lifecycle policy to the owning executable", async (version, policy) => {
@@ -773,6 +773,12 @@ describe("update global helpers", () => {
       "--loglevel=error",
       "--min-release-age=0",
     ]);
+  });
+
+  it("omits npm's lifecycle allowlist before npm 11.16", () => {
+    expect(
+      globalInstallArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
+    ).not.toContain("--allow-scripts=openclaw");
   });
 
   it("allows only the resolved npm candidate lifecycle identity", () => {

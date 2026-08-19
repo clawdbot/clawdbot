@@ -19,11 +19,21 @@ function deriveExecShortName(fullPath: string): string {
 }
 
 /** Builds the model-facing exec tool description for the current platform/config. */
-export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
+export function describeExecTool(params?: {
+  agentId?: string;
+  hasCronTool?: boolean;
+  hasProcessTool?: boolean;
+}): string {
+  const continuation =
+    params?.hasProcessTool === false
+      ? ["Run shell and wait for completion."]
+      : [
+          "Run shell now; background continuation supported.",
+          "Use yieldMs/background, then process for logs/status/input/intervention.",
+          "Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion.",
+        ];
   const base = [
-    "Run shell now; background continuation supported.",
-    "Use yieldMs/background, then process for logs/status/input/intervention.",
-    "Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion.",
+    ...continuation,
     params?.hasCronTool ? "No sleep/delay loops for reminders/follow-ups; use cron." : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
   ]

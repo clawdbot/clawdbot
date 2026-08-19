@@ -67,7 +67,7 @@ type SidebarMenusRenderer = {
   renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
 };
 
-export interface SidebarMenusControllerHost
+interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
   readonly activeWorkboardBoardId: string;
@@ -91,14 +91,19 @@ export interface SidebarMenusControllerHost
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      "approvalBadgeSnapshot" | "presenceInstanceId" | "presencePayload" | "sessionsLoading"
+      | "approvalBadgeSnapshot"
+      | "presenceInstanceId"
+      | "presencePayload"
+      | "sessionResultsByAgent"
+      | "sessionsLoading"
+      | "sessionsResult"
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
-  readonly sessionCreatorFilterActive: boolean;
-  sessionCreatorFilterId: string | null;
+  readonly sessionOwnerFilterActive: boolean;
+  sessionOwnerFilterId: string | null;
   sessionInvolvingMeFilterActive: boolean;
-  readonly sessionCreatorOptions: readonly SessionOwnerOption[];
+  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
   readSessionMutationAccess(request: {
     method: string;

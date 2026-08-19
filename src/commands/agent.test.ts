@@ -1,4 +1,5 @@
 // Agent command tests cover local agent runs, session routing, and command runtime behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -19,6 +20,7 @@ import * as modelSelectionModule from "../agents/model-selection.js";
 import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -44,6 +46,7 @@ import {
   loadVisibleSkills,
   loadWorkspaceSkills,
 } from "../skills/loading/workspace-skill-loader.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
 import type { SkillEntry } from "../skills/types.js";
 import {
   createDirectOutboundTestAdapter,
@@ -577,6 +580,84 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it("carries an external cwd into the direct agent session skill snapshot", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const executionWorkspace = path.join(home, "external-repo");
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "inspect this repo",
+          agentId: "main",
+          cwd: executionWorkspace,
+        },
+        runtime,
+      );
+
+      expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionSkillsDir: path.join(executionWorkspace, "skills"),
+        }),
+      );
+    });
+  });
+
+  it("uses the recorded canonical workspace for a managed-worktree skill snapshot", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:dashboard:managed-worktree";
+      const canonicalWorkspace = path.join(home, "project");
+      fs.mkdirSync(canonicalWorkspace, { recursive: true });
+      execFileSync("git", ["-C", canonicalWorkspace, "init", "-b", "main"]);
+      execFileSync("git", ["-C", canonicalWorkspace, "config", "user.name", "OpenClaw Test"]);
+      execFileSync("git", [
+        "-C",
+        canonicalWorkspace,
+        "config",
+        "user.email",
+        "openclaw-test@example.invalid",
+      ]);
+      fs.writeFileSync(path.join(canonicalWorkspace, "README.md"), "base\n");
+      execFileSync("git", ["-C", canonicalWorkspace, "add", "README.md"]);
+      execFileSync("git", ["-C", canonicalWorkspace, "commit", "-m", "initial"]);
+      mockConfig(home, store);
+      const worktree = await managedWorktrees.create({
+        repoRoot: canonicalWorkspace,
+        name: "managed",
+        ownerKind: "session",
+        ownerId: sessionKey,
+      });
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "managed-worktree-session",
+          spawnedCwd: worktree.path,
+          worktree: {
+            id: worktree.id,
+            branch: worktree.branch,
+            repoRoot: worktree.repoRoot,
+            canonicalWorkspaceDir: canonicalWorkspace,
+          },
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "inspect this repo",
+          sessionKey,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionSkillsDir: path.join(canonicalWorkspace, "skills"),
+        }),
+      );
+    });
+  });
+
   it.each(["Echo $PATH exactly.", String.raw`Keep \$release_notes literal.`])(
     "does not discover skills for literal dollar input: %s",
     async (message) => {

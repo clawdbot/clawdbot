@@ -84,7 +84,7 @@ function createBootstrap(selection: RunnerSelection): Bootstrap {
       status: "idle",
     },
     runnerCatalog: {
-      channels: ["matrix", "telegram"],
+      channels: ["buzz", "matrix", "telegram"],
       profiles: [
         { id: "smoke-ci", evidenceMode: "slim", channelDriver: "crabline", categoryIds: [] },
         { id: "all", evidenceMode: "full", channelDriver: "live", categoryIds: [] },
@@ -336,6 +336,12 @@ describe("QA Lab runner browser interactions", () => {
     });
 
     root.querySelector<HTMLButtonElement>("[data-sidebar-panel='config']")?.click();
+    expect(
+      Array.from(
+        root.querySelectorAll<HTMLSelectElement>("#execution-channel option"),
+        (option) => option.value,
+      ),
+    ).toEqual(["", "buzz", "matrix", "telegram"]);
     selectValue(root, "#channel-driver", "live");
     selectValue(root, "#execution-channel", "telegram");
     root.querySelector<HTMLButtonElement>("[data-action='run-suite']")?.click();

@@ -65,7 +65,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
   }
   const result = props.state?.result;
   const members = new Set(result?.members.map((member) => member.identityId) ?? []);
-  // The shared header owner chip presents createdActor; this picker only manages mutable members.
+  // The shared header owner chip presents effective ownership; this picker manages mutable members.
   const identities =
     result?.identities.filter((identity) => identity.id !== result.owner?.id) ?? [];
   const allowed = result?.allowedVisibilities ?? props.allowedVisibilities ?? [visibility];

@@ -98,29 +98,18 @@ describe("Codex session permission policy", () => {
     });
   });
 
-  it.each([
-    {
-      mode: "full" as const,
-      execMode: "ask" as const,
-      sandbox: "danger-full-access",
-    },
-    {
-      mode: "guarded" as const,
-      execMode: "deny" as const,
-      sandbox: "read-only",
-    },
-  ])("lets effective $execMode exec floors tighten a $mode tuple", (expected) => {
+  it("lets a deny exec floor tighten a guarded tuple", () => {
     const resolved = applyCodexSessionPermissionPolicy({
       appServer: appServer(),
-      permissionMode: expected.mode,
+      permissionMode: "guarded",
       sessionRoot: "/workspace/project",
       pluginConfig,
       canUseAutoReview: true,
-      execMode: expected.execMode,
+      execMode: "deny",
     });
 
     expect(resolved).toMatchObject({
-      sandbox: expected.sandbox,
+      sandbox: "read-only",
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
     });

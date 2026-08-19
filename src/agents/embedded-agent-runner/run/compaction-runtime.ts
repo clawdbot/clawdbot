@@ -97,6 +97,7 @@ export async function compactEmbeddedRunForRecovery(
       authProfileIdSource: input.authProfileIdSource,
       runtimeAuthPlan: input.runtimeAuthPlan,
       workspaceDir: input.workspaceDir,
+      bootstrapWorkspaceDir: runParams.bootstrapWorkspaceDir,
       agentDir: input.agentDir,
       config: runParams.config,
       toolOverrides: runParams.toolOverrides,

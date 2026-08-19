@@ -1,9 +1,11 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build as esbuild } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -27,7 +29,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { isQaPosixProcessGroupAlive } from "./posix-process-group.js";
+import { isProcessAlive, waitForDead, waitForPidFile } from "./process-wait.test-helper.js";
 import {
   resetQaScenarioCommandCleanupTimings,
   runQaScenarioCommandLifecycle,
@@ -59,38 +61,6 @@ function runCommand(timeoutMs?: number) {
     env: { OPENCLAW_QA_REF: "test" },
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   });
-}
-
-function isProcessRunning(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForPidFile(filePath: string, timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const value = await readFile(filePath, "utf8").catch(() => "");
-    if (/^[1-9]\d*$/u.test(value.trim())) {
-      return Number(value.trim());
-    }
-    await sleep(10);
-  }
-  throw new Error(`timed out waiting for pid file ${filePath}`);
-}
-
-async function waitForProcessExit(pid: number, timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessRunning(pid)) {
-      return;
-    }
-    await sleep(10);
-  }
-  throw new Error(`timed out waiting for process ${pid} to exit`);
 }
 
 describe.skipIf(process.platform === "win32")("qa scenario command real POSIX lifecycle", () => {
@@ -133,10 +103,6 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         timeoutMs: 5_000,
       });
       descendantPid = await waitForPidFile(descendantPidPath);
-      const processGroupId = (spawnMock.mock.results[0]?.value as ChildProcess | undefined)?.pid;
-      if (!processGroupId) {
-        throw new Error("scenario command did not expose its process group id");
-      }
       const startedAt = Date.now();
       const deadline = new AbortController();
       const result = await Promise.race([
@@ -153,9 +119,12 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         stdout: "Docker scheduling finished\ndelayed descendant output\n",
         stderr: "",
       });
-      expect(isQaPosixProcessGroupAlive(processGroupId)).toBe(false);
+      if (descendantPid === undefined) {
+        throw new Error("scenario command descendant did not expose its pid");
+      }
+      await waitForDead(descendantPid);
     } finally {
-      if (descendantPid && isProcessRunning(descendantPid)) {
+      if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
       await rm(root, { force: true, recursive: true });
@@ -197,12 +166,12 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       expect(result.exitCode).toBe(1);
       expect(result.failureMessage).toBe("stdio-drain-timeout");
       expect(result.stdout).toContain("escaped descendant output");
-      expect(isProcessRunning(descendantPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
     } finally {
       // A true setsid descendant is outside the original PGID by design.
-      if (descendantPid && isProcessRunning(descendantPid)) {
+      if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
-        await waitForProcessExit(descendantPid).catch(() => undefined);
+        await waitForDead(descendantPid).catch(() => undefined);
       }
       await rm(root, { force: true, recursive: true });
     }
@@ -211,7 +180,25 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
   it("cleans the command group before re-raising a parent SIGTERM", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "qa-command-parent-signal-"));
     const descendantPidPath = path.join(root, "descendant.pid");
-    const moduleUrl = new URL("./test-file-scenario-command-lifecycle.ts", import.meta.url).href;
+    const bundlePath = path.join(root, "test-file-scenario-command-lifecycle.mjs");
+    // Compile before the readiness window; a cold tsx child can exceed it under the full QA suite.
+    // The bundle needs only the UTF-16 helper behind this SDK import, not the full plugin runtime.
+    await esbuild({
+      alias: {
+        "openclaw/plugin-sdk/text-utility-runtime": fileURLToPath(
+          new URL("../../../packages/normalization-core/src/utf16-slice.ts", import.meta.url),
+        ),
+      },
+      bundle: true,
+      entryPoints: [
+        fileURLToPath(new URL("./test-file-scenario-command-lifecycle.ts", import.meta.url)),
+      ],
+      format: "esm",
+      outfile: bundlePath,
+      platform: "node",
+      target: "node22",
+    });
+    const moduleUrl = pathToFileURL(bundlePath).href;
     let descendantPid: number | undefined;
     if (!actualSpawn.value) {
       throw new Error("real spawn unavailable");
@@ -235,11 +222,11 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
     ].join("\n");
     const controller = actualSpawn.value(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", controllerScript],
+      ["--input-type=module", "-e", controllerScript],
       { cwd: process.cwd(), env: process.env, stdio: "ignore" },
     );
     try {
-      descendantPid = await waitForPidFile(descendantPidPath, 10_000);
+      descendantPid = await waitForPidFile(descendantPidPath);
       controller.kill("SIGTERM");
       const [exitCode, signal] = await new Promise<[number | null, NodeJS.Signals | null]>(
         (resolve) => {
@@ -249,12 +236,12 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
 
       expect(exitCode).toBeNull();
       expect(signal).toBe("SIGTERM");
-      await waitForProcessExit(descendantPid);
+      await waitForDead(descendantPid);
     } finally {
       if (controller.exitCode === null && controller.signalCode === null) {
         controller.kill("SIGKILL");
       }
-      if (descendantPid && isProcessRunning(descendantPid)) {
+      if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
       await rm(root, { force: true, recursive: true });
@@ -355,8 +342,10 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
         signal: null,
       });
       expect(spawnSyncMock).toHaveBeenCalledTimes(2);
-      expect(spawnSyncMock.mock.calls[0]?.[1]).toEqual(["/pid", "12345", "/T"]);
-      expect(spawnSyncMock.mock.calls[1]?.[1]).toEqual(["/pid", "12345", "/T", "/F"]);
+      expect(spawnSyncMock.mock.calls.map((call) => call[1])).toEqual([
+        ["/PID", "12345", "/T"],
+        ["/PID", "12345", "/T", "/F"],
+      ]);
     } finally {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);

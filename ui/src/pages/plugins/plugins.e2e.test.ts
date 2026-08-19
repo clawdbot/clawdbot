@@ -265,6 +265,27 @@ function readOnlyConnectResponse() {
   };
 }
 
+function enabledWorkboardConnectResponse() {
+  return {
+    ...readOnlyConnectResponse(),
+    auth: {
+      deviceToken: "plugins-workboard-device-token",
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    },
+    controlUiTabs: [
+      {
+        group: "control",
+        icon: "kanban",
+        id: "workboard",
+        label: "Workboard",
+        placement: "route:workboard",
+        pluginId: "workboard",
+      },
+    ],
+  };
+}
+
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
@@ -601,6 +622,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(requestParams(postEnableConfigRequest)).toEqual({});
       await gateway.setMethodResponse("plugins.list", finalInventory);
       await gateway.setMethodResponse("config.get", configSnapshot(true));
+      await gateway.setMethodResponse("connect", enabledWorkboardConnectResponse());
       await gateway.resolveDeferred("config.get", configSnapshot(true));
       const postEnableListRequest = await waitForNextRequest(
         gateway,
@@ -680,7 +702,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.waitFor({ state: "visible" });
       const workboardSidebarItem = sidebar.locator(
-        '.sidebar-zone-entry[data-sidebar-entry="route:workboard"] > .nav-item',
+        '.sidebar-zone-entry[data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
       );
       await workboardSidebarItem.waitFor({ state: "visible" });
       expect(await workboardSidebarItem.getAttribute("href")).toBe("/workboard");

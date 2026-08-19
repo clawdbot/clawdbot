@@ -15,7 +15,12 @@ import {
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { setAvatar } from "../../../state/user-profiles.js";
+import {
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
+  setAvatar,
+  syncGitHubIdentity,
+} from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
@@ -41,6 +46,7 @@ const {
   getHealthVersionMock,
   incrementPresenceVersionMock,
   loadConfigMock,
+  createAuthenticatedGitHubIdentitySyncMock,
   adoptTailscaleProfileAvatarMock,
   ensureProfileForEmailMock,
   prepareGatewayNodeConnectMock,
@@ -70,6 +76,7 @@ const {
       },
     },
   })),
+  createAuthenticatedGitHubIdentitySyncMock: vi.fn(),
   adoptTailscaleProfileAvatarMock: vi.fn(),
   ensureProfileForEmailMock: vi.fn(),
   prepareGatewayNodeConnectMock: vi.fn(),
@@ -87,6 +94,10 @@ vi.mock("../../../state/user-profiles.js", async (importOriginal) => {
     ensureProfileForEmail: ensureProfileForEmailMock,
   };
 });
+
+vi.mock("../../github-user-identity.js", () => ({
+  createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
+}));
 
 vi.mock("./auth-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./auth-context.js")>();
@@ -297,6 +308,22 @@ function attachGatewayHarness(options: {
   };
   const advanceHandshakePhase = vi.fn();
   const logWsControl = createLogger();
+  const refreshConnectedUserProfile = vi.fn<
+    NonNullable<GatewayRequestContext["refreshConnectedUserProfile"]>
+  >((profile) => {
+    const authenticatedUserProfile = (
+      client as { authenticatedUserProfile?: Record<string, unknown> } | null
+    )?.authenticatedUserProfile;
+    if (authenticatedUserProfile) {
+      Object.assign(authenticatedUserProfile, {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        avatarRevision: profile.avatarRevision,
+        hasAvatar: profile.hasAvatar,
+        updatedAt: profile.updatedAt,
+      });
+    }
+  });
   attachGatewayWsMessageHandler({
     socket,
     upgradeReq: {
@@ -332,7 +359,7 @@ function attachGatewayHarness(options: {
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
-    buildRequestContext: () => ({}) as GatewayRequestContext,
+    buildRequestContext: () => ({ refreshConnectedUserProfile }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
@@ -361,6 +388,7 @@ function attachGatewayHarness(options: {
   return {
     advanceHandshakePhase,
     logWsControl,
+    refreshConnectedUserProfile,
     send,
     socketSend,
     sendRequest: (
@@ -504,6 +532,30 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     vi.clearAllMocks();
+    createAuthenticatedGitHubIdentitySyncMock.mockImplementation(
+      (params: {
+        authResult: { method?: string; tailscaleIdentity?: { login: string } };
+        authConfig?: { trustedProxy?: { userHeader?: string; requiredHeaders?: string[] } };
+      }) => {
+        const tailscaleGitHub = params.authResult.tailscaleIdentity?.login.endsWith("@github");
+        const trustedProxy = params.authConfig?.trustedProxy;
+        const cloudflareAccess =
+          params.authResult.method === "trusted-proxy" &&
+          trustedProxy?.userHeader?.toLowerCase() === "cf-access-authenticated-user-email" &&
+          trustedProxy.requiredHeaders?.some(
+            (header) => header.toLowerCase() === "cf-access-jwt-assertion",
+          );
+        if (!tailscaleGitHub && !cloudflareAccess) {
+          return undefined;
+        }
+        return vi.fn(async () => {
+          const profile = params.authResult.tailscaleIdentity
+            ? ensureProfileForTailscaleIdentity(params.authResult.tailscaleIdentity)
+            : ensureProfileForEmailMock("authenticated@example.test");
+          return { profileId: profile.id, updatedAt: profile.updatedAt };
+        });
+      },
+    );
   });
 
   it("closes invalidated clients before dispatching queued requests", () => {
@@ -844,9 +896,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         authResult: {
           ok: true,
           method: "tailscale",
-          user: "ada@github",
+          user: "ada@passkey",
           tailscaleIdentity: {
-            login: "ada@github",
+            login: "ada@passkey",
             name: "Ada Lovelace",
             profilePic: "https://avatars.example.test/ada.png",
           },
@@ -875,7 +927,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
       await waitForFast(() => {
         expect(harness.client).toMatchObject({
-          authenticatedUserId: "ada@github",
+          authenticatedUserId: "ada@passkey",
           authenticatedUserIsTailscaleProvider: true,
           authenticatedUserProfile: { displayName: "Ada Lovelace", hasAvatar: false },
         });
@@ -898,20 +950,252 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         }
       ).authenticatedUserProfile;
       expect(setAvatar(profile.profileId, new Uint8Array([7, 8, 9]), "image/png").ok).toBe(true);
+      const adoptedUpdatedAt = profile.updatedAt + 1;
       resolveAvatar?.({
         id: profile.profileId,
         displayName: profile.displayName,
         avatarMime: "image/png",
         mergedInto: null,
         createdAt: profile.updatedAt,
-        updatedAt: profile.updatedAt + 1,
+        updatedAt: adoptedUpdatedAt,
       });
       await waitForFast(() => {
         expect(harness.client).toMatchObject({
-          authenticatedUserProfile: { hasAvatar: true, updatedAt: profile.updatedAt + 1 },
+          authenticatedUserProfile: { hasAvatar: true, updatedAt: adoptedUpdatedAt },
         });
       });
+      expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authResult: expect.objectContaining({ method: "tailscale", user: "ada@passkey" }),
+        }),
+      );
     });
+  });
+
+  it("completes GitHub-authenticated login before deferred identity sync", async () => {
+    await withOpenClawTestState({ label: "gateway-github-profile-deferred" }, async () => {
+      const canonical = ensureProfileForEmail("canonical@example.test");
+      let finishSync: (() => void) | undefined;
+      const sync = vi.fn(
+        async () =>
+          await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
+            finishSync = () => resolve({ profileId: canonical.id, updatedAt: canonical.updatedAt });
+          }),
+      );
+      createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "ada@github",
+          tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-github-identity-detached",
+        connectNonce: "nonce-github-identity-detached",
+      });
+
+      harness.sendConnect("connect-github-identity-detached", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "test",
+          version: "dev",
+          platform: "test",
+          mode: "test",
+        },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.socketSend).toHaveBeenCalled();
+        expect(harness.client).toMatchObject({
+          authenticatedUserId: "ada@github",
+          authenticatedGitHubIdentitySync: expect.any(Function),
+        });
+        expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: { invoker: { state: "unknown" } },
+        });
+        expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            authResult: expect.objectContaining({ method: "tailscale", user: "ada@github" }),
+          }),
+        );
+        expect(sync).toHaveBeenCalledOnce();
+      });
+      const initialPresence = upsertPresenceMock.mock.calls.find(
+        ([key]) => key === "conn-github-identity-detached",
+      )?.[1];
+      expect(initialPresence).not.toHaveProperty("user");
+      expect(harness.socketSend.mock.invocationCallOrder[0]).toBeLessThan(
+        sync.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(finishSync).toBeTypeOf("function");
+      finishSync?.();
+
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserProfile: { profileId: canonical.id },
+        });
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: {
+            invoker: { state: "present", kind: "person", rawPrincipalRef: canonical.id },
+          },
+        });
+        expect(harness.refreshConnectedUserProfile).toHaveBeenCalledWith(
+          expect.objectContaining({ id: canonical.id }),
+        );
+      });
+    });
+  });
+
+  it("keeps a mutable GitHub alias unattributed when immutable sync fails", async () => {
+    await withOpenClawTestState({ label: "gateway-github-profile-failure" }, async () => {
+      syncGitHubIdentity({
+        identity: { accountId: 10, login: "prior-owner" },
+        authenticationAlias: { kind: "github-login", login: "released-login" },
+        initialDisplayName: "Prior Verified Owner",
+      });
+      const sync = vi.fn(async () => {
+        throw new Error("GitHub unavailable");
+      });
+      createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "released-login@github",
+          tailscaleIdentity: { login: "released-login@github", name: "New Account" },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-github-identity-failure",
+        connectNonce: "nonce-github-identity-failure",
+      });
+
+      harness.sendConnect("connect-github-identity-failure", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { id: "test", version: "dev", platform: "test", mode: "test" },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.socketSend).toHaveBeenCalled();
+        expect(sync).toHaveBeenCalledOnce();
+      });
+      await waitForFast(() => {
+        expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: { invoker: { state: "unknown" } },
+        });
+      });
+      const presence = upsertPresenceMock.mock.calls.find(
+        ([key]) => key === "conn-github-identity-failure",
+      )?.[1];
+      expect(presence).not.toHaveProperty("user");
+      expect(harness.refreshConnectedUserProfile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("mints Cloudflare sync only for the standard trusted-proxy header contract", async () => {
+    const assertion = "header.payload.signature";
+    loadConfigMock.mockImplementationOnce(() => ({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "cf-access-authenticated-user-email",
+            requiredHeaders: ["CF-Access-JWT-Assertion"],
+          },
+        },
+        trustedProxies: ["10.0.0.1"],
+        controlUi: { allowedOrigins: ["https://team.openclaw.ai"] },
+      },
+    }));
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "trusted-proxy",
+      allowTailscale: false,
+      trustedProxy: {
+        userHeader: "cf-access-authenticated-user-email",
+        requiredHeaders: ["CF-Access-JWT-Assertion"],
+      },
+    };
+    const harness = attachGatewayHarness({
+      connId: "conn-cloudflare-access",
+      connectNonce: "nonce-cloudflare-access",
+      requestHost: "team.openclaw.ai",
+      requestOrigin: "https://team.openclaw.ai",
+      remoteAddr: "10.0.0.1",
+      resolvedAuth,
+      headers: {
+        "cf-access-authenticated-user-email": "ada@example.com",
+        "cf-access-jwt-assertion": assertion,
+        "x-forwarded-for": "203.0.113.10",
+      },
+      ingressAttribution: {
+        kind: "trusted-proxy",
+        clientIp: "203.0.113.10",
+        rateLimit: { subject: { key: "203.0.113.10" }, resetOnSuccess: true },
+      },
+    });
+
+    harness.sendConnect("connect-cloudflare-access", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "openclaw-control-ui",
+        version: "dev",
+        platform: "test",
+        mode: "ui",
+      },
+      role: "operator",
+      caps: [],
+    });
+
+    await waitForFast(() => {
+      expect(harness.client).toMatchObject({
+        authenticatedUserId: "ada@example.com",
+        authenticatedGitHubIdentitySync: expect.any(Function),
+      });
+      expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authResult: expect.objectContaining({
+            method: "trusted-proxy",
+            user: "ada@example.com",
+          }),
+          authConfig: expect.objectContaining({ mode: "trusted-proxy" }),
+          requestHeaders: expect.objectContaining({
+            "cf-access-jwt-assertion": assertion,
+          }),
+        }),
+      );
+    });
+  });
+
+  it("does not mint Cloudflare sync for a generic or non-required-header proxy", async () => {
+    const harness = connectTrustedProxyUser("conn-generic-proxy-github");
+    await waitForFast(() => expect(harness.client).not.toBeNull());
+
+    expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authResult: expect.objectContaining({ method: "trusted-proxy" }),
+        authConfig: expect.objectContaining({
+          trustedProxy: expect.objectContaining({ userHeader: "x-forwarded-user" }),
+        }),
+      }),
+    );
+    expect(harness.client).not.toHaveProperty("authenticatedGitHubIdentitySync");
   });
 
   it("keeps presence fallback but records unknown invoker when profile resolution fails", async () => {

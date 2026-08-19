@@ -652,10 +652,6 @@
       "kind": "channel",
       "openclaw": {
         "contracts": {
-          "tools": [
-            "show_widget",
-            "discord_widget"
-          ],
           "transcriptSourceProviders": [
             "discord-voice"
           ]

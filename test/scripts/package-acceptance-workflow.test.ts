@@ -646,6 +646,7 @@ function runPackageAcceptanceSummary(params: {
   advisory?: boolean;
   dockerArtifactResult?: string;
   dockerRegistryResult?: string;
+  npm12InstallResult?: string;
   telegramAdvisory?: boolean;
   telegramEnabled: boolean;
   telegramResult: string;
@@ -662,6 +663,7 @@ function runPackageAcceptanceSummary(params: {
       DOCKER_ARTIFACT_RESULT: params.dockerArtifactResult ?? "success",
       DOCKER_REGISTRY_RESULT: params.dockerRegistryResult ?? "skipped",
       PACKAGE_INTEGRITY_RESULT: "success",
+      NPM_12_INSTALL_RESULT: params.npm12InstallResult ?? "success",
       PACKAGE_TELEGRAM_RESULT: params.telegramResult,
       PATH: process.env.PATH,
       RESOLVE_RESULT: "success",
@@ -1908,6 +1910,16 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('[[ "$actual_sha256" == "$EXPECTED_PACKAGE_SHA256" ]]');
     expect(workflow).toContain("needs: [resolve_package, package_integrity]");
     expect(workflow).toContain("package_integrity=${PACKAGE_INTEGRITY_RESULT}");
+    const npm12Job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    expect(jobNeeds(npm12Job)).toEqual(["resolve_package", "package_integrity"]);
+    expect(npm12Job.permissions).toEqual({ actions: "read", contents: "read" });
+    const npm12Step = workflowStep(npm12Job, "Run install.sh with npm 12");
+    expect(npm12Step.run).toContain("npm@12.0.2");
+    expect(npm12Step.run).toContain("bash scripts/install.sh");
+    expect(npm12Step.run).toContain("scripts/docker/install-sh-common/version-parse.sh");
+    expect(npm12Step.run).toContain("extract_openclaw_semver");
+    expect(npm12Step.run).toContain("openclaw-install-guard");
+    expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
   });
 
   it("keeps ref packaging independent of workflow-checkout dependencies", () => {
@@ -4721,6 +4733,16 @@ describe("package artifact reuse", () => {
       },
     },
     {
+      expectedOutput: "::error::npm_12_install_sh ended with failure",
+      expectedStatus: 1,
+      name: "rejects a failed npm 12 installer acceptance lane",
+      params: {
+        npm12InstallResult: "failure",
+        telegramEnabled: false,
+        telegramResult: "skipped",
+      },
+    },
+    {
       expectedOutput:
         "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
       expectedStatus: 0,
@@ -6575,6 +6597,9 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     );
     expect(jobNeeds(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "summary"))).toContain(
       "docker_acceptance",
+    );
+    expect(jobNeeds(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "summary"))).toContain(
+      "npm_12_install_sh",
     );
     expect(jobNeeds(workflowJob(RELEASE_CHECKS_WORKFLOW, "summary"))).toContain(
       "package_acceptance_release_checks",

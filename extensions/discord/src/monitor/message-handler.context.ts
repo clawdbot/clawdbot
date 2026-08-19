@@ -401,6 +401,7 @@ export async function buildDiscordMessageProcessContext(params: {
       kind: isDirectMessage ? "direct" : "channel",
       id: messageChannelId,
       nativeChannelId: messageChannelId,
+      avatar: ctx.conversationAvatar,
       label: fromLabel,
       spaceId: isGuildMessage
         ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined

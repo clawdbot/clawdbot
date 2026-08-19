@@ -228,7 +228,7 @@ function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" 
   if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") {
     return false;
   }
-  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  const endpointClass = resolveProviderEndpoint(model).endpointClass;
   return endpointClass === "default" || endpointClass === "anthropic-public";
 }
 
@@ -252,7 +252,7 @@ function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean
 function supportsReasoningContentReplay(
   model: Pick<AnthropicTransportModel, "provider" | "baseUrl">,
 ): boolean {
-  return resolveProviderEndpoint(model.baseUrl).endpointClass === "xiaomi-native";
+  return resolveProviderEndpoint(model).endpointClass === "xiaomi-native";
 }
 
 function buildAnthropicBetaHeader(
@@ -934,13 +934,16 @@ async function buildAnthropicParams(
       `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
     );
   }
-  const payloadPolicy = resolveAnthropicPayloadPolicy({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    cacheRetention: options?.cacheRetention,
-    enableCacheControl: true,
-  });
+  const payloadPolicy = resolveAnthropicPayloadPolicy(
+    {
+      provider: model.provider,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      cacheRetention: options?.cacheRetention,
+      enableCacheControl: true,
+    },
+    model,
+  );
   // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
   // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();

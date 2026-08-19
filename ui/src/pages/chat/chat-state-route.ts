@@ -1,17 +1,19 @@
 import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
-import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
-  parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { resolveChatAgentId } from "./chat-agent-id.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+
+export { resolveChatAgentId } from "./chat-agent-id.ts";
 
 export function canCreateChatSession(state: ChatPageHost) {
   return (
@@ -62,14 +64,6 @@ export function saveRouteSessionSettings(state: ChatPageHost, sessionKey: string
     return;
   }
   state.settings = patchSettings({ sessionKey, lastActiveSessionKey: sessionKey });
-}
-
-export function resolveChatAgentId(state: ChatPageHost) {
-  return normalizeAgentId(
-    parseAgentSessionKey(state.sessionKey)?.agentId ??
-      scopedAgentParamsForSession(state, state.sessionKey).agentId ??
-      resolveUiSelectedGlobalAgentId(state),
-  );
 }
 
 export function patchChatSessionLabel(

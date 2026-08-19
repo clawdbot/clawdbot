@@ -26,7 +26,8 @@ import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-ser
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 
 // The Gateway may spend its full restart-drain budget before entering the
-// bounded shutdown phase. Keep the helper alive through both phases. (#99666)
+// bounded shutdown phase. This estimate only controls the late-parent
+// diagnostic; exact parent exit is the update mutation boundary. (#99666)
 const PARENT_EXIT_SHUTDOWN_RESERVE_MS = 30_000;
 const HANDOFF_READY_TIMEOUT_MS = 30_000;
 const HANDOFF_READY_MARKER = "OPENCLAW_UPDATE_HANDOFF_READY\n";
@@ -950,18 +951,20 @@ function startGatewayServiceBestEffort() {
   fs.writeSync(1, ${JSON.stringify(HANDOFF_READY_MARKER)});
 
   try {
-    const deadline =
+    let deadline =
       typeof params.parentExitTimeoutMs === "number"
         ? Date.now() + params.parentExitTimeoutMs
         : null;
-    while (isPidAlive(params.parentPid) && (deadline === null || Date.now() < deadline)) {
+    while (isPidAlive(params.parentPid)) {
+      if (deadline !== null && Date.now() >= deadline) {
+        appendLog(
+          "gateway parent pid " +
+            params.parentPid +
+            " exceeded expected handoff timeout; continuing to wait",
+        );
+        deadline = null;
+      }
       await sleep(250);
-    }
-    if (deadline !== null && isPidAlive(params.parentPid)) {
-      appendLog("gateway parent pid " + params.parentPid + " did not exit before handoff timeout");
-      markUpdateSentinelFailureIfPending("managed-service-handoff-parent-timeout");
-      process.exitCode = 1;
-      return;
     }
 
     appendLog("starting managed update command: " + params.commandLabel);

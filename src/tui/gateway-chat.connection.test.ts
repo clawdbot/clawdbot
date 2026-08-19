@@ -60,9 +60,9 @@ vi.mock("../infra/device-identity.js", async (importOriginal) => {
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 
-const resolveBoundGatewayConnection = (
+const resolveBoundGatewayConnection = async (
   opts: Parameters<typeof GatewayChatClient.connectBound>[0],
-) => GatewayChatClient.connectBound(opts).connection;
+) => (await GatewayChatClient.connectBound(opts)).connection;
 
 const resolveGatewayConnection = async (opts: Parameters<typeof GatewayChatClient.connect>[0]) =>
   (await GatewayChatClient.connect(opts)).connection;
@@ -182,10 +182,10 @@ describe("resolveGatewayConnection", () => {
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_URL: "wss://env.example/ws",
-        OPENCLAW_GATEWAY_TOKEN: "bound-global-shell-auth",
+        OPENCLAW_GATEWAY_TOKEN: "test-token",
       },
       async () => {
-        const result = resolveBoundGatewayConnection({
+        const result = await resolveBoundGatewayConnection({
           config: {
             gateway: {
               mode: "remote",

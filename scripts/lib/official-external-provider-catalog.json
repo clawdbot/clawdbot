@@ -1288,6 +1288,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/pixverse-provider",
           "npmSpec": "@openclaw/pixverse-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.26"

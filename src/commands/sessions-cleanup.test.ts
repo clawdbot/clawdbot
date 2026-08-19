@@ -92,6 +92,7 @@ describe("sessionsCleanupCommand", () => {
     mocks.resolveMaintenanceConfig.mockReturnValue({
       mode: "warn",
       pruneAfterMs: 7 * 24 * 60 * 60 * 1000,
+      archiveDashboardAfterMs: 7 * 24 * 60 * 60 * 1000,
       modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
       maxEntries: 500,
       resetArchiveRetentionMs: 7 * 24 * 60 * 60 * 1000,

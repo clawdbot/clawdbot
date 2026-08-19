@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -1181,20 +1180,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         },
       } as EmbeddedRunAttemptParams["config"];
 
-      let runError: unknown;
-      const run = runCodexAppServerAttempt(params).catch((error: unknown) => {
-        runError = error;
-        throw error;
-      });
-      await vi.waitFor(
-        () => {
-          if (runError) {
-            throw toLintErrorObject(runError, "Non-Error thrown");
-          }
-          expect(harness.requests.map((request) => request.method)).toContain("turn/start");
-        },
-        { interval: 1 },
-      );
+      const run = runCodexAppServerAttempt(params);
+      await Promise.race([
+        harness.waitForMethod("turn/start"),
+        run.then(() => {
+          throw new Error("Codex attempt completed before turn/start");
+        }),
+      ]);
 
       expect(harness.requests.map((request) => request.method)).toEqual([
         "thread/start",
@@ -1912,9 +1904,31 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("logs assemble failures as a formatted message instead of the raw error object", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+      assistantMessage("first baseline message", 1) as never,
+    );
+    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+      userMessage("second baseline message", 2) as never,
+    );
+    let preassemblyMessages: AgentMessage[] = [];
+    let promptHookMessages: AgentMessage[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: async (event) => {
+            promptHookMessages = (event as { messages: AgentMessage[] }).messages;
+            return {};
+          },
+        },
+      ]),
+    );
     const rawError = new Error("Authorization: Bearer sk-abcdefghijklmnopqrstuv");
     const contextEngine = createContextEngine({
-      assemble: vi.fn(async () => {
+      assemble: vi.fn(async ({ messages }) => {
+        preassemblyMessages = messages.slice();
+        messages.reverse();
+        messages.pop();
         throw rawError;
       }),
       bootstrap: undefined,
@@ -1936,6 +1950,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(typeof details.error).toBe("string");
     expect(warning?.[1]).not.toEqual({ error: rawError });
     expect(String(details.error)).not.toContain("sk-abcdefghijklmnopqrstuv");
+    expect(promptHookMessages).toEqual(preassemblyMessages);
+    expect(promptHookMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expectRequestInputTextContains(harness, params.prompt);
   });
 
   it("does not advance context-engine state on prompt failure", async () => {

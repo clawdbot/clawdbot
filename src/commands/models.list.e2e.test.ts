@@ -509,6 +509,58 @@ describe("models list/status", () => {
     expect(runtimeLogText(runtime)).toBe("openrouter/hunter-alpha");
   });
 
+  it("models list --agent projects that agent's configured aliases and tags", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: {
+            primary: "gpt-5.6-luna",
+          },
+          models: {
+            "openai/gpt-5.6-luna": { alias: "global-luna" },
+            "anthropic/claude-sonnet-4-6": { alias: "global-sonnet" },
+            "minimax/claude-sonnet-4-6": { alias: "global-minimax-sonnet" },
+          },
+        },
+        entries: {
+          main: {},
+          worker: {
+            model: { fallbacks: ["claude-sonnet-4-6"] },
+            models: {
+              "openai/gpt-5.6-luna": { alias: "worker-luna" },
+              "anthropic/claude-sonnet-4-6": { alias: "worker-sonnet" },
+              "google/gemini-3-flash-preview": { alias: "worker-flash" },
+            },
+          },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ agent: "worker", json: true }, runtime);
+
+    const payload = parseJsonLog(runtime);
+    const tagsByKey = Object.fromEntries(
+      payload.models.map((model: { key: string; tags: string[] }) => [model.key, model.tags]),
+    );
+    expect(tagsByKey["openai/gpt-5.6-luna"]).toEqual([
+      "default",
+      "configured",
+      "alias:worker-luna",
+    ]);
+    expect(tagsByKey["anthropic/claude-sonnet-4-6"]).toEqual([
+      "fallback#1",
+      "configured",
+      "alias:worker-sonnet",
+    ]);
+    expect(tagsByKey["google/gemini-3-flash-preview"]).toEqual([
+      "configured",
+      "alias:worker-flash",
+    ]);
+    expect(tagsByKey["openai/gpt-5.6-luna"]).not.toContain("alias:global-luna");
+    expect(tagsByKey["anthropic/claude-sonnet-4-6"]).not.toContain("alias:global-sonnet");
+  });
+
   it("models list configured fallback marks stale Anthropic Claude 4 refs image-capable", async () => {
     getRuntimeConfig.mockReturnValue({
       agents: { defaults: { model: "anthropic/claude-sonnet-4-5" } },

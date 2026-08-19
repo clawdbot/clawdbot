@@ -5,17 +5,43 @@ import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { resolveConfigIncludes, resolveConfigIncludesForTopLevelKey } from "../config/includes.js";
 import { resolveConfigPath, resolveIncludeRoots } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 
 // Lightweight logging-config reader used before the full config runtime is safe to load.
 type LoggingConfig = NonNullable<OpenClawConfig["logging"]>;
 
 let cachedLoggingConfig:
   | {
-      path: string;
+      selector: string;
       logging: LoggingConfig | undefined;
     }
   | undefined;
+
+export function invalidateLoggingConfigCache(): void {
+  cachedLoggingConfig = undefined;
+}
+
+function resolveLoggingConfigSelector(): string {
+  const env = process.env;
+  return [
+    env.OPENCLAW_CONFIG_PATH,
+    env.OPENCLAW_STATE_DIR,
+    env.OPENCLAW_HOME,
+    env.OPENCLAW_PROFILE,
+    env.HOME,
+    env.USERPROFILE,
+    env.HOMEDRIVE,
+    env.HOMEPATH,
+    env.PREFIX,
+    env.ANDROID_DATA,
+    env.OPENCLAW_TEST_FAST,
+    tryProcessCwd() ?? "",
+  ]
+    .map((value) => value ?? "")
+    .join("\0");
+}
 
 function resolvePartialDiagnosticLoggingConfig(logging: unknown): LoggingConfig | undefined {
   if (!isObjectRecord(logging)) {
@@ -57,11 +83,16 @@ function resolvePartialDiagnosticLoggingConfig(logging: unknown): LoggingConfig 
 /** Reads the logging block from config, caching by resolved config path. */
 export function readLoggingConfig(): LoggingConfig | undefined {
   try {
-    const configPath = resolveConfigPath();
-    if (cachedLoggingConfig?.path === configPath) {
+    if (loggingState.appliedConfig !== APPLIED_LOGGING_CONFIG_UNOWNED) {
+      return loggingState.appliedConfig;
+    }
+    const selector = resolveLoggingConfigSelector();
+    if (cachedLoggingConfig?.selector === selector) {
       return cachedLoggingConfig.logging;
     }
+    const configPath = resolveConfigPath();
     if (!fs.existsSync(configPath)) {
+      cachedLoggingConfig = { selector, logging: undefined };
       return undefined;
     }
     const parsed = parseJsonWithJson5Fallback(fs.readFileSync(configPath, "utf8"));
@@ -102,7 +133,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
     const logging = isObjectRecord(resolvedConfig) ? resolvedConfig.logging : undefined;
     const resolvedLogging = isObjectRecord(logging) ? (logging as LoggingConfig) : undefined;
     cachedLoggingConfig = {
-      path: configPath,
+      selector,
       logging: resolvedLogging,
     };
     return resolvedLogging;

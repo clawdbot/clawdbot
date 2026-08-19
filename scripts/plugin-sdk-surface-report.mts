@@ -295,7 +295,15 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: remove obsolete transcript display helper exports.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
-      4328,
+      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
+      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
+      // +1: account-scoped model catalog discovery for native agent harnesses.
+      // +2: shared delegation policy (mode resolver + section builder) so harness
+      //     runtimes render the same guidance instead of diverging prompt copies.
+      // +1: shared harness visible-source-reply guidance.
+      // +1: typed guarded-fetch redirect error for direct-only plugin delivery.
+      // -1: remove the test-only channel activity reset export.
+      4335,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -376,7 +384,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: remove the obsolete transcript tool-call predicate.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
-      2572,
+      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
+      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
+      // +2: shared delegation policy (mode resolver + section builder) so harness
+      //     runtimes render the same guidance instead of diverging prompt copies.
+      // +1: shared harness visible-source-reply guidance.
+      // -1: remove the test-only channel activity reset export.
+      2577,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
