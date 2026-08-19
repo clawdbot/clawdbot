@@ -108,19 +108,20 @@ const DYNAMIC_STARTUP_CASES = [
 
 describe("Dynamic route startup bridge", () => {
   it("keeps share-route reservations aligned with every built-in path and alias", () => {
-    const appRouteSegments = [
-      ...new Set(
-        APP_ROUTE_IDS.flatMap((routeId) => {
+    const reservedRouteSegments = [
+      ...new Set([
+        "focus",
+        ...APP_ROUTE_IDS.flatMap((routeId) => {
           const definition = routePageSpec(routeId);
           return [definition.path, ...(definition.aliases ?? [])]
             .map((path) => path.split("/").find(Boolean))
             .filter((segment): segment is string => Boolean(segment));
         }),
-      ),
+      ]),
     ].toSorted();
 
-    expect([...CONTROL_UI_RESERVED_ROUTE_SEGMENTS].toSorted()).toEqual(appRouteSegments);
-    expect(appRouteSegments.every(isControlUiReservedRouteSegment)).toBe(true);
+    expect([...CONTROL_UI_RESERVED_ROUTE_SEGMENTS].toSorted()).toEqual(reservedRouteSegments);
+    expect(reservedRouteSegments.every(isControlUiReservedRouteSegment)).toBe(true);
   });
 
   it("keeps plausible generic catalog share paths on chat", () => {
@@ -152,6 +153,7 @@ describe("Dynamic route startup bridge", () => {
     expect(routeIdFromPath("/control/avatar/main", "/control")).toBeNull();
     expect(routeIdFromPath("/settings/about")).toBe("about");
     expect(routeIdFromPath("/workboard/0123456789ab")).toBe("workboard");
+    expect(routeIdFromPath("/focus/0123456789ab")).toBeNull();
     expect(routeIdFromPath("/plugin/0123456789ab")).toBeNull();
     expect(routeIdFromPath("/usage/0123456789ab")).toBeNull();
     expect(routeIdFromPath("/settings/0123456789ab")).toBeNull();

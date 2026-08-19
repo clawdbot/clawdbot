@@ -87,7 +87,7 @@ describe("session catalog share routes", () => {
     expect(catalogs.every((catalog) => catalog.shareRoute === undefined)).toBe(true);
   });
 
-  it.each(["chat", "plugin", "settings"])(
+  it.each(["chat", "focus", "plugin", "settings"])(
     "does not project the reserved %s route",
     async (routeSegment) => {
       hoisted.activeRegistry.sessionCatalogs = [

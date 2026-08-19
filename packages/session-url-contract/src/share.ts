@@ -24,6 +24,7 @@ export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS = Object.freeze([
   "dashboard",
   "dashboards",
   "debug",
+  "focus",
   "infrastructure",
   "lobsterdex",
   "logs",

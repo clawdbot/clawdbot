@@ -119,6 +119,10 @@ describe("buildControlUiCatalogSharePath", () => {
       threadId: "0123456789abcdef0123456789abcdef",
     },
     {
+      shareRoute: { ...SHARE_ROUTE, routeSegment: "focus" },
+      threadId: "0123456789abcdef0123456789abcdef",
+    },
+    {
       shareRoute: { ...SHARE_ROUTE, routeSegment: "plugin" },
       threadId: "0123456789abcdef0123456789abcdef",
     },

@@ -315,6 +315,7 @@ describe("matchControlUiCatalogSharePath", () => {
 
   it.each([
     "/chat/0123456789ab",
+    "/focus/0123456789ab",
     "/plugin/0123456789ab",
     "/settings/0123456789ab",
     "/ui/chat",

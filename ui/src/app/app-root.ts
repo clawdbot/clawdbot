@@ -325,6 +325,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
         this.focusDashboardRoute = { kind: "not-found" };
         return;
       }
+      if (result.kind === "route-error") {
+        this.focusDashboardRoute = { kind: "error", message: result.message };
+        return;
+      }
       if (result.kind === "ambiguous") {
         this.focusDashboardRoute = {
           kind: "ambiguous",

@@ -74,7 +74,7 @@ describe("sessionNavigationTarget", () => {
     });
   });
 
-  it.each(["chat", "plugin", "settings"])(
+  it.each(["chat", "focus", "plugin", "settings"])(
     "keeps a generic catalog URL when a descriptor collides with the built-in %s route",
     (routeSegment) => {
       const target = sessionNavigationTarget({
