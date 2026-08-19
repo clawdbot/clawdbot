@@ -149,11 +149,12 @@ current in-memory run state:
    `activeRunIds`, when present, is the complete exact active set; an empty array
    therefore proves the session is idle. When `hasActiveRun` is true and
    `activeRunIds` is omitted, another runtime owner is active but its exact run
-   identities are unavailable. In incremental merge events, omission is not a
-   replacement value; replace the cached list only when the field is present,
-   including an empty-array tombstone. Correlate only a run ID the client owns
-   locally or received from a request, history response, or event, and never
-   select the first list entry as an owner.
+   identities are unavailable. In incremental merge events, omission means no
+   change, `null` is the event-only tombstone that clears cached exact IDs to
+   unavailable, and an array replaces the cache (including `[]` for proven
+   idle). Correlate only a run ID the client owns locally or received from a
+   request, history response, or event, and never select the first list entry as
+   an owner.
 5. Show an observer headline or run-inspector link only when the observer digest's
    exact `runId` is present in `activeRunIds`. Aggregate activity alone does not
    make a retained digest current.

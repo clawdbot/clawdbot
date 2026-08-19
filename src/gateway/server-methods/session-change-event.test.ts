@@ -28,22 +28,26 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../session-event-payload.js", () => ({
-  buildGatewaySessionEventFields: ({
-    sessionRow,
-    hasActiveRun,
-    activeRunIds,
-  }: {
-    sessionRow: { key: string; label: string };
-    hasActiveRun?: boolean;
-    activeRunIds?: string[];
-  }) => ({
-    key: sessionRow.key,
-    label: sessionRow.label,
-    ...(hasActiveRun === undefined ? {} : { hasActiveRun }),
-    ...(activeRunIds === undefined ? {} : { activeRunIds }),
-  }),
-}));
+vi.mock("../session-event-payload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-event-payload.js")>();
+  return {
+    ...actual,
+    buildGatewaySessionEventFields: ({
+      sessionRow,
+      hasActiveRun,
+      activeRunIds,
+    }: {
+      sessionRow: { key: string; label: string };
+      hasActiveRun?: boolean;
+      activeRunIds?: string[] | null;
+    }) => ({
+      key: sessionRow.key,
+      label: sessionRow.label,
+      ...(hasActiveRun === undefined ? {} : { hasActiveRun }),
+      ...(activeRunIds === undefined ? {} : { activeRunIds }),
+    }),
+  };
+});
 
 const { emitSessionsChanged, flushPendingSessionsChangedEvents, readSessionsMutationVersion } =
   await import("./session-change-event.js");
@@ -208,9 +212,31 @@ describe("sessions.changed coalescing", () => {
     );
   });
 
-  it("omits active run ids when lifecycle projection owns only aggregate liveness", () => {
+  it("tombstones exact run ids when lifecycle projection takes ownership", () => {
     const sessionKey = "agent:main:projected";
-    const context = createContext();
+    const sessionId = `${sessionKey}-id`;
+    const chatAbortControllers = new Map([
+      [
+        "direct-run",
+        {
+          agentId: "main",
+          controller: new AbortController(),
+          expiresAtMs: 60_000,
+          sessionId,
+          sessionKey,
+          startedAtMs: 0,
+        } satisfies ChatAbortControllerEntry,
+      ],
+    ]);
+    const context = createContext(new Set(["conn-1"]), {}, chatAbortControllers);
+
+    emitSessionsChanged(context, { reason: "update", sessionKey });
+    expect(vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1]).toMatchObject({
+      hasActiveRun: true,
+      activeRunIds: ["direct-run"],
+    });
+
+    chatAbortControllers.clear();
     registerAgentRunContext("hidden-worker-run", {
       isControlUiVisible: false,
       projectSessionActive: true,
@@ -218,10 +244,11 @@ describe("sessions.changed coalescing", () => {
     });
     try {
       emitSessionsChanged(context, { reason: "update", sessionKey });
+      flushPendingSessionsChangedEvents(context);
 
-      const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+      const payload = vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1];
       expect(payload).toMatchObject({ hasActiveRun: true });
-      expect(payload).not.toHaveProperty("activeRunIds");
+      expect(payload).toHaveProperty("activeRunIds", null);
     } finally {
       clearAgentRunContext("hidden-worker-run");
     }

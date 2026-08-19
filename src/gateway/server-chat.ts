@@ -53,7 +53,10 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
-import { buildGatewaySessionEventRow } from "./session-event-payload.js";
+import {
+  buildGatewaySessionEventRow,
+  projectSessionEventActiveRunIds,
+} from "./session-event-payload.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
@@ -607,7 +610,7 @@ export function createAgentEventHandler({
     const activeRunFields = activeRunState
       ? {
           hasActiveRun: activeRunState.active,
-          ...(activeRunState.runIds === undefined ? {} : { activeRunIds: activeRunState.runIds }),
+          activeRunIds: projectSessionEventActiveRunIds(activeRunState),
         }
       : {};
     const clearsLastRunError =
