@@ -6,6 +6,7 @@ import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } f
 
 const dispatchTestMocks = vi.hoisted(() => ({
   findLiveByOwner: vi.fn(),
+  runCommandWithTimeout: vi.fn(),
   resolveTarget: vi.fn(),
 }));
 
@@ -18,6 +19,15 @@ vi.mock("../../agents/worktrees/service.js", () => ({
     findLiveByOwner: dispatchTestMocks.findLiveByOwner,
   },
 }));
+
+vi.mock("../../process/exec.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+  return {
+    ...actual,
+    runCommandWithTimeout: dispatchTestMocks.runCommandWithTimeout,
+  };
+});
 
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
@@ -120,7 +130,7 @@ export function makeDispatchTestContext(
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: { profileId: string; machineClass?: string } | { deviceId: string } = {
+  target: { profileId?: string; machineClass?: string; deviceId?: string } = {
     profileId: "test",
   },
   sessionMutationAuthorization?: SessionMutationAuthorization,

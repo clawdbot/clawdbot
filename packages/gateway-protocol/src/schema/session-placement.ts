@@ -182,7 +182,7 @@ const WorkerMachineClassSchema = Type.String({
   maxLength: WORKER_MACHINE_CLASS_MAX_LENGTH,
 });
 
-/** Requests one-way dispatch of an existing local session to exactly one worker target. */
+/** Requests one-way dispatch of an existing local session to an explicit or configured target. */
 export const SessionsDispatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -198,6 +198,15 @@ export const SessionsDispatchParamsSchema = Type.Object(
       {
         required: ["deviceId"],
         not: { anyOf: [{ required: ["profileId"] }, { required: ["machineClass"] }] },
+      },
+      {
+        not: {
+          anyOf: [
+            { required: ["profileId"] },
+            { required: ["deviceId"] },
+            { required: ["machineClass"] },
+          ],
+        },
       },
     ],
   },
