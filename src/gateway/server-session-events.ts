@@ -27,6 +27,7 @@ import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import {
   buildGatewaySessionEventFields,
   buildGatewaySessionEventRow,
+  projectSessionEventActiveRunIds,
 } from "./session-event-payload.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
@@ -83,14 +84,14 @@ export function buildGatewaySessionSnapshot(params: {
   parentSessionKey?: string;
   status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
-  activeRunIds?: string[];
+  activeRunIds?: string[] | null;
 }): Record<string, unknown> {
   const { sessionRow } = params;
   if (!sessionRow) {
     return {};
   }
   // Nested snapshots are the UI merge source, so preserve explicit clear semantics there too.
-  const session = params.includeSession
+  const session: Record<string, unknown> | undefined = params.includeSession
     ? {
         ...buildGatewaySessionEventRow(sessionRow),
         createdActor: sessionRow.createdActor ?? null,
@@ -344,7 +345,7 @@ async function handleTranscriptUpdateBroadcast(
     includeSession: true,
     status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
     hasActiveRun: activeRunState?.active,
-    activeRunIds: activeRunState?.runIds,
+    activeRunIds: projectSessionEventActiveRunIds(activeRunState),
   });
   if (update.message === undefined) {
     // A committed batch without individually proven cursors must invalidate
@@ -454,7 +455,7 @@ export function createLifecycleEventBroadcastHandler(params: {
           displayName: event.displayName,
           parentSessionKey: event.parentSessionKey,
           hasActiveRun: activeRunState?.active,
-          activeRunIds: activeRunState?.runIds,
+          activeRunIds: projectSessionEventActiveRunIds(activeRunState),
         }),
         ...(swarmEvent.swarmGroupId
           ? {

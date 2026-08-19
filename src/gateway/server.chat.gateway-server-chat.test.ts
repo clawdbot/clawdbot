@@ -38,11 +38,6 @@ import {
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
-vi.mock("./session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-utils.js")>();
-  return { ...actual, resolveGatewayModelSupportsImages: vi.fn(async () => true) };
-});
-
 function createGatewayHistoryText(role: "user" | "assistant", text: unknown, timestamp: number) {
   return { role, content: [{ type: "text", text }], timestamp };
 }
@@ -726,7 +721,20 @@ describe("gateway server chat", () => {
 
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      // The discovered model advertises image input, so the real capability
+      // resolver must keep these attachments inline; offloading here would mean
+      // the catalog lookup silently failed and returned false. Capability
+      // resolution happens before dispatch, so capturing dispatch args observes
+      // the real resolver's decision.
+      const inlineDispatches: { runId?: string; images?: unknown[] }[] = [];
+      const captureInlineDispatch = async (args: unknown) => {
+        const replyOptions = (args as { replyOptions?: { runId?: string; images?: unknown[] } })
+          .replyOptions;
+        inlineDispatches.push({ runId: replyOptions?.runId, images: replyOptions?.images });
+        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      };
 
+      dispatchInboundMessageMock.mockImplementationOnce(captureInlineDispatch);
       const imgRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "see image",
@@ -745,6 +753,8 @@ describe("gateway server chat", () => {
       expect(imgRes.ok).toBe(true);
       expectStringRunId(imgRes.payload);
       await waitForAgentRunDrained("idem-img");
+      expect(inlineDispatches).toEqual([{ runId: "idem-img", images: [expect.anything()] }]);
+      dispatchInboundMessageMock.mockImplementationOnce(captureInlineDispatch);
       const imgOnlyRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "",
@@ -761,6 +771,10 @@ describe("gateway server chat", () => {
       expect(imgOnlyRes.ok).toBe(true);
       expectStringRunId(imgOnlyRes.payload);
       await waitForAgentRunDrained("idem-img-only");
+      expect(inlineDispatches).toEqual([
+        { runId: "idem-img", images: [expect.anything()] },
+        { runId: "idem-img-only", images: [expect.anything()] },
+      ]);
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);

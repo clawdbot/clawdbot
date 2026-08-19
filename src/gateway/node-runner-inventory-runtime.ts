@@ -37,6 +37,7 @@ export type NodeRunnerInventoryRecord = Omit<
   NodeWorkerSupervisorNodeProof,
   "commands" | "pairingGeneration" | "protocolFeature" | "workerHost"
 > & {
+  pairingGeneration?: string;
   protocolFeatures: readonly string[];
   workerHost?: NodeWorkerHostDeclaration;
 };
@@ -70,6 +71,7 @@ export function resolveNodeWorkerSupervisorProof(
     node.clientMode !== "node" ||
     declaration.nodeId !== node.nodeId ||
     declaration.pairingIdentity !== node.pairingIdentity ||
+    declaration.pairingGeneration !== node.pairingGeneration ||
     declaration.clientId !== node.clientId ||
     declaration.clientMode !== node.clientMode ||
     !declaration.protocolFeatures.includes(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE) ||
@@ -102,6 +104,8 @@ export function resolveNodeRunnerInventoryIssue(
     node.client.invalidated !== true &&
     declaration.nodeId === node.nodeId &&
     declaration.pairingIdentity === node.pairingIdentity &&
+    declaration.pairingGeneration !== undefined &&
+    declaration.pairingGeneration === node.pairingGeneration &&
     declaration.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
     declaration.clientMode === "node" &&
     declaration.protocolFeatures.length === 1 &&

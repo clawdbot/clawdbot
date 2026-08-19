@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import type { BridgeMemoryWikiResult } from "./bridge.js";
@@ -110,14 +111,6 @@ async function collectUnsafeLocalArtifacts(
     deduped.set(artifact.syncKey, artifact);
   }
   return { artifacts: [...deduped.values()], unavailableConfiguredPaths };
-}
-
-function isSourceWithinConfiguredPath(sourcePath: string, configuredPath: string): boolean {
-  const relative = path.relative(configuredPath, sourcePath);
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-  );
 }
 
 function resolveUnsafeLocalPagePath(params: { configuredPath: string; absolutePath: string }): {
@@ -240,7 +233,7 @@ export async function syncMemoryWikiUnsafeLocalSources(
     if (
       entry.group === "unsafe-local" &&
       unavailableConfiguredPaths.some((configuredPath) =>
-        isSourceWithinConfiguredPath(entry.sourcePath, configuredPath),
+        isPathInside(configuredPath, entry.sourcePath),
       )
     ) {
       // A configured source scope remains authoritative until it is readable again or removed

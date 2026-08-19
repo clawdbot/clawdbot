@@ -1280,35 +1280,31 @@ npm_config_has_raw_key() {
 }
 
 npm_lifecycle_allow_arg() {
-  local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" version=""
-  version="$("$npm_cmd" --version 2>/dev/null | awk 'NF { value = $0 } END { print value }')" || true
-  if [[ ! "$version" =~ ^[vV]?([0-9]+)\.([0-9]+)\.([0-9]+)([-+][0-9A-Za-z.-]+)?$ ]]; then
+  local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" version="" output=""
+  if ! version="$("$npm_cmd" --version 2>/dev/null)"; then
     log "ERROR: unable to determine npm version; no package changes were made"
     return 1
   fi
-  local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}"
-  if (( major < 12 && (major != 11 || minor < 16) )); then return 0; fi
-  local identity="$spec" normalized=""
-  normalized="$(to_lowercase_ascii "$identity")"
-  if [[ "$normalized" == openclaw@* ]]; then identity="${identity#*@}"; normalized="$(to_lowercase_ascii "$identity")"; fi
-  if [[ "$normalized" == npm:* ]]; then
-    local alias_target="${identity#*:}"
-    if [[ "$alias_target" == @*/*@* ]]; then identity="${alias_target%@*}"
-    elif [[ "$alias_target" == *@* ]]; then identity="${alias_target%%@*}"
-    else identity="$alias_target"; fi
-  elif [[ "$identity" != *"://"* && "$identity" != /* && "$identity" != ./* && "$identity" != ../* && ! "$identity" =~ ^(file|github|git\+|npm): && ! "$identity" =~ \.(tgz|tar\.gz)$ ]]; then
-    identity="openclaw"
-  fi
-  if [[ "$identity" == /* ]]; then
-    # shellcheck disable=SC2016 # JavaScript source must not expand in the installer shell.
-    identity="$("$(node_bin)" -e '
+  output="$("$(node_bin)" - "$version" "$spec" "$npm_cwd" <<'NODE'
 const path = require("node:path");
-const relative = path.relative(process.argv[1], process.argv[2]) || ".";
-process.stdout.write(path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`);
-' "$npm_cwd" "$identity")" || return 1
-  fi
-  [[ -n "$identity" && "$identity" != *,* ]] || { log "ERROR: npm cannot allow lifecycle scripts for ${spec}"; return 1; }
-  printf '%s\n' "--allow-scripts=${identity}"
+const [versionOutput, spec, cwd] = process.argv.slice(2);
+const version = versionOutput.trim().split(/\r?\n/).at(-1) ?? "";
+const parsed = version.match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
+const fail = (message) => { process.stderr.write(`${message}\n`); process.exit(1); };
+if (!parsed) fail("Unable to determine npm version; no package changes were made.");
+if (+parsed[1] < 12 && (+parsed[1] !== 11 || +parsed[2] < 16)) process.exit(0);
+const normalized = spec.trim();
+const unaliased = normalized.toLowerCase().startsWith("openclaw@") ? normalized.slice(9).trim() : normalized;
+const explicit = (value) => /\.(?:tgz|tar\.gz)$/i.test(value) || value.includes("://") || value.includes("#") || /^(?:file|github|git\+(?:ssh|https|http|file)|npm):/i.test(value);
+let identity = !normalized || explicit(normalized) || explicit(unaliased) || /^\.{1,2}(?:[\\/]|$)/.test(unaliased) || path.isAbsolute(normalized) || path.isAbsolute(unaliased) ? unaliased : "openclaw";
+if (/^npm:/i.test(identity)) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
+const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
+if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
+if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'.`);
+process.stdout.write(`--allow-scripts=${identity}\n`);
+NODE
+)" || return 1
+  printf '%s' "$output"
 }
 
 publish_executable_wrapper() {

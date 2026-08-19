@@ -522,7 +522,11 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
 }
 
 function requiresIndividualCollectDrain(item: FollowupRun): boolean {
-  return item.disableCollectBatching === true || hasRuntimeOnlyFollowupMetadata(item);
+  return (
+    item.disableCollectBatching === true ||
+    item.run.skillWorkshopProposalRevision !== undefined ||
+    hasRuntimeOnlyFollowupMetadata(item)
+  );
 }
 
 type AggregateCancellation = {

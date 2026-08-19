@@ -99,12 +99,18 @@ dispatch so authorization failures have one canonical structured response:
   `projectId`, and `operator.admin` for incognito sessions or any `execNode`
   request. For non-admin callers, the handler limits `cwd` to configured agent
   workspaces; `projectId` cannot be combined with `cwd` or `execNode`.
-- `environments.list` needs `operator.read`. Operators with `operator.write`
-  can use administrator-provisioned shared runner infrastructure through
-  `sessions.dispatch`, `sessions.reclaim`, and `sessions.move`; those methods
-  retain session ownership, participation, and commit-time revalidation
-  fences. `operator.read` alone cannot start, stop, or move a session. Cloud
-  profile mutation, pairing and Connect machine, raw `environments.create` or
+- `environments.list` needs `operator.read`. Session placement methods derive
+  their scope from the requested target before schema validation:
+  `sessions.dispatch` needs `operator.write` for `deviceId` and
+  `operator.admin` for `profileId` or a target-less
+  `cloudWorkers.projectProfiles` lookup; `sessions.move` needs `operator.write`
+  for Gateway or device targets and `operator.admin` for profile targets;
+  `sessions.reclaim` remains `operator.write`. Malformed dispatch params or a
+  malformed move target use `operator.write` so the handler can return the
+  precise schema error. All three methods retain session ownership,
+  participation, and commit-time revalidation fences. `operator.read` alone
+  cannot start, stop, or move a session. Cloud profile allocation and mutation,
+  pairing and Connect machine, raw `environments.create` or
   `environments.destroy`, incognito sessions, direct `execNode` execution, and
   arbitrary host or node paths remain `operator.admin`.
 - `worktrees.branches` needs `operator.write`. Its handler limits non-admin

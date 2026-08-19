@@ -5,6 +5,7 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
 
@@ -132,6 +133,177 @@ suite.define(() => {
       });
       expect(steerParams).not.toHaveProperty("expectedRunId");
       expect(steerParams).not.toHaveProperty("expectedLeafEntryId");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps the active run across a live steer operation", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const runId = "run-a";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "user",
+          content: "run the long command",
+          __openclaw: { id: "user-a", idempotencyKey: `${runId}:user`, seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "callExec", name: "exec", arguments: {} }],
+          __openclaw: { id: "exec-call", seq: 2 },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "callExec",
+          toolName: "exec",
+          content: [{ type: "text", text: "process still running" }],
+          __openclaw: { id: "exec-result", seq: 3 },
+        },
+      ],
+      inFlightRun: { runId, text: "" },
+      sessionInfo: { activeRunIds: [runId], hasActiveRun: true, key: "main" },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      const configPatchesBefore = (await gateway.getRequests("config.patch")).length;
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await waitForRequests(gateway, "config.patch", configPatchesBefore + 1);
+      const shortcut = page.locator("[data-settings-send-shortcut]");
+      await shortcut.selectOption("enter");
+      expect(await shortcut.inputValue()).toBe("enter");
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await page.locator(".chat-tool-msg-summary", { hasText: "Exec" }).waitFor();
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      let toolSequence = 0;
+      const emitTool = (data: Record<string, unknown>) =>
+        gateway.emitGatewayEvent("agent", {
+          data,
+          runId,
+          seq: ++toolSequence,
+          sessionKey: "main",
+          stream: "tool",
+          ts: Date.now(),
+        });
+
+      const steerText = "steer while the process runs";
+      const sendsBeforeSteer = (await gateway.getRequests("chat.send")).length;
+      await gateway.deferNext("chat.send");
+      await composer.fill(steerText);
+      await composer.press("Control+Enter");
+      const steerSend = await gateway.waitForRequest("chat.send", { after: sendsBeforeSteer });
+      const steerParams = requireRecord(steerSend.params);
+      expect(steerParams).toMatchObject({
+        deliver: false,
+        message: steerText,
+        queueMode: "steer",
+        sessionKey: "main",
+      });
+      expect(steerParams).not.toHaveProperty("expectedRunId");
+      expect(steerParams).not.toHaveProperty("expectedLeafEntryId");
+      const steerRunId = requireString(
+        steerParams.idempotencyKey,
+        "steer chat send idempotency key",
+      );
+      await gateway.resolveDeferred("chat.send", { runId: steerRunId, status: "started" });
+      const steerUser = {
+        __openclaw: {
+          id: "ui4-steer-user",
+          idempotencyKey: `${steerRunId}:user`,
+          seq: 4,
+          steerTargetRunId: runId,
+        },
+        content: [{ text: steerText, type: "text" }],
+        role: "user",
+        timestamp: Date.now(),
+      };
+      await gateway.deferNext("chat.history");
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [runId],
+        clientRunId: steerRunId,
+        hasActiveRun: true,
+        message: steerUser,
+        messageId: "ui4-steer-user",
+        messageSeq: 4,
+        session: {
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await page.locator(".chat-group.user", { hasText: steerText }).waitFor();
+      await gateway.emitGatewayEvent("chat", {
+        runId: steerRunId,
+        sessionKey: "main",
+        state: "final",
+      });
+
+      await emitTool({
+        args: { action: "poll" },
+        name: "process",
+        phase: "start",
+        toolCallId: "callProcess",
+      });
+      await emitTool({
+        name: "process",
+        phase: "result",
+        result: "process complete",
+        toolCallId: "callProcess",
+      });
+      const finalText = "UI4_LONG_BASE UI4_STEER_OK";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: finalText,
+        message: {
+          content: [{ text: finalText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [runId],
+        clientRunId: runId,
+        hasActiveRun: true,
+        message: {
+          role: "assistant",
+          content: [{ text: finalText, type: "text" }],
+          __openclaw: { id: "ui4-final", seq: 5 },
+        },
+        messageId: "ui4-final",
+        messageSeq: 5,
+        session: {
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await gateway.emitChatFinal({ runId, text: finalText });
+      await expect
+        .poll(() =>
+          page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).count(),
+        )
+        .toBe(1);
+      await expect
+        .poll(() => page.locator(".chat-work-group", { hasText: "used process" }).count())
+        .toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

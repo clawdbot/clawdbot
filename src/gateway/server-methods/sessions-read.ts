@@ -405,7 +405,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                     ? { status: activeRunState.status ?? ("running" as const) }
                     : {}),
                   ...projectPlacement(session.sessionId),
-                  ...(activeRunState.runIds.length > 0
+                  ...(activeRunState.runIds !== undefined
                     ? { activeRunIds: activeRunState.runIds }
                     : {}),
                 });

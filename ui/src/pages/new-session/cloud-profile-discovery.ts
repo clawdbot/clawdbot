@@ -16,8 +16,12 @@ export function selectProfiles(
 export function discoverPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
   canWrite: boolean,
+  isAdmin: boolean,
 ): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
   return canWrite
-    ? requestPlaceCatalog(client)
+    ? requestPlaceCatalog(client).then((catalog) => ({
+        ...catalog,
+        profiles: isAdmin ? catalog.profiles : [],
+      }))
     : Promise.resolve({ profiles: [], environments: [] });
 }

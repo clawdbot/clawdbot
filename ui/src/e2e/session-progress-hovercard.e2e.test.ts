@@ -47,6 +47,35 @@ async function waitForPullRequestSubscription(
     .toBe(true);
 }
 
+async function emitPullRequestSnapshot(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  sessionKey: string,
+): Promise<void> {
+  await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+    sessions: {
+      [sessionKey]: {
+        pullRequests: [
+          {
+            additions: 128,
+            branch: "steipete/session-hovercard-unify",
+            changedFiles: 7,
+            checks: { state: "passing", passed: 24, failed: 0, skipped: 2, running: 0 },
+            deletions: 34,
+            number: 417,
+            owner: "openclaw",
+            repo: "openclaw",
+            state: "open",
+            title: "Restore the session hovercard",
+            url: "https://github.com/openclaw/openclaw/pull/417",
+          },
+        ],
+        rateLimited: false,
+        status: "ready",
+      },
+    },
+  });
+}
+
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
@@ -144,48 +173,11 @@ suite.define(() => {
         await row.waitFor({ state: "visible" });
         await row.hover();
         const card = page.locator(".session-progress-hovercard");
-        expect(await card.count()).toBe(0);
-        expect(
-          (await gateway.getRequests("progressCard.get")).filter(
-            (request) => isRecord(request.params) && request.params.sessionKey === sessionKey,
-          ),
-        ).toHaveLength(0);
-
-        const link = page.locator(
-          `.chat-thread a.markdown-session-link[data-session-key="${sessionKey}"]`,
-        );
-        await link.waitFor({ state: "visible" });
-        await expect.poll(() => link.textContent()).toBe("Other session");
-        expect(await link.getAttribute("href")).toBe("/chat/main/other-session");
-        await link.hover();
-
         await waitForPullRequestSubscription(gateway, sessionKey);
-        await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-          sessions: {
-            [sessionKey]: {
-              pullRequests: [
-                {
-                  additions: 128,
-                  branch: "steipete/session-hovercard-unify",
-                  changedFiles: 7,
-                  checks: { state: "passing", passed: 24, failed: 0, skipped: 2, running: 0 },
-                  deletions: 34,
-                  number: 417,
-                  owner: "openclaw",
-                  repo: "openclaw",
-                  state: "open",
-                  title: "Restore the session hovercard",
-                  url: "https://github.com/openclaw/openclaw/pull/417",
-                },
-              ],
-              rateLimited: false,
-              status: "ready",
-            },
-          },
-        });
+        await emitPullRequestSnapshot(gateway, sessionKey);
 
         await card.waitFor({ state: "visible" });
-        expect(["bottom", "top"]).toContain(await card.getAttribute("data-side"));
+        expect(["left", "right"]).toContain(await card.getAttribute("data-side"));
         await expect
           .poll(() => card.locator(".session-hovercard__title").textContent())
           .toBe("Other session");
@@ -230,6 +222,26 @@ suite.define(() => {
           .poll(() => card.locator(".session-progress-card__step--pending").textContent())
           .toContain("Publish");
         expect(await page.evaluate(() => "__progressCardPwned" in window)).toBe(false);
+        await captureProof(page, "sidebar-row-hovercard-progress.png");
+
+        const link = page.locator(
+          `.chat-thread a.markdown-session-link[data-session-key="${sessionKey}"]`,
+        );
+        await link.waitFor({ state: "visible" });
+        await expect.poll(() => link.textContent()).toBe("Other session");
+        expect(await link.getAttribute("href")).toBe("/chat/main/other-session");
+        await link.hover();
+        await card.waitFor({ state: "visible" });
+        await waitForPullRequestSubscription(gateway, sessionKey);
+        await emitPullRequestSnapshot(gateway, sessionKey);
+        expect(["bottom", "top"]).toContain(await card.getAttribute("data-side"));
+        await expect
+          .poll(() => card.locator(".session-hovercard__title").textContent())
+          .toBe("Other session");
+        await expect
+          .poll(() => card.locator(".session-hovercard__pr-number").textContent())
+          .toBe("#417");
+        await expect.poll(() => card.locator("strong").textContent()).toContain("Building");
         await captureProof(page, "chat-link-hovercard-progress.png");
 
         await gateway.deferNext("progressCard.get", { sessionKey });
@@ -430,19 +442,10 @@ suite.define(() => {
         expect(await row.getAttribute("title")).toBeNull();
         expect(await row.locator(".sidebar-recent-session__link").getAttribute("title")).toBeNull();
         await row.hover();
-        expect(await page.locator(".session-progress-hovercard").count()).toBe(0);
-
-        const link = page.locator(
-          `.chat-thread a.markdown-session-link[data-session-key="${sessionKey}"]`,
-        );
-        await link.waitFor({ state: "visible" });
-        await expect.poll(() => link.textContent()).toBe("No progress card");
-        expect(await link.getAttribute("href")).toBe("/chat/main/no-progress-card");
-        expect(await link.getAttribute("title")).toBe(sessionKey);
-        await link.hover();
         await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
         const card = page.locator(".session-progress-hovercard");
         await card.waitFor({ state: "visible" });
+        expect(["left", "right"]).toContain(await card.getAttribute("data-side"));
         await expect
           .poll(() => card.locator(".session-hovercard__excerpt").textContent())
           .toBe(lastMessagePreview);
@@ -453,7 +456,7 @@ suite.define(() => {
             .locator(".session-hovercard__excerpt")
             .evaluate((element) => getComputedStyle(element).webkitLineClamp),
         ).toBe("2");
-        await captureProof(page, "chat-link-hovercard-last-turn.png");
+        await captureProof(page, "sidebar-row-hovercard-last-turn.png");
       },
     );
   });

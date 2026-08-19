@@ -1487,9 +1487,6 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.5.5
         version: 0.5.5
-      execa:
-        specifier: 10.0.0
-        version: 10.0.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

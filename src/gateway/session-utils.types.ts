@@ -157,6 +157,7 @@ export type GatewaySessionRow = {
   /** Compact user-facing reason for the latest failed or timed-out run. */
   lastRunError?: string;
   hasActiveRun?: boolean;
+  /** Complete exact active set when present; omitted for active owners without exact identities. */
   activeRunIds?: string[];
   /** Active transcript-branch leaf for history rendered from this row. */
   activeLeafEntryId?: string | null;

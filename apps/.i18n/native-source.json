@@ -41909,6 +41909,17 @@
       ]
     },
     {
+      "id": "native.apple.08109b7e335603e1",
+      "source": "Review the proposal draft before applying or rejecting it.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.d23668f12e319332",
       "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
       "surface": "apple",
