@@ -2460,7 +2460,8 @@ export const en: TranslationMap = {
       setupHelp: "Optional idempotent shell command run before OpenClaw is installed.",
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
-      desktopHelp: "Provision a desktop-capable worker for Browser and Terminal access.",
+      desktopHelp:
+        "Warm an AWS or Hetzner worker with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
@@ -3300,7 +3301,7 @@ export const en: TranslationMap = {
     workerDesktop: {
       title: "Cloud Worker Desktop",
       description:
-        "Watch and control desktop-capable cloud worker environments live from a Desktop panel; requires crabbox profiles with desktop: true.",
+        "Watch and control node-carried desktops from capable Crabbox AWS or Hetzner profiles with desktop: true.",
     },
   },
   aboutPage: {

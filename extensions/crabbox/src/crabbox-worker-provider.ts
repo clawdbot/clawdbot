@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
   WorkerProviderError,
@@ -20,6 +21,10 @@ import {
   runCrabboxCommand,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
+import {
+  createCrabboxWorkerDesktopEndpoint,
+  createCrabboxWorkerDesktopSetup,
+} from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
@@ -35,6 +40,7 @@ import {
 } from "./crabbox-worker-profile.js";
 import {
   countCrabboxProvisionSetupPhases,
+  CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
   CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
@@ -49,6 +55,9 @@ export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 const READY_POLL_INTERVAL_MS = 2_000;
 const MAX_ERROR_DETAIL_CHARS = 512;
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
+const WORKER_WALLPAPER_WIDTH = 1920;
+const WORKER_WALLPAPER_HEIGHT = 1080;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // Only states that prove the resource is gone or stopped map to `destroyed`. Crabbox also
 // treats `deleting` and `failed` as unable to become ready, but those can retain resources
 // that still need an explicit stop during teardown.
@@ -93,6 +102,7 @@ type CrabboxWorkerProviderDependencies = {
   platform?: NodeJS.Platform;
   runCommand?: CrabboxCommandRunner;
   sleep?: (milliseconds: number) => Promise<void>;
+  wallpaperPath: string;
   warn?: (message: string) => void;
 };
 
@@ -125,6 +135,31 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
       return provider && classes.length > 0 ? [[provider, classes]] : [];
     }),
   );
+}
+
+function loadWorkerWallpaperBase64(wallpaperPath: string): string {
+  let wallpaper: Buffer;
+  try {
+    wallpaper = fs.readFileSync(wallpaperPath);
+  } catch (cause) {
+    throw new Error(`Crabbox worker wallpaper could not be read: ${wallpaperPath}`, { cause });
+  }
+  if (
+    wallpaper.length < 33 ||
+    !wallpaper.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE) ||
+    wallpaper.readUInt32BE(8) !== 13 ||
+    wallpaper.toString("ascii", 12, 16) !== "IHDR"
+  ) {
+    throw new Error(`Crabbox worker wallpaper is not a PNG: ${wallpaperPath}`);
+  }
+  const width = wallpaper.readUInt32BE(16);
+  const height = wallpaper.readUInt32BE(20);
+  if (width !== WORKER_WALLPAPER_WIDTH || height !== WORKER_WALLPAPER_HEIGHT) {
+    throw new Error(
+      `Crabbox worker wallpaper must be ${WORKER_WALLPAPER_WIDTH}x${WORKER_WALLPAPER_HEIGHT}; got ${width}x${height}: ${wallpaperPath}`,
+    );
+  }
+  return wallpaper.toString("base64");
 }
 
 async function assertAwsWorkerHasNoInstanceProfile(params: {
@@ -474,8 +509,9 @@ async function rejectAwsProfileAfterLeaseReconciliation(
 }
 
 export function createCrabboxWorkerProvider(
-  dependencies: CrabboxWorkerProviderDependencies = {},
+  dependencies: CrabboxWorkerProviderDependencies,
 ): WorkerProvider {
+  const wallpaperBase64 = loadWorkerWallpaperBase64(dependencies.wallpaperPath);
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const warn = dependencies.warn ?? (() => {});
   const sleep =
@@ -592,12 +628,9 @@ export function createCrabboxWorkerProvider(
         );
       }
       const parsed = requestedClass ? { ...configured, class: requestedClass } : configured;
-      if (parsed.desktop) {
-        throw new WorkerProviderError(
-          "Crabbox desktop profiles are unavailable after node transport convergence",
-        );
-      }
-      const warmupTimeoutMs = CRABBOX_WARMUP_TIMEOUT_MS;
+      const warmupTimeoutMs = parsed.desktop
+        ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
+        : CRABBOX_WARMUP_TIMEOUT_MS;
       const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
       const setupDeadline =
         deadline +
@@ -684,11 +717,25 @@ export function createCrabboxWorkerProvider(
           sleep,
         });
       }
+      if (parsed.desktop) {
+        inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+          ...inspectedParams,
+          setup: createCrabboxWorkerDesktopSetup(leaseId, wallpaperBase64),
+          sleep,
+        });
+      }
       const beginNodeEnrollment = options?.beginNodeEnrollment;
       if (!beginNodeEnrollment) {
+        await stopProvisionInspect(inspectedParams);
         throw new Error("Crabbox worker node enrollment is unavailable");
       }
-      const enrollment = await beginNodeEnrollment();
+      let enrollment: WorkerNodeEnrollment;
+      try {
+        enrollment = await beginNodeEnrollment();
+      } catch (error) {
+        await stopProvisionInspect(inspectedParams);
+        throw error;
+      }
       inspectedParams.inspect = await runProvisionSetupAndWaitReady({
         ...inspectedParams,
         setup: nodeEnrollmentSetupCommand({ enrollment, leaseId }),
@@ -698,7 +745,13 @@ export function createCrabboxWorkerProvider(
           : {}),
         sleep,
       });
-      const deviceId = await enrollment.waitForDeviceId();
+      let deviceId: string;
+      try {
+        deviceId = await enrollment.waitForDeviceId();
+      } catch (error) {
+        await stopProvisionInspect(inspectedParams);
+        throw error;
+      }
       heartbeats.start({
         binary,
         heartbeatIntervalMs: parsed.heartbeatIntervalMs,
@@ -710,6 +763,7 @@ export function createCrabboxWorkerProvider(
         leaseId,
         node: { deviceId },
         sharedHost: false,
+        ...(parsed.desktop ? { desktop: createCrabboxWorkerDesktopEndpoint() } : {}),
       };
     },
     async inspect(lease): Promise<WorkerLeaseStatus> {
