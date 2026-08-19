@@ -256,7 +256,7 @@ describe("Telegram Desktop recorder remote contract", () => {
     },
   );
 
-  it("fails before warmup when the local Telegram image is missing", async () => {
+  it("fails before warmup when docker cannot inspect the local Telegram image", async () => {
     const root = makeTempDir();
     const calls: Array<{ args: string[]; command: string }> = [];
     const mockedRun: RunCommand = async (params) => {
@@ -292,7 +292,7 @@ describe("Telegram Desktop recorder remote contract", () => {
         operations,
       ),
     ).rejects.toThrow(
-      "Local Telegram Desktop image openclaw-telegram-desktop:7.0.9 is missing. Run bash scripts/mantis/build-telegram-desktop-image.sh first.",
+      "docker image inspect openclaw-telegram-desktop:7.0.9 failed: No such image. Build it with bash scripts/mantis/build-telegram-desktop-image.sh when the image is absent.",
     );
     expect(calls).toEqual([
       {
@@ -301,6 +301,43 @@ describe("Telegram Desktop recorder remote contract", () => {
       },
     ]);
     expect(operations.inspectCrabbox).not.toHaveBeenCalled();
+  });
+
+  // A run once reported a missing image while docker held it, because this wrapper
+  // replaced docker's own failure with its guess. The daemon's text has to survive.
+  it("keeps the docker failure text in the thrown message", async () => {
+    const root = makeTempDir();
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => {
+        throw new Error("must not inspect");
+      }),
+      runCommand: (async () => {
+        throw new Error("permission denied while trying to connect to the Docker daemon socket");
+      }) satisfies RunCommand,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    await expect(
+      startRecorder(
+        root,
+        {
+          command: "start",
+          chat: "-1001234567890",
+          crabboxClass: "standard",
+          idleTimeout: "1h",
+          json: false,
+          outputDir: "out",
+          provider: "docker",
+          recordFps: 24,
+          ttl: "2h",
+          userDriver: ["python3", "driver.py"],
+        },
+        operations,
+      ),
+    ).rejects.toThrow("permission denied while trying to connect to the Docker daemon socket");
   });
 
   it("renders only golden-image desktop operations", () => {

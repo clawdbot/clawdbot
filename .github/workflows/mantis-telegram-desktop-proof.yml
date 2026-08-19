@@ -538,6 +538,7 @@ jobs:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ steps.inspect.outputs.output_dir }}/mantis-evidence.json
+            ${{ steps.inspect.outputs.output_dir }}/capture-failure.log
             ${{ steps.inspect.outputs.output_dir }}/baseline
             ${{ steps.inspect.outputs.output_dir }}/candidate
           retention-days: 14

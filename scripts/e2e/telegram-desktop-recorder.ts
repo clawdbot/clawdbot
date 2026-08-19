@@ -347,7 +347,10 @@ async function assertLocalTelegramImage(params: { cwd: string; run: RunCommand }
     });
   } catch (error) {
     throw new Error(
-      `Local Telegram Desktop image ${TELEGRAM_DESKTOP_DOCKER_IMAGE} is missing. Run bash scripts/mantis/build-telegram-desktop-image.sh first.`,
+      // The CLI prints only `message`, so an inspect failure that is not a missing
+      // image (an unreachable daemon, a denied socket) has to be readable here or the
+      // operator is left with this wrapper's guess about the cause.
+      `docker image inspect ${TELEGRAM_DESKTOP_DOCKER_IMAGE} failed: ${coerceErrorMessage(error)}. Build it with bash scripts/mantis/build-telegram-desktop-image.sh when the image is absent.`,
       { cause: error },
     );
   }

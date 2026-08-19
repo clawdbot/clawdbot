@@ -95,7 +95,10 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    `comparison.pass: false`, skipped lanes, no artifacts, and a summary that
    starts with `Mantis could not capture Telegram Desktop proof because`. The
    publisher will keep that out of PR comments so the failure stays in the
-   workflow logs and artifacts.
+   workflow logs and artifacts. Before writing it, copy the failing command's
+   own output into `${MANTIS_OUTPUT_DIR}/capture-failure.log` and quote that
+   text in the summary. A summary that interprets the failure instead of
+   quoting it sends the next run chasing the wrong cause.
 
 3. Decide what Telegram message, mock model response, command, callback, button,
    media, or sequence best proves the PR. Use `MANTIS_INSTRUCTIONS` as extra

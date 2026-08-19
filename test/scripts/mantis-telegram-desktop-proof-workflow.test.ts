@@ -592,6 +592,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       workflowStep("Upload Mantis Telegram desktop artifacts").with?.path ?? "",
     );
     expect(uploadPaths).toContain("/mantis-evidence.json");
+    // A capture-infrastructure failure produces no lane artifacts, so this log is the
+    // only evidence of why the run could not record anything.
+    expect(uploadPaths).toContain("/capture-failure.log");
     expect(uploadPaths).toContain("/baseline");
     expect(uploadPaths).toContain("/candidate");
     expect(uploadPaths).not.toContain("session.json");
