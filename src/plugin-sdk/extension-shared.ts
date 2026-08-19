@@ -8,6 +8,7 @@ import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
+export { canResolveEnvSecretRefInReadOnlyPath } from "./secret-ref-readonly.internal.js";
 
 type PassiveChannelStatusSnapshot = {
   configured?: boolean;

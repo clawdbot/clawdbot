@@ -12,7 +12,31 @@ vi.mock("@openclaw/proxyline", () => ({
   hasAmbientNodeProxyConfigured: hasAmbientNodeProxyConfiguredMock,
 }));
 
-import { resolveAmbientNodeProxyAgent } from "./extension-shared.js";
+import {
+  canResolveEnvSecretRefInReadOnlyPath,
+  resolveAmbientNodeProxyAgent,
+} from "./extension-shared.js";
+
+describe("extension-shared compatibility exports", () => {
+  it("keeps the read-only env SecretRef guard available to published plugins", () => {
+    expect(
+      canResolveEnvSecretRefInReadOnlyPath({
+        cfg: {
+          secrets: {
+            providers: {
+              restricted: {
+                source: "env",
+                allowlist: ["FIRECRAWL_API_KEY"],
+              },
+            },
+          },
+        },
+        provider: "restricted",
+        id: "FIRECRAWL_API_KEY",
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("resolveAmbientNodeProxyAgent", () => {
   const envKeys = [
