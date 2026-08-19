@@ -63,7 +63,7 @@ export function parseSemver(version: string | null): Semver | null {
 }
 
 /** Compares parsed semver triples against an inclusive minimum version. */
-export function isAtLeast(version: Semver | null, minimum: Semver): boolean {
+function isAtLeast(version: Semver | null, minimum: Semver): boolean {
   if (!version) {
     return false;
   }

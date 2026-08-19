@@ -53,7 +53,10 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
-import { buildGatewaySessionEventRow } from "./session-event-payload.js";
+import {
+  buildGatewaySessionEventRow,
+  projectSessionEventActiveRunIds,
+} from "./session-event-payload.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
@@ -372,7 +375,7 @@ export type AgentEventHandlerOptions = {
     canonicalKey: string;
     sessionId?: string;
     agentId?: string;
-  }) => { active: boolean; runIds: string[] };
+  }) => { active: boolean; runIds?: string[] };
 };
 
 type AgentEventHandler = ((event: AgentEventPayload) => void) & {
@@ -602,10 +605,13 @@ export function createAgentEventHandler({
           ...(agentId ? { agentId } : {}),
         })
       : undefined;
-    // Agent lifecycle broadcasts merge into cached session rows in the UI.
-    // Always replace run identity so a newer start cannot inherit a completed run.
+    // Agent lifecycle broadcasts merge into cached session rows in the UI. Replace
+    // run identities only when the Gateway owns the complete exact set.
     const activeRunFields = activeRunState
-      ? { hasActiveRun: activeRunState.active, activeRunIds: activeRunState.runIds }
+      ? {
+          hasActiveRun: activeRunState.active,
+          activeRunIds: projectSessionEventActiveRunIds(activeRunState),
+        }
       : {};
     const clearsLastRunError =
       Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;

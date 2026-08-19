@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { NewSessionRouteData } from "./location.ts";
-import "./new-session-page.ts";
+import "./new-session-page-entry.ts";
 
 type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;

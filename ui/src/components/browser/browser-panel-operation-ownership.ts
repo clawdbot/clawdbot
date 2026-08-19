@@ -10,7 +10,7 @@ import {
 export interface BrowserPanelControllerHost extends ReactiveControllerHost {
   readonly client: GatewayBrowserClient | null;
   readonly available: boolean;
-  readonly basePath: string;
+  readonly resourceBasePath: string;
   readonly authToken: string | null;
   readonly isConnected: boolean;
   readonly renderRoot: HTMLElement | DocumentFragment;

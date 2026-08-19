@@ -20,48 +20,25 @@ describe("What chip state", () => {
   it.each([
     {
       name: "filters registered and workspace projects locally",
-      execNode: "",
       query: "site",
-      expectedMode: "projects",
       expectedProjects: ["website"],
       expectedRecents: 0,
       showWorkspace: false,
     },
-    {
-      name: "switches to node-path mode without changing the source list",
-      execNode: "macbook",
-      query: "",
-      expectedMode: "node-path",
-      expectedProjects: ["openclaw", "website"],
-      expectedRecents: 1,
-      showWorkspace: false,
-    },
-  ])(
-    "$name",
-    ({ execNode, query, expectedMode, expectedProjects, expectedRecents, showWorkspace }) => {
-      const state = resolveProjectChip({
-        folder: "",
-        workspace: "/workspace",
-        projectId: "",
-        selectedRemoteProject: null,
-        projects,
-        recents: [
-          {
-            kind: "folder",
-            folder: "/remote/project",
-            displayName: "project",
-            execNode: "macbook",
-          },
-        ],
-        projectQuery: query,
-        execNode,
-      });
-      expect(state.mode).toBe(expectedMode);
-      expect(state.localProjects.map((project) => project.id)).toEqual(expectedProjects);
-      expect(state.recents).toHaveLength(expectedRecents);
-      expect(state.showWorkspace).toBe(showWorkspace);
-    },
-  );
+  ])("$name", ({ query, expectedProjects, expectedRecents, showWorkspace }) => {
+    const state = resolveProjectChip({
+      folder: "",
+      workspace: "/workspace",
+      projectId: "",
+      selectedRemoteProject: null,
+      projects,
+      recents: [],
+      projectQuery: query,
+    });
+    expect(state.localProjects.map((project) => project.id)).toEqual(expectedProjects);
+    expect(state.recents).toHaveLength(expectedRecents);
+    expect(state.showWorkspace).toBe(showWorkspace);
+  });
 
   it("omits project recents already shown in the project list", () => {
     const folderRecent = {
@@ -77,7 +54,6 @@ describe("What chip state", () => {
       projects,
       recents: [{ kind: "project", projectId: "openclaw", displayName: "OpenClaw" }, folderRecent],
       projectQuery: "",
-      execNode: "",
     });
 
     expect(state.recents).toEqual([folderRecent]);

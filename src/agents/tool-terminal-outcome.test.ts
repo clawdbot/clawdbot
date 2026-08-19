@@ -8,6 +8,7 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
 import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
+import { inferToolMetaFromArgsCore } from "./tool-display.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 describe("tool terminal outcome observer", () => {
@@ -165,6 +166,65 @@ describe("tool terminal outcome observer", () => {
       sideEffectEvidence: false,
       lastToolError: { mutatingAction: false },
     });
+  });
+
+  it("clears a failed sessions_spawn once a retry with adjusted arguments succeeds", () => {
+    const observe = createToolTerminalObserver("run-spawn-retry");
+    const failedArgs = {
+      task: "Investigate the flaky gateway test",
+      label: "Investigate",
+      cwd: "/outside/workspace",
+    };
+    // The retry the model actually issues: drops the rejected cwd and rewords the task.
+    const retryArgs = { task: "Investigate the flaky gateway test in repo scope" };
+
+    observe({
+      toolName: "sessions_spawn",
+      arguments: failedArgs,
+      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
+      outcome: "failure",
+      failure: { error: "cwd is outside the workspace" },
+    });
+    const afterRetry = observe({
+      toolName: "sessions_spawn",
+      arguments: retryArgs,
+      meta: inferToolMetaFromArgsCore("sessions_spawn", retryArgs),
+      outcome: "success",
+    });
+
+    expect(afterRetry.lastToolError).toBeUndefined();
+    expect(afterRetry.lastToolRecovery).toEqual({ toolName: "sessions_spawn" });
+
+    const payloads = buildPayloads({
+      assistantTexts: ["Started Investigate in a new session."],
+      lastToolError: afterRetry.lastToolError,
+      lastToolRecovery: afterRetry.lastToolRecovery,
+    });
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Started Investigate in a new session.",
+      "✅ 🧑‍🔧 Sub-agent succeeded after retry.",
+    ]);
+  });
+
+  it("keeps the sessions_spawn failure warning when no later spawn succeeds", () => {
+    const observe = createToolTerminalObserver("run-spawn-failed");
+    const failedArgs = { task: "Investigate the flaky gateway test", label: "Investigate" };
+
+    const terminal = observe({
+      toolName: "sessions_spawn",
+      arguments: failedArgs,
+      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
+      outcome: "failure",
+      failure: { error: "cwd is outside the workspace" },
+    });
+
+    const payloads = buildPayloads({
+      assistantTexts: ["Started Investigate in a new session."],
+      lastToolError: terminal.lastToolError,
+      lastToolRecovery: terminal.lastToolRecovery,
+    });
+    expect(payloads.at(-1)?.isError).toBe(true);
+    expect(payloads.at(-1)?.text).toContain("Sub-agent failed");
   });
 
   it("preserves durable memory recall side-effect evidence", () => {

@@ -21,6 +21,10 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import {
+  isDeliveredCoreCurrentChannelWidgetResult,
+  readEmbeddedMessageDeliveryFact,
+} from "./embedded-agent-message-delivery.js";
+import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
   readMessageToolSourceReplyText,
@@ -33,6 +37,7 @@ import {
 } from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
+  isPluginNativeMessagingTool,
   isMessagingToolSendAction,
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
@@ -57,7 +62,7 @@ import {
   readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
-  readUpdatePlanResult,
+  readProgressCardPlanInput,
   resolveFallbackToolTerminalObserver,
 } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -96,7 +101,7 @@ import {
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import { isToolResultError } from "./tool-result-error.js";
+import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -254,15 +259,21 @@ export async function handleToolExecutionEnd(
   const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
   const hasMessagingTargetEvidence =
     isMessagingInvocation && isMessagingToolTargetEvidenceAction(toolName, startArgs);
+  const messageDelivery = readEmbeddedMessageDeliveryFact(
+    readToolResultDetails(toolSendReceiptResult)?.messageDelivery,
+  );
   const didDeliverMessagingResult =
     isMessagingInvocation &&
-    isDeliveredMessagingToolResult({
-      toolName,
-      args: startArgs,
-      result,
-      hookResult: toolSendReceiptResult,
-      isError: isToolError,
-    });
+    (messageDelivery
+      ? messageDelivery.status === "settled" && (!isToolError || messageDelivery.partialDelivery)
+      : isPluginNativeMessagingTool(toolName) &&
+        isDeliveredMessagingToolResult({
+          toolName,
+          args: startArgs,
+          result,
+          hookResult: toolSendReceiptResult,
+          isError: isToolError,
+        }));
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
   const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
@@ -282,7 +293,7 @@ export async function handleToolExecutionEnd(
     didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
-  const deliveredCurrentSourceReply =
+  const deliveredMessageToolSourceReply =
     didDeliverMessagingResult &&
     isDeliveredMessageToolOnlySourceReplyResult({
       sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
@@ -290,8 +301,18 @@ export async function handleToolExecutionEnd(
       args: startArgs,
       result,
       isError: isToolError,
+      deliveryConfirmed: didDeliverMessagingResult,
     });
-  const sourceReplyFinal = deliveredCurrentSourceReply
+  const deliveredCurrentSourceReply =
+    deliveredMessageToolSourceReply ||
+    isDeliveredCoreCurrentChannelWidgetResult({
+      coreBuiltinToolNames: ctx.params.coreBuiltinToolNames,
+      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+      toolName,
+      result,
+      isToolError,
+    });
+  const sourceReplyFinal = deliveredMessageToolSourceReply
     ? resolveMessageToolSourceReplyFinal(startArgs)
     : undefined;
   ctx.state.pendingMessagingTexts.delete(toolCallId);
@@ -317,13 +338,15 @@ export async function handleToolExecutionEnd(
   }
   if (deliveredCurrentSourceReply) {
     ctx.state.messageToolOnlySourceReplyDelivered = true;
-    const sourceReplyText = readMessageToolSourceReplyText(startArgs);
-    const normalizedSourceReplyText = sourceReplyText
-      ? normalizeTextForComparison(sourceReplyText)
-      : "";
-    if (normalizedSourceReplyText) {
-      ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
-      ctx.trimMessagingToolSent();
+    if (deliveredMessageToolSourceReply) {
+      const sourceReplyText = readMessageToolSourceReplyText(startArgs);
+      const normalizedSourceReplyText = sourceReplyText
+        ? normalizeTextForComparison(sourceReplyText)
+        : "";
+      if (normalizedSourceReplyText) {
+        ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
+        ctx.trimMessagingToolSent();
+      }
     }
     ctx.params.onDeliveredMessageToolOnlySourceReply?.();
   }
@@ -367,7 +390,7 @@ export async function handleToolExecutionEnd(
   }
 
   const planUpdate =
-    !isToolError && toolName === "update_plan" ? readUpdatePlanResult(sanitizedResult) : undefined;
+    !isToolError && toolName === "progress_card" ? readProgressCardPlanInput(startArgs) : undefined;
   if (planUpdate) {
     const planEvent = {
       stream: "plan" as const,

@@ -42,7 +42,13 @@ describe("prepared model catalog worker input", () => {
     };
     const workerInput = createPreparedModelCatalogWorkerInput({
       agentFacts: {
-        input: { agentDir: "/tmp/agent", config: {}, workspaceDir: "/tmp/workspace" },
+        input: {
+          agentDir: "/tmp/agent",
+          config: {},
+          workspaceDir: "/tmp/workspace",
+          loadRuntimePlugins: true,
+          runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+        },
         env: {},
         authStore,
         credentials: { shared: { ...authStore.profiles["shared:named"] } },
@@ -74,5 +80,9 @@ describe("prepared model catalog worker input", () => {
     });
     expect(cloned.authStore.order).toEqual(authStore.order);
     expect(cloned.authStore.lastGood).toEqual(authStore.lastGood);
+    expect(cloned.input.runtimePluginSelections).toEqual([
+      { provider: "selected", modelId: "model" },
+    ]);
+    expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");
   });
 });

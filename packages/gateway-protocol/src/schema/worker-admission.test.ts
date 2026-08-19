@@ -444,11 +444,10 @@ describe("worker protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("does not advertise legacy launch v2 after making execution context mandatory", () => {
-    // Older gateways adopt workers by the V2 feature alone. Omitting it forces
-    // them to reprovision instead of sending the legacy V2 assignment.
+  it("advertises only the current execution-context dialect", () => {
     expect(WORKER_PROTOCOL_FEATURES).not.toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
-    expect(WORKER_PROTOCOL_FEATURES).toContain("worker-execution-context-v1");
+    expect(WORKER_PROTOCOL_FEATURES).not.toContain("worker-execution-context-v1");
+    expect(WORKER_PROTOCOL_FEATURES).toContain("worker-execution-context-v2");
   });
 
   it("validates the additive live-event protocol", () => {

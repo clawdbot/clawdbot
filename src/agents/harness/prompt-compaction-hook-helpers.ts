@@ -26,10 +26,14 @@ type AgentHarnessPromptBuildResult = {
   promptInputRange?: { start: number; end: number };
 };
 
+type AgentHarnessDeveloperInstructionBuilder = {
+  build: (params: { toolsAllow?: string[] }) => string | undefined;
+};
+
 /** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
-  developerInstructions: string;
+  developerInstructions: string | AgentHarnessDeveloperInstructionBuilder;
   messages: unknown[];
   ctx: AgentHarnessHookContext;
   bootstrapContextRunKind?: BootstrapContextRunKind;
@@ -43,9 +47,10 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const hasHeartbeatContribution =
     isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
   if (!hasHeartbeatContribution && !hookRunner?.hasHooks("before_prompt_build")) {
+    const developerInstructions = resolveDeveloperInstructions(params.developerInstructions);
     return {
       prompt: params.prompt,
-      developerInstructions: params.developerInstructions,
+      developerInstructions,
       promptInputRange: { start: 0, end: params.prompt.length },
     };
   }
@@ -84,8 +89,12 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
         return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
       })
     : undefined;
+  const developerInstructions = resolveDeveloperInstructions(
+    params.developerInstructions,
+    promptBuildResult?.toolsAllow,
+  );
   const systemPrompt = resolvePromptBuildSystemPrompt({
-    developerInstructions: params.developerInstructions,
+    developerInstructions,
     promptBuildResult,
   });
   const promptPrefix = joinPresentTextSegments([
@@ -120,6 +129,15 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       end: promptInputStart + params.prompt.length,
     },
   };
+}
+
+function resolveDeveloperInstructions(
+  instructions: string | AgentHarnessDeveloperInstructionBuilder,
+  toolsAllow?: string[],
+): string {
+  return typeof instructions === "string"
+    ? instructions
+    : (instructions.build({ toolsAllow }) ?? "");
 }
 
 function resolvePromptBuildSystemPrompt(params: {

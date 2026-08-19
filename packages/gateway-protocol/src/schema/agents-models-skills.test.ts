@@ -270,6 +270,7 @@ describe("ModelsListResultSchema", () => {
         id: "codex",
         fallback: "openclaw",
         cloudPlacementSupported: true,
+        devicePlacementSupported: false,
         source: "model",
       },
       thinkingLevels: [

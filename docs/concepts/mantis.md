@@ -199,6 +199,58 @@ scenario observed, not the live Slack UI; `slack-desktop-smoke.png` is only
 proof of Slack Web itself when the lease's browser profile was already logged
 in.
 
+### Telegram Desktop recorder
+
+The Telegram Desktop recorder is a standalone operator utility, invoked
+directly through `pnpm qa:telegram-desktop-recorder`. It records native
+Telegram Desktop and nothing else: it never drives OpenClaw or sends Telegram
+messages. Whoever runs it owns the turn — start the SUT, send through a real
+Telegram user, then tell the recorder which message to show — and supplies
+`--user-driver`, the command the recorder shells out to for the TDLib calls it
+cannot make itself (`confirm-qr`, `terminate-session`). Any driver exposing
+those two verbs works, including this repo's
+`scripts/e2e/telegram-user-driver.py`.
+
+Nothing in this repository invokes it yet: the `Mantis Telegram Desktop Proof`
+workflow still runs its own container-based proof runner, and moving that
+workflow onto the recorder is a separate change.
+
+Start a fresh authorized desktop and begin recording:
+
+```bash
+pnpm qa:telegram-desktop-recorder start \
+  --output-dir .artifacts/qa-e2e/telegram-desktop \
+  --chat -1001234567890 \
+  --user-driver "python3 /path/to/telegram-user-driver.py" \
+  --json
+```
+
+Use `view --session <recorder.json> --message-id <id>` to open a recorded
+group post. Use `screenshot --session <recorder.json>` for a still image. Run
+`stop --session <recorder.json> --crop telegram-window` to copy the recording
+and logs, build motion GIFs, terminate the Telegram Desktop authorization, and
+release the Crabbox lease. Add `--keep-box` only when the lease must remain
+available for WebVNC inspection.
+
+The recorder defaults to Crabbox's local Docker desktop path. Build the pinned
+image once, then run `start` without coordinator access:
+
+```bash
+bash scripts/mantis/build-telegram-desktop-image.sh
+```
+
+`--provider aws` targets a Crabbox catalog-only Telegram variant image
+(`--image-sdk telegram-desktop=7.0.9`) so the generic desktop image never
+carries the client. Publishing that variant needs Crabbox coordinator admin
+(`crabbox image create` / `image promote`) and is not part of this repository
+yet; until it is published, use the local Docker image above. Either image must
+provide an
+executable Telegram Desktop at `/opt/Telegram/Telegram`, a readable desktop
+version marker, `wmctrl`, `xdotool`, `scrot`, `ffmpeg`, `zbarimg`, and
+`xdpyinfo`, plus a reachable `DISPLAY=:99`. Crabbox refuses the lease when no
+matching image is promoted, and recorder startup fails when the contract is
+incomplete. It does not install packages or download replacements.
+
 ### `telegram-desktop-builder`
 
 ```bash

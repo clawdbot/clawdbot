@@ -10,6 +10,7 @@ import type {
 } from "./placement-move-intent.js";
 import type {
   WorkerPlacementDispatchRequest,
+  WorkerPlacementAuthorization,
   WorkerPlacementMoveDestination,
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
@@ -19,9 +20,12 @@ import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-life
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerMovePlacement = Extract<WorkerDispatchPlacement, { state: "local" | "active" }>;
 type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
+const RESTART_AUTHORITY_EXPIRED =
+  "Cloud worker move request authority expired after Gateway restart; retry move";
 
 export type WorkerPlacementMoveBarrier = (
   params: MoveSessionIdentity & {
+    authorize?: WorkerPlacementAuthorization;
     begin: () => {
       intent: WorkerPlacementMoveIntent;
       placement: WorkerDrainingDispatchPlacement;
@@ -43,10 +47,12 @@ export function createWorkerPlacementMoveService(options: {
   dispatch: (
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
+    authorize?: WorkerPlacementAuthorization,
   ) => Promise<WorkerActiveDispatchPlacement>;
   reclaimSource: (
     request: WorkerPlacementReclaimRequest,
     intent: WorkerPlacementMoveIntent,
+    authorize?: WorkerPlacementAuthorization,
   ) => Promise<WorkerReclaimPlacement>;
   resolveDestination: (
     identity: MoveSessionIdentity,
@@ -66,6 +72,7 @@ export function createWorkerPlacementMoveService(options: {
     intent: WorkerPlacementMoveIntent;
     destination: NonNullable<WorkerPlacementMoveDestination>;
     onTransition?: (placement: WorkerDispatchPlacement) => void;
+    authorize?: WorkerPlacementAuthorization;
   }): Promise<WorkerActiveDispatchPlacement> => {
     const active = await options.dispatch(
       {
@@ -74,6 +81,7 @@ export function createWorkerPlacementMoveService(options: {
         idempotencyKey: `session-move:${params.intent.operationId}:dispatch`,
       },
       params.onTransition,
+      params.authorize,
     );
     const completed = options.placements.completePlacementMoveToWorker({
       operationId: params.intent.operationId,
@@ -91,6 +99,7 @@ export function createWorkerPlacementMoveService(options: {
   const move = async (
     request: WorkerPlacementMoveRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<WorkerMovePlacement> => {
     let intent: WorkerPlacementMoveIntent | undefined;
     try {
@@ -105,6 +114,7 @@ export function createWorkerPlacementMoveService(options: {
         sessionId: request.sessionId,
         sessionKey: request.sessionKey,
         agentId: request.agentId,
+        authorize,
         begin: () => {
           const started = options.placements.beginPlacementMove({
             sessionId: request.sessionId,
@@ -121,7 +131,7 @@ export function createWorkerPlacementMoveService(options: {
       });
       intent = begun.intent;
       onTransition?.(begun.placement);
-      const local = await options.reclaimSource(request, intent);
+      const local = await options.reclaimSource(request, intent, authorize);
       onTransition?.(local);
       if (local.state !== "local") {
         throw new Error(`Session ${request.sessionKey} move did not return to local placement`);
@@ -137,6 +147,7 @@ export function createWorkerPlacementMoveService(options: {
         intent,
         destination,
         ...(onTransition ? { onTransition } : {}),
+        ...(authorize ? { authorize } : {}),
       });
     } catch (error) {
       const durableIntent = intent ?? options.placements.getPlacementMove(request.sessionId);
@@ -169,15 +180,11 @@ export function createWorkerPlacementMoveService(options: {
             `Session ${identity.sessionKey} failed move environment must finish teardown before retry`,
           );
         }
-        placement = options.placements.transition({
-          sessionId: placement.sessionId,
-          from: "failed",
-          to: "local",
-          expectedGeneration: placement.generation,
+        options.placements.cancelPlacementMove({
+          operationId: intent.operationId,
+          sessionId: intent.sessionId,
         });
-        if (placement.state !== "local") {
-          throw new Error(`Session ${identity.sessionKey} failed move did not return local`);
-        }
+        return;
       } else if (placement.state === "draining") {
         const local = await options.reclaimSource(identity, intent);
         if (local.state !== "local") {
@@ -220,13 +227,23 @@ export function createWorkerPlacementMoveService(options: {
         return;
       }
       if (intent.target.kind === "gateway") {
-        throw new Error(`Session ${identity.sessionKey} Gateway move retained a completed intent`);
+        if (options.placements.getPlacementMove(intent.sessionId)) {
+          options.placements.cancelPlacementMove({
+            operationId: intent.operationId,
+            sessionId: intent.sessionId,
+          });
+        }
+        return;
       }
-      const destination = await options.resolveDestination(identity, intent.target);
-      if (!destination) {
-        throw new Error(`Session ${identity.sessionKey} worker move target is unavailable`);
-      }
-      await finishWorkerDestination({ identity, intent, destination });
+      options.placements.fail({
+        sessionId: placement.sessionId,
+        expectedGeneration: placement.generation,
+        recoveryError: RESTART_AUTHORITY_EXPIRED,
+      });
+      options.placements.cancelPlacementMove({
+        operationId: intent.operationId,
+        sessionId: intent.sessionId,
+      });
     } catch (error) {
       recordError(intent, error);
       throw error;

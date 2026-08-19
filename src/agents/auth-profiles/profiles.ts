@@ -78,6 +78,7 @@ function resetSuccessfulUsageStats(
     blockedModel: undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
+    cooldownClassification: undefined,
     cooldownModel: undefined,
     disabledUntil: undefined,
     disabledReason: undefined,

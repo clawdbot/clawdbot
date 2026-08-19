@@ -36,36 +36,37 @@ import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "./workspace.js"
 
 const BOOTSTRAP_AGENT_ID = "main";
 
-type CreateAgentResult =
-  | {
-      status: "created" | "existing";
-      agentId: string;
-      name: string;
-      workspace: string;
-      agentDir: string;
-      model?: string;
-      bootstrapPending: boolean;
-      configHash?: string;
-      bindingResult?: ReturnType<typeof applyAgentBindings>;
-    }
-  | {
-      status: "error";
-      reason:
-        | "invalid-name"
-        | "reserved-id"
-        | "already-exists"
-        | "deletion-pending"
-        | "invalid-bindings"
-        | "legacy-session-migration-required"
-        | "shared-auth-store-owned-by-main"
-        | "unsafe-identity-file";
-      agentId?: string;
-      message: string;
-    };
+type CreateAgentSuccess = {
+  status: "created" | "existing";
+  agentId: string;
+  name: string;
+  workspace: string;
+  agentDir: string;
+  model?: string;
+  bootstrapPending: boolean;
+  configHash?: string;
+  bindingResult?: ReturnType<typeof applyAgentBindings>;
+};
 
-type CreateError = Extract<CreateAgentResult, { status: "error" }>;
+type CreateError = {
+  status: "error";
+  reason:
+    | "invalid-name"
+    | "reserved-id"
+    | "already-exists"
+    | "deletion-pending"
+    | "invalid-bindings"
+    | "legacy-session-migration-required"
+    | "shared-auth-store-owned-by-main"
+    | "unsafe-identity-file";
+  agentId?: string;
+  message: string;
+};
+
+type CreateAgentResult = (CreateAgentSuccess & { config: OpenClawConfig }) | CreateError;
 type AgentEntryConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 type CreateAgentEntry = AgentEntryConfig & { id: string };
+type ConfigCommitRollback = () => void | Promise<void>;
 
 type CreateAgentParams = {
   name?: string;
@@ -87,6 +88,8 @@ type CreateAgentParams = {
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   bindingSpecs?: string[];
   transformConfig?: typeof transformConfigFileWithRetry;
+  /** Prepare guided staged state at the last reversible edge before config publication. */
+  prepareConfigCommit?: () => Promise<ConfigCommitRollback | void>;
   provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
@@ -255,6 +258,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     ? resolveUserPath(requestedAgentDir.trim())
     : undefined;
   const transformConfig = params.transformConfig ?? transformConfigFileWithRetry;
+  let configCommitRollback: ConfigCommitRollback | undefined;
 
   try {
     return await withConfigMutationExclusive(async (lockedConfig) => {
@@ -280,7 +284,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         }
         tombstoneClaimed = true;
       }
-      const committed = await transformConfig<CreateAgentResult>({
+      const committed = await transformConfig<CreateAgentSuccess>({
         afterWrite: { mode: "auto" },
         maxAttempts: 1,
         ...(params.bootstrapFirstAgent
@@ -436,6 +440,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           if (!workspace.bootstrapPending) {
             await writeIdentityFile({ workspaceDir: workspace.dir, identity });
           }
+          // The receipt owns compensation until the config transform publishes this result.
+          const preparedRollback = await params.prepareConfigCommit?.();
+          configCommitRollback =
+            typeof preparedRollback === "function" ? preparedRollback : undefined;
 
           return {
             nextConfig,
@@ -452,6 +460,8 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           };
         },
       });
+      // Publication is now irreversible; later tombstone or provenance failures retain staged state.
+      configCommitRollback = undefined;
       if (
         deletion?.cleanupCompleted &&
         !tombstoneClaimed &&
@@ -464,11 +474,25 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       if (result.status === "created") {
         recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
       }
-      return typeof committed.persistedHash === "string"
-        ? { ...result, configHash: committed.persistedHash }
-        : result;
+      return {
+        ...result,
+        config: committed.nextConfig,
+        ...(typeof committed.persistedHash === "string"
+          ? { configHash: committed.persistedHash }
+          : {}),
+      };
     });
   } catch (error) {
+    if (configCommitRollback) {
+      try {
+        await configCommitRollback();
+      } catch (rollbackError) {
+        throw new Error(
+          `${String(error)}\nstaged config rollback failed: ${String(rollbackError)}`,
+          { cause: rollbackError },
+        );
+      }
+    }
     if (error instanceof DuplicateAgentError) {
       return createError("already-exists", `agent "${agentId}" already exists`, agentId);
     }

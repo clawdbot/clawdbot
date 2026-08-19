@@ -73,6 +73,7 @@ async function runAnnounceAgentCall(params: {
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
   timeoutMs?: number;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<unknown> {
   return await dispatchSubagentAnnounceAgent(params.agentParams, {
     expectFinal: params.expectFinal,
@@ -81,6 +82,7 @@ async function runAnnounceAgentCall(params: {
     ),
     delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
     timeoutMs: params.timeoutMs,
+    resolveGatewayContext: params.resolveGatewayContext,
   });
 }
 
@@ -105,6 +107,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   requesterIsSubagent: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
     return {
@@ -369,6 +372,7 @@ export async function sendSubagentAnnounceDirectly(params: {
                 : undefined,
             expectFinal: true,
             timeoutMs: announceTimeoutMs,
+            resolveGatewayContext: params.resolveGatewayContext,
           });
         },
       });
@@ -408,11 +412,17 @@ export async function sendSubagentAnnounceDirectly(params: {
     }
 
     const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
+    const hasMessagingToolDelivery = Boolean(
+      directAnnounceResult &&
+      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
+    );
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)
         : undefined;
-    if (directDeliveryFailure) {
+    // Automatic-delivery diagnostics and a committed source message are independent facts.
+    // Once the message tool delivered the owed final, the task must settle as delivered.
+    if (directDeliveryFailure && !hasMessagingToolDelivery) {
       return {
         delivered: false,
         path: "direct",
@@ -422,10 +432,6 @@ export async function sendSubagentAnnounceDirectly(params: {
           : {}),
       };
     }
-    const hasMessagingToolDelivery = Boolean(
-      directAnnounceResult &&
-      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
-    );
     const completionPayloadVisibility = {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,

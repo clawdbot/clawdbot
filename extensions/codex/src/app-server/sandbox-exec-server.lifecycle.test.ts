@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const killProcessTreeMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -14,10 +15,17 @@ vi.mock("node:child_process", async (importOriginal) => {
     spawn: (...args: Parameters<typeof actual.spawn>) => spawnMock(...args),
   };
 });
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
+  return {
+    ...actual,
+    killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
+  };
+});
 
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { httpRequest } from "./sandbox-exec-server/http.js";
-import { startProcess } from "./sandbox-exec-server/processes.js";
+import { startProcess, terminateProcess } from "./sandbox-exec-server/processes.js";
 import type { ManagedProcess, OpenClawExecServer } from "./sandbox-exec-server/types.js";
 
 type FakeSocket = WebSocket & { send: ReturnType<typeof vi.fn> };
@@ -40,7 +48,7 @@ function createFakeSocket(): FakeSocket {
 }
 
 function createExecServer(sandbox: SandboxContext): OpenClawExecServer {
-  return { sandbox } as OpenClawExecServer;
+  return { sandbox, children: new Set(), cleanupTasks: new Set() } as OpenClawExecServer;
 }
 
 function processStartParams(processId: string) {
@@ -65,10 +73,223 @@ function streamingHttpParams(requestId: string) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   spawnMock.mockReset();
+  killProcessTreeMock.mockReset();
 });
 
 describe("Codex sandbox exec-server lifecycle", () => {
+  it("reaps and finalizes a TERM-resistant child before acknowledging termination", async () => {
+    vi.useFakeTimers();
+    const child = createFakeChild();
+    spawnMock.mockReturnValue(child);
+    let finishFinalize: (() => void) | undefined;
+    const finalizeExec = vi.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishFinalize = resolve;
+        }),
+    );
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: ["sandbox-child"],
+        env: {},
+        finalizeToken: "terminate-token",
+        stdinMode: "pipe-closed",
+      }),
+      finalizeExec,
+    });
+    const processes = new Map<string, ManagedProcess>();
+    await startProcess(
+      createExecServer(sandbox),
+      processes,
+      createFakeSocket(),
+      processStartParams("process-resistant"),
+    );
+    killProcessTreeMock.mockImplementation(() => {
+      setTimeout(() => child.emit("close", null, "SIGKILL"), 1_000);
+    });
+
+    let settled = false;
+    const termination = Promise.resolve(
+      terminateProcess(processes, { processId: "process-resistant" }),
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(settled).toBe(false);
+    expect(killProcessTreeMock).toHaveBeenCalledWith(child.pid, {
+      detached: process.platform !== "win32",
+      graceMs: 1_000,
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    expect(finalizeExec).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    finishFinalize?.();
+    await expect(termination).resolves.toEqual({ running: true });
+    expect(finalizeExec).toHaveBeenCalledWith({
+      status: "completed",
+      exitCode: 1,
+      timedOut: false,
+      token: "terminate-token",
+    });
+  });
+
+  it("preserves cooperative TERM exit without force killing", async () => {
+    const child = createFakeChild();
+    spawnMock.mockReturnValue(child);
+    killProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
+    const finalizeExec = vi.fn(async () => undefined);
+    const processes = new Map<string, ManagedProcess>();
+    await startProcess(
+      createExecServer(
+        createSandboxContext({
+          buildExecSpec: async () => ({
+            argv: ["sandbox-child"],
+            env: {},
+            finalizeToken: "cooperative-token",
+            stdinMode: "pipe-closed",
+          }),
+          finalizeExec,
+        }),
+      ),
+      processes,
+      createFakeSocket(),
+      processStartParams("process-cooperative"),
+    );
+
+    await expect(
+      terminateProcess(processes, { processId: "process-cooperative" }),
+    ).resolves.toEqual({ running: true });
+
+    expect(killProcessTreeMock).toHaveBeenCalledOnce();
+    expect(finalizeExec).toHaveBeenCalledWith({
+      status: "completed",
+      exitCode: 143,
+      timedOut: false,
+      token: "cooperative-token",
+    });
+  });
+
+  it("shares termination and finalization across concurrent cleanup", async () => {
+    vi.useFakeTimers();
+    const child = createFakeChild();
+    spawnMock.mockReturnValue(child);
+    killProcessTreeMock.mockImplementation(() => {
+      setTimeout(() => child.emit("close", null, "SIGKILL"), 1_000);
+    });
+    const finalizeExec = vi.fn(async () => undefined);
+    const processes = new Map<string, ManagedProcess>();
+    await startProcess(
+      createExecServer(
+        createSandboxContext({
+          buildExecSpec: async () => ({
+            argv: ["sandbox-child"],
+            env: {},
+            finalizeToken: "race-token",
+            stdinMode: "pipe-closed",
+          }),
+          finalizeExec,
+        }),
+      ),
+      processes,
+      createFakeSocket(),
+      processStartParams("process-race"),
+    );
+
+    const first = terminateProcess(processes, { processId: "process-race" });
+    const second = terminateProcess(processes, { processId: "process-race" });
+    await vi.runOnlyPendingTimersAsync();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { running: true },
+      { running: true },
+    ]);
+    expect(killProcessTreeMock).toHaveBeenCalledOnce();
+    expect(finalizeExec).toHaveBeenCalledOnce();
+  });
+
+  it("reports a surviving tree instead of acknowledging termination", async () => {
+    vi.useFakeTimers();
+    const child = createFakeChild();
+    spawnMock.mockReturnValue(child);
+    killProcessTreeMock.mockImplementation(() => undefined);
+    const finalizeExec = vi.fn(async () => undefined);
+    const processes = new Map<string, ManagedProcess>();
+    await startProcess(
+      createExecServer(
+        createSandboxContext({
+          buildExecSpec: async () => ({
+            argv: ["sandbox-child"],
+            env: {},
+            finalizeToken: "survivor-token",
+            stdinMode: "pipe-closed",
+          }),
+          finalizeExec,
+        }),
+      ),
+      processes,
+      createFakeSocket(),
+      processStartParams("process-survivor"),
+    );
+
+    const termination = terminateProcess(processes, { processId: "process-survivor" });
+    const rejection = expect(termination).rejects.toThrow(
+      `Sandbox child process tree ${child.pid} survived SIGKILL; tear down the sandbox environment and inspect the surviving process tree before retrying.`,
+    );
+    await vi.advanceTimersByTimeAsync(4_500);
+
+    await rejection;
+    expect(finalizeExec).not.toHaveBeenCalled();
+  });
+
+  it("reaps a TERM-resistant streaming HTTP child on socket close", async () => {
+    vi.useFakeTimers();
+    const child = createFakeChild();
+    spawnMock.mockReturnValue(child);
+    killProcessTreeMock.mockImplementation(() => {
+      setTimeout(() => child.emit("close", null, "SIGKILL"), 1_000);
+    });
+    const finalizeExec = vi.fn(async () => undefined);
+    const socket = createFakeSocket();
+    const request = httpRequest(
+      createExecServer(
+        createSandboxContext({
+          buildExecSpec: async () => ({
+            argv: ["sandbox-http-child"],
+            env: {},
+            finalizeToken: "http-terminate-token",
+            stdinMode: "pipe-closed",
+          }),
+          finalizeExec,
+        }),
+      ),
+      socket,
+      streamingHttpParams("http-resistant"),
+    );
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+    (child.stdout as PassThrough).write(
+      `${JSON.stringify({ type: "headers", status: 200, headers: [] })}\n`,
+    );
+    await expect(request).resolves.toEqual({ status: 200, headers: [], bodyBase64: "" });
+
+    socket.emit("close");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(killProcessTreeMock).toHaveBeenCalledOnce();
+    expect(finalizeExec).toHaveBeenCalledOnce();
+    expect(finalizeExec).toHaveBeenCalledWith({
+      status: "failed",
+      exitCode: 1,
+      timedOut: false,
+      token: "http-terminate-token",
+    });
+  });
+
   it("retains the process backend lease after child error until close", async () => {
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);

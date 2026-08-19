@@ -32,7 +32,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .command("invoke")
       .description("Invoke a command on a paired node")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .requiredOption("--command <command>", "Command (e.g. canvas.eval)")
+      .requiredOption("--command <command>", "Command (e.g. canvas.navigate)")
       .option("--params <json>", "JSON object string for params", "{}")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
       .option("--idempotency-key <key>", "Idempotency key (optional)")

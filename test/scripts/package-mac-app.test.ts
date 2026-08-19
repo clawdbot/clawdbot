@@ -1680,6 +1680,27 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
+  it("omits the CUA driver only from elevation-host packages", () => {
+    const packageScript = readFileSync(scriptPath, "utf8");
+    const variantBlock = packageScript.slice(
+      packageScript.indexOf('SIGNING_VARIANT="${OPENCLAW_MAC_SIGNING_VARIANT:-standard}"'),
+      packageScript.indexOf("# OPENCLAW_SKIP_MLX_TTS"),
+    );
+    const cuaBlock = packageScript.slice(
+      packageScript.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]'),
+      packageScript.indexOf('echo "📦 Copying CLI installer"'),
+    );
+
+    expect(variantBlock).toContain("standard | elevation-host");
+    expect(variantBlock).toContain("Unknown OPENCLAW_MAC_SIGNING_VARIANT value");
+    expect(cuaBlock).toContain("Omitting embedded CUA driver from elevation-host package");
+    expect(cuaBlock).toContain("else");
+    expect(cuaBlock).toContain("Staging embedded CUA driver");
+    expect(cuaBlock).toContain(
+      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
+    );
+  });
+
   it("does not mask required Info.plist stamp failures", () => {
     const script = readFileSync(scriptPath, "utf8");
     const stampBlock = script.slice(

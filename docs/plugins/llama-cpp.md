@@ -1,29 +1,41 @@
 ---
-summary: "Run local GGUF chat and memory embeddings with an OpenClaw-managed llama.cpp server"
+summary: "Run GGUF chat and memory embeddings with managed or external llama.cpp servers"
 read_when:
-  - You want local text inference without an API key or separately managed model server
+  - You want OpenClaw to install and manage a local llama.cpp server
+  - You want OpenClaw to connect to an existing llama-server
   - You want memory search embeddings from a local GGUF model
   - You are configuring memory.search.provider = "local"
-  - You need to inspect or repair OpenClaw's managed llama.cpp server
 title: "llama.cpp Provider"
 sidebarTitle: "llama.cpp Provider"
 ---
 
-The `llama-cpp` plugin manages a loopback-only `llama-server` for local GGUF
-chat and embeddings. OpenClaw installs a pinned, integrity-verified llama.cpp
-release, starts it only when a request needs it, reuses it across concurrent
-chat and embedding requests, and stops it after an idle period.
+The `llama-cpp` plugin supports two llama.cpp server ownership modes. The
+`llama-cpp` provider installs and manages a loopback-only `llama-server` for
+chat and embeddings. The `llama-server` provider connects to an existing server
+that you manage outside OpenClaw.
 
-Install the official plugin before using either local inference or local memory
-embeddings:
+Install the official plugin before using either mode or local memory embeddings:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
 ```
 
-## Guided setup
+## Choose a server
 
-Choose **llama.cpp** once during interactive onboarding or configuration.
+Interactive onboarding shows two choices in the **Local llama.cpp** group:
+
+| Choice                | Model reference        | Process owner |
+| --------------------- | ---------------------- | ------------- |
+| Managed local server  | `llama-cpp/<model>`    | OpenClaw      |
+| Existing llama-server | `llama-server/<model>` | User          |
+
+Both providers can be configured at the same time. The external provider
+supports passive model discovery, router status, chat-template capabilities,
+and optional authentication. See [llama-server](/providers/llama-server).
+
+## Managed server setup
+
+Choose **Managed local server** during interactive onboarding or configuration.
 OpenClaw then:
 
 1. Selects the verified llama-server build for the Gateway platform.

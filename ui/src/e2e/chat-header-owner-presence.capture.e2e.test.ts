@@ -45,9 +45,9 @@ suite.define(() => {
           methodResponses: {
             "sessions.list": {
               count: 1,
-              creators: [
-                { id: "profile-ada", label: "Ada" },
-                { id: "profile-zoe", label: "Zoe" },
+              owners: [
+                { type: "human", id: "profile-ada", label: "Ada" },
+                { type: "human", id: "profile-zoe", label: "Zoe" },
               ],
               defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
               path: "",
@@ -55,6 +55,9 @@ suite.define(() => {
                 {
                   contextTokens: null,
                   createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+                  owner: {
+                    actor: { type: "human", id: "profile-ada", label: "Ada" },
+                  },
                   displayName: "Owner presence",
                   hasActiveRun: false,
                   key: sessionKey,

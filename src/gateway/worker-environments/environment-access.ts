@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
@@ -7,7 +6,6 @@ import {
   verifyWorkerAdmissionHandshake,
   type ExpectedWorkerBuild,
 } from "./admission.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentState } from "./state.js";
@@ -24,7 +22,6 @@ type WorkerEnvironmentAccessOptions = {
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
-  resolveWorkerGateway?: () => { host: "127.0.0.1" | "::1"; port: number } | undefined;
   now: () => number;
   identityResolverFor: (
     record: WorkerEnvironmentRecord,
@@ -133,21 +130,20 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
       }
+      const nodeDeviceId = record.nodeDeviceId;
       const nodeBundle =
-        record.providerId === DEVICE_WORKER_PROVIDER_ID &&
+        typeof nodeDeviceId === "string" &&
         !record.sshEndpoint &&
         record.bootstrapReceipt.installKind === "bundle";
       if (nodeBundle) {
-        const profileSettings = record.profileSnapshot.settings;
-        const deviceId = isRecord(profileSettings) ? profileSettings.device : undefined;
         const sessionId = record.attachedSessionIds[0];
-        if (!nodeTunnels || typeof deviceId !== "string" || !deviceId.trim() || !sessionId) {
-          throw serviceError("invalid_state", "Device worker tunnel runtime is unavailable");
+        if (!nodeTunnels || !sessionId) {
+          throw serviceError("invalid_state", "Node worker tunnel runtime is unavailable");
         }
         startup = nodeTunnels.start({
           environmentId: record.environmentId,
           ownerEpoch: record.ownerEpoch,
-          deviceId: deviceId.trim(),
+          deviceId: nodeDeviceId,
           sessionId,
           expectedBuild: {
             bundleHash: currentBundle.bundleHash,
@@ -164,17 +160,12 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!tunnels) {
         throw serviceError("invalid_state", "Worker SSH tunnel runtime is unavailable");
       }
-      const gateway = options.resolveWorkerGateway?.();
-      if (!gateway) {
-        throw serviceError("invalid_state", "Worker gateway ingress is unavailable");
-      }
       const provider = providerFor(record.providerId);
-      // Tunnel ownership is registered synchronously by the manager. Release the durable-state
-      // lock while SSH connects so drain/destroy can fence an indefinitely reconnecting start.
+      // Workspace ownership is registered synchronously by the manager. Release the durable-state
+      // lock while SSH identity material is prepared so drain/destroy can fence initialization.
       startup = tunnels.start({
         ...request,
         bundleHash: currentBundle.bundleHash,
-        gateway,
         ssh: record.sshEndpoint,
         sharedHost: record.sharedHost,
         resolveIdentity: identityResolverFor(record, provider, record.leaseId),

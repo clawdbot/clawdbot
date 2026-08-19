@@ -324,7 +324,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     try {
       chatLog.addSystem("loading models...");
       tui.requestRender();
-      const models = await client.listModels();
+      const models = await client.listModels({ agentId: selection.agentId });
       if (!isCurrentSessionSelection(selection)) {
         return;
       }

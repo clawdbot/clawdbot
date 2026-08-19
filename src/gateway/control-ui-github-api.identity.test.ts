@@ -15,6 +15,11 @@ describe("Control UI GitHub credential", () => {
     expect(
       githubApiToken(env, {
         gateway: { controlUi: { github: { token: "preview-service-token" } } },
+        tools: {
+          github: {
+            profileId: "ghp_99999999999999999999999999999999",
+          },
+        },
       }),
     ).toBe("preview-service-token");
     expect(() =>

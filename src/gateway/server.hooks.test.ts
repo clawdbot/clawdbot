@@ -249,17 +249,16 @@ describe("gateway server hooks", () => {
       expect(routedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
-      mockIsolatedRunOkOnce();
-      const resAgentUnknown = await postHook(port, "/hooks/agent", {
+      const unknownAgent = await postHook(port, "/hooks/agent", {
         message: "Do it",
-        name: "Email",
         agentId: "missing-agent",
       });
-      expect(resAgentUnknown.status).toBe(200);
-      await waitForSystemEvent();
-      const fallbackCall = cronRunCall();
-      expect(fallbackCall?.job?.agentId).toBe("main");
-      drainSystemEvents(resolveMainKey());
+      expect(unknownAgent.status).toBe(400);
+      await expect(unknownAgent.json()).resolves.toMatchObject({
+        error: 'unknown agentId "missing-agent"',
+      });
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
 
       const resQuery = await postHook(
         port,
@@ -504,6 +503,7 @@ describe("gateway server hooks", () => {
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
       allowedAgentIds: ["main", "hooks"],
       allowedSessionKeyPrefixes: ["hook:"],
       mappings: [
@@ -519,13 +519,13 @@ describe("gateway server hooks", () => {
     setMainAndHooksAgents();
 
     await withGatewayServer(async ({ port }) => {
-      const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
+      const direct = await postHook(port, "/hooks/wake", {
+        text: "Direct wake",
+        sessionKey: "hook:wake:direct",
+      });
       expect(direct.status).toBe(200);
-      await waitForSystemEvent(5_000);
-      const directEvents = peekSystemEventEntries(resolveMainKey());
-      expect(directEvents).toHaveLength(1);
-      expect(directEvents[0]?.text).toBe("Direct wake");
-      drainSystemEvents(resolveMainKey());
+      expect(await waitForSystemEventTexts("agent:main:hook:wake:direct")).toEqual(["Direct wake"]);
+      drainSystemEvents("agent:main:hook:wake:direct");
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
       expect(mapped.status).toBe(200);
@@ -949,7 +949,7 @@ describe("gateway server hooks", () => {
       });
       expect(resEmptyAgent.status).toBe(400);
       const emptyAgentBody = (await resEmptyAgent.json()) as { error?: string };
-      expect(emptyAgentBody.error).toContain("hooks.allowedAgentIds");
+      expect(emptyAgentBody.error).toBe("agentId must be a non-empty string");
       expect(cronIsolatedRun).not.toHaveBeenCalled();
 
       mockIsolatedRunOkOnce();
@@ -1008,17 +1008,6 @@ describe("gateway server hooks", () => {
       expect(noAgentCall?.job?.agentId).toBe("main");
       expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
       expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
-      drainSystemEvents(resolveMainKey());
-
-      mockIsolatedRunOkOnce();
-      const resBlankAgent = await postHook(port, "/hooks/agent", {
-        message: "Blank target",
-        agentId: " ",
-      });
-      expect(resBlankAgent.status).toBe(200);
-      await waitForSystemEventTexts(resolveMainKey());
-      const blankAgentCall = cronRunCall();
-      expect(blankAgentCall?.job?.agentId).toBe("main");
       drainSystemEvents(resolveMainKey());
     });
   });

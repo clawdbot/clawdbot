@@ -70,6 +70,7 @@ describe("loadModelProvidersData", () => {
     expect(request).toHaveBeenCalledWith("models.list", {
       view: "configured",
       agentId: "writer",
+      refresh: true,
     });
     expect(request).toHaveBeenCalledWith("usage.status");
     const sessionUsageCall = request.mock.calls.find(([method]) => method === "sessions.usage");

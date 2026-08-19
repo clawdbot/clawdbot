@@ -24,6 +24,7 @@ import {
   consumeDeviceBootstrapTokenWithSetupCompletion,
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
+  ensureDevicePairSetupBootstrapToken,
   issueDeviceBootstrapToken,
   issueDevicePairSetupBootstrapToken,
   pruneExpiredDevicePairSetupCompletions,
@@ -116,6 +117,44 @@ describe("device bootstrap tokens", () => {
     const revoked = await revokeDeviceBootstrapToken({ baseDir, token: setup.token });
     expect(revoked.record?.setupId).toBe(setup.setupId);
     expect(revoked.record).not.toHaveProperty("expiresAtMs");
+  });
+
+  it("reuses one setup bearer until the exact handoff completes", async () => {
+    const baseDir = await createTempDir();
+    const setupId = "worker-environment-setup";
+    const first = await ensureDevicePairSetupBootstrapToken({
+      baseDir,
+      setupId,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const replay = await ensureDevicePairSetupBootstrapToken({
+      baseDir,
+      setupId,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+
+    expect(first).toMatchObject({ status: "pending", setupId });
+    expect(replay).toEqual(first);
+    if (first.status !== "pending") {
+      throw new Error("expected pending setup credential");
+    }
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+    });
+    database.db
+      .prepare(
+        `INSERT INTO device_pair_setup_completions (
+          setup_id, device_id, access, completed_at_ms, delivery_state, retain_until_ms
+        ) VALUES (?, ?, 'node', ?, 'confirmed', ?)`,
+      )
+      .run(setupId, "cloud-device", Date.now(), Date.now() + 10_000);
+    await expect(
+      ensureDevicePairSetupBootstrapToken({
+        baseDir,
+        setupId,
+        profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      }),
+    ).resolves.toEqual({ status: "completed", setupId, deviceId: "cloud-device" });
   });
 
   it("adds setup correlation storage only on first setup issuance", async () => {

@@ -18,12 +18,13 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
+  MAX_SESSION_PARTICIPANTS,
   mergeSessionParticipantSource,
   type SessionCreatedActor,
   type SessionParticipantSource,
 } from "./session-entry-provenance.js";
 
-export const MAX_SESSION_PARTICIPANTS = 32;
+export { MAX_SESSION_PARTICIPANTS };
 
 export type RecordSessionParticipantResult = "inserted" | "updated" | "capped";
 

@@ -10,11 +10,9 @@ import {
   validateSessionsPluginPatchParams,
   validateSessionsResetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../../agents/agent-scope.js";
 import { assignSessionOwner } from "../../config/sessions/session-accessor.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -24,7 +22,8 @@ import {
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
-import { projectSessionActor } from "../session-utils-row.js";
+import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
+import { projectAssignableSessionOwner, projectSessionActor } from "../session-utils-row.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
@@ -108,26 +107,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const key = requireSessionKey(params.key, respond);
-    const ownerId = normalizeOptionalString(params.owner.id);
-    if (!key || !ownerId) {
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const owner =
-      params.owner.type === "agent"
-        ? (() => {
-            const normalizedId = normalizeAgentId(ownerId);
-            return normalizedId && listAgentIds(cfg).includes(normalizedId)
-              ? ({ type: "agent", id: normalizedId } as const)
-              : null;
-          })()
-        : ({ type: "human", id: ownerId } as const);
-    if (!owner) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${ownerId}"`),
-      );
+    if (!key) {
       return;
     }
     const runtimeAgentId = normalizeOptionalString(client?.internal?.agentRuntimeIdentity?.agentId);
@@ -150,6 +130,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
@@ -174,6 +155,17 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(false, undefined, visibilityError);
       return;
     }
+    const ownerIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
+    const projectedOwner = projectAssignableSessionOwner(params.owner, ownerIdentityById, cfg);
+    if (!projectedOwner) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session owner "${params.owner.id}"`),
+      );
+      return;
+    }
+    const owner = { type: projectedOwner.type, id: projectedOwner.id };
     const assignment = assignSessionOwner(
       {
         agentId: target.agentId,
@@ -208,7 +200,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       },
     );
     const projectedActor = assignment
-      ? projectSessionActor(assignment.actor, new Map(), cfg)
+      ? projectAssignableSessionOwner(assignment.actor, ownerIdentityById, cfg)
       : null;
     const projectedAssignedBy = assignment?.assignedBy
       ? projectSessionActor(assignment.assignedBy, new Map(), cfg)
