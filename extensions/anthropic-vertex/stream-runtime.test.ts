@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
 function createStreamDeps(): {
@@ -659,5 +659,148 @@ describe("createAnthropicVertexStreamFnForModel", () => {
       region: "global",
       baseURL: "https://proxy.example.test/custom-root/v1",
     });
+  });
+});
+
+describe("googleAuthFetch timeout and abort", () => {
+  beforeAll(() => {
+    // The proxy-aware fetch test earlier stubs HTTP_PROXY and creates the
+    // EnvHttpProxyAgent singleton with a proxy configured.  After unstubbing,
+    // the singleton still routes through that now-dead proxy for any host not
+    // explicitly excluded by NO_PROXY.  EnvHttpProxyAgent reads NO_PROXY from
+    // process.env, preferring lowercase no_proxy over uppercase NO_PROXY, so
+    // we must stub both variants to reliably bypass the dead proxy on CI.
+    vi.stubEnv("NO_PROXY", "127.0.0.1");
+    vi.stubEnv("no_proxy", "127.0.0.1");
+  });
+
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function extractFetchImplementation(): typeof globalThis.fetch {
+    const { deps, googleAuthCtorMock } = createStreamDeps();
+    createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+
+    const authOptions = googleAuthCtorMock.mock.calls[0]?.[0] as
+      | {
+          clientOptions?: {
+            transporterOptions?: { fetchImplementation?: typeof globalThis.fetch };
+          };
+        }
+      | undefined;
+    const fetchImplementation = authOptions?.clientOptions?.transporterOptions?.fetchImplementation;
+    expect(fetchImplementation).toBeDefined();
+    return fetchImplementation!;
+  }
+
+  it("rejects with the caller's abort reason when pre-aborted", async () => {
+    const fetchImplementation = extractFetchImplementation();
+    const controller = new AbortController();
+    const customError = new Error("early-cancel");
+    controller.abort(customError);
+
+    await expect(
+      fetchImplementation("http://127.0.0.1:0/pre-aborted", { signal: controller.signal } as never),
+    ).rejects.toThrow("early-cancel");
+  });
+
+  it("rejects with the caller's abort reason when aborted mid-request", async () => {
+    const fetchImplementation = extractFetchImplementation();
+    const server = createServer(() => {
+      // Accept connections but never write a response, so the request hangs
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address() as { port: number };
+
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(new Error("user-cancel")), 500);
+
+    try {
+      await expect(
+        fetchImplementation(`http://127.0.0.1:${address.port}/hang`, {
+          signal: controller.signal,
+        } as never),
+      ).rejects.toThrow("user-cancel");
+    } finally {
+      clearTimeout(abortTimer);
+      controller.abort();
+      server.close();
+      await once(server, "close");
+    }
+  });
+
+  it("resolves normally when the server responds quickly", async () => {
+    const fetchImplementation = extractFetchImplementation();
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address() as { port: number };
+
+    try {
+      const response = await fetchImplementation(`http://127.0.0.1:${address.port}/health`);
+      expect(response.ok).toBe(true);
+      expect(await response.text()).toBe("ok");
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+  });
+
+  it("rejects with AbortSignal.timeout() reason", async () => {
+    const fetchImplementation = extractFetchImplementation();
+    const server = createServer(() => {
+      // Accept connections but never write a response, so the request hangs
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address() as { port: number };
+
+    const signal = AbortSignal.timeout(800);
+    try {
+      await expect(
+        fetchImplementation(`http://127.0.0.1:${address.port}/timeout`, {
+          signal,
+        } as never),
+      ).rejects.toThrow("aborted due to timeout");
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+  });
+
+  it("does not retain abort listeners across repeated requests with a shared caller signal", async () => {
+    const fetchImplementation = extractFetchImplementation();
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address() as { port: number };
+
+    const sharedController = new AbortController();
+    try {
+      // Make several requests sharing the same long-lived signal.
+      // If each request leaked an abort listener, the signal would
+      // accumulate references and prevent GC of old controller pairs.
+      for (let i = 0; i < 5; i++) {
+        const response = await fetchImplementation(`http://127.0.0.1:${address.port}/health`, {
+          signal: sharedController.signal,
+        } as never);
+        expect(response.ok).toBe(true);
+        expect(await response.text()).toBe("ok");
+      }
+      // The shared signal was never aborted by the caller.
+      expect(sharedController.signal.aborted).toBe(false);
+    } finally {
+      sharedController.abort();
+      server.close();
+      await once(server, "close");
+    }
   });
 });
