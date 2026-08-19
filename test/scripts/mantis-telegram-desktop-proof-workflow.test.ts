@@ -430,9 +430,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(install.run).toContain(
       'exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-sut.ts" "\\$@"',
     );
+    expect(install.run).toContain("sudo apt-get update");
+    expect(install.run).toContain("sudo apt-get install -y ffmpeg");
+    expect(install.run).toContain(
+      "sudo ln -s /usr/bin/ffmpeg /usr/local/lib/mantis-toolchain/ffmpeg",
+    );
+    expect(install.run).toContain(
+      "sudo ln -s /usr/bin/ffprobe /usr/local/lib/mantis-toolchain/ffprobe",
+    );
+    expect(install.run).toContain('export PATH=/usr/local/lib/mantis-toolchain:"\\$PATH"');
+    expect(install.run).not.toContain("dangerouslyAllowAllBuilds");
+    expect(install.run).not.toContain("ffmpeg-static");
+    expect(install.run).not.toContain("ffprobe-static");
     expect(install.run).not.toContain("BtbN/FFmpeg-Builds");
     expect(install.run).not.toContain("ffmpeg-master-latest-linux64-gpl.tar.xz");
-    expect(install.run).not.toContain("apt-get install");
 
     const image = workflowStep("Build local Telegram Desktop image");
     expect(image.run).toContain("bash scripts/mantis/build-telegram-desktop-image.sh");

@@ -390,6 +390,61 @@ describe("Telegram Desktop recorder remote contract", () => {
     ).rejects.toThrow("permission denied reading the remote Docker socket");
   });
 
+  it("refuses to record when the target chat has no message to open", async () => {
+    const root = makeTempDir();
+    const sshRun = vi.fn(async ({ command }: { command: string }) => {
+      if (command.includes("telegram-login-qr.png")) {
+        return { stderr: "", stdout: "tg://login?token=target-chat-precondition" };
+      }
+      if (command.includes("getwindowgeometry")) {
+        return { stderr: "", stdout: "635 40 650 1000" };
+      }
+      return { stderr: "", stdout: "" };
+    });
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 650 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn<RunCommand>(async ({ args }) => ({
+        stderr: "",
+        stdout: JSON.stringify(
+          args.includes("transcript")
+            ? { messages: [], ok: true }
+            : { ok: true, session: { id: 91234, isPasswordPending: false } },
+        ),
+      })),
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun,
+    } satisfies RecorderOperations;
+
+    await expect(
+      startRecorder(
+        root,
+        {
+          command: "start",
+          chat: "-1001234567890",
+          crabboxClass: "standard",
+          idleTimeout: "1h",
+          json: false,
+          leaseId: "cbx_borrowed",
+          outputDir: "out",
+          provider: "docker",
+          recordFps: 24,
+          ttl: "2h",
+          userDriver: ["python3", "driver.py"],
+        },
+        operations,
+      ),
+    ).rejects.toThrow();
+    expect(sshRun.mock.calls.some(([call]) => call.command.includes("x11grab"))).toBe(false);
+    expect(fs.existsSync(path.join(root, "out", "recorder.json"))).toBe(false);
+  });
+
   it("fetches the undecodable login screen when login attempts run out", async () => {
     const root = makeTempDir();
     // Without the screenshot, "Telegram never drew the QR" and "zbarimg could not read it"

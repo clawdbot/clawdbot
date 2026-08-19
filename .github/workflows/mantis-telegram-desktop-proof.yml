@@ -253,6 +253,7 @@ jobs:
           cat >"${RUNNER_TEMP}/telegram-desktop-recorder-exec" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
+          export PATH=/usr/local/lib/mantis-toolchain:"\$PATH"
           exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-desktop-recorder.ts" "\$@"
           EOF
           cat >"${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" <<EOF
@@ -269,10 +270,14 @@ jobs:
           EOF
           chmod 0755 "${RUNNER_TEMP}/mantis-node" "${RUNNER_TEMP}/mantis-pnpm" "${RUNNER_TEMP}/mantis-uv"
           chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" "${RUNNER_TEMP}/openclaw-telegram-user-driver" "${RUNNER_TEMP}/telegram-desktop-recorder-exec" "${RUNNER_TEMP}/telegram-user-driver"
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
           sudo install -d -m 0755 /usr/local/lib/mantis-toolchain
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-node" /usr/local/lib/mantis-toolchain/node
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-pnpm" /usr/local/lib/mantis-toolchain/pnpm
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-uv" /usr/local/lib/mantis-toolchain/uv
+          sudo ln -s /usr/bin/ffmpeg /usr/local/lib/mantis-toolchain/ffmpeg
+          sudo ln -s /usr/bin/ffprobe /usr/local/lib/mantis-toolchain/ffprobe
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" /usr/local/bin/openclaw-telegram-mantis-sut
           sudo install -m 0755 "${RUNNER_TEMP}/telegram-desktop-recorder-exec" /usr/local/lib/mantis-toolchain/telegram-desktop-recorder
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" /usr/local/bin/openclaw-telegram-desktop-recorder
@@ -291,6 +296,8 @@ jobs:
           /usr/local/lib/mantis-toolchain/node --version
           /usr/local/lib/mantis-toolchain/pnpm --version
           /usr/local/lib/mantis-toolchain/uv --version
+          /usr/local/lib/mantis-toolchain/ffmpeg -version >/dev/null
+          /usr/local/lib/mantis-toolchain/ffprobe -version >/dev/null
           /usr/local/bin/openclaw-telegram-mantis-sut --help >/dev/null
           /usr/local/bin/openclaw-telegram-desktop-recorder --help >/dev/null
 

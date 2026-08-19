@@ -70,6 +70,10 @@ const confirmedQrSchema = z.object({
   }),
 });
 
+const targetChatTranscriptSchema = z.object({
+  messages: z.array(z.object({ id: z.union([z.string(), z.number()]) })),
+});
+
 export type RecorderOperations = {
   createCroppedMotionPreview: typeof createCroppedMotionPreview;
   createMotionPreview: typeof createMotionPreview;
@@ -323,6 +327,32 @@ async function authorizeDesktop(params: {
   );
 }
 
+async function resolveTargetMessageId(params: {
+  chat: string;
+  cwd: string;
+  messageId?: string;
+  run: RunCommand;
+  userDriver: string[];
+}): Promise<string> {
+  if (params.messageId) {
+    return params.messageId;
+  }
+  const command = driverCommand(params.userDriver, [
+    "transcript",
+    "--chat",
+    params.chat,
+    "--limit",
+    "1",
+    "--json",
+  ]);
+  const result = await params.run({ ...command, cwd: params.cwd });
+  const [latest] = targetChatTranscriptSchema.parse(JSON.parse(result.stdout)).messages;
+  if (!latest) {
+    throw new Error("Telegram target chat has no message to open; refusing to start capture.");
+  }
+  return String(latest.id);
+}
+
 // The recorder runs as a different user than the agent that drives it, so an output dir
 // the agent owns can be unwritable here. The first write is the session file, minutes after
 // provisioning, so probe up front and report who is blocked rather than failing at the end.
@@ -468,11 +498,17 @@ export async function startRecorder(
       outputDir,
       userDriver: opts.userDriver,
     });
-    const link = opts.messageId ? telegramPrivatePostLink(opts.chat, opts.messageId) : undefined;
+    const targetMessageId = await resolveTargetMessageId({
+      chat: opts.chat,
+      cwd,
+      messageId: opts.messageId,
+      run: operations.runCommand,
+      userDriver: opts.userDriver,
+    });
     await operations.sshRun({
       command: renderTelegramViewCommand({
         binary: TELEGRAM_BINARY,
-        link,
+        link: telegramPrivatePostLink(opts.chat, targetMessageId),
         workdir: TELEGRAM_WORKDIR,
       }),
       cwd,
