@@ -304,6 +304,8 @@ describe("tool display details", () => {
     const functionKeyword = "function f { echo one; echo two; }";
     const hyphenatedFunction = "function deploy-prod { echo one; echo two; }";
     const namespacedFunction = "function log::info { echo one; echo two; }";
+    const hyphenatedParenFunction = "deploy-prod() { echo one; echo two; }";
+    const namespacedParenFunction = "log::info() { echo one; echo two; }";
     const selectLoop = 'select d in a b; do echo "$d"; break; done';
     const namedCoprocess = "coproc worker { echo one; echo two; }";
     const anonymousCoprocess = "coproc (echo one; echo two)";
@@ -337,6 +339,8 @@ describe("tool display details", () => {
       functionKeyword,
       hyphenatedFunction,
       namespacedFunction,
+      hyphenatedParenFunction,
+      namespacedParenFunction,
       selectLoop,
       namedCoprocess,
       anonymousCoprocess,
@@ -414,6 +418,8 @@ describe("tool display details", () => {
     for (const command of [
       "function f{ echo one; echo two; }",
       "function f {not-a-body; echo two; }",
+      "function worker (echo one; echo two)",
+      "time -- if true; then echo one; echo two; fi",
       "printf x >& select",
       "printf x &> select",
       "printf x >| select",
