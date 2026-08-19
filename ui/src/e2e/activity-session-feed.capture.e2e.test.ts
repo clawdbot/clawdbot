@@ -241,7 +241,7 @@ suite.define(() => {
           )
           .toBe(3);
         await page.keyboard.press("Escape");
-        const activityFeed = page.locator(".activity-feed");
+        const activityFeed = activityPage.locator(".activity-feed");
         const activitySession = (key: string) =>
           activityFeed.locator(`[data-activity-session="${key}"]`);
         const automationGroup = activityFeed.locator("[data-activity-automation-group]");
