@@ -17,10 +17,7 @@ import {
   getRestartRecoveryTerminalDeliveryEvidence,
   hasRestartRecoveryTerminalRun,
 } from "../config/sessions/restart-recovery-state.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  type SessionTranscriptAssistantMessage,
-} from "../config/sessions/transcript.js";
+import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   advanceSessionDeliveryAgentRun,
@@ -44,6 +41,7 @@ import {
   attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
 } from "./managed-image-attachments.js";
+import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-transcript-inject.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "./server-recovery-runtime-context.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -52,7 +50,6 @@ const log = createSubsystemLogger("gateway/restart-sentinel");
 const AGENT_DELIVERY_OWNERSHIP_RETRY_MS = 1_000;
 
 type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
-type GeneratedMediaTranscriptContent = SessionTranscriptAssistantMessage["content"];
 
 function sessionDeliveryStateDirArgs(stateDir?: string): [] | [string] {
   return stateDir === undefined ? [] : [stateDir];
@@ -390,9 +387,6 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             }
             content.push(...blocks);
           }
-          const transcriptContent =
-            // SAFETY: managed preparation returns transcript display blocks.
-            content as unknown as GeneratedMediaTranscriptContent;
           const appended = await appendAssistantMessageToSessionTranscript({
             agentId: params.agentId,
             sessionKey: params.canonicalKey,
@@ -404,7 +398,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                     params.sessionEntry.cronRunContinuation.lifecycleRevision,
                 }
               : {}),
-            content: transcriptContent,
+            content: prepareGatewayInjectedAssistantContent(content),
             idempotencyKey: `${queuedRunId}:generated-media-transcript`,
             updateMode: "inline",
           });
