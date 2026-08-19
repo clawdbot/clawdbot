@@ -20,7 +20,7 @@ GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve
 
 The **GitHub account** row is read-only. Generic trusted proxies, token, password, and unauthenticated connections cannot claim a GitHub account, and agent or tool GitHub credentials are never used for this identity. The forwarded Cloudflare Access assertion is connection-scoped: OpenClaw does not persist, export, log, or expose it to the UI or model.
 
-Identity lookup runs after WebSocket sign-in, so a Cloudflare or GitHub rate limit or network failure never blocks access or erases a previously verified account. A later connection or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
+Identity lookup runs after WebSocket sign-in, so connection status and other identity-independent reads remain available. Profile and session work waits for the lookup; a Cloudflare or GitHub rate limit or network failure returns retryable unavailability without exposing a mutable alias or erasing a previously verified account. A later request, connection, or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
 
 Public commit metadata is a separate choice. **Git co-author credit** defaults off. Enabling it adds the verified account's public GitHub noreply address to commits created from shared sessions; OpenClaw never requests or stores a private GitHub email for this feature. Signing in as a different numeric GitHub account resets the choice, so one account cannot inherit another account's consent.
 

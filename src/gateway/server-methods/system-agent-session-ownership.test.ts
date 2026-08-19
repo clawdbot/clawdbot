@@ -331,20 +331,33 @@ describe("openclaw.chat session ownership", () => {
     expect(handle).toHaveBeenCalledWith("continue");
   });
 
-  it("does not bind a pending GitHub profile to its mutable alias", async () => {
+  it("rejects pending GitHub ownership and binds only the attached canonical profile", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
-    await callChat(
-      makeContext(sessions),
-      { sessionId: "github-pending" },
-      makeClient({
-        connId: "conn-pending",
-        deviceId: "device-pending",
-        authenticatedUserId: "released-login@github",
-        githubSyncPending: true,
-      }),
-    );
+    const context = makeContext(sessions);
+    const pendingClient = makeClient({
+      connId: "conn-pending",
+      deviceId: "device-pending",
+      authenticatedUserId: "released-login@github",
+      githubSyncPending: true,
+    });
 
-    expect(sessions.get("github-pending")?.ownerKey).toBe("device:device-pending");
+    const pending = await callChat(context, { sessionId: "github-pending" }, pendingClient);
+    expect(pending).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true },
+    });
+    expect(sessions.has("github-pending")).toBe(false);
+
+    pendingClient.authenticatedUserProfile = {
+      profileId: "profile-canonical",
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 2,
+    };
+    const attached = await callChat(context, { sessionId: "github-pending" }, pendingClient);
+
+    expect(attached.ok).toBe(true);
+    expect(sessions.get("github-pending")?.ownerKey).toBe("user:profile-canonical");
   });
 
   it("lets the same paired device resume after reconnecting", async () => {

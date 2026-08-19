@@ -138,7 +138,7 @@ export function resolveSessionSharingRole(params: {
   const identity = gatewayClientSessionCreator(params.client);
   // Shared-secret/no-auth solo deployments have no durable person identity.
   if (!identity) {
-    return "owner";
+    return params.client?.authenticatedGitHubIdentitySync ? "viewer" : "owner";
   }
   if (params.target.entry.createdActor?.id === identity.id) {
     return "owner";

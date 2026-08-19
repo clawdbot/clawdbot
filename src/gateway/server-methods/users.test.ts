@@ -183,7 +183,11 @@ describe("users gateway methods", () => {
     expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: "authenticated user profile is unavailable" }),
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+      }),
     );
     expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(true, {
       profile,
@@ -217,7 +221,7 @@ describe("users gateway methods", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: "authenticated user profile is unavailable" }),
+      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
     );
     expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });

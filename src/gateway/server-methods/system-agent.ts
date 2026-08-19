@@ -50,6 +50,10 @@ import {
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
 import {
+  authenticatedProfileUnavailableError,
+  isGatewayClientProfilePending,
+} from "./gateway-client-identity.js";
+import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
   SETUP_ADMISSION_BUSY_MESSAGE,
@@ -498,6 +502,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           client,
         });
         if (!ownerKey) {
+          if (isGatewayClientProfilePending(client)) {
+            respond(false, undefined, authenticatedProfileUnavailableError());
+            return;
+          }
           respond(
             false,
             undefined,

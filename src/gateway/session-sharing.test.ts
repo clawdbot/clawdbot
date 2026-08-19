@@ -37,6 +37,7 @@ function client(params: {
   user?: string;
   deviceId?: string;
   displayName?: string;
+  githubSyncPending?: boolean;
   scopes?: string[];
 }): GatewayClient {
   return {
@@ -75,6 +76,11 @@ function client(params: {
           },
         }
       : {}),
+    ...(params.githubSyncPending
+      ? {
+          authenticatedGitHubIdentitySync: async () => ({ profileId: "pending", updatedAt: 1 }),
+        }
+      : {}),
   };
 }
 
@@ -95,6 +101,13 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
 }
 
 describe("session sharing policy", () => {
+  it("fails closed instead of treating pending GitHub identity as a solo owner", () => {
+    const pending = client({ githubSyncPending: true });
+    const draft = target({ type: "human", id: "profile-owner" });
+
+    expect(resolveSessionSharingRole({ client: pending, target: draft })).toBe("viewer");
+  });
+
   it("requires participation before sessions.create can adopt a categorized key", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:categorized-adoption";

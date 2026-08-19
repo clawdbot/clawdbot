@@ -26,6 +26,10 @@ import {
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import {
+  authenticatedProfileUnavailableError,
+  isGatewayClientProfilePending,
+} from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 function refreshConnectedProfile(
@@ -150,11 +154,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       }
       const profileId = resolveAuthenticatedProfileId(client);
       if (!profileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(true, { profile: getUserProfileListItem(profileId) });
@@ -173,17 +173,17 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const profileId = client?.authenticatedUserProfile?.profileId ?? "";
     if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
       respond(true, { status: "no_durable_identity" }, undefined);
       return;
     }
     try {
       const canonicalProfileId = resolveUserProfileId(profileId);
       if (!canonicalProfileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(
@@ -206,17 +206,17 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const profileId = client?.authenticatedUserProfile?.profileId ?? "";
     if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
       respond(true, { status: "no_durable_identity" }, undefined);
       return;
     }
     try {
       const canonicalProfileId = resolveUserProfileId(profileId);
       if (!canonicalProfileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       const result = setUserPreferences(canonicalProfileId, params.entries);

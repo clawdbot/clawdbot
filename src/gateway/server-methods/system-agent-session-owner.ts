@@ -1,4 +1,5 @@
 import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
+import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./types.js";
 
 export function resolveSystemAgentSessionOwnerKey(params: {
@@ -14,9 +15,12 @@ export function resolveSystemAgentSessionOwnerKey(params: {
   if (profileId) {
     return `user:${profileId}`;
   }
-  // A GitHub-backed alias is not an owner until immutable profile sync succeeds.
+  // A GitHub-backed connection has no durable owner until immutable profile sync succeeds.
+  if (isGatewayClientProfilePending(params.client)) {
+    return undefined;
+  }
   const userId = params.client?.authenticatedUserId?.trim();
-  if (userId && !params.client?.authenticatedGitHubIdentitySync) {
+  if (userId) {
     return `user:${userId}`;
   }
   const deviceId = params.client?.connect.device?.id.trim();
