@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, type Mock } from "vitest";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -14,9 +15,10 @@ import {
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { agentCommandMock, testState, writeSessionStore } from "./test-helpers.js";
 
-export async function runSessionsSendAuthorityClosureScenario(params: {
+async function runSessionsSendAdmissionFenceScenario(params: {
   createOpenClawTools: typeof import("../agents/openclaw-tools.js").createOpenClawTools;
   dir: string;
+  mode: "abort" | "authority-closure";
 }): Promise<void> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
@@ -45,6 +47,8 @@ export async function runSessionsSendAuthorityClosureScenario(params: {
   };
   const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const previousHookRegistry = getGlobalPluginRegistry();
+  const operationAbort = new AbortController();
+  let fenceTriggered = false;
   let authorityReleased = false;
   initializeGlobalHookRunner(
     createMockPluginRegistry([
@@ -53,10 +57,15 @@ export async function runSessionsSendAuthorityClosureScenario(params: {
         pluginId: "authority-race",
         handler: (_event, context) => {
           if (
-            !authorityReleased &&
+            !fenceTriggered &&
             (context as { sessionKey?: string }).sessionKey === targetSessionKey
           ) {
-            authorityReleased = releaseAgentRunDelegatedAuthority(delegatedAuthority);
+            fenceTriggered = true;
+            if (params.mode === "abort") {
+              operationAbort.abort(new Error("sessions_send operation cancelled"));
+            } else {
+              authorityReleased = releaseAgentRunDelegatedAuthority(delegatedAuthority);
+            }
           }
         },
       },
@@ -76,20 +85,26 @@ export async function runSessionsSendAuthorityClosureScenario(params: {
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
+    const message =
+      params.mode === "abort"
+        ? "do not dispatch after cancellation"
+        : "do not dispatch after closure";
     const result = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: sourceSessionKey, operationalRunInstance },
       () =>
-        tool.execute("call-authority-race", {
-          sessionKey: targetSessionKey,
-          message: "do not dispatch after closure",
-          timeoutSeconds: 5,
-        }),
+        tool.execute(
+          "call-authority-race",
+          {
+            sessionKey: targetSessionKey,
+            message,
+            timeoutSeconds: 5,
+          },
+          params.mode === "abort" ? operationAbort.signal : undefined,
+        ),
     );
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("agent runtime authority"),
-    });
-    expect(authorityReleased).toBe(true);
+    expect(result.details).toMatchObject({ status: "error" });
+    expect(fenceTriggered).toBe(true);
+    expect(authorityReleased).toBe(params.mode === "authority-closure");
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
@@ -98,6 +113,12 @@ export async function runSessionsSendAuthorityClosureScenario(params: {
         ([opts]) => (opts as { sessionKey?: string }).sessionKey === targetSessionKey,
       ),
     ).toEqual([]);
+    const targetEvents = await loadTranscriptEvents({
+      sessionId: "authority-race-target",
+      sessionKey: targetSessionKey,
+      storePath: testState.sessionStorePath,
+    });
+    expect(JSON.stringify(targetEvents)).not.toContain(message);
   } finally {
     releaseAgentRunDelegatedAuthority(delegatedAuthority);
     if (previousHookRegistry) {
@@ -107,4 +128,18 @@ export async function runSessionsSendAuthorityClosureScenario(params: {
     }
     testState.sessionStorePath = undefined;
   }
+}
+
+export async function runSessionsSendAuthorityClosureScenario(params: {
+  createOpenClawTools: typeof import("../agents/openclaw-tools.js").createOpenClawTools;
+  dir: string;
+}): Promise<void> {
+  await runSessionsSendAdmissionFenceScenario({ ...params, mode: "authority-closure" });
+}
+
+export async function runSessionsSendCancellationScenario(params: {
+  createOpenClawTools: typeof import("../agents/openclaw-tools.js").createOpenClawTools;
+  dir: string;
+}): Promise<void> {
+  await runSessionsSendAdmissionFenceScenario({ ...params, mode: "abort" });
 }

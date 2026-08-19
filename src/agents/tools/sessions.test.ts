@@ -1689,7 +1689,6 @@ describe("sessions_send gating", () => {
     const tool = createSessionsSendTool({
       agentSessionKey: MAIN_AGENT_SESSION_KEY,
       agentChannel: MAIN_AGENT_CHANNEL,
-      signal: abortController.signal,
       handoffContext: {
         inheritedToolPolicy: { version: 1, allow: ["sessions_send"], deny: [] },
         requester: { messageProvider: MAIN_AGENT_CHANNEL },
@@ -1711,11 +1710,15 @@ describe("sessions_send gating", () => {
       return {};
     });
 
-    const result = await tool.execute("call-policy-cancelled", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
-      message: "ping",
-      timeoutSeconds: 0,
-    });
+    const result = await tool.execute(
+      "call-policy-cancelled",
+      {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message: "ping",
+        timeoutSeconds: 0,
+      },
+      abortController.signal,
+    );
 
     expect(requireDetails(result).status).toBe("error");
     expect(callAgentWithHandoff).toHaveBeenCalledOnce();

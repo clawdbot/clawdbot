@@ -15,6 +15,7 @@ type HandoffOwner = Readonly<{
 type StoredHandoff<Payload, Target> = Readonly<{
   owner: HandoffOwner;
   payload: Payload;
+  state: { consumed: boolean; revoked: boolean };
   target: Target;
   expiresAtMs: number;
 }>;
@@ -81,27 +82,39 @@ export function createAgentRuntimeOneShotHandoffRegistry<Payload, Target>(option
       const nowMs = Date.now();
       prune(nowMs);
       const id = randomUUID();
+      // Consumption removes replayability, while this closure-bound state keeps a
+      // later source revocation visible until the target admission becomes durable.
+      const state = { consumed: false, revoked: false };
       handoffs.set(
         id,
         Object.freeze({
           owner: params.owner,
           payload: options.snapshotPayload(params.payload),
+          state,
           target: params.target,
           expiresAtMs: nowMs + ttlMs,
         }),
       );
-      return Object.freeze({ id, revoke: () => handoffs.delete(id) });
+      return Object.freeze({
+        id,
+        revoke: () => {
+          state.revoked = true;
+          handoffs.delete(id);
+        },
+      });
     },
 
     redeem(params: { id: string; owner: HandoffOwner }):
       | Readonly<{
           payload: Payload;
           consume: (target: Target) => Payload | undefined;
+          validateConsumed: () => boolean;
         }>
       | undefined {
       const handoff = handoffs.get(params.id);
       if (
         !handoff ||
+        handoff.state.revoked ||
         handoff.expiresAtMs <= Date.now() ||
         !sameOwner(handoff.owner, params.owner) ||
         !validateAgentRunDelegatedAuthority(handoff.owner.delegatedAuthority)
@@ -112,7 +125,11 @@ export function createAgentRuntimeOneShotHandoffRegistry<Payload, Target>(option
       return Object.freeze({
         payload: handoff.payload,
         consume: (target: Target) => {
-          if (handoffs.get(params.id) !== handoff) {
+          if (
+            handoff.state.revoked ||
+            handoff.state.consumed ||
+            handoffs.get(params.id) !== handoff
+          ) {
             return undefined;
           }
           if (
@@ -127,9 +144,15 @@ export function createAgentRuntimeOneShotHandoffRegistry<Payload, Target>(option
           }
           // Authentication may reconnect before admission. Delete only at this
           // synchronous target check so exactly one admitted consumer can win.
+          handoff.state.consumed = true;
           handoffs.delete(params.id);
           return handoff.payload;
         },
+        validateConsumed: () =>
+          handoff.state.consumed &&
+          !handoff.state.revoked &&
+          handoff.expiresAtMs > Date.now() &&
+          validateAgentRunDelegatedAuthority(handoff.owner.delegatedAuthority),
       });
     },
   };

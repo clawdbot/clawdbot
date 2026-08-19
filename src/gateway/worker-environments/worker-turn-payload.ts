@@ -113,13 +113,17 @@ export async function prepareWorkerAgentRuntimeIdentity(
     {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      sessionHandoffRequester: {
-        ...(params.turn.messageProvider ? { messageProvider: params.turn.messageProvider } : {}),
-        ...(params.turn.senderId ? { senderId: params.turn.senderId } : {}),
-        ...(params.turn.senderName ? { senderName: params.turn.senderName } : {}),
-        ...(params.turn.senderUsername ? { senderUsername: params.turn.senderUsername } : {}),
-        ...(params.turn.senderE164 ? { senderE164: params.turn.senderE164 } : {}),
-      },
+      sessionHandoffRequester: params.turn.trustedSessionHandoff
+        ? { ...params.turn.trustedSessionHandoff.requester }
+        : {
+            ...(params.turn.messageProvider
+              ? { messageProvider: params.turn.messageProvider }
+              : {}),
+            ...(params.turn.senderId ? { senderId: params.turn.senderId } : {}),
+            ...(params.turn.senderName ? { senderName: params.turn.senderName } : {}),
+            ...(params.turn.senderUsername ? { senderUsername: params.turn.senderUsername } : {}),
+            ...(params.turn.senderE164 ? { senderE164: params.turn.senderE164 } : {}),
+          },
     },
   );
   return {

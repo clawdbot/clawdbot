@@ -29,7 +29,10 @@ import {
 } from "../infra/agent-run-registry.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
-import { runSessionsSendAuthorityClosureScenario } from "./server.sessions-send.authority-race.test-support.js";
+import {
+  runSessionsSendAuthorityClosureScenario,
+  runSessionsSendCancellationScenario,
+} from "./server.sessions-send.authority-race.test-support.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommandMock,
@@ -275,6 +278,13 @@ describe("sessions_send gateway loopback", () => {
     await runSessionsSendAuthorityClosureScenario({
       createOpenClawTools,
       dir: tempDirs.make("openclaw-sessions-send-authority-race-"),
+    });
+  });
+
+  it("cancels a handoff before target transcript persistence or dispatch", async () => {
+    await runSessionsSendCancellationScenario({
+      createOpenClawTools,
+      dir: tempDirs.make("openclaw-sessions-send-cancellation-race-"),
     });
   });
 

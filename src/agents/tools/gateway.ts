@@ -51,6 +51,11 @@ export type GatewayCallOptions = {
 
 type GatewayOverrideTarget = "local" | "remote";
 
+type ResolvedAgentRuntimeIdentityToken = Readonly<{
+  token: string;
+  revokeSessionHandoff?: () => void;
+}>;
+
 /** Reads common gateway options from tool parameters while preserving explicit token whitespace. */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
@@ -357,7 +362,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
   required?: boolean;
-}): Promise<string | undefined> {
+}): Promise<ResolvedAgentRuntimeIdentityToken | undefined> {
   const optionalLocalIdentity = OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS.has(params.method);
   if (
     !params.required &&
@@ -383,7 +388,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
   if (identity.signedAgentRuntimeIdentityToken) {
-    return identity.signedAgentRuntimeIdentityToken;
+    return { token: identity.signedAgentRuntimeIdentityToken };
   }
   if (!identity.operationalRunInstance) {
     if (optionalLocalIdentity && !params.required) {
@@ -445,7 +450,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
       throw new Error("session handoff could not bind the source admission");
     }
     try {
-      return await mintAgentRuntimeIdentityToken({
+      const token = await mintAgentRuntimeIdentityToken({
         ...identity,
         operationalRunInstance: identity.operationalRunInstance,
         ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
@@ -457,6 +462,10 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
         ...(sessionHandoff ? { sessionHandoffId: sessionHandoff.id } : {}),
         ...(sessionHandoff ? { executionIdentityToken: undefined } : {}),
       });
+      return {
+        token,
+        ...(sessionHandoff ? { revokeSessionHandoff: sessionHandoff.revoke } : {}),
+      };
     } catch (error) {
       lineageHandoff?.revoke();
       sessionHandoff?.revoke();
@@ -612,6 +621,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   params?: unknown,
   extra?: {
     expectFinal?: boolean;
+    onSignalAbort?: import("../../gateway/call.js").CallGatewayOptions["onSignalAbort"];
     scopes?: OperatorScope[];
     requireAgentRuntimeIdentity?: boolean;
     signal?: AbortSignal;
@@ -627,13 +637,24 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     target: gateway.target,
   });
-  const agentRuntimeIdentityToken = await resolveAgentRuntimeIdentityTokenForGatewayTool({
+  const resolvedAgentRuntimeIdentity = await resolveAgentRuntimeIdentityTokenForGatewayTool({
     method,
     callParams,
     opts,
     target: gateway.target,
     required: extra?.requireAgentRuntimeIdentity,
   });
+  const agentRuntimeIdentityToken = resolvedAgentRuntimeIdentity?.token;
+  const revokeSessionHandoff = resolvedAgentRuntimeIdentity?.revokeSessionHandoff;
+  const revokeSessionHandoffOnAbort = revokeSessionHandoff
+    ? () => revokeSessionHandoff()
+    : undefined;
+  if (extra?.signal && revokeSessionHandoffOnAbort) {
+    extra.signal.addEventListener("abort", revokeSessionHandoffOnAbort, { once: true });
+    if (extra.signal.aborted) {
+      revokeSessionHandoffOnAbort();
+    }
+  }
   const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
     method,
     callParams,
@@ -647,6 +668,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     params: callParams,
     timeoutMs: gateway.timeoutMs,
     signal: extra?.signal,
+    onSignalAbort: extra?.onSignalAbort,
     expectFinal: extra?.expectFinal,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
@@ -665,6 +687,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
         params: stripNodeInvokeTurnSource(callOptions.params),
       });
     }
+    revokeSessionHandoff?.();
     if (agentRuntimeIdentityToken && isStaleGatewayAgentRuntimeIdentityRejection(error)) {
       if (method === "node.invoke" && extra?.requireAgentRuntimeIdentity !== true) {
         return await callGateway<T>({
@@ -676,5 +699,9 @@ export async function callGatewayTool<T = Record<string, unknown>>(
       throw staleGatewayAgentRuntimeIdentityError(error);
     }
     throw error;
+  } finally {
+    if (extra?.signal && revokeSessionHandoffOnAbort) {
+      extra.signal.removeEventListener("abort", revokeSessionHandoffOnAbort);
+    }
   }
 }

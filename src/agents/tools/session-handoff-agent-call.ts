@@ -16,13 +16,27 @@ export async function callSessionHandoffAgent<T>(params: {
   if (params.request.method !== "agent") {
     throw new Error("session handoff authority is valid only for agent runs");
   }
+  const requestParams = (params.request.params ?? {}) as Record<string, unknown>;
+  const sessionKey =
+    typeof requestParams.sessionKey === "string" ? requestParams.sessionKey.trim() : "";
+  const runId =
+    typeof requestParams.idempotencyKey === "string" ? requestParams.idempotencyKey.trim() : "";
+  if (!sessionKey || !runId) {
+    throw new Error("session handoff requires an exact target session and idempotency key");
+  }
   return await withGatewayToolCallerIdentity(params.authority, () =>
     runWithGatewaySessionHandoffContext(params.context, () =>
       callGatewayTool<T>(
         "agent",
         { timeoutMs: params.request.timeoutMs ?? undefined },
         params.request.params,
-        { requireAgentRuntimeIdentity: true, signal: params.request.signal },
+        {
+          requireAgentRuntimeIdentity: true,
+          signal: params.request.signal,
+          onSignalAbort: async (request) => {
+            await request("chat.abort", { sessionKey, runId }, { timeoutMs: 5_000 });
+          },
+        },
       ),
     ),
   );

@@ -12,6 +12,7 @@ import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   assertSupportedTurn,
   fitLaunchDescriptorWithRuntimeIdentity,
+  prepareWorkerAgentRuntimeIdentity,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 
@@ -24,9 +25,18 @@ const runtimeIdentityToken = vi.hoisted(() => ({
   ),
 }));
 
+const workerIdentityMocks = vi.hoisted(() => ({
+  bind: vi.fn(),
+}));
+
 vi.mock("../agent-runtime-identity-token.js", () => ({
   measureAgentRuntimeIdentityTokenBytes: runtimeIdentityToken.measure,
   mintAgentRuntimeIdentityToken: runtimeIdentityToken.mint,
+}));
+
+vi.mock("./placement-turn-claim-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./placement-turn-claim-events.js")>()),
+  bindWorkerTurnExecutionIdentity: workerIdentityMocks.bind,
 }));
 
 const PROVIDER_REPLAY = {
@@ -164,6 +174,42 @@ describe("assertSupportedTurn", () => {
         },
       } as SessionPlacementTurnParams),
     ).toEqual({ provider: "openai", model: "gpt-5.4" });
+  });
+});
+
+describe("prepareWorkerAgentRuntimeIdentity", () => {
+  it("preserves the original requester across chained worker handoffs", async () => {
+    const admittedRunContext = createTestAdmittedRunContext("run-worker-handoff");
+
+    await prepareWorkerAgentRuntimeIdentity({
+      runtimeInstanceId: "worker-runtime",
+      agentId: "main",
+      sessionKey: "agent:main:worker-target",
+      turnClaim: {} as never,
+      placements: {} as never,
+      turn: {
+        runId: "run-worker-handoff",
+        admittedRunContext,
+        messageProvider: "internal",
+        senderId: "worker-target",
+        trustedSessionHandoff: {
+          inheritedToolPolicy: { version: 1, allow: ["sessions_send"], deny: [] },
+          requester: { messageProvider: "whatsapp", senderId: "guest" },
+        },
+      } as SessionPlacementTurnParams,
+    });
+
+    expect(workerIdentityMocks.bind).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      admittedRunContext.operationalRunInstance,
+      {
+        agentId: "main",
+        sessionKey: "agent:main:worker-target",
+        sessionHandoffRequester: { messageProvider: "whatsapp", senderId: "guest" },
+      },
+    );
   });
 });
 

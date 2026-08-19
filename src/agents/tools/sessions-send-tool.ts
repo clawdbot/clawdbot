@@ -514,8 +514,12 @@ export function createSessionsSendTool(opts?: {
     parameters: SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, executionSignal) => {
       const params = normalizeSessionsSendArguments(args);
+      const operationSignal =
+        executionSignal && opts?.signal && executionSignal !== opts.signal
+          ? AbortSignal.any([executionSignal, opts.signal])
+          : (executionSignal ?? opts?.signal);
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const authority = getGatewayToolCallerIdentity();
       const handoffContext: AgentRuntimeSessionHandoffContext | undefined = opts?.handoffContext
@@ -531,9 +535,9 @@ export function createSessionsSendTool(opts?: {
       const agentCall: GatewayCaller = handoffContext
         ? async <T = Record<string, unknown>>(request: Parameters<GatewayCaller>[0]) => {
             const signal =
-              request.signal && opts?.signal && request.signal !== opts.signal
-                ? AbortSignal.any([request.signal, opts.signal])
-                : (request.signal ?? opts?.signal);
+              request.signal && operationSignal && request.signal !== operationSignal
+                ? AbortSignal.any([request.signal, operationSignal])
+                : (request.signal ?? operationSignal);
             const handoffRequest = signal ? { ...request, signal } : request;
             if (opts?.callAgentWithHandoff) {
               return (await opts.callAgentWithHandoff(handoffRequest, handoffContext)) as T;
@@ -971,7 +975,7 @@ export function createSessionsSendTool(opts?: {
         cfg,
         agentId: targetAgentId,
         expectedSessionId,
-        ...(opts?.signal ? { signal: opts.signal } : {}),
+        ...(operationSignal ? { signal: operationSignal } : {}),
         targetSessionKey: resolvedKey,
         run: async () => {
           if (visibleSession.missing) {

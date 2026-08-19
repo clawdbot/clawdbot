@@ -29,6 +29,7 @@ type SessionHandoffRedemption = Readonly<{
   consume: (
     target: AgentRuntimeSessionHandoffTarget,
   ) => AgentRuntimeSessionHandoffContext | undefined;
+  validateConsumed: () => boolean;
 }>;
 
 type SessionHandoffRedemptionCarrier = {
@@ -133,6 +134,7 @@ export function redeemAgentRuntimeSessionHandoff(params: {
       : {}),
     redemption: Object.freeze({
       consume: (target: AgentRuntimeSessionHandoffTarget) => handoff.consume(target)?.context,
+      validateConsumed: handoff.validateConsumed,
     }),
   });
 }
@@ -154,4 +156,14 @@ export function consumeAgentRuntimeSessionHandoff(
         AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION
       ].consume(target)
     : undefined;
+}
+
+/** Revalidate the consumed one-shot handoff until target admission is durable. */
+export function validateConsumedAgentRuntimeSessionHandoff(identity: object): boolean {
+  return (
+    AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION in identity &&
+    (identity as SessionHandoffRedemptionCarrier)[
+      AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION
+    ].validateConsumed()
+  );
 }

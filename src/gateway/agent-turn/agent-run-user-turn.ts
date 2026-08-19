@@ -74,6 +74,8 @@ export async function prepareAgentRunUserTurn(params: {
   runId: string;
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
+  /** Final synchronous authority check after hooks and immediately before transcript append. */
+  assertBeforeTranscriptWrite?: () => void;
 }): Promise<PreparedAgentRunUserTurn> {
   const execApprovalFollowupHandoffClaimId = randomUUID();
   let claimedExecApprovalFollowupHandoffId: string | undefined;
@@ -195,7 +197,11 @@ export async function prepareAgentRunUserTurn(params: {
           };
         },
         errorContext: "gateway agent user turn transcript",
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        beforeMessageWrite: (hookParams) => {
+          const prepared = runAgentHarnessBeforeMessageWriteHook(hookParams);
+          params.assertBeforeTranscriptWrite?.();
+          return prepared;
+        },
         onPersistenceError: (error) => {
           params.context.logGateway.warn(
             `gateway agent user transcript persistence failed: ${formatForLog(error)}`,

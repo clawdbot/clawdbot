@@ -29,6 +29,7 @@ import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle
 import {
   consumeAgentRuntimeSessionHandoff,
   type AgentRuntimeSessionHandoffContext,
+  validateConsumedAgentRuntimeSessionHandoff,
 } from "../agent-runtime-session-handoff.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import type { ChatImageContent, OffloadedRef } from "../chat-attachments.js";
@@ -479,6 +480,18 @@ export async function prepareAgentRunDispatch(params: {
       return undefined;
     }
   }
+  let sessionHandoffValidatedAtTranscriptWrite = false;
+  const assertSessionHandoffSourceActive = () => {
+    if (
+      trustedSessionHandoff &&
+      runtimeIdentity &&
+      (params.context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) !== true ||
+        !validateConsumedAgentRuntimeSessionHandoff(runtimeIdentity))
+    ) {
+      throw new TypeError("session handoff source authority is no longer active");
+    }
+    sessionHandoffValidatedAtTranscriptWrite = true;
+  };
   let userTurn: PreparedAgentRunUserTurn;
   try {
     userTurn = await prepareAgentRunUserTurn({
@@ -504,6 +517,10 @@ export async function prepareAgentRunDispatch(params: {
       runId: params.runId,
       client: params.client,
       context: params.context,
+      assertBeforeTranscriptWrite: () => {
+        params.assertGatewayWorkAdmissionAllowed();
+        assertSessionHandoffSourceActive();
+      },
     });
     if (userTurn.recorder) {
       // The recorder already persisted the media references, so later admission
@@ -520,12 +537,8 @@ export async function prepareAgentRunDispatch(params: {
     // Transcript persistence can yield. Revalidate the exact live admission
     // before its durable turn is allowed to cross the acceptance boundary.
     params.assertGatewayWorkAdmissionAllowed();
-    if (
-      trustedSessionHandoff &&
-      runtimeIdentity &&
-      params.context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) !== true
-    ) {
-      throw new TypeError("session handoff source authority is no longer active");
+    if (!sessionHandoffValidatedAtTranscriptWrite) {
+      assertSessionHandoffSourceActive();
     }
   } catch (err) {
     releasePreparedAgentRunUserTurn(userTurn);

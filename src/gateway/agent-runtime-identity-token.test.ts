@@ -395,6 +395,13 @@ describe("agent runtime identity token", () => {
           idempotencyKey: "handoff-request-1",
         }),
     ).toMatchObject({ inheritedToolPolicy: { allow: ["sessions_send", "read"] } });
+    expect(identity && sessionHandoff.validateConsumedAgentRuntimeSessionHandoff(identity)).toBe(
+      true,
+    );
+    handoff?.revoke();
+    expect(identity && sessionHandoff.validateConsumedAgentRuntimeSessionHandoff(identity)).toBe(
+      false,
+    );
     expect(
       disconnectedIdentity &&
         sessionHandoff.consumeAgentRuntimeSessionHandoff(disconnectedIdentity, {
