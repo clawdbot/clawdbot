@@ -84,11 +84,21 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
+export function resolveSlackProgressStyle(
+  entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
+): "card" | "compact" {
+  const style = Reflect.get(resolveChannelProgressDraftConfig(entry), "style");
+  return style === "compact" ? "compact" : "card";
+}
+
 // Slack's native agent card is the default progress surface; operators opt out
 // with an explicit `false`, which falls back to the Block Kit progress card.
 export function resolveSlackNativeProgressTaskCards(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): boolean {
+  if (resolveSlackProgressStyle(entry) === "compact") {
+    return false;
+  }
   const streaming = entry?.streaming;
   if (!streaming || typeof streaming !== "object" || Array.isArray(streaming)) {
     return true;
