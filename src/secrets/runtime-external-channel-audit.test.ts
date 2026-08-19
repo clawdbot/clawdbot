@@ -5,6 +5,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { getPath } from "./path-utils.js";
+import {
+  assertSecretOwnerAvailable,
+  isTrustedSecretSurfaceUnavailableError,
+} from "./runtime-degraded-state.js";
+import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 
 const {
   getBootstrapChannelSecretsMock,
@@ -594,5 +599,61 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     });
     expect(snapshot.warnings).toStrictEqual([]);
     expectMetadataBackedContractsWereUsed(["feishu"]);
+  });
+
+  it("publishes an unavailable Discord realtime provider owner as a typed redacted error", async () => {
+    const records = configureExternalChannelRecords(["discord"]);
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            accounts: {
+              work: {
+                enabled: true,
+                voice: {
+                  enabled: true,
+                  mode: "agent-proxy",
+                  realtime: {
+                    provider: "grok-voice",
+                    providers: {
+                      xai: { apiKey: ref("MISSING_XAI_REALTIME_API_KEY") },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "discord:voice:realtime:work:xai",
+        reason: "secret reference was not found",
+      },
+    ]);
+    activateSecretsRuntimeSnapshot(snapshot);
+
+    let failure: unknown;
+    try {
+      assertSecretOwnerAvailable("capability", "discord:voice:realtime:work:xai");
+    } catch (error) {
+      failure = error;
+    }
+    expect(isTrustedSecretSurfaceUnavailableError(failure)).toBe(true);
+    expect(failure).toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId: "discord:voice:realtime:work:xai",
+      paths: ["channels.discord.accounts.work.voice.realtime.providers.xai.apiKey"],
+    });
+    expect(String(failure)).not.toContain("MISSING_XAI_REALTIME_API_KEY");
+    expectMetadataBackedContractsWereUsed(["discord"]);
   });
 });

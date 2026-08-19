@@ -28,6 +28,7 @@ defineDiscordVoiceTests(
     controlRealtimeVoiceAgentRunMock,
     resolveConfiguredRealtimeVoiceProviderMock,
     assertSecretOwnerAvailableMock,
+    canonicalizeRealtimeVoiceProviderIdMock,
     realtimeSessionMock,
     decodeOpusStreamMock,
     managerModule,
@@ -847,6 +848,51 @@ defineDiscordVoiceTests(
         "discord:voice:realtime:work:openai",
       );
       expect(resolveConfiguredRealtimeVoiceProviderMock).not.toHaveBeenCalled();
+    });
+
+    it("gates the canonical secret owner for a configured realtime provider alias", async () => {
+      const connection = createConnectionMock();
+      joinVoiceChannelMock.mockReturnValueOnce(connection);
+      canonicalizeRealtimeVoiceProviderIdMock.mockReturnValueOnce("xai");
+      assertSecretOwnerAvailableMock.mockImplementation(
+        (_ownerKind: string, ownerId: string) => {
+          if (ownerId === "discord:voice:realtime:work:xai") {
+            throw new Error(
+              "Secret owner capability:discord:voice:realtime:work:xai is configured but unavailable (secret reference was not found).",
+            );
+          }
+        },
+      );
+      const manager = createManager(
+        {
+          voice: {
+            enabled: true,
+            mode: "agent-proxy",
+            realtime: { provider: "grok-voice" },
+          },
+        },
+        undefined,
+        {},
+        "work",
+      );
+
+      const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+      expect(result).toEqual({
+        ok: false,
+        message:
+          "Failed to start Discord realtime voice: Secret owner capability:discord:voice:realtime:work:xai is configured but unavailable (secret reference was not found).",
+        guildId: "g1",
+        channelId: "1001",
+      });
+      expect(canonicalizeRealtimeVoiceProviderIdMock).toHaveBeenCalledWith("grok-voice", {});
+      expect(assertSecretOwnerAvailableMock.mock.calls).toEqual([
+        ["capability", "discord:voice:realtime:work:grok-voice"],
+        ["capability", "discord:voice:realtime:work:xai"],
+      ]);
+      expect(resolveConfiguredRealtimeVoiceProviderMock).not.toHaveBeenCalled();
+      expect(connection.destroy).toHaveBeenCalledOnce();
+      expect(manager.status()).toEqual([]);
     });
 
     it("provider reset fences transcript, tool, playback, and consult completions", async () => {

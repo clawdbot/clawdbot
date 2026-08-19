@@ -3,6 +3,7 @@ import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/c
 import {
   buildRealtimeVoiceSessionInstructions,
   buildRealtimeVoiceSpeakExactMessage,
+  canonicalizeRealtimeVoiceProviderId,
   createRealtimeVoiceSessionHarness,
   isRealtimeVoiceWakeNameRequired,
   matchRealtimeVoiceConsultQuestions,
@@ -227,10 +228,22 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     };
     const configuredProviderId = this.realtimeConfig?.provider?.trim();
     if (configuredProviderId) {
-      assertSecretOwnerAvailable(
-        "capability",
-        discordRealtimeVoiceSecretOwnerId(this.params.accountId, configuredProviderId),
+      const ownerProviderIds = new Set([configuredProviderId]);
+      const canonicalProviderId = canonicalizeRealtimeVoiceProviderId(
+        configuredProviderId,
+        this.params.cfg,
       );
+      if (canonicalProviderId) {
+        ownerProviderIds.add(canonicalProviderId);
+      }
+      // Secret collection keys owners by configured provider blocks, while selection also accepts
+      // aliases. Gate both identities before provider config normalization can read an unresolved ref.
+      for (const providerId of ownerProviderIds) {
+        assertSecretOwnerAvailable(
+          "capability",
+          discordRealtimeVoiceSecretOwnerId(this.params.accountId, providerId),
+        );
+      }
     }
     const resolved = resolveConfiguredRealtimeVoiceProvider({
       configuredProviderId: this.realtimeConfig?.provider,

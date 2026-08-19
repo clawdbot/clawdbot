@@ -25,6 +25,7 @@ const {
   updateVoiceStateMock,
   enqueueSystemEventMock,
   assertSecretOwnerAvailableMock,
+  canonicalizeRealtimeVoiceProviderIdMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -192,6 +193,9 @@ const {
     updateVoiceStateMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
     assertSecretOwnerAvailableMock: vi.fn(),
+    canonicalizeRealtimeVoiceProviderIdMock: vi.fn(
+      (providerId: string | undefined) => providerId?.trim().toLowerCase(),
+    ),
   };
 });
 
@@ -220,6 +224,7 @@ export const voiceTestMocks = {
   updateVoiceStateMock,
   enqueueSystemEventMock,
   assertSecretOwnerAvailableMock,
+  canonicalizeRealtimeVoiceProviderIdMock,
 };
 
 vi.mock("openclaw/plugin-sdk/channel-secret-owner-runtime", async () => {
@@ -308,6 +313,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
   );
   return {
     ...actual,
+    canonicalizeRealtimeVoiceProviderId: canonicalizeRealtimeVoiceProviderIdMock,
     createRealtimeVoiceBridgeSession: createRealtimeVoiceBridgeSessionMock,
     createRealtimeVoiceSessionHarness: (
       params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
