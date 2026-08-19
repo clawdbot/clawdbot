@@ -94,6 +94,31 @@ export function createClaudeAppServerAgentHarness(options?: {
   return {
     id: options?.id ?? "claude-bridge",
     label: options?.label ?? "Claude app-server harness",
+    /**
+     * This harness enforces the conversation tool policy exactly, so declare
+     * it — codex and copilot already do. Without this,
+     * assertPluginHarnessConversationToolPolicySupport (src/agents/harness/
+     * selection.ts:824-834) throws for ANY restricted tool policy on a
+     * non-openclaw harness, which made every subagent dispatch from a
+     * claude-harness session fail preflight with "cannot enforce this
+     * conversation's tool policy" (openclaw-t56a).
+     *
+     * The enforcement is real, and if anything stricter than codex's:
+     *   - native tools: computeNativeDisallowedTools (run-attempt.ts:1901)
+     *     returns the FULL native set whenever disableTools is set or any
+     *     toolsAllow is present without an explicit "*" — it over-blocks
+     *     rather than trying to map allowlist entries onto native names.
+     *   - dynamic tools: buildTools returns [] for disableTools /
+     *     !supportsModelTools, then filterToolsForAllowlist honors toolsAllow.
+     *   - call time: every dynamic tool is wrapped with the BeforeToolCall
+     *     hook by createClaudeDynamicToolBridge.
+     *
+     * conversationToolPolicySafeDenyTools is deliberately NOT declared. It is
+     * only read when support === "exact", so today's code path already passes
+     * `undefined` for it; leaving it unset keeps this change to exactly one
+     * behavioural difference — the preflight no longer throws.
+     */
+    conversationToolPolicySupport: "exact",
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (providerIds.has(provider)) {

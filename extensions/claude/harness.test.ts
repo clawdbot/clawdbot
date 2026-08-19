@@ -84,3 +84,32 @@ describe("createClaudeAppServerAgentHarness dispose() pool-key scoping", () => {
     expect(clearSpy).toHaveBeenCalledWith("claude-bridge:zai-staging");
   });
 });
+
+/**
+ * Regression guard for openclaw-t56a: the harness must declare that it can
+ * enforce the conversation tool policy exactly. Without this declaration,
+ * assertPluginHarnessConversationToolPolicySupport throws for any restricted
+ * tool policy on a non-openclaw harness, which made EVERY subagent dispatch
+ * from a claude-harness session fail preflight at zero tokens.
+ */
+describe("createClaudeAppServerAgentHarness conversation tool policy support", () => {
+  it("declares exact tool-policy support", () => {
+    expect(createClaudeAppServerAgentHarness().conversationToolPolicySupport).toBe("exact");
+  });
+
+  it("declares it regardless of provider/label overrides", () => {
+    const harness = createClaudeAppServerAgentHarness({
+      providerIds: ["zai"],
+      label: "custom",
+    });
+    expect(harness.conversationToolPolicySupport).toBe("exact");
+  });
+
+  it("does NOT declare safe-deny tools", () => {
+    // Only read when support === "exact". Today's path already passes
+    // undefined, so leaving it unset keeps the preflight fix to exactly one
+    // behavioural change. If this ever becomes non-undefined it is a real
+    // policy change and wants its own review.
+    expect(createClaudeAppServerAgentHarness().conversationToolPolicySafeDenyTools).toBeUndefined();
+  });
+});
