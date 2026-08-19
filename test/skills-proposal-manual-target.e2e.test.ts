@@ -120,7 +120,7 @@ describe("Skill proposal manual-target product proof", () => {
         const inspected = (await started.client.request("skills.proposals.inspect", {
           agentId: "main",
           proposalId: created.record.id,
-        })) as { record: ProposalRecord };
+        })) as { record: ProposalRecord; revisionHash: string };
         expect(inspected.record).toMatchObject({
           id: created.record.id,
           status: "stale",
@@ -150,6 +150,7 @@ describe("Skill proposal manual-target product proof", () => {
           await started.client.request("skills.proposals.apply", {
             agentId: "main",
             proposalId: created.record.id,
+            expectedRevisionHash: inspected.revisionHash,
           });
         } catch (error) {
           applyError = error;

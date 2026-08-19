@@ -10,9 +10,17 @@ import "./app-host.ts";
 type PairingShell = HTMLElement & {
   runtime?: ApplicationRuntime;
   render: () => TemplateResult;
+  routeState: {
+    routeId?: string;
+    location?: { pathname: string; search: string; hash: string };
+  };
   devicePairSetupRenderer: unknown;
   devicePairSetupLoadFailed: boolean;
   loadDevicePairSetupRenderer: () => void;
+  settingsSidebarRenderer: unknown;
+  settingsSidebarLoadFailed: boolean;
+  loadSettingsSidebarRenderer: () => void;
+  retrySettingsSidebarRenderer: () => void;
 };
 
 type PairingSidebar = HTMLElement & {
@@ -67,6 +75,7 @@ function createPairingShell(params: {
     updateAvailable: null,
     updateRunning: false,
     updateStatusBanner: null,
+    recordedUpdateAttempt: null,
     controlUiRefreshRequired: false,
   };
   const context = {
@@ -229,6 +238,48 @@ describe("application shell pairing access", () => {
     expect(dialog?.getAttribute("aria-busy")).toBe("true");
     expect(dialog?.textContent).toContain("Loading…");
     expect(loadRenderer).toHaveBeenCalledOnce();
+  });
+
+  it("keeps settings navigation visibly loading while its renderer downloads", () => {
+    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
+    const loadRenderer = vi.fn();
+    shell.routeState = {
+      routeId: "profile",
+      location: { pathname: "/settings/profile", search: "", hash: "" },
+    };
+    shell.settingsSidebarRenderer = null;
+    shell.settingsSidebarLoadFailed = false;
+    shell.loadSettingsSidebarRenderer = loadRenderer;
+
+    render(shell.render(), container);
+
+    const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
+    expect(sidebar?.getAttribute("aria-busy")).toBe("true");
+    expect(sidebar?.textContent).toContain("Loading…");
+    expect(loadRenderer).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a failed settings navigation load visible and retryable", () => {
+    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
+    const retryRenderer = vi.fn();
+    shell.routeState = {
+      routeId: "profile",
+      location: { pathname: "/settings/profile", search: "", hash: "" },
+    };
+    shell.settingsSidebarRenderer = null;
+    shell.settingsSidebarLoadFailed = true;
+    shell.retrySettingsSidebarRenderer = retryRenderer;
+
+    render(shell.render(), container);
+
+    const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
+    expect(sidebar?.getAttribute("aria-busy")).toBeNull();
+    expect(sidebar?.textContent).toContain("Settings navigation could not load.");
+    const retry = [...(sidebar?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    retry?.click();
+    expect(retryRenderer).toHaveBeenCalledOnce();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {

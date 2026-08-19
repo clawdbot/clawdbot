@@ -1,6 +1,6 @@
 // Gateway channel health policy.
 // Evaluates channel lifecycle snapshots for restart/readiness decisions.
-import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 
 type ChannelHealthSnapshot = {
   running?: boolean;
@@ -15,6 +15,7 @@ type ChannelHealthSnapshot = {
   activeRunStartedAt?: number | null;
   lastEventAt?: number | null;
   lastConnectedAt?: number | null;
+  lastDisconnect?: ChannelAccountSnapshot["lastDisconnect"];
   lastTransportActivityAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
@@ -34,6 +35,7 @@ type ChannelHealthEvaluationReason =
   | "busy"
   | "stuck"
   | "startup-connect-grace"
+  | "reconnect-grace"
   | "disconnected"
   | "stale-socket"
   | "ingress-unavailable";
@@ -74,6 +76,7 @@ function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
+const CHANNEL_RECONNECT_GRACE_MS = 120_000;
 // Keep these shared between the background health monitor and on-demand readiness
 // probes so both surfaces evaluate channel lifecycle windows consistently.
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
@@ -170,6 +173,22 @@ export function evaluateChannelHealth(
     }
   }
   if (snapshot.connected === false) {
+    const lastDisconnectAt =
+      snapshot.lastDisconnect &&
+      typeof snapshot.lastDisconnect !== "string" &&
+      Number.isFinite(snapshot.lastDisconnect.at)
+        ? snapshot.lastDisconnect.at
+        : null;
+    // A disconnect is current only when its producer recorded it inside this
+    // account lifecycle; patch-merged timestamps from prior runs grant no grace.
+    const disconnectBelongsToLifecycle =
+      lastDisconnectAt != null && (lastStartAt == null || lastDisconnectAt >= lastStartAt);
+    if (
+      disconnectBelongsToLifecycle &&
+      Math.max(0, policy.now - lastDisconnectAt) < CHANNEL_RECONNECT_GRACE_MS
+    ) {
+      return { healthy: true, reason: "reconnect-grace" };
+    }
     return { healthy: false, reason: "disconnected" };
   }
   // App-level events are not socket liveness: quiet Slack/Discord workspaces can

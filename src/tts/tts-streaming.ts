@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
+import { normalizeSpeechText } from "./speech-text.js";
 import type { TtsStreamResult, TtsSynthesisStreamResult } from "./tts-runtime-types.js";
 import { executeTtsProviderAttempts, resolveTtsRequestSetup } from "./tts-synthesis-support.js";
 import { resolveTtsSynthesisTarget } from "./tts-synthesis.js";
@@ -38,7 +39,7 @@ export async function streamSpeech(params: {
     config,
     persona,
     providers,
-    synthesisText: params.text,
+    synthesisText: normalizeSpeechText(params.text),
     providerOverrides: params.overrides?.providerOverrides,
     timeoutMs: params.timeoutMs,
     target,

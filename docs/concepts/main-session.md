@@ -33,8 +33,8 @@ coding/CLI sessions under **Coding**.
 The main session is not just a chat log; it is the place where your agent's
 world converges:
 
-- **Group activity.** Group and room sessions stay isolated by default (see
-  below), but under the default DM scope the main session automatically watches them.
+- **Group activity.** Under `session.groupScope: "per-group"` (the default),
+  group and room sessions stay isolated while the main session automatically watches them.
   Activity queues up as compact notices — coalesced per conversation, never
   one wake-up per message — and the agent sees them the next time it runs: on
   your next message or on a scheduled heartbeat. Under the default `tree`
@@ -97,12 +97,13 @@ to. If several people can message your agent, isolate DMs:
 }
 ```
 
-With an isolating scope, each sender gets their own session, group watching
-from the main session is disabled, and cross-conversation memory recall
-defaults off. `openclaw security audit` recommends isolation when it detects
-multiple DM senders. The full scope matrix, identity linking, and per-route
-overrides are covered in [Session management](/concepts/session) and
-[Channel routing](/channels/channel-routing).
+With an isolating scope, each sender gets their own session and
+cross-conversation memory recall defaults off. Group watching remains controlled
+independently by `session.groupScope`: `per-group` keeps ambient main-session
+visibility, while `main` puts the room in the main conversation directly.
+`openclaw security audit` recommends DM isolation when it detects multiple
+senders. The full scope matrix, identity linking, and per-route overrides are
+covered in [Session management](/concepts/session) and [Channel routing](/channels/channel-routing).
 
 Groups and rooms use separate sessions by default. To make selected trusted
 team rooms part of the rolling main conversation, set

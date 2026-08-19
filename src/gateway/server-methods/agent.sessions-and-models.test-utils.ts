@@ -2553,7 +2553,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves selected-global agent id on cached accepted responses", async () => {
+  it("preserves accepted session and runtime metadata on cached responses", async () => {
     const context = makeContext();
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
@@ -2569,6 +2569,11 @@ describe("gateway agent handler", () => {
         sessionKey: "global",
         agentId: "work",
         status: "accepted",
+        runtime: {
+          harness: "claude-cli",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
       },
     });
     const respond = vi.fn();
@@ -2588,6 +2593,11 @@ describe("gateway agent handler", () => {
       sessionKey: "global",
       agentId: "work",
       status: "in_flight",
+      runtime: {
+        harness: "claude-cli",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });

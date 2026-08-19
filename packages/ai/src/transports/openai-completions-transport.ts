@@ -1,7 +1,7 @@
 import type { Context, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { codeModeToolSurfaceObserver, type OpenAICompletionsOptions } from "../provider-options.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { tagUnresolvedTextAsCommentary } from "../utils/assistant-text-phase.js";
 import {
@@ -241,7 +241,12 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
             ?.openclawCodeModeToolSurface === true
         ) {
           const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
-          enforceCodeModeResponsesToolSurface(params, visibleToolNames);
+          enforceCodeModeResponsesToolSurface(
+            params,
+            visibleToolNames,
+            undefined,
+            codeModeToolSurfaceObserver.get(options),
+          );
           assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
         const compat = getCompat(model as OpenAIModeModel);

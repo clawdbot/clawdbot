@@ -1,4 +1,5 @@
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -99,6 +100,7 @@ function resolveOpenClawExecPolicyFromConfig(params: {
 }
 
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {
+  permissionMode?: EmbeddedRunAttemptParamsV2["permissionMode"];
   execOverrides?: {
     mode?: unknown;
     security?: unknown;
@@ -108,6 +110,9 @@ export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   config?: OpenClawConfig;
   agentId?: string;
 }): OpenClawExecPolicyForCodexAppServer {
+  if (params.permissionMode === "full") {
+    return { ...resolveOpenClawExecPolicyForMode("full"), touched: true };
+  }
   const basePolicy = resolveOpenClawExecPolicyFromConfig({
     config: params.config,
     agentId: params.agentId,

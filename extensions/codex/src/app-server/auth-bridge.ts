@@ -339,7 +339,10 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
       'Codex remote-exec cloud placement requires prepared OpenAI auth. Configure an OpenAI API-key, OAuth, or token profile and use appServer.homeScope="agent"; ambient credentials and native Codex auth are not allowed.',
     );
   }
-  if (params.authRequirement === "api-key" && !usesNativeHome) {
+  if (usesNativeHome) {
+    return { nativeAuthProfile: true };
+  }
+  if (params.authRequirement === "api-key") {
     const apiKey = params.resolvedApiKey?.trim();
     if (!apiKey) {
       throw new Error("Prepared Codex API-key route is missing its resolved API key.");
@@ -357,10 +360,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
     agentDir: params.agentDir,
     config: params.config,
   });
-  if (
-    usesNativeHome ||
-    (params.authRequirement !== "subscription" && !params.requirePreparedAuth)
-  ) {
+  if (params.authRequirement !== "subscription" && !params.requirePreparedAuth) {
     return { authProfileId, nativeAuthProfile };
   }
   if (!authProfileId || (params.authRequirement === "subscription" && !nativeAuthProfile)) {

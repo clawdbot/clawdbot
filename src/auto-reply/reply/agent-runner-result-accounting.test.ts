@@ -4,6 +4,7 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 
 const mocks = vi.hoisted(() => ({
+  persistRunSessionUsage: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
 }));
 
@@ -64,7 +65,7 @@ vi.mock("./reply-usage-state.js", () => ({
 
 vi.mock("./session-run-accounting.js", () => ({
   incrementRunCompactionCount: vi.fn(async () => undefined),
-  persistRunSessionUsage: vi.fn(async () => undefined),
+  persistRunSessionUsage: (params: unknown) => mocks.persistRunSessionUsage(params),
 }));
 
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
@@ -165,6 +166,32 @@ function createParams(
 describe("accountFollowupTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("forwards typed runtime context provenance to session persistence", async () => {
+    const params = createParams();
+    const result = params.execution.execution.outcome;
+    if (result.kind !== "settled") {
+      throw new Error("expected settled test execution");
+    }
+    result.result.meta.agentMeta = {
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "codex",
+      contextTokens: 1_000_000,
+      contextTokensSource: "runtime",
+    };
+
+    await accountFollowupTurn(params);
+
+    expect(mocks.persistRunSessionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "codex",
+        contextTokensUsed: 1_000_000,
+        contextTokensSource: "runtime",
+      }),
+    );
   });
 
   it.each([

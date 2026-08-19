@@ -50,7 +50,11 @@ import {
   normalizeControlPlaneUpdateResult,
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
-import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
+import {
+  resolveUpdateInstallSurface,
+  runGatewayUpdate,
+  runGatewayUpdatePreflight,
+} from "../../infra/update-runner.js";
 import {
   getUpdateAvailable,
   getUpdateEffectiveChannel,
@@ -335,6 +339,13 @@ export const updateHandlers: GatewayRequestHandlers = {
         : false;
       const requiresManagedServiceHandoff =
         installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
+      const managedGitPreflightFailure =
+        installSurface.kind === "git" &&
+        effectiveChannel === "dev" &&
+        hasHandoffContext &&
+        !isGatewayExternallySupervised()
+          ? await runGatewayUpdatePreflight(installRoot, timeoutMs, adoptedDevTarget)
+          : undefined;
       if (isGatewayExternallySupervised()) {
         const beforeVersion = installSurface.root
           ? await readPackageVersion(installSurface.root)
@@ -373,6 +384,8 @@ export const updateHandlers: GatewayRequestHandlers = {
           steps: [],
           durationMs: 0,
         };
+      } else if (managedGitPreflightFailure) {
+        result = managedGitPreflightFailure;
       } else if (requiresManagedServiceHandoff) {
         if (!installRoot) {
           throw new Error("managed update install root is unavailable");

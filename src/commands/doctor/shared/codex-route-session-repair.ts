@@ -174,8 +174,9 @@ function repairProviderlessCodexSessionOverride(
     delete entry.model;
     delete entry.modelProvider;
   }
-  if (entry.contextTokens !== undefined) {
+  if (entry.contextTokens !== undefined || entry.contextTokensSource !== undefined) {
     delete entry.contextTokens;
+    delete entry.contextTokensSource;
   }
   if (entry.contextBudgetStatus !== undefined) {
     delete entry.contextBudgetStatus;

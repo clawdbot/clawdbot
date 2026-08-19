@@ -114,7 +114,7 @@ describe("doctor runtime tool schema checks", () => {
     });
     mocks.readGatewayServiceState.mockReset().mockResolvedValue({
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: true,
       env: {},
       command: { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" },
@@ -573,7 +573,7 @@ describe("doctor gateway runtime checks", () => {
     });
     mocks.readGatewayServiceState.mockReset().mockResolvedValue({
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: true,
       env: {},
       command: { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" },
@@ -648,7 +648,7 @@ describe("doctor gateway runtime checks", () => {
   it("reports missing local gateway daemon service", async () => {
     mocks.readGatewayServiceState.mockResolvedValueOnce({
       installed: false,
-      loaded: false,
+      loadState: { status: "not-loaded" },
       running: false,
       env: {},
       command: null,

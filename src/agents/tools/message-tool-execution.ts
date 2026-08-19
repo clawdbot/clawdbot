@@ -19,7 +19,7 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
+import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -38,6 +38,10 @@ import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-to
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import {
+  attachEmbeddedMessageDeliveryFact,
+  projectEmbeddedMessageDeliveryFact,
+} from "../embedded-agent-message-delivery.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import {
   readGatewayCallOptions,
@@ -366,7 +370,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const deliveryRunId = options?.runId ?? executionIdentityToken?.runId;
       const trustedTurnContext =
         resolvedAgentId && options?.agentSessionKey
-          ? resolveMessageActionTurnCapability({
+          ? messageActionTurnCapability.resolveMessageActionTurnCapability({
               token: options.messageActionTurnCapability,
               agentId: resolvedAgentId,
               runId: options.runId,
@@ -648,8 +652,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           params: actionParams,
           actionOrigin: "message-tool",
           defaultAccountId: accountId ?? undefined,
-          requesterAccountId: trustedTurnContext?.requesterAccountId,
-          requesterSenderId: trustedTurnContext?.requesterSenderId,
+          ...messageActionTurnCapability.selectMessageActionRequesterIdentity(trustedTurnContext),
           messageActionAuthorization: {
             requesterAccountId: trustedTurnContext?.requesterAccountId,
             requesterSenderId: trustedTurnContext?.requesterSenderId,
@@ -704,13 +707,17 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         resolveTrustedDecisionChannel(result.channel, preparedMessageToolCatalog),
       );
       const toolResult = getToolResult(result);
+      const messageDelivery = projectEmbeddedMessageDeliveryFact(result);
       const normalizationNotice = result.kind === "send" ? result.normalization?.notice : undefined;
       if (normalizationNotice) {
         const normalizedResult = toolResult ?? jsonResult(result.payload);
-        return {
-          ...normalizedResult,
-          content: [...normalizedResult.content, { type: "text", text: normalizationNotice }],
-        };
+        return attachEmbeddedMessageDeliveryFact(
+          {
+            ...normalizedResult,
+            content: [...normalizedResult.content, { type: "text", text: normalizationNotice }],
+          },
+          messageDelivery,
+        );
       }
       if (
         action === "poll-vote" &&
@@ -739,9 +746,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
       if (toolResult) {
-        return toolResult;
+        return attachEmbeddedMessageDeliveryFact(toolResult, messageDelivery);
       }
-      return jsonResult(result.payload);
+      return attachEmbeddedMessageDeliveryFact(jsonResult(result.payload), messageDelivery);
     },
   };
 }

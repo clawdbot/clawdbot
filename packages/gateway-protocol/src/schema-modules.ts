@@ -51,6 +51,7 @@ export * from "./schema/ui-command.js";
 export * from "./schema/plugin-approvals.js";
 export * from "./schema/plugins.js";
 export * from "./schema/portals.js";
+export * from "./schema/progress-card.js";
 export * from "./schema/projects.js";
 export * from "./schema/wizard.js";
 export * from "./schema/worker-admission.js";

@@ -321,6 +321,37 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(joined).toContain("configured, secret unavailable in this command path");
   });
 
+  it("renders missing gateway credentials canonically before config-only status", async () => {
+    const error = Object.assign(
+      new Error(
+        [
+          "gateway channels.status requires credentials before opening a websocket",
+          "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+          "Config: /tmp/openclaw.json",
+        ].join("\n"),
+      ),
+      {
+        name: "GatewayCredentialsRequiredError",
+        method: "channels.status",
+        configPath: "/tmp/openclaw.json",
+      },
+    );
+    mocks.callGateway.mockRejectedValue(error);
+    mocks.requireValidConfig.mockResolvedValue({ channels: {} });
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: { channels: {} },
+      effectiveConfig: { channels: {} },
+      diagnostics: [],
+    });
+    const { runtime, logs, errors } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ probe: false }, runtime as never);
+
+    expect(errors).toEqual([error.message]);
+    expect(errors.join("\n")).not.toContain("Gateway not reachable:");
+    expect(logs.join("\n")).toContain("Gateway auth unavailable; showing config-only status.");
+  });
+
   it("prefers resolved snapshots when command-local SecretRef resolution succeeds", async () => {
     mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
     mocks.requireValidConfig.mockResolvedValue({ secretResolved: false, channels: {} });

@@ -194,7 +194,6 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // Budget so small that even one compact skill can't fit
     const prompt = buildPrompt(skills, { maxChars: 10 });
     expect(prompt).toBe("");
-    expect(prompt.length).toBeLessThanOrEqual(10);
   });
 
   it.each([0, 1, 10, 64])("never exceeds a tiny configured prompt budget of %i", (maxChars) => {
@@ -229,6 +228,30 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).toContain("<name>weather</name>");
     expect(prompt).toContain("</available_skills>");
     expect(prompt).not.toContain("REMOTE_NOTE_");
+  });
+
+  it("preserves the exact full-catalog bytes when a remote note fits", () => {
+    const skill = makeSkill("weather", "Get weather data");
+    const remoteNote = "Remote node skills are available.";
+    const catalog = formatSkillsForPromptCore([skill]);
+    const expected = [remoteNote, catalog].join("\n");
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(skill)],
+      config: {
+        skills: { limits: { maxSkillsPromptChars: expected.length } },
+      } satisfies OpenClawConfig,
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: remoteNote,
+        },
+      },
+    });
+
+    expect(prompt).toBe(expected);
+    expect(prompt.length).toBeLessThanOrEqual(expected.length);
   });
 
   it("budgets the final rendered prompt including versions and limit notices", () => {

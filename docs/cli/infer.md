@@ -111,6 +111,10 @@ A good infer-based skill maps common user intents to the right subcommand, inclu
   agent; explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
   remains aggregate; `--agent` scopes saved-auth and per-agent selection facts. Gateway-owned TTS
   provider state remains Gateway-global, so `tts providers --gateway` does not accept `--agent`.
+- Runner commands that resolve agent-owned model or auth state (`model run`, `image generate`,
+  `image edit`, `image describe`, `image describe-many`, `video generate`, `embedding create`, and
+  `model auth logout`) also accept `--agent <id>`. They resolve an explicit id first, then
+  `agents.defaults.systemAgent.agentId`, then the sole configured agent.
 - Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.

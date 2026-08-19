@@ -636,22 +636,17 @@ suite.define(() => {
         .toBe(2);
 
       // Group by "None" flattens the category sections into the plain list. The
-      // confirm left the pointer over the dialog rather than the sidebar, and
-      // section actions only surface on hover, so reveal this one first.
-      const sortSessionsButton = page.locator(
-        "button.sidebar-session-sort:not(.sidebar-session-new)",
-      );
-      await page
-        .locator('[data-session-section="ungrouped"] .sidebar-recent-sessions__head')
-        .hover();
-      await sortSessionsButton.click();
+      // confirm left the pointer over the dialog rather than the sidebar; the
+      // global toolbar remains available without revealing a section action.
+      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
+      await filterAndSortButton.click();
       const showAutomationSessions = page.getByRole("menuitemcheckbox", {
         name: "Show automation sessions",
       });
       await activateSelfRemovingControl(showAutomationSessions);
-      await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
+      await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("false");
 
-      await sortSessionsButton.click();
+      await filterAndSortButton.click();
       await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
       await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-groupby-sort-menu.png");
@@ -677,12 +672,12 @@ suite.define(() => {
           return Math.abs(automationRight - groupingRight);
         })
         .toBeLessThanOrEqual(1);
-      await sortSessionsButton.click();
-      await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
+      await filterAndSortButton.click();
+      await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);
       await captureUiProof(page, "sidebar-groupby-sort-menu-closed.png");
 
-      await sortSessionsButton.click();
+      await filterAndSortButton.click();
       await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
@@ -911,9 +906,8 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
-      await sortSessionsButton.locator("..").hover();
-      await sortSessionsButton.click();
+      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
+      await filterAndSortButton.click();
       await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
       const flatSection = page.locator('[data-session-section="ungrouped"]');
       await flatSection

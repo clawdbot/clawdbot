@@ -78,7 +78,7 @@ export function createApplicationGateway(
   createClient: GatewayClientFactory = defaultClientFactory,
   options: {
     persistDefaultConnectionSettings?: boolean;
-    basePath?: string;
+    resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
   } = {},
 ): ApplicationGateway {
@@ -319,7 +319,7 @@ export function createApplicationGateway(
         settings: { token: nextConnection.token },
         password: nextConnection.password,
       }),
-      options.basePath,
+      options.resourceBasePath,
     );
     updateSettings(
       {
@@ -390,7 +390,7 @@ export function createApplicationGateway(
             settings: { token: nextConnection.token },
             password: nextConnection.password,
           }),
-          options.basePath,
+          options.resourceBasePath,
         );
         connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         if (persistConnectionSettings) {
