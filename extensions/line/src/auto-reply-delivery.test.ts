@@ -13,8 +13,10 @@ import {
 } from "./auto-reply-delivery.test-helpers.js";
 import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
-import { createLocationMessage as createRealLocationMessage } from "./send.js";
-import { createFlexMessage as createProviderFlexMessage } from "./send.js";
+import {
+  createFlexMessage as createProviderFlexMessage,
+  createLocationMessage as createRealLocationMessage,
+} from "./send.js";
 
 describe("deliverLineAutoReply", () => {
   it.each([
