@@ -190,10 +190,6 @@ openclaw-board-widget-cell {
   padding: 0 6px;
 }
 
-.board-widget__hover-zone {
-  display: none;
-}
-
 .board-widget__drag-handle,
 .board-widget__resize-handle {
   background: transparent;
@@ -609,20 +605,8 @@ openclaw-workboard-board-widget {
     grid-template-rows: minmax(0, 1fr);
   }
 
-  /* A small centered hover zone reveals centered host chrome without turning
-     the whole iframe into a trigger. Coarse pointers keep the base 38px
-     in-flow grid row that BOARD_WIDGET_TOUCH_BAR_PX mirrors. */
-  .board-widget__hover-zone {
-    display: block;
-    height: 44px;
-    left: 50%;
-    position: absolute;
-    top: 0;
-    transform: translateX(-50%);
-    width: min(180px, 40%);
-    z-index: 4;
-  }
-
+  /* Fine pointers center a compact overlay; coarse pointers keep the base 38px
+     in-flow row that BOARD_WIDGET_TOUCH_BAR_PX mirrors. */
   .board-widget__bar {
     backdrop-filter: blur(6px);
     background: color-mix(in srgb, var(--board-surface) 92%, transparent);
@@ -678,31 +662,20 @@ openclaw-workboard-board-widget {
   .board-widget__resize-handle {
     opacity: 0;
     transition:
-      opacity 100ms ease 500ms,
-      visibility 0s linear 600ms;
+      opacity 100ms ease,
+      visibility 0s linear 100ms;
     visibility: hidden;
   }
 
-  /* The bounded zone owns hover even when the iframe owns the surrounding card. */
-  .board-widget__hover-zone:hover ~ .board-widget__bar,
-  .board-widget__bar:hover {
+  /* Hover-intent: the pointer must rest on the card briefly before chrome
+     appears, so quick clicks into widget content never race the overlay.
+     Delay-only overrides keep the base fade, and reduced-motion's
+     transition: none stays authoritative because no transition-property is
+     redeclared here. */
+  .board-widget:hover .board-widget__bar,
+  .board-widget:hover .board-widget__resize-handle {
     opacity: 1;
     transition-delay: 350ms;
-    visibility: visible;
-  }
-
-  /* The center zone owns coordinated pointer reveal. The transparent handle
-     remains the only secondary host target: grace keeps it visible in transit,
-     then its bounded corner pins the resize affordance. */
-  .board-widget__hover-zone:hover ~ .board-widget__resize-handle {
-    opacity: 1;
-    transition-delay: 350ms, 350ms;
-    visibility: visible;
-  }
-
-  .board-widget__resize-handle:hover {
-    opacity: 1;
-    transition-delay: 0s;
     visibility: visible;
   }
 
@@ -730,19 +703,16 @@ openclaw-workboard-board-widget {
     position: absolute;
     right: 10px;
     top: 10px;
-    transition: opacity 120ms ease 300ms;
+    transition: opacity 120ms ease;
     width: 6px;
     z-index: 4;
   }
 
-  .board-widget__hover-zone:hover ~ .board-widget__grant-dot,
-  .board-widget__bar:hover ~ .board-widget__grant-dot,
-  .board-widget__resize-handle:hover ~ .board-widget__grant-dot,
+  .board-widget:hover .board-widget__grant-dot,
   .board-widget:focus-within .board-widget__grant-dot,
   .board-widget--dragging .board-widget__grant-dot,
   .board-widget:has(.board-widget__menu[open]) .board-widget__grant-dot {
     opacity: 0;
-    transition-delay: 0s;
   }
 
   /* Frameless is a fine-pointer treatment only: touch keeps the card shell
@@ -755,9 +725,7 @@ openclaw-workboard-board-widget {
     box-shadow: none;
   }
 
-  .board-widget--frameless:has(> .board-widget__hover-zone:hover),
-  .board-widget--frameless:has(> .board-widget__bar:hover),
-  .board-widget--frameless:has(> .board-widget__resize-handle:hover),
+  .board-widget--frameless:hover,
   .board-widget--frameless:focus-within,
   .board-widget--frameless:has(.board-widget__menu[open]) {
     border-color: var(--board-line);
