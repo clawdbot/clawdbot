@@ -28,7 +28,7 @@ import {
   applyResponsesServiceTierPricing,
   convertResponsesMessages,
   createResponsesAssistantOutput,
-  hasNullThinkingLevelOptOut,
+  shouldDisableResponsesReasoningSerialization,
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
@@ -113,8 +113,10 @@ export const streamSimpleOpenAIResponses: StreamFunction<
 
   const base = buildBaseOptions(model, options, apiKey);
   const replayOptions = options as OpenAIResponsesReplayOptions | undefined;
-  const disableReasoningSerialization =
-    options?.reasoning !== undefined && hasNullThinkingLevelOptOut(model, options.reasoning);
+  const disableReasoningSerialization = shouldDisableResponsesReasoningSerialization(
+    model,
+    options?.reasoning,
+  );
 
   return streamOpenAIResponses(model, context, {
     ...base,

@@ -140,4 +140,33 @@ describe("OpenAI Responses provider", () => {
       include: ["reasoning.encrypted_content"],
     });
   });
+
+  it("preserves Grok 4.5 off-to-low serialization through simple Responses", async () => {
+    const result = await streamSimpleOpenAIResponses(
+      model({
+        provider: "xai",
+        id: "grok-4.5",
+        baseUrl: "https://api.x.ai/v1",
+        thinkingLevelMap: {
+          off: null,
+          minimal: "low",
+          low: "low",
+          medium: "medium",
+          high: "high",
+        },
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      }),
+      context,
+      { apiKey: "proof-key", reasoning: "off" },
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(openAiMockState.params[0]).toMatchObject({
+      reasoning: { effort: "low", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
+  });
 });

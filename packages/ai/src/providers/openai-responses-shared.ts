@@ -177,7 +177,7 @@ function isResponsesReasoningEffortDisabled<TApi extends Api>(model: Model<TApi>
   );
 }
 
-export function hasNullThinkingLevelOptOut<TApi extends Api>(
+function hasNullThinkingLevelOptOut<TApi extends Api>(
   model: Model<TApi>,
   reasoning: string | undefined,
 ): boolean {
@@ -187,6 +187,16 @@ export function hasNullThinkingLevelOptOut<TApi extends Api>(
   return Object.entries(model.thinkingLevelMap).some(
     ([level, value]) => level === reasoning && value === null,
   );
+}
+
+export function shouldDisableResponsesReasoningSerialization<TApi extends Api>(
+  model: Model<TApi>,
+  reasoning: string | undefined,
+): boolean {
+  if (!hasNullThinkingLevelOptOut(model, reasoning)) {
+    return false;
+  }
+  return reasoning !== "off" || clampThinkingLevel(model, reasoning) === "off";
 }
 
 function isModelThinkingLevel(value: string): value is ModelThinkingLevel {
@@ -234,7 +244,7 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: SimpleStreamOptions["reasoning"] | undefined,
 ): OpenAIApiReasoningEffort | undefined {
-  if (hasNullThinkingLevelOptOut(model, reasoning)) {
+  if (shouldDisableResponsesReasoningSerialization(model, reasoning)) {
     return undefined;
   }
   const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;

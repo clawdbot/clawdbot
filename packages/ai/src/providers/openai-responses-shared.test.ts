@@ -368,6 +368,27 @@ describe("Responses reasoning effort", () => {
     expect(resolveResponsesReasoningEffort(optOutModel, "high")).toBeUndefined();
   });
 
+  it("preserves Grok 4.5 off-to-low clamping despite an off null map entry", () => {
+    const grok45Model = {
+      ...nativeOpenAIModel,
+      provider: "xai",
+      id: "grok-4.5",
+      thinkingLevelMap: {
+        off: null,
+        minimal: "low",
+        low: "low",
+        medium: "medium",
+        high: "high",
+      },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+      },
+    } satisfies Model<"openai-responses">;
+
+    expect(resolveResponsesReasoningEffort(grok45Model, "off")).toBe("low");
+  });
+
   it("maps compat reasoning effort before serializing Responses payload", () => {
     const params = {} as ResponseCreateParamsStreaming;
     const compatModel = {
