@@ -14,6 +14,7 @@ import {
   getCurrentActiveNodeContext,
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
 
@@ -60,11 +61,17 @@ export function buildSystemPromptParams(params: {
     : resolveSystemPromptRepoRoot(params);
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userDate = formatDateStamp(Date.now(), userTimezone);
-  const sessionUrl = resolveControlUiSessionUrl(params.config, {
-    sessionKey: params.runtime.sessionKey,
-    fallbackAgentId: params.agentId,
-    exactKey: true,
-  });
+  const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
+  // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
+  // defeating byte-identical prompt-prefix reuse across runs of the same job.
+  const sessionUrl =
+    runId === undefined
+      ? resolveControlUiSessionUrl(params.config, {
+          sessionKey: params.runtime.sessionKey,
+          fallbackAgentId: params.agentId,
+          exactKey: true,
+        })
+      : undefined;
   return {
     runtimeInfo: {
       agentId: params.agentId,
