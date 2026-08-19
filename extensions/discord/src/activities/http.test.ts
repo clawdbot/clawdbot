@@ -3,6 +3,7 @@ import { createServer, request as createHttpRequest, type Server } from "node:ht
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
@@ -251,6 +252,20 @@ describe("Discord Activity HTTP OAuth", () => {
     {
       name: "the client secret is unresolved",
       config: createActivityTestConfig({ clientSecret: "" }),
+    },
+    {
+      name: "the bot token is unresolved",
+      config: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+            activities: {
+              clientSecret: "testsec",
+              applicationId: "123456789012345678",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
     },
   ])("leaves the public prefix externally absent when $name", async ({ config }) => {
     const base = await startServer(createActivityTestRuntime(config));
