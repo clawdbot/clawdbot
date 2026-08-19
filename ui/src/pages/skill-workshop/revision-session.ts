@@ -36,7 +36,7 @@ async function loadRevisionSessionsForAgent(
   return context.sessions.list({ agentId });
 }
 
-export type SkillWorkshopRevisionTarget = {
+type SkillWorkshopRevisionTarget = {
   sessionKey: string;
   sessionId?: string;
   targetAgentId: string;

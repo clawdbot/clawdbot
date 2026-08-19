@@ -36,7 +36,7 @@ type AdmissionExecutor = (
   ) => SkillWorkshopRevisionAdmissionEntry | null,
 ) => Promise<{ sessionKey: string }>;
 
-export type SkillWorkshopRevisionAdmissionRun = {
+type SkillWorkshopRevisionAdmissionRun = {
   completion: Promise<SkillWorkshopRevisionAdmissionOutcome>;
   entry: SkillWorkshopRevisionAdmissionEntry;
 };
