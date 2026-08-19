@@ -257,7 +257,7 @@ async function authorizeDesktop(params: {
   // screen before trusting it.
   let lastLink = "";
   for (let attempt = 1; attempt <= 6; attempt += 1) {
-    let link = "";
+    let link: string;
     try {
       const qr = await params.operations.sshRun({
         command: renderReadQrLink(),

@@ -72,6 +72,9 @@ RUN set -eux; \
     chmod 0644 /var/lib/crabbox/telegram-desktop-version; \
     rm -rf "$install_root" /var/lib/apt/lists/*
 
+# Fail the build if the base ever drops the account this image defaults to.
+RUN getent passwd ubuntu >/dev/null
+
 # Crabbox launches leases with an explicit --user root, so its bootstrap still runs
 # privileged; this default only bounds a direct `docker run` of the image.
 USER ubuntu
