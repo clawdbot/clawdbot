@@ -381,7 +381,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
   const entryResolved = (catalog: readonly ModelCatalogEntry[]) =>
     hasResolvedThinkingCatalogEntry({ catalog, provider: params.provider, model: params.model });
   const augmentHarnessCatalog = async (snapshot: ModelCatalogSnapshot) => {
-    const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
+    const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
     const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
     const augmented = await augmentModelCatalogWithAgentHarness({
       cfg: params.config,
