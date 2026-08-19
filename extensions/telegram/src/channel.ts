@@ -104,6 +104,7 @@ import {
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
+import { reconcileTelegramUnknownSend } from "./unknown-send-reconciliation.js";
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 
@@ -251,7 +252,7 @@ const telegramChannelOutbound = createTelegramOutboundAdapter({
   preferFinalAssistantVisibleText: true,
 });
 
-const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawConfig>({
+const telegramMessageAdapterBase = createChannelMessageAdapterFromOutbound<OpenClawConfig>({
   id: "telegram",
   live: {
     capabilities: {
@@ -274,6 +275,19 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
   },
   outbound: telegramChannelOutbound,
 });
+
+const telegramMessageAdapter = {
+  ...telegramMessageAdapterBase,
+  durableFinal: {
+    ...telegramMessageAdapterBase.durableFinal,
+    capabilities: {
+      ...telegramMessageAdapterBase.durableFinal?.capabilities,
+      reconcileUnknownSend: true,
+    },
+    reconcileUnknownSendKinds: { text: true, media: true },
+    reconcileUnknownSend: reconcileTelegramUnknownSend,
+  },
+} satisfies typeof telegramMessageAdapterBase;
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: ["react", "edit", "delete"],

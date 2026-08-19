@@ -3,6 +3,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveNonNegativeIntegerOption,
 } from "../../packages/normalization-core/src/number-coercion.js";
+import { asNullableObjectRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { computeBackoffSchedule } from "../../packages/retry/src/index.js";
 import { sleep } from "../utils/sleep.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
@@ -23,6 +24,19 @@ const PRE_CONNECT_ERROR_CODES = new Set([
   "ENETDOWN",
   "ENETUNREACH",
   "EHOSTUNREACH",
+]);
+// TLS negotiation fails before any HTTP bytes are written, so the unambiguous
+// handshake/verification codes are no-send proof. A mid-stream TLS record
+// failure could reuse a code; that residual ambiguity is an accepted tradeoff.
+const TLS_HANDSHAKE_ERROR_CODE_RE = /^(?:ERR_TLS_|ERR_SSL_)/;
+const TLS_CERT_VERIFY_ERROR_CODES = new Set([
+  "CERT_HAS_EXPIRED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "HOSTNAME_MISMATCH",
 ]);
 const TRANSPORT_ERROR_CODE_RE =
   /^(?:E(?:AI_|CONN|NET|HOST|ADDR|PIPE|TIMEDOUT|SOCKET)|UND_ERR_|ERR_(?:NETWORK|HTTP2|QUIC|TLS|SSL))/;
@@ -103,10 +117,21 @@ function isProvenPreConnectCandidate(candidate: unknown): boolean {
   if (code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_DNS_RESOLVE_FAILED") {
     return true;
   }
-  if (!code || !PRE_CONNECT_ERROR_CODES.has(code) || !candidate || typeof candidate !== "object") {
+  if (!code || !candidate || typeof candidate !== "object") {
     return false;
   }
+  if (TLS_HANDSHAKE_ERROR_CODE_RE.test(code) || TLS_CERT_VERIFY_ERROR_CODES.has(code)) {
+    return true;
+  }
   const syscall = (candidate as { syscall?: unknown }).syscall;
+  // Generic ETIMEDOUT can fire after the request was written; only the
+  // connect-stage variant proves the request never reached the platform.
+  if (code === "ETIMEDOUT") {
+    return syscall === "connect";
+  }
+  if (!PRE_CONNECT_ERROR_CODES.has(code)) {
+    return false;
+  }
   return syscall === "connect" || syscall === "getaddrinfo";
 }
 
@@ -171,6 +196,100 @@ export function findPlatformMessageRejectedError(
     }
   }
   return undefined;
+}
+
+type OutboundSendFailureClassification =
+  | { kind: "provably_not_sent"; retryable: true; retryAfterMs?: number }
+  | { kind: "provably_not_sent"; retryable: false }
+  | { kind: "ambiguous" };
+
+const isHttpStatusNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599;
+
+function readHttpStatus(value: unknown): number | undefined {
+  if (isHttpStatusNumber(value)) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d{3}$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    return isHttpStatusNumber(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function readRetryAfterMs(record: Record<string, unknown>): number | undefined {
+  const retryAfterSeconds = asNullableObjectRecord(record.parameters)?.retry_after;
+  return typeof retryAfterSeconds === "number" &&
+    Number.isFinite(retryAfterSeconds) &&
+    retryAfterSeconds >= 0
+    ? retryAfterSeconds * 1000
+    : undefined;
+}
+
+// `error_code` is a Bot-API-style response field and is response proof on its
+// own; bare `status`/`statusCode` numbers also appear on local errors, so they
+// count only next to response evidence. Keeps non-response failures ambiguous.
+const PLATFORM_RESPONSE_EVIDENCE_KEYS = [
+  "description",
+  "parameters",
+  "response",
+  "body",
+  "data",
+  "headers",
+] as const;
+
+function readPlatformErrorResponse(
+  candidate: unknown,
+): { status: number; retryAfterMs?: number } | undefined {
+  const record = asNullableObjectRecord(candidate);
+  if (!record) {
+    return undefined;
+  }
+  const status =
+    readHttpStatus(record.error_code) ??
+    (PLATFORM_RESPONSE_EVIDENCE_KEYS.some((key) => record[key] !== undefined)
+      ? (readHttpStatus(record.status) ?? readHttpStatus(record.statusCode))
+      : undefined);
+  if (status === undefined) {
+    return undefined;
+  }
+  const retryAfterMs = readRetryAfterMs(record);
+  return retryAfterMs === undefined ? { status } : { status, retryAfterMs };
+}
+
+/**
+ * Classifies one outbound send failure for retry policy. "Provably not sent"
+ * requires proof that no recipient-visible send occurred: a provider no-send
+ * marker, a connection-phase transport failure, or a platform API error
+ * response (the platform rejected the request, so nothing was delivered).
+ * Anything else — e.g. a socket that died after the request bytes were
+ * written with no response — stays ambiguous and must never blind-retry.
+ */
+export function classifyOutboundSendFailure(err: unknown): OutboundSendFailureClassification {
+  if (findPlatformMessageRejectedError(err)) {
+    return { kind: "provably_not_sent", retryable: false };
+  }
+  for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
+    const response = readPlatformErrorResponse(candidate);
+    if (!response || response.status < 400) {
+      continue;
+    }
+    // 5xx and 429 are transient platform rejections; the platform still
+    // decided the request, so a bounded retry cannot duplicate a send.
+    // Other 4xx are semantic rejections a byte-identical retry cannot fix.
+    if (response.status >= 500 || response.status === 429) {
+      return {
+        kind: "provably_not_sent",
+        retryable: true,
+        ...(response.retryAfterMs !== undefined ? { retryAfterMs: response.retryAfterMs } : {}),
+      };
+    }
+    return { kind: "provably_not_sent", retryable: false };
+  }
+  if (isProvenDeliveryNotSentError(err)) {
+    return { kind: "provably_not_sent", retryable: true };
+  }
+  return { kind: "ambiguous" };
 }
 
 export function computeBackoffMs(retryCount: number): number {

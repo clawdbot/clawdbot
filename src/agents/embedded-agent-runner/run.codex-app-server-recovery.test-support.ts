@@ -80,6 +80,19 @@ function successAttempt(): EmbeddedRunAttemptResult {
   });
 }
 
+function codexReasoningStallIdleTimeoutAttempt(): EmbeddedRunAttemptResult {
+  // The production stall shape: the model completed a reasoning item, produced
+  // zero assistant text, and the stream then went silent past the idle window.
+  return codexTurnCompletionIdleTimeoutAttempt({
+    itemLifecycle: {
+      startedCount: 1,
+      completedCount: 1,
+      activeCount: 0,
+      completedReasoningCount: 1,
+    },
+  });
+}
+
 function ordinaryPromptFailureAttempt(): EmbeddedRunAttemptResult {
   return makeAttemptResult({
     assistantTexts: [],
@@ -261,6 +274,45 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         }
       ).suppressNextUserMessagePersistence,
     ).toBe(true);
+  });
+
+  it("auto-replays exactly once after a reasoning-only completion idle timeout", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(codexReasoningStallIdleTimeoutAttempt())
+      .mockResolvedValueOnce(successAttempt());
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-reasoning-stall-auto-replay",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    // The replay's success is the surfaced outcome: no error payload survives.
+    expect(result.meta.error).toBeUndefined();
+    expect(result.payloads?.some((payload) => payload.isError)).not.toBe(true);
+  });
+
+  it("surfaces the original idle timeout when the reasoning-stall replay also stalls", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(codexReasoningStallIdleTimeoutAttempt())
+      .mockResolvedValueOnce(codexReasoningStallIdleTimeoutAttempt());
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-reasoning-stall-replay-exhausted",
+    });
+
+    // Exactly one replay: the second stall surfaces today's timeout payload.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]).toMatchObject({
+      isError: true,
+      text: CODEX_MISSING_TERMINAL_MESSAGE,
+    });
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
   it("returns a timeout payload after a replay-safe turn/completed idle timeout retry is exhausted", async () => {

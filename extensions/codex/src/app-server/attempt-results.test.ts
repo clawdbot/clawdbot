@@ -180,6 +180,43 @@ describe("Codex app-server attempt results", () => {
         }),
       ),
     ).toBe("active_item");
+    // Completed reasoning items are model-internal and never block replay.
+    expect(
+      resolveCodexAppServerReplayBlockedReason(
+        createResult({
+          itemLifecycle: {
+            startedCount: 1,
+            completedCount: 1,
+            activeCount: 0,
+            completedReasoningCount: 1,
+          },
+        }),
+      ),
+    ).toBeUndefined();
+    expect(
+      resolveCodexAppServerReplayBlockedReason(
+        createResult({
+          itemLifecycle: {
+            startedCount: 2,
+            completedCount: 2,
+            activeCount: 0,
+            completedReasoningCount: 1,
+          },
+        }),
+      ),
+    ).toBe("active_item");
+    expect(
+      resolveCodexAppServerReplayBlockedReason(
+        createResult({
+          itemLifecycle: {
+            startedCount: 2,
+            completedCount: 1,
+            activeCount: 1,
+            completedReasoningCount: 1,
+          },
+        }),
+      ),
+    ).toBe("active_item");
   });
 
   it("recognizes invalid image payload errors without matching unsupported image input", () => {

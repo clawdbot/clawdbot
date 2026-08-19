@@ -66,6 +66,9 @@ export class CodexAppServerEventProjector {
   private readonly reasoningProjection: CodexReasoningProjection;
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
+  // Completed reasoning items are model-internal text with no side effect;
+  // replay gating must not treat them as replay-blocking turn activity.
+  private readonly completedReasoningItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
@@ -364,6 +367,7 @@ export class CodexAppServerEventProjector {
       completedCompactionCount: this.completedCompactionCount,
       activeItemCount: this.activeItemIds.size,
       completedItemCount: this.completedItemIds.size,
+      completedReasoningItemCount: this.completedReasoningItemIds.size,
       guardianReviewCount: this.eventProjection.guardianReviewCount,
       toolTelemetry,
       yieldDetected: options?.yieldDetected,
@@ -477,6 +481,9 @@ export class CodexAppServerEventProjector {
     if (itemId) {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
+      if (item?.type === "reasoning") {
+        this.completedReasoningItemIds.add(itemId);
+      }
     }
     this.assistantProjection.recordItemCompleted(item, itemId, this.activeItemIds);
     this.reasoningProjection.recordItem(item);

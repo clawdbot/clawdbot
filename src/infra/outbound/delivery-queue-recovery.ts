@@ -7,12 +7,12 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
+  classifyOutboundSendFailure,
   createDeliveryRecoveryCoordinator,
   createEmptyDeliveryRecoverySummary,
   findPlatformMessageRejectedError,
   getErrnoCode,
   isDeliveryRecoveryRetryEligible,
-  isProvenDeliveryNotSentError,
   resolveDeliveryRecoveryDeadlineMs,
   type ActiveDeliveryRecoveryClaimResult,
   type DeliveryRecoveryDrainDecision,
@@ -58,12 +58,12 @@ import {
   claimDeliveryPlatformSendAttempt,
   failDelivery,
   failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend,
   failPendingDelivery,
   loadPendingDelivery,
   loadPendingDeliveries,
   moveToFailed,
   reserveDeliveryAttempt,
+  resolveNotSentAwareFailureRecorder,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
 import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
@@ -391,7 +391,12 @@ async function applyRecoveryDeliveryAdmission(params: {
   await markDurableDeliveryFailedBestEffort(params.entry, params.log, params.stateDir);
   const failed = await terminalizeWithMediaRetention(params, async (spoolPaths) => {
     const result = await failPendingDelivery(
-      { id: params.entry.id, entry: params.entry, retainSpoolArtifacts: true },
+      {
+        id: params.entry.id,
+        entry: params.entry,
+        retainSpoolArtifacts: true,
+        terminalError: admission.reason,
+      },
       params.stateDir,
     );
     return result.status === "failed" ? spoolPaths : false;
@@ -416,11 +421,13 @@ async function moveEntryToFailedAndCleanup(params: {
   log: RecoveryLogger;
   stateDir?: string;
   attemptId?: string | null;
+  /** Recorded on the terminal row when the entry has no persisted send error. */
+  terminalError?: string;
 }): Promise<void> {
   await terminalizeWithMediaRetention(params, async () =>
     params.attemptId !== undefined
-      ? moveToFailed(params.entry.id, params.stateDir, params.attemptId)
-      : moveToFailed(params.entry.id, params.stateDir),
+      ? moveToFailed(params.entry.id, params.stateDir, params.attemptId, params.terminalError)
+      : moveToFailed(params.entry.id, params.stateDir, undefined, params.terminalError),
   );
 }
 
@@ -540,11 +547,12 @@ async function moveEntryToFailedWithLogging(
   cfg: OpenClawConfig,
   log: RecoveryLogger,
   stateDir?: string,
+  terminalError = "delivery retry budget exhausted",
 ): Promise<boolean> {
   await markDurableDeliveryFailedBestEffort(entry, log, stateDir);
   try {
     const attemptId = recoveryPlatformAttemptId(entry);
-    await moveEntryToFailedAndCleanup({ entry, cfg, log, stateDir, attemptId });
+    await moveEntryToFailedAndCleanup({ entry, cfg, log, stateDir, attemptId, terminalError });
     emitRecoveredTerminalFailure(entry, "delivery retry budget exhausted");
     return true;
   } catch (err) {
@@ -701,7 +709,13 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     return "failed";
   }
   if (operation.state === "unknown") {
-    const moved = await moveEntryToFailedWithLogging(opts.entry, opts.cfg, opts.log, opts.stateDir);
+    const moved = await moveEntryToFailedWithLogging(
+      opts.entry,
+      opts.cfg,
+      opts.log,
+      opts.stateDir,
+      "delivery owner state unknown after platform send",
+    );
     return moved ? "moved-to-failed" : "failed";
   }
   return "continue";
@@ -852,7 +866,11 @@ async function drainQueuedEntry(opts: {
           log: opts.log,
           stateDir: opts.stateDir,
           attemptId,
+          terminalError: errMsg,
         });
+        opts.log.error(
+          `Delivery entry ${entry.id} dead-lettered as ambiguous on ${entry.channel} -> ${entry.to}: ${errMsg}`,
+        );
         emitRecoveredTerminalFailure(entry, errMsg);
         emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
         return "moved-to-failed";
@@ -930,6 +948,7 @@ async function drainQueuedEntry(opts: {
         log: opts.log,
         stateDir: opts.stateDir,
         attemptId: producerClaimId,
+        terminalError: errMsg,
       });
       emitRecoveredTerminalFailure(entry, errMsg);
     } catch (moveErr) {
@@ -1029,12 +1048,13 @@ async function drainQueuedEntry(opts: {
           );
         }
       } else {
-        const recordFailure = failedOutcomes.every((outcome) =>
-          isProvenDeliveryNotSentError(outcome.error),
-        )
-          ? failDeliveryBeforePlatformSend
-          : failDelivery;
-        await recordRecoveredFailure(recordFailure, entry, errMsg, opts.stateDir, producerClaimId);
+        await recordRecoveredFailure(
+          resolveNotSentAwareFailureRecorder(failedOutcomes.map((outcome) => outcome.error)),
+          entry,
+          errMsg,
+          opts.stateDir,
+          producerClaimId,
+        );
       }
       return "failed";
     }
@@ -1162,8 +1182,13 @@ async function drainQueuedEntry(opts: {
       );
       return "failed";
     }
+    const classification = classifyOutboundSendFailure(err);
     const permanentPlatformRejection = findPlatformMessageRejectedError(err);
-    if (permanentPlatformRejection || isPermanentDeliveryError(errMsg)) {
+    const permanentlyRejected =
+      permanentPlatformRejection !== undefined ||
+      isPermanentDeliveryError(errMsg) ||
+      (classification.kind === "provably_not_sent" && !classification.retryable);
+    if (permanentlyRejected) {
       try {
         if (permanentPlatformRejection && entry.deliveryCompletion) {
           await rejectDurableDelivery(
@@ -1180,6 +1205,7 @@ async function drainQueuedEntry(opts: {
           log: opts.log,
           stateDir: opts.stateDir,
           attemptId: producerClaimId,
+          terminalError: errMsg,
         });
         emitRecoveredTerminalFailure(entry, errMsg, messageSentEvents);
         emitQueuedAuditTerminals(entry, () =>
@@ -1198,10 +1224,13 @@ async function drainQueuedEntry(opts: {
       }
     } else {
       try {
-        const recordFailure = isProvenDeliveryNotSentError(err)
-          ? failDeliveryBeforePlatformSend
-          : failDelivery;
-        await recordRecoveredFailure(recordFailure, entry, errMsg, opts.stateDir, producerClaimId);
+        await recordRecoveredFailure(
+          resolveNotSentAwareFailureRecorder([err]),
+          entry,
+          errMsg,
+          opts.stateDir,
+          producerClaimId,
+        );
         return "failed";
       } catch (failErr) {
         if (getErrnoCode(failErr) === "ENOENT") {
@@ -1279,6 +1308,7 @@ export async function drainPendingDeliveriesCore(opts: {
               log: opts.log,
               stateDir: opts.stateDir,
               attemptId,
+              terminalError: "delivery retry budget exhausted",
             });
             emitRecoveredTerminalFailure(currentEntry, "delivery retry budget exhausted");
           } catch (err) {

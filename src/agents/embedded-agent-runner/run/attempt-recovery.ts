@@ -304,8 +304,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     if (recoveryRetry.retry) {
       runInput.laneController.throwIfAborted();
       sessionPromptState.suppressNextUserMessagePersistence = true;
+      // Stable operator-countable marker: one line per automatic replay.
       log.warn(
-        `codex app-server replay-safe failure; retrying once failureKind=${attempt.codexAppServerFailure?.kind} ` +
+        `codex app-server recovered_via_auto_replay: replaying turn once failureKind=${attempt.codexAppServerFailure?.kind} ` +
           `runId=${params.runId} sessionId=${params.sessionId}`,
       );
       return retry({ codexAppServerRecoveryRetries: input.codexAppServerRecoveryRetries + 1 });

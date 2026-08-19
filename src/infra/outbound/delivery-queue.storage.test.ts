@@ -731,6 +731,9 @@ describe("delivery-queue storage", () => {
           retryCount: 0,
           completionRetention: "permanent",
           recoveryState: "completed_permanent",
+          // Terminal rows keep routing evidence for operator diagnosis.
+          channel: "directchat",
+          to: "+1555",
         });
         await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
@@ -803,6 +806,9 @@ describe("delivery-queue storage", () => {
         retryCount: 0,
         completionRetention: "permanent",
         recoveryState: "completed_permanent",
+        // Terminal rows keep routing evidence for operator diagnosis.
+        channel: "workspace",
+        to: "#general",
       });
       await expect(
         enqueueDeliveryOnce(

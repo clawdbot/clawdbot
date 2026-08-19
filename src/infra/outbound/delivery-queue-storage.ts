@@ -23,6 +23,7 @@ import {
   upsertDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.js";
 import { inferDeliveryQueueFailureRetention } from "../delivery-queue-sqlite.types.js";
+import { classifyOutboundSendFailure } from "../delivery-recovery.shared.js";
 import { generateSecureUuid } from "../secure-random.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
@@ -350,6 +351,7 @@ export async function failDeliveryBeforePlatformSend(
   error: string,
   stateDir?: string,
   expectedPlatformSendAttemptId?: string | null,
+  retryDelayMs?: number,
 ): Promise<void> {
   updateQueuedDelivery(
     id,
@@ -359,8 +361,11 @@ export async function failDeliveryBeforePlatformSend(
       retryCount: entry.retryCount + 1,
       lastAttemptAt: Date.now(),
       lastError: error,
-      // Clear both fields together; retaining either would preserve false send evidence.
-      availableAt: undefined,
+      // Clear claim and platform evidence together; retaining either would
+      // preserve false send evidence. availableAt survives only as a platform
+      // retry-after floor (e.g. Telegram 429), never as an ownership lease.
+      availableAt:
+        retryDelayMs !== undefined && retryDelayMs > 0 ? Date.now() + retryDelayMs : undefined,
       producerClaimId: undefined,
       platformSendAttemptId: undefined,
       platformSendStartedAt: undefined,
@@ -392,6 +397,32 @@ export async function failDeliveryAfterPlatformSend(
     }),
     expectedPlatformSendAttemptId,
   );
+}
+
+/**
+ * Chooses the attempt-failure recorder from not-sent proof. Only when every
+ * failure provably never produced a recipient-visible send may the retry
+ * clear platform evidence; a platform retry-after hint floors the next try.
+ */
+export function resolveNotSentAwareFailureRecorder(
+  errors: readonly unknown[],
+): typeof failDelivery {
+  let retryDelayMs: number | undefined;
+  for (const error of errors) {
+    const classification = classifyOutboundSendFailure(error);
+    if (classification.kind !== "provably_not_sent") {
+      return failDelivery;
+    }
+    if (classification.retryable && classification.retryAfterMs !== undefined) {
+      retryDelayMs = Math.max(retryDelayMs ?? 0, classification.retryAfterMs);
+    }
+  }
+  if (errors.length === 0) {
+    return failDelivery;
+  }
+  const delay = retryDelayMs;
+  return (id, error, stateDir, expectedPlatformSendAttemptId) =>
+    failDeliveryBeforePlatformSend(id, error, stateDir, expectedPlatformSendAttemptId, delay);
 }
 
 export { claimDeliveryPlatformSendAttempt } from "./delivery-queue-platform-lease.js";
@@ -569,6 +600,7 @@ export async function moveToFailed(
   id: string,
   stateDir?: string,
   expectedPlatformSendAttemptId?: string | null,
+  terminalError?: string,
 ): Promise<string[]> {
   let spoolPaths: string[];
   if (expectedPlatformSendAttemptId !== undefined) {
@@ -585,7 +617,7 @@ export async function moveToFailed(
           queuedDeliveryPayloads(entry as QueuedDelivery),
           stateDir,
         );
-        moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+        moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir, terminalError);
       },
     );
     if (!moved) {
@@ -597,7 +629,7 @@ export async function moveToFailed(
       throw new Error(`No pending outbound delivery queue entry ${id}`);
     }
     spoolPaths = collectEntrySpoolPaths(queuedDeliveryPayloads(entry), stateDir);
-    moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+    moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir, terminalError);
   }
   return spoolPaths;
 }
@@ -610,12 +642,21 @@ export async function failPendingDelivery(
     id: string;
     entry: QueuedDelivery;
     retainSpoolArtifacts?: boolean;
+    terminalError?: string;
   },
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
   let terminalized: ReturnType<typeof terminalizePendingDeliveryQueueEntry> = {
     status: "not_pending",
   };
+  const terminalize = () =>
+    terminalizePendingDeliveryQueueEntry({
+      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      id: params.id,
+      entry: params.entry,
+      stateDir,
+      ...(params.terminalError !== undefined ? { terminalError: params.terminalError } : {}),
+    });
   const retained =
     inferDeliveryQueueFailureRetention(params.entry, params.id, OUTBOUND_DELIVERY_QUEUE_NAME) !==
     undefined;
@@ -631,21 +672,11 @@ export async function failPendingDelivery(
         platformSendAttemptId: attemptId,
       },
       () => {
-        terminalized = terminalizePendingDeliveryQueueEntry({
-          queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-          id: params.id,
-          entry: params.entry,
-          stateDir,
-        });
+        terminalized = terminalize();
       },
     );
   } else {
-    terminalized = terminalizePendingDeliveryQueueEntry({
-      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-      id: params.id,
-      entry: params.entry,
-      stateDir,
-    });
+    terminalized = terminalize();
   }
   if (terminalized.status === "terminalized") {
     if (params.retainSpoolArtifacts !== true) {

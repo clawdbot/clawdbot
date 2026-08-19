@@ -56,10 +56,12 @@ export function resolveCodexAppServerRecoveryRetry(params: {
   ) {
     return { retry: false, reason: "tool_activity" };
   }
-  if (
-    params.attempt.itemLifecycle.startedCount > 0 ||
-    params.attempt.itemLifecycle.activeCount > 0
-  ) {
+  // Mirrors resolveCodexAppServerReplayBlockedReason: completed reasoning
+  // items are model-internal and must not veto the one replay-safe retry.
+  const startedNonReasoningCount =
+    params.attempt.itemLifecycle.startedCount -
+    (params.attempt.itemLifecycle.completedReasoningCount ?? 0);
+  if (startedNonReasoningCount > 0 || params.attempt.itemLifecycle.activeCount > 0) {
     return { retry: false, reason: "active_item" };
   }
   return { retry: true };
