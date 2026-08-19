@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeAppServerClient } from "./client.js";
 import type { ResolvedClaudeAppServerConfig } from "./config.js";
 import type { ClaudeDynamicToolBridge } from "./dynamic-tools.js";
-import { isThreadNotFound, startOrResumeClaudeThread } from "./thread-lifecycle.js";
+import {
+  isThreadNotFound,
+  isTransientToolPolicyTurn,
+  startOrResumeClaudeThread,
+} from "./thread-lifecycle.js";
 import {
   createClaudeAppServerBindingStore,
   type ClaudeAppServerBinding,
@@ -603,3 +607,119 @@ async function seedBinding(
     dynamicToolsFingerprint: overrides.dynamicToolsFingerprint,
   });
 }
+
+// ── transient narrowed-tool-policy turns (openclaw-tb9g) ────────────────────
+
+function makeTriggerParams(trigger: string): EmbeddedRunAttemptParams {
+  return { ...makeParams(), trigger } as unknown as EmbeddedRunAttemptParams;
+}
+
+function makeBridgeWithTools(names: string[]): ClaudeDynamicToolBridge {
+  return {
+    specs: names.map((name) => ({ name, description: "", inputSchema: { type: "object" } })),
+    handlers: new Map(),
+  } as unknown as ClaudeDynamicToolBridge;
+}
+
+describe("isTransientToolPolicyTurn", () => {
+  it("is true for a memory-flush run", () => {
+    expect(isTransientToolPolicyTurn(makeTriggerParams("memory"))).toBe(true);
+  });
+
+  it("is false for every other trigger", () => {
+    for (const t of ["user", "heartbeat", "cron", "manual", "overflow"]) {
+      expect(isTransientToolPolicyTurn(makeTriggerParams(t))).toBe(false);
+    }
+    expect(isTransientToolPolicyTurn(makeParams())).toBe(false);
+  });
+});
+
+describe("startOrResumeClaudeThread — transient narrowed tool policy", () => {
+  let transientStore: ClaudeAppServerBindingStore;
+
+  beforeEach(() => {
+    transientStore = createClaudeTestBindingStore();
+  });
+
+  async function seedFullCatalogBinding() {
+    await transientStore.write(IDENTITY, {
+      threadId: "thr_durable_full",
+      cwd: "/tmp/ws",
+      model: "claude-sonnet-4-6",
+      approvalPolicy: BASE_CFG.appServer.approvalPolicy,
+      approvalsReviewer: "user",
+      sandbox: BASE_CFG.appServer.sandbox,
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+    } as ClaudeAppServerBinding);
+  }
+
+  it("forks for a memory-flush turn but leaves the durable binding on the parent", async () => {
+    await seedFullCatalogBinding();
+    const result = await startOrResumeClaudeThread({
+      client: makeClient({}),
+      params: makeTriggerParams("memory"),
+      cfg: BASE_CFG,
+      bridge: makeBridgeWithTools(["read", "write"]),
+      bindingStore: transientStore,
+      developerInstructions: "x",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: "fp-memory-flush-narrowed",
+      effectiveWorkspace: "/tmp/ws",
+      nativeDisallowedTools: [],
+    });
+    expect(result.outcome).toBe("forked");
+    expect(result.transient).toBe(true);
+    expect(result.threadId).toBe("thr_forked_001");
+    // The whole point: the next ordinary turn must resume the parent.
+    expect((await transientStore.read(IDENTITY))?.threadId).toBe("thr_durable_full");
+  });
+
+  it("registers the NARROWED catalog on the transient thread (policy is still enforced)", async () => {
+    await seedFullCatalogBinding();
+    const client = makeClient({});
+    await startOrResumeClaudeThread({
+      client,
+      params: makeTriggerParams("memory"),
+      cfg: BASE_CFG,
+      bridge: makeBridgeWithTools(["read", "write"]),
+      bindingStore: transientStore,
+      developerInstructions: "x",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: "fp-memory-flush-narrowed",
+      effectiveWorkspace: "/tmp/ws",
+      nativeDisallowedTools: ["Bash", "Edit"],
+    });
+    const forkCall = (
+      client.request as unknown as { mock: { calls: [string, Record<string, unknown>][] } }
+    ).mock.calls.find(([method]) => method === "thread/fork");
+    expect(forkCall).toBeDefined();
+    const forkParams = forkCall?.[1] as {
+      dynamicTools?: { name: string }[];
+      disallowedTools?: string[];
+    };
+    // Diversion must NOT widen the turn's tools — that was the policy-bypass
+    // failure mode of suppressing the rotation instead of diverting it.
+    expect(forkParams.dynamicTools?.map((t) => t.name)).toEqual(["read", "write"]);
+    expect(forkParams.disallowedTools).toEqual(["Bash", "Edit"]);
+  });
+
+  it("still rotates the durable binding for a normal catalog change", async () => {
+    await seedFullCatalogBinding();
+    const result = await startOrResumeClaudeThread({
+      client: makeClient({}),
+      params: makeTriggerParams("user"),
+      cfg: BASE_CFG,
+      bridge: makeBridgeWithTools(["read", "write", "exec", "message"]),
+      bindingStore: transientStore,
+      developerInstructions: "x",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: "fp-genuinely-changed",
+      effectiveWorkspace: "/tmp/ws",
+      nativeDisallowedTools: [],
+    });
+    expect(result.outcome).toBe("forked");
+    expect(result.transient).toBeUndefined();
+    expect((await transientStore.read(IDENTITY))?.threadId).toBe("thr_forked_001");
+  });
+});
