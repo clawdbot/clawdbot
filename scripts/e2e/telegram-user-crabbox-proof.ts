@@ -1,12 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Telegram User Crabbox Proof script supports OpenClaw repository automation.
 
-import {
-  type ChildProcess,
-  spawn,
-  spawnSync,
-  type SpawnOptionsWithoutStdio,
-} from "node:child_process";
+import { type ChildProcess, spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -47,8 +42,27 @@ import {
   TELEGRAM_DESKTOP_WINDOW,
   telegramPrivatePostLink,
 } from "./telegram-desktop-crabbox.ts";
+import {
+  createMantisGatewayEnv as gatewayEnv,
+  createMantisMockServerEnv as mockServerEnv,
+  createOpenClawGatewaySpawnSpec,
+  drainSutUpdates,
+  preserveMantisSutRuntimeArtifacts,
+  runSutContainerAction,
+  startMantisSut,
+  waitForLog,
+  writeSutConfig,
+} from "./telegram-mantis-sut.ts";
 
 export { COMMAND_TIMEOUT_MS, runCommand, selectCrabboxSshPort };
+export {
+  createContainerizedSutSpawnSpec,
+  createOpenClawGatewaySpawnSpec,
+  readCodexProxyPort,
+  runSutContainerAction,
+  waitForLog,
+  writeSutConfig,
+} from "./telegram-mantis-sut.ts";
 
 type GatewaySpawnSpec = {
   args: string[];
@@ -646,81 +660,6 @@ function childProcessBaseEnv() {
   return env;
 }
 
-function mockServerEnv(params: {
-  mockPort: number;
-  mockResponseChunkDelayMs?: number;
-  mockResponseText: string;
-  requestLog: string;
-}) {
-  return {
-    ...childProcessBaseEnv(),
-    MOCK_PORT: String(params.mockPort),
-    MOCK_REQUEST_LOG: params.requestLog,
-    SUCCESS_MARKER: params.mockResponseText,
-    ...(params.mockResponseChunkDelayMs === undefined
-      ? {}
-      : { MOCK_RESPONSE_CHUNK_DELAY_MS: String(params.mockResponseChunkDelayMs) }),
-  };
-}
-
-function gatewayEnv(params: {
-  configPath: string;
-  gatewayPassword?: string;
-  stateDir: string;
-  sutToken: string;
-  tailscaleProxyDir?: string;
-}) {
-  return {
-    ...childProcessBaseEnv(),
-    OPENAI_API_KEY: "sk-openclaw-e2e-mock",
-    OPENCLAW_CONFIG_PATH: params.configPath,
-    ...(params.gatewayPassword ? { OPENCLAW_GATEWAY_PASSWORD: params.gatewayPassword } : {}),
-    OPENCLAW_STATE_DIR: params.stateDir,
-    ...(params.tailscaleProxyDir
-      ? { PATH: `${params.tailscaleProxyDir}${path.delimiter}${process.env.PATH ?? ""}` }
-      : {}),
-    TELEGRAM_BOT_TOKEN: params.sutToken,
-  };
-}
-
-export function createOpenClawGatewaySpawnSpec(params: {
-  env: NodeJS.ProcessEnv;
-  gatewayPort: number;
-  repoRoot: string;
-  comSpec?: string;
-  nodeExecPath?: string;
-  npmExecPath?: string;
-  pnpmExecPath?: string;
-  platform?: NodeJS.Platform;
-}): GatewaySpawnSpec {
-  if (params.pnpmExecPath) {
-    return {
-      args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
-      command: params.pnpmExecPath,
-      options: { cwd: params.repoRoot, env: params.env, shell: false },
-    };
-  }
-  const spec = createPnpmRunnerSpawnSpec({
-    comSpec: params.comSpec,
-    cwd: params.repoRoot,
-    env: params.env,
-    nodeExecPath: params.nodeExecPath,
-    npmExecPath: params.npmExecPath,
-    platform: params.platform,
-    pnpmArgs: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
-  });
-  return {
-    args: spec.args,
-    command: spec.command,
-    options: {
-      cwd: spec.options.cwd,
-      env: spec.options.env,
-      shell: spec.options.shell,
-      windowsVerbatimArguments: spec.options.windowsVerbatimArguments,
-    },
-  };
-}
-
 export function createOpenClawCliSpawnSpec(params: {
   args: string[];
   env: NodeJS.ProcessEnv;
@@ -927,28 +866,6 @@ export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): s
   return readTextFileTail(logPath, Math.max(1, maxBytes));
 }
 
-export async function waitForLog(
-  logPath: string,
-  pattern: RegExp,
-  label: string,
-  timeoutMs: number,
-) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const text = readLogTail(logPath);
-    if (pattern.test(text)) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
-  }
-  const text = readLogTail(logPath);
-  throw new Error(
-    `${label} did not become ready within ${timeoutMs}ms\n${sliceUtf16Safe(text, -4000)}`,
-  );
-}
-
 export function readLogAfterOffset(
   logPath: string,
   offset: number,
@@ -994,38 +911,6 @@ async function telegram(token: string, method: string, body: JsonObject = {}) {
   return await telegramBotApi(token, method, body);
 }
 
-async function drainSutUpdates(sutToken: string) {
-  const before = telegramResultObject(await telegram(sutToken, "getWebhookInfo"), "getWebhookInfo");
-  const rawUpdates = await telegram(sutToken, "getUpdates", {
-    allowed_updates: ["message", "edited_message"],
-    timeout: 0,
-  });
-  if (!Array.isArray(rawUpdates)) {
-    throw new Error("getUpdates returned an invalid payload.");
-  }
-  const updates = rawUpdates;
-  if (updates.length) {
-    const last = updates.at(-1);
-    if (
-      last &&
-      typeof last === "object" &&
-      "update_id" in last &&
-      typeof last.update_id === "number"
-    ) {
-      await telegram(sutToken, "getUpdates", { offset: last.update_id + 1, timeout: 0 });
-    }
-  }
-  const after = telegramResultObject(await telegram(sutToken, "getWebhookInfo"), "getWebhookInfo");
-  return {
-    drained: updates.length,
-    pendingAfter:
-      typeof after.pending_update_count === "number" ? after.pending_update_count : undefined,
-    pendingBefore:
-      typeof before.pending_update_count === "number" ? before.pending_update_count : undefined,
-    webhookUrlSet: typeof before.url === "string" && before.url.length > 0,
-  };
-}
-
 async function sutIdentity(sutToken: string) {
   const result = telegramResultObject(await telegram(sutToken, "getMe"), "getMe");
   const username = requireString(result, "username").replace(/^@/u, "");
@@ -1037,134 +922,6 @@ function telegramResultObject(value: unknown, label: string): JsonObject {
     throw new Error(`${label} returned an invalid payload.`);
   }
   return value as JsonObject;
-}
-
-export function writeSutConfig(params: {
-  gatewayPort: number;
-  groupId: string;
-  humanDelayFixedMs?: number;
-  linkPreview?: boolean;
-  mcpAppFixture?: boolean;
-  mockPort: number;
-  outputDir: string;
-  repoRoot?: string;
-  testerId: string;
-}) {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-crabbox-sut-"));
-  const stateDir = path.join(tempRoot, "state");
-  const workspace = path.join(tempRoot, "workspace");
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.mkdirSync(workspace, { recursive: true });
-  const configPath = path.join(tempRoot, "openclaw.json");
-  const config = {
-    agents: {
-      defaults: {
-        ...(params.humanDelayFixedMs === undefined
-          ? {}
-          : {
-              humanDelay: {
-                maxMs: params.humanDelayFixedMs,
-                minMs: params.humanDelayFixedMs,
-                mode: "custom",
-              },
-            }),
-        model: { primary: "openai/gpt-5.6-luna" },
-        models: {
-          "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
-        },
-      },
-      entries: {
-        main: {
-          default: true,
-          model: { primary: "openai/gpt-5.6-luna" },
-          name: "Main",
-          workspace,
-        },
-      },
-    },
-    // Exercise the opt-in message audit surface: the DM probe should produce
-    // inbound/outbound rows under the privacy-sensitive "direct" mode.
-    logging: { audit: { enabled: true, executionIdentity: true, messages: "direct" } },
-    channels: {
-      telegram: {
-        allowFrom: [params.testerId],
-        botToken: { id: "TELEGRAM_BOT_TOKEN", provider: "default", source: "env" },
-        commands: { native: true, nativeSkills: false },
-        dmPolicy: "allowlist",
-        enabled: true,
-        groupAllowFrom: [params.testerId],
-        groupPolicy: "allowlist",
-        groups: {
-          [params.groupId]: {
-            allowFrom: [params.testerId],
-            groupPolicy: "allowlist",
-            requireMention: false,
-          },
-        },
-        ...(params.linkPreview === undefined ? {} : { linkPreview: params.linkPreview }),
-        replyToMode: "first",
-      },
-    },
-    gateway: params.mcpAppFixture
-      ? {
-          auth: {
-            mode: "password",
-            password: {
-              id: "OPENCLAW_GATEWAY_PASSWORD",
-              provider: "default",
-              source: "env",
-            },
-          },
-          bind: "loopback",
-          mode: "local",
-          port: params.gatewayPort,
-          tailscale: { mode: "funnel" },
-        }
-      : { auth: { mode: "none" }, bind: "loopback", mode: "local", port: params.gatewayPort },
-    ...(params.mcpAppFixture
-      ? {
-          mcp: {
-            servers: {
-              fixture: {
-                args: [
-                  path.join(
-                    params.repoRoot ?? process.cwd(),
-                    "scripts/e2e/mcp-app-conformance-server.mjs",
-                  ),
-                ],
-                command: process.execPath,
-              },
-            },
-          },
-        }
-      : {}),
-    messages: { groupChat: { visibleReplies: "automatic" } },
-    models: {
-      providers: {
-        openai: {
-          api: "openai-responses",
-          apiKey: { id: "OPENAI_API_KEY", provider: "default", source: "env" },
-          baseUrl: `http://127.0.0.1:${params.mockPort}/v1`,
-          models: [
-            {
-              api: "openai-responses",
-              contextWindow: 128000,
-              id: "gpt-5.6-luna",
-              name: "gpt-5.6-luna",
-            },
-          ],
-          request: { allowPrivateNetwork: true },
-        },
-      },
-    },
-    plugins: {
-      allow: ["telegram", "openai"],
-      enabled: true,
-      entries: { openai: { enabled: true }, telegram: { enabled: true } },
-    },
-  };
-  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  return { configPath, stateDir, tempRoot, workspace };
 }
 
 type StartLocalSutDeps = {
@@ -1297,135 +1054,6 @@ export async function recordProbeVideo(params: {
   }
 }
 
-export function createContainerizedSutSpawnSpec(params: {
-  codexProxyPort: number;
-  containerName: string;
-  gatewayPort: number;
-  mockPort: number;
-  mockResponseChunkDelayMs?: number;
-  mockResponseText: string;
-  repoRoot: string;
-  runtimeRoot: string;
-  sutLane: "baseline" | "candidate";
-  gatewayEnv: NodeJS.ProcessEnv;
-}) {
-  const containerHome = path.join(params.runtimeRoot, "container-home");
-  fs.mkdirSync(containerHome, { recursive: true });
-  const inputPath = path.join(params.runtimeRoot, "container-input.json");
-  fs.writeFileSync(
-    inputPath,
-    `${JSON.stringify({
-      gatewayPassword: params.gatewayEnv.OPENCLAW_GATEWAY_PASSWORD,
-      mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
-      mockResponseText: params.mockResponseText,
-      telegramBotToken: params.gatewayEnv.TELEGRAM_BOT_TOKEN,
-    })}\n`,
-    { mode: 0o600 },
-  );
-  return {
-    args: [
-      "-n",
-      "/usr/local/sbin/openclaw-mantis-sut-container",
-      "run",
-      params.containerName,
-      params.sutLane,
-      params.repoRoot,
-      params.runtimeRoot,
-      String(params.gatewayPort),
-      String(params.mockPort),
-      String(params.codexProxyPort),
-    ],
-    command: "sudo",
-    inputPath,
-    options: {
-      cwd: process.cwd(),
-      env: childProcessBaseEnv(),
-      shell: false,
-    } satisfies SpawnOptionsWithoutStdio,
-  };
-}
-
-export function readCodexProxyPort(codexHome: string): number | undefined {
-  let config: string;
-  try {
-    config = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
-  } catch {
-    return undefined;
-  }
-  const section = config.match(
-    /\[model_providers\.codex-action-responses-proxy\]([\s\S]*?)(?=\n\[|$)/u,
-  )?.[1];
-  const match = section?.match(/base_url\s*=\s*"http:\/\/127\.0\.0\.1:(\d+)\/v1"/u);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  const port = Number.parseInt(match[1], 10);
-  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : undefined;
-}
-
-function requireCodexProxyPort() {
-  const codexHome = trimToValue(process.env.CODEX_HOME);
-  if (!codexHome) {
-    throw new Error("Fork SUT isolation requires CODEX_HOME for the proxy boundary check.");
-  }
-  const proxyPort = readCodexProxyPort(codexHome);
-  if (!proxyPort) {
-    throw new Error("Fork SUT isolation could not resolve the Codex Responses proxy port.");
-  }
-  return proxyPort;
-}
-
-type SutContainerAction = "destroy" | "stop";
-
-type SutContainerCommandRunner = (
-  command: string,
-  args: string[],
-  options: {
-    encoding: "utf8";
-    env: NodeJS.ProcessEnv;
-    stdio: "pipe";
-  },
-) => {
-  error?: Error;
-  signal?: NodeJS.Signals | null;
-  status: number | null;
-  stderr?: string;
-};
-
-export function runSutContainerAction(
-  action: SutContainerAction,
-  containerName: string | undefined,
-  runtimeRoot: string | undefined,
-  run: SutContainerCommandRunner = spawnSync,
-) {
-  if (!containerName || !runtimeRoot) {
-    return;
-  }
-  const result = run(
-    "sudo",
-    ["-n", "/usr/local/sbin/openclaw-mantis-sut-container", action, containerName, runtimeRoot],
-    {
-      encoding: "utf8",
-      env: childProcessBaseEnv(),
-      stdio: "pipe",
-    },
-  );
-  if (result.error) {
-    throw new Error(`Failed to ${action} container-isolated SUT: ${result.error.message}`, {
-      cause: result.error,
-    });
-  }
-  if (result.signal) {
-    throw new Error(`Container-isolated SUT ${action} was terminated by ${result.signal}.`);
-  }
-  if (result.status !== 0) {
-    const stderr = result.stderr?.trim().slice(-4_000);
-    throw new Error(
-      `Container-isolated SUT ${action} failed with exit code ${result.status ?? "unknown"}.${stderr ? `\n${stderr}` : ""}`,
-    );
-  }
-}
-
 async function stopLocalSutDaemon(
   sut:
     | {
@@ -1468,12 +1096,7 @@ function preserveLocalSutRuntimeArtifacts(
   sut: Pick<SessionFile["localSut"], "gatewayLog" | "mockLog" | "requestLog">,
   outputDir: string,
 ) {
-  for (const source of [sut.gatewayLog, sut.mockLog, sut.requestLog]) {
-    const target = path.join(outputDir, path.basename(source));
-    if (path.resolve(source) !== path.resolve(target) && fs.existsSync(source)) {
-      fs.copyFileSync(source, target);
-    }
-  }
+  preserveMantisSutRuntimeArtifacts(sut, outputDir);
 }
 
 async function startLocalSutDaemon(params: {
@@ -1495,6 +1118,31 @@ async function startLocalSutDaemon(params: {
   sutContainer?: boolean;
   sutLane?: "baseline" | "candidate";
 }) {
+  if (params.sutContainer) {
+    if (!params.sutLane) {
+      throw new Error("Container-isolated SUT requires an attested lane.");
+    }
+    if (params.funnelBridge) {
+      throw new Error("Container-isolated fork SUT does not support the MCP App Funnel fixture.");
+    }
+    return {
+      ...(await startMantisSut({
+        gatewayPort: params.gatewayPort,
+        groupId: params.groupId,
+        humanDelayFixedMs: params.humanDelayFixedMs,
+        linkPreview: params.linkPreview,
+        mockPort: params.mockPort,
+        mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
+        mockResponseText: params.mockResponseText,
+        outputDir: params.outputDir,
+        repoRoot: params.repoRoot,
+        sutLane: params.sutLane,
+        sutToken: params.sutToken,
+        testerId: params.testerId,
+      })),
+      funnelBridge: params.funnelBridge,
+    };
+  }
   const drained = await drainSutUpdates(params.sutToken);
   const config = writeSutConfig(params);
   const gatewayPassword = params.mcpAppFixture ? randomUUID() : undefined;
@@ -1504,74 +1152,7 @@ async function startLocalSutDaemon(params: {
   const gatewayLog = path.join(runtimeLogRoot, "gateway.log");
   let mockPid: number | undefined;
   let gatewayPid: number | undefined;
-  let containerName: string | undefined;
-  let containerInputPath: string | undefined;
   try {
-    if (params.sutContainer) {
-      if (!params.sutLane) {
-        throw new Error("Container-isolated SUT requires an attested lane.");
-      }
-      if (params.funnelBridge) {
-        throw new Error("Container-isolated fork SUT does not support the MCP App Funnel fixture.");
-      }
-      const codexProxyPort = requireCodexProxyPort();
-      containerName = `openclaw-telegram-sut-${randomUUID()}`;
-      const gatewayEnvVars = gatewayEnv({
-        ...config,
-        gatewayPassword,
-        sutToken: params.sutToken,
-      });
-      const spec = createContainerizedSutSpawnSpec({
-        codexProxyPort,
-        containerName,
-        gatewayEnv: gatewayEnvVars,
-        gatewayPort: params.gatewayPort,
-        mockPort: params.mockPort,
-        mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
-        mockResponseText: params.mockResponseText,
-        repoRoot: params.repoRoot,
-        runtimeRoot: config.tempRoot,
-        sutLane: params.sutLane,
-      });
-      containerInputPath = spec.inputPath;
-      gatewayPid = spawnDaemon({
-        args: spec.args,
-        command: spec.command,
-        cwd: spec.options.cwd ?? params.repoRoot,
-        env: spec.options.env ?? {},
-        logPath: path.join(params.outputDir, "sut-container.log"),
-        shell: spec.options.shell as boolean | undefined,
-      });
-      mockPid = gatewayPid;
-      if (!gatewayPid) {
-        throw new Error("container-isolated SUT did not start.");
-      }
-      await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 30_000);
-      await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
-      const sutAttestation = readJsonFile(path.join(config.tempRoot, "sut-attestation.json")) as {
-        lane?: unknown;
-        sha?: unknown;
-      };
-      if (
-        sutAttestation.lane !== params.sutLane ||
-        typeof sutAttestation.sha !== "string" ||
-        !/^[0-9a-f]{40}$/u.test(sutAttestation.sha)
-      ) {
-        throw new Error("Container-isolated SUT attestation mismatch.");
-      }
-      return {
-        ...config,
-        containerName,
-        drained,
-        gatewayLog,
-        gatewayPid,
-        mockLog,
-        mockPid: gatewayPid,
-        requestLog,
-        sutAttestation: { lane: params.sutLane, sha: sutAttestation.sha },
-        funnelBridge: params.funnelBridge,
-      };
-    }
     mockPid = spawnDaemon({
       command: params.nodeBin ?? process.execPath,
       args: ["scripts/e2e/mock-openai-server.mjs"],
@@ -1623,41 +1204,14 @@ async function startLocalSutDaemon(params: {
     };
   } catch (error) {
     const cleanupErrors: unknown[] = [];
-    let quiesced = false;
     try {
       await stopLocalSutDaemon({
-        containerName,
         gatewayPid,
         mockPid,
         tempRoot: config.tempRoot,
       });
-      quiesced = true;
     } catch (cleanupError) {
       cleanupErrors.push(cleanupError);
-    }
-    if (params.sutContainer) {
-      if (quiesced) {
-        try {
-          preserveLocalSutRuntimeArtifacts({ gatewayLog, mockLog, requestLog }, params.outputDir);
-        } catch (cleanupError) {
-          cleanupErrors.push(cleanupError);
-        }
-      }
-      try {
-        destroyLocalSutRuntime({
-          containerName,
-          tempRoot: config.tempRoot,
-        });
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
-      }
-    }
-    if (containerInputPath) {
-      try {
-        fs.rmSync(containerInputPath, { force: true });
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
-      }
     }
     if (cleanupErrors.length > 0) {
       throw new Error(

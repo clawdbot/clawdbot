@@ -11,18 +11,6 @@ on:
         description: Optional freeform proof instructions for the agent
         required: false
         type: string
-      crabbox_provider:
-        description: Crabbox provider for the native Telegram Desktop capture
-        required: false
-        default: aws
-        type: choice
-        options:
-          - aws
-          - hetzner
-      crabbox_lease_id:
-        description: Optional existing Crabbox desktop lease id or slug to reuse
-        required: false
-        type: string
       publish_artifact_name:
         description: Optional existing proof artifact name to publish without recapturing
         required: false
@@ -43,9 +31,6 @@ env:
   NODE_VERSION: "24.x"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-  CRABBOX_REF: main
-  CRABBOX_AWS_REGION: us-east-1
-  CRABBOX_CAPACITY_REGIONS: us-east-1
   MANTIS_OUTPUT_DIR: .artifacts/qa-e2e/mantis/telegram-desktop-proof
 
 jobs:
@@ -55,9 +40,7 @@ jobs:
     outputs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
       candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
-      crabbox_provider: ${{ steps.resolve.outputs.crabbox_provider }}
       instructions: ${{ steps.resolve.outputs.instructions }}
-      lease_id: ${{ steps.resolve.outputs.lease_id }}
       publish_artifact_name: ${{ steps.resolve.outputs.publish_artifact_name }}
       publish_run_id: ${{ steps.resolve.outputs.publish_run_id }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
@@ -89,19 +72,11 @@ jobs:
               repo,
               pull_number: Number(prNumber),
             });
-            const provider = inputs.crabbox_provider || "aws";
-            if (!["aws", "hetzner"].includes(provider)) {
-              core.setFailed(`Unsupported Crabbox provider for Mantis Telegram desktop proof: ${provider}`);
-              return;
-            }
-
             setOutput("should_run", "true");
             setOutput("baseline_ref", pr.base.sha);
             setOutput("candidate_ref", pr.head.sha);
             setOutput("pr_number", String(pr.number));
             setOutput("instructions", body);
-            setOutput("crabbox_provider", provider);
-            setOutput("lease_id", inputs.crabbox_lease_id || "");
             setOutput("publish_artifact_name", inputs.publish_artifact_name || "");
             setOutput("publish_run_id", inputs.publish_run_id || "");
             setOutput("request_source", "workflow_dispatch");
@@ -258,27 +233,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version: "1.26.x"
-          cache: false
-
-      - name: Install Crabbox CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          install_dir="${RUNNER_TEMP}/crabbox"
-          mkdir -p "$install_dir/src"
-          git init "$install_dir/src"
-          git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
-          timeout --signal=TERM --kill-after=10s 120s git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
-          git -C "$install_dir/src" checkout --detach FETCH_HEAD
-          go build -C "$install_dir/src" -o "$install_dir/crabbox" ./cmd/crabbox
-          sudo install -m 0755 "$install_dir/crabbox" /usr/local/bin/crabbox
-          crabbox --version
-          crabbox media preview --help >/dev/null
-
       - name: Install local proof tools
         env:
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
@@ -300,17 +254,23 @@ jobs:
           set -euo pipefail
           exec "$node_bin" "$corepack_bin" pnpm "\$@"
           EOF
-          cat >"${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" <<EOF
+          cat >"${RUNNER_TEMP}/openclaw-telegram-mantis-sut" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
-          exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-crabbox-proof.ts" "\$@"
+          exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-sut.ts" "\$@"
+          EOF
+          cat >"${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-desktop-recorder.ts" "\$@"
           EOF
           chmod 0755 "${RUNNER_TEMP}/mantis-node" "${RUNNER_TEMP}/mantis-pnpm"
-          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof"
+          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder"
           sudo install -d -m 0755 /usr/local/lib/mantis-toolchain
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-node" /usr/local/lib/mantis-toolchain/node
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-pnpm" /usr/local/lib/mantis-toolchain/pnpm
-          sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" /usr/local/bin/openclaw-telegram-user-crabbox-proof
+          sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" /usr/local/bin/openclaw-telegram-mantis-sut
+          sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" /usr/local/bin/openclaw-telegram-desktop-recorder
           sudo install -m 0755 scripts/mantis/mantis-sut-container.sh /usr/local/sbin/openclaw-mantis-sut-container
           printf '/tmp/openclaw-mantis-proof-worktrees-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
             | sudo tee /etc/openclaw-mantis-sut-worktrees >/dev/null
@@ -323,19 +283,15 @@ jobs:
           sudo chmod 0444 /etc/openclaw-mantis-sut-worktrees /etc/openclaw-mantis-sut-revisions /etc/openclaw-mantis-sut-runtime-root
           /usr/local/lib/mantis-toolchain/node --version
           /usr/local/lib/mantis-toolchain/pnpm --version
-          /usr/local/bin/openclaw-telegram-user-crabbox-proof --help >/dev/null
-          media_tools="${RUNNER_TEMP}/mantis-media-tools"
-          install -d "$media_tools"
-          curl --fail --location --retry 3 --retry-delay 2 \
-            --connect-timeout 15 --max-time 180 \
-            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
-            --output "$media_tools/ffmpeg.tar.xz"
-          tar -xJf "$media_tools/ffmpeg.tar.xz" -C "$media_tools"
-          bin_dir="$(find "$media_tools" -type d -path '*/bin' | head -n 1)"
-          sudo install -m 0755 "$bin_dir/ffmpeg" /usr/local/bin/ffmpeg
-          sudo install -m 0755 "$bin_dir/ffprobe" /usr/local/bin/ffprobe
-          ffmpeg -version >/dev/null
-          ffprobe -version >/dev/null
+          /usr/local/bin/openclaw-telegram-mantis-sut --help >/dev/null
+          /usr/local/bin/openclaw-telegram-desktop-recorder --help >/dev/null
+
+      - name: Build local Telegram Desktop image
+        shell: bash
+        run: |
+          set -euo pipefail
+          crabbox --version
+          bash scripts/mantis/build-telegram-desktop-image.sh
 
       - name: Prepare proof worktrees with pinned toolchain
         env:
@@ -395,6 +351,39 @@ jobs:
           test "$(git -C "$baseline_root" rev-parse HEAD)" = "$BASELINE_SHA"
           test "$(git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"
 
+      - name: Install TDLib and restore Telegram QA user
+        env:
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CREDENTIAL_OWNER_ID: mantis-telegram-desktop-${{ github.run_id }}-${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tdlib_dir="${RUNNER_TEMP}/mantis-tdlib"
+          credential_dir="/tmp/openclaw-mantis-telegram-user-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$tdlib_dir" "$credential_dir/user-driver" "$credential_dir/desktop"
+          tdlib_url=http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz
+          tdlib_sha256=943518ad39f67e20f843713ba5c88fedbd06111fbc314c61bfb2fc3f1a45743e
+          curl --fail --location --retry 3 --output "$tdlib_dir/tdlib-v1.8.0-linux-x64.tgz" "$tdlib_url"
+          curl --fail --location --retry 3 --output "$tdlib_dir/tdlib-v1.8.0-linux-x64.tgz.sha256" "${tdlib_url}.sha256"
+          printf '%s  tdlib-v1.8.0-linux-x64.tgz\n' "$tdlib_sha256" \
+            | cmp - "$tdlib_dir/tdlib-v1.8.0-linux-x64.tgz.sha256"
+          (cd "$tdlib_dir" && sha256sum --strict --check tdlib-v1.8.0-linux-x64.tgz.sha256)
+          tar -xzf "$tdlib_dir/tdlib-v1.8.0-linux-x64.tgz" -C "$tdlib_dir"
+          sudo install -m 0755 "$tdlib_dir/tdlib-v1.8.0-linux-x64/lib/libtdjson.so" /usr/local/lib/libtdjson.so
+          node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
+            --user-driver-dir "$credential_dir/user-driver" \
+            --desktop-workdir "$credential_dir/desktop" \
+            --lease-file "$credential_dir/lease.json" \
+            --payload-output "$credential_dir/payload.json" \
+            --credential-role ci
+          chmod 0700 "$credential_dir" "$credential_dir/user-driver"
+          {
+            echo "OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE=$credential_dir/lease.json"
+            echo "OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD=$credential_dir/payload.json"
+            echo "TELEGRAM_USER_DRIVER_STATE_DIR=$credential_dir/user-driver"
+          } >> "$GITHUB_ENV"
+
       - name: Ensure agent key exists
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
@@ -413,11 +402,10 @@ jobs:
           {
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
-            printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_AWS_REGION CRABBOX_CAPACITY_REGIONS CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
             printf '%s\n' 'Defaults env_keep += "GH_TOKEN GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
             printf '%s\n' 'Defaults env_keep += "MANTIS_NODE_BIN MANTIS_PNPM_BIN"'
-            printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CREDENTIAL_OWNER_ID OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
-            printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT OPENCLAW_TELEGRAM_USER_PROOF_CMD"'
+            printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CREDENTIAL_OWNER_ID"'
+            printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD OPENCLAW_TELEGRAM_MANTIS_SUT_CMD OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD OPENCLAW_TELEGRAM_USER_DRIVER_CMD TELEGRAM_USER_DRIVER_STATE_DIR"'
             printf '%s\n' 'codex ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container'
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
@@ -432,6 +420,7 @@ jobs:
             workspace_parent="$(dirname "$workspace_parent")"
           done
           sudo chown -R codex:codex "$GITHUB_WORKSPACE"
+          sudo chown -R codex:codex "$(dirname "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE")"
           proof_worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo chown -R root:root "$proof_worktree_root"
           sudo chmod -R a-w "$proof_worktree_root"
@@ -444,14 +433,6 @@ jobs:
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
           CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
-          CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
-          CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
-          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
-          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
-          CRABBOX_AWS_REGION: ${{ env.CRABBOX_AWS_REGION }}
-          CRABBOX_CAPACITY_REGIONS: ${{ env.CRABBOX_CAPACITY_REGIONS }}
-          CRABBOX_LEASE_ID: ${{ needs.resolve_request.outputs.lease_id }}
-          CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           GH_TOKEN: ${{ github.token }}
           MANTIS_CANDIDATE_TRUST: ${{ needs.validate_refs.outputs.candidate_trust }}
           MANTIS_BASELINE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/baseline
@@ -464,12 +445,11 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CREDENTIAL_OWNER_ID: mantis-telegram-desktop-${{ github.run_id }}-${{ github.run_attempt }}
-          OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
-          OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
-          OPENCLAW_TELEGRAM_USER_CRABBOX_BIN: /usr/local/bin/crabbox
-          OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
-          OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT: ${{ github.workspace }}/scripts/e2e/telegram-user-driver.py
-          OPENCLAW_TELEGRAM_USER_PROOF_CMD: /usr/local/bin/openclaw-telegram-user-crabbox-proof
+          OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD: /usr/local/bin/openclaw-telegram-desktop-recorder
+          OPENCLAW_TELEGRAM_MANTIS_SUT_CMD: /usr/local/bin/openclaw-telegram-mantis-sut
+          OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD: ${{ env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD }}
+          OPENCLAW_TELEGRAM_USER_DRIVER_CMD: uv run ${{ github.workspace }}/scripts/e2e/telegram-user-driver.py
+          TELEGRAM_USER_DRIVER_STATE_DIR: ${{ env.TELEGRAM_USER_DRIVER_STATE_DIR }}
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md
@@ -482,53 +462,24 @@ jobs:
           codex-user: codex
           allow-bot-users: github-actions[bot]
 
-      - name: Release leaked Telegram proof leases
+      - name: Release Telegram QA user lease
         if: ${{ always() }}
         env:
-          CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
-          MANTIS_NODE_BIN: /usr/local/lib/mantis-toolchain/node
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! -d .artifacts/qa-e2e ]]; then
+          lease_file="${OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE:-}"
+          if [[ -z "$lease_file" ]] || ! sudo test -f "$lease_file"; then
             exit 0
           fi
-          status=0
-          mapfile -d '' session_files < <(sudo find .artifacts/qa-e2e -name session.json -type f -print0)
-          for session_file in "${session_files[@]}"; do
-            if ! sudo -u codex "$MANTIS_NODE_BIN" -e 'const fs = require("fs"); const session = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(session.command === "telegram-user-crabbox-session" ? 0 : 1);' "$session_file"; then
-              continue
-            fi
-            lease_file="${session_file%/session.json}/.session/lease.json"
-            if [[ ! -f "$lease_file" ]]; then
-              continue
-            fi
-            if ! sudo -u codex env \
-              OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
-              OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
-              OPENCLAW_TELEGRAM_USER_CRABBOX_BIN=/usr/local/bin/crabbox \
-              OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER="$CRABBOX_PROVIDER" \
-              "$MANTIS_NODE_BIN" --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-crabbox-proof.ts" \
-                finish --session "$session_file" --preview-crop telegram-window; then
-              status=1
-            fi
-          done
-          mapfile -d '' lease_files < <(sudo find .artifacts/qa-e2e -path '*/.session/lease.json' -type f -print0)
-          for lease_file in "${lease_files[@]}"; do
-            if ! sudo -u codex "$MANTIS_NODE_BIN" -e 'const fs = require("fs"); const lease = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(lease.kind === "telegram-user" ? 0 : 1);' "$lease_file"; then
-              continue
-            fi
-            if ! sudo -u codex env \
-              OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
-              OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
-              "$MANTIS_NODE_BIN" --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" \
-                release --lease-file "$lease_file"; then
-              status=1
-            fi
-          done
-          exit "$status"
+          sudo env \
+            OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
+            OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
+            /usr/local/lib/mantis-toolchain/node --import tsx \
+            "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" release \
+            --lease-file "$lease_file"
 
       - name: Validate root-owned SUT attestations
         if: ${{ always() }}

@@ -36,16 +36,15 @@ Inputs are provided as environment variables:
 - `MANTIS_CANDIDATE_TRUST`
 - `MANTIS_OUTPUT_DIR`
 - `MANTIS_INSTRUCTIONS`
-- `CRABBOX_PROVIDER`
-- `OPENCLAW_TELEGRAM_USER_PROOF_CMD`
-- optional `CRABBOX_LEASE_ID`
+- `OPENCLAW_TELEGRAM_MANTIS_SUT_CMD`
+- `OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD`
+- `OPENCLAW_TELEGRAM_USER_DRIVER_CMD`
 
 Required workflow:
 
-1. Read `.agents/skills/telegram-crabbox-e2e-proof/SKILL.md`.
-2. Inspect the PR with `gh pr view "$MANTIS_PR_NUMBER"` and
+1. Inspect the PR with `gh pr view "$MANTIS_PR_NUMBER"` and
    `gh pr diff "$MANTIS_PR_NUMBER"`.
-3. Decide whether the PR has a visibly reproducible Telegram Desktop
+2. Decide whether the PR has a visibly reproducible Telegram Desktop
    before/after. Treat these as visible until proven otherwise: message text
    formatting/content, progress drafts, native drafts, final delivery, media or
    document delivery, inline buttons, approval prompts, stop/abort behavior,
@@ -60,7 +59,7 @@ Required workflow:
    `Mantis did not generate before/after GIFs because`. Include a short
    public reason, such as `the PR changes internal session bookkeeping rather
 than Telegram-visible behavior`. Use this manifest shape and do not create
-   worktrees or start Crabbox for this case:
+   worktrees or start capture services for this case:
 
    ```json
    {
@@ -90,7 +89,7 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    ```
 
    If the PR appears visual but proof is blocked by Telegram Desktop session
-   state, authorization, credentials, Crabbox, missing Telegram client support,
+   state, authorization, credentials, local Docker, missing Telegram client support,
    unavailable media/provider setup, or another capture-infrastructure issue,
    do not describe it as a no-visual PR. Write a manifest with
    `comparison.pass: false`, skipped lanes, no artifacts, and a summary that
@@ -98,14 +97,14 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    publisher will keep that out of PR comments so the failure stays in the
    workflow logs and artifacts.
 
-4. Decide what Telegram message, mock model response, command, callback, button,
+3. Decide what Telegram message, mock model response, command, callback, button,
    media, or sequence best proves the PR. Use `MANTIS_INSTRUCTIONS` as extra
    maintainer guidance, not as a replacement for reading the PR.
    MCP App Funnel proof is not supported by the container-isolated Mantis path.
    If that is the required scenario, write the capture-infrastructure failure
-   manifest described above without leasing credentials or starting Crabbox;
-   do not pass `--mcp-app-fixture` or weaken the container boundary.
-5. Use the workflow-prepared detached worktrees named by
+   manifest described above without starting capture services;
+   do not weaken the container boundary.
+4. Use the workflow-prepared detached worktrees named by
    `MANTIS_BASELINE_ROOT` and `MANTIS_CANDIDATE_ROOT`.
    The workflow already verified their `HEAD`s and then made the worktree root
    inaccessible to the agent. Do not read, enter, execute, create, install,
@@ -113,43 +112,63 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    the only execution seam for these prepared builds.
    If `MANTIS_CANDIDATE_TRUST` is `fork-pr-head`, treat the
    candidate worktree as untrusted fork code: do not pass GitHub, OpenAI,
-   Crabbox, Convex, or other workflow secrets into candidate runtime commands.
+   Convex, or other workflow secrets into candidate runtime commands.
    The candidate SUT may receive only the proof runner's
    short-lived Telegram bot token, generated local config/state paths, and mock
    model key needed for this isolated proof.
-6. In each worktree, run the real-user Telegram Crabbox proof flow from the
-   skill with `$OPENCLAW_TELEGRAM_USER_PROOF_CMD`; do not run
-   `pnpm qa:telegram-user:crabbox` directly. Run it from the trusted workflow
-   checkout and pass
-   `--sut-container --sut-lane baseline --sut-repo-root "$MANTIS_BASELINE_ROOT"`
-   for main and
-   `--sut-container --sut-lane candidate --sut-repo-root "$MANTIS_CANDIDATE_ROOT"`
-   for the PR. Fork heads are rejected without the explicit attested lane and
-   prepared root, and
-   the root-owned wrapper is the only process allowed to mount it. This keeps
-   candidate code away from the host Codex proxy and workflow filesystem while
-   preserving real Telegram network behavior. Use
-   `$OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT`, the workflow-provided `crabbox`
-   binary, and the workflow-provided local `ffmpeg`/`ffprobe`; do not generate,
-   install, or patch replacement proof tooling during the run. Use the same
-   proof idea for baseline and candidate. Let `start` return or fail on its
-   own; do not kill it while Crabbox is still waiting for bootstrap. Use a long
-   command timeout for `start`, `send`, `view`, and `finish`. You may iterate
-   and rerun if the visual result is not convincing.
-   When the requested scenario needs `channels.telegram.linkPreview: false`,
-   pass `--link-preview false` to `start`. The runner injects that setting into
-   the isolated SUT config before Gateway startup. Do not edit the generated
-   config or restart the Gateway to apply it.
-   To prove fixed pacing between streamed blocks, pass `--human-delay-fixed-ms <milliseconds>` to `start`.
-   When the proof must show an in-place streamed edit, also pass
-   `--mock-response-chunk-delay-ms 1200` and use a mock response long enough
-   for the first chunk to clear the preview debounce. Capture both the initial
-   partial reply and the later edit before finishing.
-7. Open Telegram Desktop directly to the newest relevant message with the
-   runner `view` command before finishing each recording. Keep the chat scrolled
-   to the bottom so new proof messages appear in-frame.
-8. Finish each session with `--preview-crop telegram-window`.
-9. Build `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` with:
+5. Run the same proof idea for baseline and candidate from the trusted workflow
+   checkout. Use `${MANTIS_OUTPUT_DIR}-sessions/baseline` and
+   `${MANTIS_OUTPUT_DIR}-sessions/candidate` as the private lane directories.
+   For each lane, in order:
+
+   ```bash
+   "$OPENCLAW_TELEGRAM_MANTIS_SUT_CMD" start \
+     --lane <baseline|candidate> \
+     --repo-root <MANTIS_BASELINE_ROOT|MANTIS_CANDIDATE_ROOT> \
+     --output-dir <lane-dir>
+   sut_session=<lane-dir>/sut.json
+   chat="$(jq -r '.telegram.chat' "$sut_session")"
+   bot_token="$(jq -r '.telegram.botToken' "$sut_session")"
+
+   "$OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD" start \
+     --provider docker \
+     --output-dir <lane-dir> \
+     --chat "$chat" \
+     --user-driver "$OPENCLAW_TELEGRAM_USER_DRIVER_CMD"
+
+   TELEGRAM_E2E_SUT_BOT_TOKEN="$bot_token" \
+     $OPENCLAW_TELEGRAM_USER_DRIVER_CMD send \
+       --chat "$chat" --text <stimulus> --json --output <lane-dir>/sent.json
+   sent_id="$(jq -r '.sent.messageId' <lane-dir>/sent.json)"
+   TELEGRAM_E2E_SUT_BOT_TOKEN="$bot_token" \
+     $OPENCLAW_TELEGRAM_USER_DRIVER_CMD wait \
+       --chat "$chat" --after-message-id "$sent_id" \
+       --json --output <lane-dir>/reply.json
+   reply_id="$(jq -r '.message.messageId' <lane-dir>/reply.json)"
+
+   "$OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD" view \
+     --session <lane-dir>/recorder.json --message-id "$reply_id"
+   "$OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD" stop \
+     --session <lane-dir>/recorder.json --crop telegram-window
+   "$OPENCLAW_TELEGRAM_MANTIS_SUT_CMD" stop --session "$sut_session"
+   ```
+
+   Add SUT `start` proof controls only when the PR needs them:
+   `--mock-response-file`, `--mock-response-chunk-delay-ms`,
+   `--human-delay-fixed-ms`, or `--link-preview`. Use a response long enough
+   to make the requested delivery/edit behavior visible. Do not edit generated
+   config or restart the Gateway to apply proof controls.
+
+   Do not print `bot_token`, the SUT descriptor, credential payloads, or driver
+   state. The SUT command is the only seam allowed to mount prepared worktrees;
+   it sends the short-lived bot token to the root-owned wrapper through a
+   mode-0600 input file. If a lane fails after startup, still stop its recorder
+   when `recorder.json` exists, then stop its SUT. You may iterate when the
+   result is not convincing, but never reuse one lane's SUT for the other lane.
+
+6. Open Telegram Desktop to the newest relevant reply before stopping each
+   recording. Keep the final result near the bottom and in-frame.
+7. Build `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` with:
 
    Session artifact paths are relative to the trusted workflow checkout, not
    to the inaccessible SUT mounts. Pass the trusted checkout root for both
