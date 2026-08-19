@@ -492,7 +492,7 @@ lock_runtime_root() {
   fi
   local safe_runtime="${filesystem%%$'\t'*}"
   local image_path="${filesystem#*$'\t'}"
-  chown mantis-sut:mantis-sut "$safe_runtime"
+  chown mantis-sut:mantis-proof "$safe_runtime"
   chmod 0700 "$safe_runtime"
   if ! /usr/sbin/runuser -u mantis-sut -- \
     /bin/cp -a --no-dereference "$quarantine/." "$safe_runtime/"; then
@@ -770,9 +770,9 @@ case "$command" in
     gateway_log="$runtime_source/gateway.log"
     mock_log="$runtime_source/mock-openai.log"
     request_log="$runtime_source/mock-openai-requests.ndjson"
-    install -T -o mantis-sut -g mantis-sut -m 0600 /dev/null "$safe_runtime/gateway.log"
-    install -T -o mantis-sut -g mantis-sut -m 0600 /dev/null "$safe_runtime/mock-openai.log"
-    install -T -o mantis-sut -g mantis-sut -m 0600 /dev/null "$safe_runtime/mock-openai-requests.ndjson"
+    install -T -o mantis-sut -g mantis-proof -m 0600 /dev/null "$safe_runtime/gateway.log"
+    install -T -o mantis-sut -g mantis-proof -m 0600 /dev/null "$safe_runtime/mock-openai.log"
+    install -T -o mantis-sut -g mantis-proof -m 0600 /dev/null "$safe_runtime/mock-openai-requests.ndjson"
     export CI=1
     export GATEWAY_LOG="$gateway_log"
     export GIT_COMMIT="$attested_sha"

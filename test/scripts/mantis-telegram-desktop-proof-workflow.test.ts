@@ -872,7 +872,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain('ln -s "$safe_runtime" "$runtime_source"');
     expect(wrapper.indexOf('ln -s "$safe_runtime" "$runtime_source"')).toBeLessThan(
       wrapper.indexOf(
-        "install -T -o mantis-sut -g mantis-sut -m 0600",
+        "install -T -o mantis-sut -g mantis-proof -m 0600",
         wrapper.indexOf('ln -s "$safe_runtime" "$runtime_source"'),
       ),
     );
@@ -900,7 +900,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain("refusing to destroy runtime with pending network cleanup");
     expect(wrapper).toContain('remove_claimed_runtime_input "$runtime_parent/$1-input"');
     expect(wrapper).toContain('*) die "expected build, check, run, stop, or destroy"');
-    expect(wrapper).toContain("install -T -o mantis-sut -g mantis-sut -m 0600");
+    expect(wrapper).toContain("chown mantis-sut:mantis-proof");
+    expect(wrapper).toContain("install -T -o mantis-sut -g mantis-proof -m 0600");
+    expect(wrapper).not.toContain("mantis-sut:mantis-sut");
     expect(wrapper).toContain('attested_sha="$(attest_worktree "$repo_root" "$lane")"');
     expect(wrapper).toContain("sut-attestation.json");
     expect(wrapper.match(/run_network_probe "\$network_name"/gu)).toHaveLength(3);
