@@ -26,13 +26,8 @@ type ChannelAvatarCacheIndex = {
   imageKey: string;
 };
 
-let channelAvatarIndex = new Map<string, ChannelAvatarCacheIndex>();
-let channelAvatarBytes = new Map<string, HttpImageRepresentation>();
-
-export function clearChannelAvatarCacheForTest(): void {
-  channelAvatarIndex = new Map();
-  channelAvatarBytes = new Map();
-}
+const channelAvatarIndex = new Map<string, ChannelAvatarCacheIndex>();
+const channelAvatarBytes = new Map<string, HttpImageRepresentation>();
 
 const getSessionStoreModule = createLazyRuntimeModule(() => import("./session-utils-store.js"));
 

@@ -29,8 +29,7 @@ vi.mock("../media/store.js", () => ({
   readMediaBuffer: (...args: unknown[]) => mocks.readMedia(...args),
 }));
 
-const { clearChannelAvatarCacheForTest, handleChannelAvatarHttpRequest } =
-  await import("./channel-avatar-http.js");
+const { handleChannelAvatarHttpRequest } = await import("./channel-avatar-http.js");
 
 const PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zb0YAAAAASUVORK5CYII=",
@@ -80,7 +79,6 @@ describe("handleChannelAvatarHttpRequest", () => {
   });
 
   beforeEach(() => {
-    clearChannelAvatarCacheForTest();
     mocks.authorize.mockReset().mockResolvedValue({
       authMethod: "token",
       operatorScopes: ["operator.admin", "operator.read"],
