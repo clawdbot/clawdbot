@@ -18,6 +18,7 @@ import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeAlias } from "./models/alias-name.js";
+import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
 
 /**
  * Wizard default for non-Azure custom APIs when context length is unknown.
@@ -193,6 +194,7 @@ type ApplyCustomApiConfigParams = {
   providerId?: string;
   alias?: string;
   supportsImageInput?: boolean;
+  target?: OnboardingAgentTarget;
 };
 
 /** Raw CLI flag values for non-interactive custom API setup. */
@@ -733,6 +735,10 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     };
   }
 
+  if (params.target && params.config.agents?.ownership === "explicit") {
+    config = projectCustomAgentModelState(config, params.config, params.target);
+  }
+
   return {
     config,
     providerId,
@@ -741,4 +747,33 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
       ? { providerIdRenamedFrom: providerIdResult.providerIdRenamedFrom }
       : {}),
   };
+}
+
+function projectCustomAgentModelState(
+  configured: OpenClawConfig,
+  original: OpenClawConfig,
+  target: OnboardingAgentTarget,
+): OpenClawConfig {
+  const authoredEntryKey = Object.keys(original.agents?.entries ?? {}).find(
+    (key) => key.trim().toLowerCase() === target.agentId,
+  );
+  const originalEntry = authoredEntryKey ? original.agents?.entries?.[authoredEntryKey] : undefined;
+  const configuredDefaults = configured.agents?.defaults;
+  const nextAgents = {
+    ...configured.agents,
+    entries: {
+      ...configured.agents?.entries,
+      [authoredEntryKey ?? target.agentId]: {
+        ...originalEntry,
+        ...(configuredDefaults?.model !== undefined ? { model: configuredDefaults.model } : {}),
+        ...(configuredDefaults?.models !== undefined ? { models: configuredDefaults.models } : {}),
+      },
+    },
+  };
+  if (original.agents?.defaults === undefined) {
+    delete nextAgents.defaults;
+  } else {
+    nextAgents.defaults = original.agents.defaults;
+  }
+  return { ...configured, agents: nextAgents };
 }

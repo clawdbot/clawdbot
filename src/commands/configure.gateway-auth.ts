@@ -231,7 +231,7 @@ export async function promptAuthConfig(
           });
 
     if (authChoice === "custom-api-key") {
-      const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
+      const customResult = await promptCustomApiConfig({ prompter, runtime, config: next, target });
       next = customResult.config;
       break;
     }
@@ -269,10 +269,22 @@ export async function promptAuthConfig(
       runtime,
       agentId: target.agentId,
       agentDir: target.agentDir,
-      setDefaultModel: true,
+      setDefaultModel: false,
       preserveExistingDefaultModel: true,
     });
     next = applied.config;
+    if (applied.agentModelOverride) {
+      const targeted = applyOnboardingPrimaryModel(next, target, applied.agentModelOverride);
+      next = {
+        ...targeted,
+        agents: {
+          ...targeted.agents,
+          ...(beforeAuthConfig.agents?.defaults === undefined
+            ? { defaults: undefined }
+            : { defaults: beforeAuthConfig.agents.defaults }),
+        },
+      };
+    }
     preferredProvider = resolveConfiguredProviderFromAuthChange({
       before: beforeAuthConfig,
       after: next,

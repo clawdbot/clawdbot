@@ -131,6 +131,9 @@ export function applyAgentModelDefaults(
   const updated = mutate(projected);
   const updatedDefaults = updated.agents?.defaults;
   const { model: _model, models: _models, modelPolicy: _modelPolicy, ...entryRest } = entry ?? {};
+  const authoredEntryKey = Object.keys(config.agents?.entries ?? {}).find(
+    (key) => normalizeAgentId(key) === target.agentId,
+  );
   const nextEntry = {
     ...entryRest,
     ...(updatedDefaults?.model !== undefined ? { model: updatedDefaults.model } : {}),
@@ -145,7 +148,7 @@ export function applyAgentModelDefaults(
       ...config.agents,
       entries: {
         ...config.agents?.entries,
-        [target.agentId]: nextEntry,
+        [authoredEntryKey ?? target.agentId]: nextEntry,
       },
     },
   };

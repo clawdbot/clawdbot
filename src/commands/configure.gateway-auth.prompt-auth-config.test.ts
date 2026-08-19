@@ -776,4 +776,86 @@ describe("promptAuthConfig", () => {
     expect(result.agents?.defaults?.model).toBeUndefined();
     expect(result.agents?.defaults?.modelPolicy).toBeUndefined();
   });
+
+  it("projects provider-auth model defaults onto the explicit target", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("provider-auth");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          ownership: "explicit" as const,
+          defaults: { model: { primary: "provider/global" } },
+          entries: { main: {}, OPS: {} },
+        },
+      },
+      agentModelOverride: "provider/selected",
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: {
+          systemAgent: { agentId: "ops" },
+          model: { primary: "provider/original" },
+        },
+        entries: { main: {}, OPS: {} },
+      },
+    };
+    const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+    });
+
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({ setDefaultModel: false }),
+    );
+    expect(result.agents?.entries?.OPS?.model).toEqual({ primary: "provider/selected" });
+    expect(result.agents?.defaults?.model).toEqual({ primary: "provider/original" });
+    expect(result.agents?.entries?.ops).toBeUndefined();
+  });
+
+  it("projects custom-provider model metadata onto the explicit target", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("custom-api-key");
+    mocks.promptCustomApiConfig.mockResolvedValue({
+      config: {
+        agents: {
+          ownership: "explicit" as const,
+          entries: {
+            main: {},
+            OPS: {
+              model: { primary: "custom/model" },
+              models: { "custom/model": { alias: "Custom" } },
+            },
+          },
+        },
+        models: { providers: { custom: { models: [{ id: "model" }] } } },
+      },
+      providerId: "custom",
+      modelId: "model",
+    });
+
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: {}, OPS: {} },
+      },
+    };
+    const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+    });
+
+    expect(mocks.promptCustomApiConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ target: expect.objectContaining({ agentId: "ops" }) }),
+    );
+    expect(result.agents?.entries?.OPS?.model).toEqual({ primary: "custom/model" });
+    expect(result.agents?.entries?.OPS?.models).toEqual({ "custom/model": { alias: "Custom" } });
+    expect(result.agents?.defaults?.model).toBeUndefined();
+    expect(result.models?.providers?.custom?.models).toEqual([{ id: "model" }]);
+  });
 });
