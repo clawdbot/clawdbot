@@ -514,11 +514,21 @@ overwrite the last current fact. Connected inventory always wins over stored
 history, a missing stored value means false, and exact worker slots are never
 persisted or shown as offline capacity.
 
-If the device is offline before a turn is dispatched, the Gateway waits up to
-10 seconds and then returns a visible retry/reconnect error while keeping the
-session placement available for a later attempt. Gateway restart likewise
-preserves an idle device placement and reconnects its tunnel lazily on the next
-turn. A paired node remains dormant for 14 days after its exact recorded
+If the device is offline, its active placement remains active: availability is
+process-current, not a terminal placement state. `sessions.list` and
+`sessions.describe` project `runner: { kind: "device", status: "offline" }`
+until that exact current-v5 node runner reconnects. Gateway restart therefore
+shows an active device placement as offline until reconnect; current inventory
+then changes the projection to `available` and emits a session refresh. Exact
+worker slots gate new placements only and do not affect availability of a
+session the device already owns.
+
+Control UI shows **Device offline** and waits by default without giving up the
+placement, workspace, or authority. Retry the next turn after the device
+returns. **Continue on Gateway…** is a separate destructive choice: it fences
+the device owner and continues from the last Gateway-synced workspace without
+replaying the interrupted turn. Unsynced device files and in-flight work may be
+lost. A paired node remains dormant for 14 days after its exact recorded
 disconnect; at that boundary its old worker environment is treated as gone and
 the session placement reconciles normally. Pairing itself remains, so a later
 reconnect can provision a fresh environment. Legacy pairings without exact node

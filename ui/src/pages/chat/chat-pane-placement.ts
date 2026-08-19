@@ -15,6 +15,14 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { requestPlaceCatalog } from "../new-session/cloud-target.ts";
 import { projectDevicePlacements } from "../new-session/device-placement.ts";
 
+function isOfflineDevicePlacement(placement: GatewaySessionRow["placement"]): boolean {
+  return (
+    placement?.state === "active" &&
+    placement.runner?.kind === "device" &&
+    placement.runner.status === "offline"
+  );
+}
+
 export function resolveChatPaneDesktopTarget(
   session: GatewaySessionRow | undefined,
 ): string | null {
@@ -55,6 +63,7 @@ export function resolveChatPanePlacement(params: {
     requiredScope: "operator.write",
   });
   const placementState = params.row?.placement?.state;
+  const deviceOffline = isOfflineDevicePlacement(params.row?.placement);
   const moveDisabledReason = moving
     ? t("common.loading")
     : reclaiming
@@ -66,13 +75,15 @@ export function resolveChatPanePlacement(params: {
           : moveAccess.reason;
   const reclaimDisabledReason = reclaiming
     ? t("common.loading")
-    : action?.blocksActiveRun && params.row?.hasActiveRun === true
-      ? t("sessionsView.activeRun")
-      : action?.method !== "sessions.reclaim"
-        ? t("sessionsView.actionUnavailable")
-        : reclaimAccess.allowed
-          ? undefined
-          : reclaimAccess.reason;
+    : deviceOffline
+      ? t("sessionsView.offlineDeviceStopUnavailable")
+      : action?.blocksActiveRun && params.row?.hasActiveRun === true
+        ? t("sessionsView.activeRun")
+        : action?.method !== "sessions.reclaim"
+          ? t("sessionsView.actionUnavailable")
+          : reclaimAccess.allowed
+            ? undefined
+            : reclaimAccess.reason;
   return {
     moving,
     moveDisabledReason,
@@ -118,21 +129,36 @@ export async function moveChatPanePlacement(params: {
     params.publishError(access.reason);
     return;
   }
-  const { showSessionPlacementMoveDialog } =
-    await import("../../components/session-placement-move-dialog.ts");
-  const target: SessionMoveTarget | null = await showSessionPlacementMoveDialog({
-    sessionLabel: params.row.label || params.row.key,
-    activeRun: params.row.hasActiveRun === true,
-    deviceDisabledReason:
-      params.row.agentRuntime?.devicePlacementSupported === false
-        ? t("newSession.deviceRuntimeUnsupported")
-        : undefined,
-    loadCatalog: async () =>
-      await loadPlacementMoveCatalog(
-        client,
-        hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null),
-      ),
-  });
+  const agentId = parseAgentSessionKey(params.row.key)?.agentId;
+  const abandonSource = isOfflineDevicePlacement(placement);
+  let target: SessionMoveTarget | null;
+  if (abandonSource) {
+    const { showConfirmDialog } = await import("../../components/confirm-dialog.js");
+    const confirmed = await showConfirmDialog({
+      message: t("sessionsView.continueOnGatewayConfirm", {
+        session: params.row.label || params.row.key,
+      }),
+      confirmLabel: t("sessionsView.continueOnGatewayAction"),
+      danger: true,
+    });
+    target = confirmed ? { kind: "gateway" } : null;
+  } else {
+    const { showSessionPlacementMoveDialog } =
+      await import("../../components/session-placement-move-dialog.ts");
+    target = await showSessionPlacementMoveDialog({
+      sessionLabel: params.row.label || params.row.key,
+      activeRun: params.row.hasActiveRun === true,
+      deviceDisabledReason:
+        params.row.agentRuntime?.devicePlacementSupported === false
+          ? t("newSession.deviceRuntimeUnsupported")
+          : undefined,
+      loadCatalog: async () =>
+        await loadPlacementMoveCatalog(
+          client,
+          hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null),
+        ),
+    });
+  }
   if (!target) {
     return;
   }
@@ -140,7 +166,6 @@ export async function moveChatPanePlacement(params: {
     params.publishError(t("sessionsView.actionUnavailable"));
     return;
   }
-  const agentId = parseAgentSessionKey(params.row.key)?.agentId;
   params.onMovingChange(params.row.key);
   try {
     await client.request("sessions.move", {
@@ -152,6 +177,7 @@ export async function moveChatPanePlacement(params: {
         ownerEpoch: placement.activeOwnerEpoch,
       },
       target,
+      ...(abandonSource ? { abandonSource: true } : {}),
     });
     if (params.isCurrent(client, params.connectionGeneration)) {
       await params.refreshReplacement(agentId);
@@ -183,9 +209,11 @@ export async function reclaimChatPanePlacement(params: {
   const connectionGeneration = params.connectionGeneration;
   const action = resolveCloudWorkerStopAction(params.row.placement);
   const reclaiming = params.reclaimingKey === params.row.key;
+  const deviceOffline = isOfflineDevicePlacement(params.row.placement);
   if (
     !client ||
     reclaiming ||
+    deviceOffline ||
     (action?.blocksActiveRun && params.row.hasActiveRun === true) ||
     action?.method !== "sessions.reclaim"
   ) {
@@ -200,11 +228,18 @@ export async function reclaimChatPanePlacement(params: {
     return;
   }
   const { showConfirmDialog } = await import("../../components/confirm-dialog.js");
+  const deviceWorker =
+    params.row.placement?.state === "active" && params.row.placement.runner?.kind === "device";
   const confirmed = await showConfirmDialog({
-    message: t("sessionsView.stopCloudWorkerConfirm", {
-      session: params.row.label || params.row.key,
-    }),
-    confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
+    message: t(
+      deviceWorker ? "sessionsView.stopDeviceWorkerConfirm" : "sessionsView.stopCloudWorkerConfirm",
+      { session: params.row.label || params.row.key },
+    ),
+    confirmLabel: t(
+      deviceWorker
+        ? "sessionsView.stopDeviceWorkerConfirmAction"
+        : "sessionsView.stopCloudWorkerConfirmAction",
+    ),
     danger: true,
   });
   if (!confirmed) {

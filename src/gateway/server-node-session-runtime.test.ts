@@ -115,26 +115,42 @@ describe("gateway node session runtime", () => {
         connId: "conn-original",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: false },
+          workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
         },
       }),
     ).toEqual({ changed: true });
-    expect(broadcast).toHaveBeenLastCalledWith(
+    expect(broadcast).toHaveBeenNthCalledWith(
+      1,
       GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
       { nodeId: "node-a" },
       { dropIfSlow: true },
     );
+    expect(broadcast).toHaveBeenNthCalledWith(
+      2,
+      "sessions.changed",
+      { reason: "runner-availability" },
+      { dropIfSlow: true },
+    );
+    expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(true);
     expect(onRunnerInventoryChanged).toHaveBeenLastCalledWith("node-a");
 
     registerNode(runtime, "conn-replacement", "generation-a", []);
 
-    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenCalledTimes(4);
     expect(onRunnerInventoryChanged).toHaveBeenCalledTimes(2);
-    expect(broadcast).toHaveBeenLastCalledWith(
+    expect(broadcast).toHaveBeenNthCalledWith(
+      3,
       GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
       { nodeId: "node-a" },
       { dropIfSlow: true },
     );
+    expect(broadcast).toHaveBeenNthCalledWith(
+      4,
+      "sessions.changed",
+      { reason: "runner-availability" },
+      { dropIfSlow: true },
+    );
+    expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(false);
   });
 
   test("forwards subscribed payload json without parsing it again", async () => {

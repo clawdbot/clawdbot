@@ -146,6 +146,7 @@ describe("worker session placement moves", () => {
         sessionId: SESSION.sessionId,
         source,
         target: { kind: "gateway" },
+        abandonSource: false,
         lastError: null,
       },
       placement: {
@@ -175,6 +176,64 @@ describe("worker session placement moves", () => {
         target: { kind: "profile", profileId: "other-profile" },
       }),
     ).toThrow("already has a conflicting placement move");
+    expect(() =>
+      store.beginPlacementMove({
+        sessionId: SESSION.sessionId,
+        source,
+        target: { kind: "gateway" },
+        abandonSource: true,
+      }),
+    ).toThrow("already has a conflicting placement move");
+  });
+
+  it("persists explicit abandonment and atomically completes its exact failed source", () => {
+    const active = advanceToActive();
+    seedAttachedEnvironment({
+      environmentId: active.environmentId,
+      sessionId: active.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
+    const begun = store.beginPlacementMove({
+      sessionId: active.sessionId,
+      source: {
+        generation: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+      abandonSource: true,
+    });
+    expect(store.getPlacementMove(active.sessionId)).toMatchObject({ abandonSource: true });
+    const reconciling = store.startReconcile({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: begun.placement.generation,
+    });
+    const recoveryError = "Worker result abandoned by forced operator teardown";
+    const failed = store.fail({
+      sessionId: active.sessionId,
+      expectedGeneration: reconciling.generation,
+      recoveryError,
+    });
+    expect(() =>
+      store.completeAbandonedPlacementMoveSourceToLocal({
+        operationId: begun.intent.operationId,
+        sessionId: active.sessionId,
+        expectedGeneration: failed.generation,
+        expectedRecoveryError: "different abandonment",
+      }),
+    ).toThrow("Cannot complete stale abandoned placement move");
+
+    expect(
+      store.completeAbandonedPlacementMoveSourceToLocal({
+        operationId: begun.intent.operationId,
+        sessionId: active.sessionId,
+        expectedGeneration: failed.generation,
+        expectedRecoveryError: recoveryError,
+      }),
+    ).toMatchObject({ state: "local", generation: failed.generation + 1 });
+    expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
   });
 
   it("persists a profile machine class and joins only the exact target", () => {
@@ -423,6 +482,10 @@ describe("worker session placement moves", () => {
       runMoveBarrier: async ({ begin }) => begin(),
       dispatch,
       reclaimSource,
+      validateAbandonSource: vi.fn(),
+      abandonSource: vi.fn(async () => {
+        throw new Error("unexpected source abandonment");
+      }),
       resolveDestination: async (_identity, target) => {
         if (target.kind !== "profile") {
           throw new Error("expected profile move target");

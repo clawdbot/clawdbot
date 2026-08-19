@@ -2,9 +2,12 @@ import type {
   SessionPlacement,
   SessionPlacementDiskSpace,
   SessionPlacementMove,
+  SessionPlacementRunner,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
+import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
@@ -15,6 +18,38 @@ export type WorkerPlacementDiskSpaceReader = {
   read(record: WorkerSessionPlacementRecord): SessionPlacementDiskSpace | undefined;
   version(): number;
 };
+
+export type WorkerPlacementRunnerAvailabilityReader = {
+  read(record: WorkerSessionPlacementRecord): SessionPlacementRunner | undefined;
+};
+
+export function createWorkerPlacementRunnerAvailabilityReader(params: {
+  environments: Pick<WorkerEnvironmentServiceContract, "get">;
+  hasCurrentDeviceRunner: (deviceId: string) => boolean;
+}): WorkerPlacementRunnerAvailabilityReader {
+  return {
+    read: (record) => {
+      if (record.state !== "active") {
+        return undefined;
+      }
+      const environment = params.environments.get(record.environmentId);
+      if (
+        environment?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
+        environment.state !== "attached" ||
+        environment.ownerEpoch !== record.activeOwnerEpoch ||
+        environment.attachedSessionIds.length !== 1 ||
+        environment.attachedSessionIds[0] !== record.sessionId ||
+        !environment.nodeDeviceId
+      ) {
+        return undefined;
+      }
+      return {
+        kind: "device",
+        status: params.hasCurrentDeviceRunner(environment.nodeDeviceId) ? "available" : "offline",
+      };
+    },
+  };
+}
 
 export function projectWorkerPlacementMove(
   intent: WorkerPlacementMoveIntent,
@@ -30,6 +65,7 @@ export function projectWorkerPlacementMove(
 export function projectWorkerSessionPlacement(
   record: WorkerSessionPlacementRecord,
   diskSpace?: SessionPlacementDiskSpace,
+  runner?: SessionPlacementRunner,
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -87,6 +123,7 @@ export function projectWorkerSessionPlacement(
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
         ...(diskSpace ? { diskSpace } : {}),
+        ...(runner ? { runner } : {}),
         ...conflict,
       };
     case "draining":

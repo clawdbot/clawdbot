@@ -601,6 +601,45 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("threads explicit Gateway abandonment through the existing move service", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const move = vi.fn().mockResolvedValue({ state: "local", generation: 8 });
+    const source = { generation: 4, environmentId: "environment-device", ownerEpoch: 3 };
+
+    await invokeSessionMove(
+      makeContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), move } as never,
+        workerSessionPlacementService: {
+          getMany: () => new Map([[sessionId, activePlacementRecord()]]),
+        },
+      }),
+      { expected: source, target: { kind: "gateway" }, abandonSource: true },
+    );
+
+    expect(move).toHaveBeenCalledWith(
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        source,
+        target: { kind: "gateway" },
+        abandonSource: true,
+      },
+      expect.any(Function),
+      undefined,
+    );
+  });
+
   it("resolves a worker move through the canonical destination owner", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({

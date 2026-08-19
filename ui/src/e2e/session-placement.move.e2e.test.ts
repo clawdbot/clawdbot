@@ -11,10 +11,24 @@ import {
 const suite = createChatFlowE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "session-placement-move");
+const runnerOfflineProofName = process.env.OPENCLAW_RUNNER_OFFLINE_SCREENSHOT;
+const runnerOfflineProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "runner-offline",
+);
 
 async function capture(page: Page, name: string): Promise<void> {
   if (captureProof) {
     await page.screenshot({ path: path.join(proofDir, name) });
+  }
+}
+
+async function captureRunnerOffline(page: Page): Promise<void> {
+  if (runnerOfflineProofName) {
+    await mkdir(runnerOfflineProofDir, { recursive: true });
+    await page.screenshot({ path: path.join(runnerOfflineProofDir, runnerOfflineProofName) });
   }
 }
 
@@ -145,6 +159,77 @@ suite.define(() => {
         placement: { state: "active", generation: 10 },
       });
       await capture(page, "04-moved.png");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("waits for an offline device or explicitly continues from Gateway-synced state", async () => {
+    const context = await suite.newBrowserContext(contextOptions());
+    const page = await context.newPage();
+    const session = activeSession();
+    session.placement = {
+      ...session.placement,
+      runner: { kind: "device", status: "offline" },
+    } as typeof session.placement;
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.startup", "sessions.move"],
+      operatorScopes: ["operator.read", "operator.write"],
+      historyMessages: [{ role: "assistant", content: "Offline device recovery proof." }],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([session]),
+      },
+      sessionKey: "agent:main:placement-move",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".chat-pane__placement-chip").waitFor();
+      await page.getByRole("button", { name: "Device offline" }).waitFor();
+      await page.locator(".chat-pane__placement-chip").click();
+      await page
+        .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
+        .waitFor();
+      session.placement = {
+        ...session.placement,
+        runner: { kind: "device", status: "available" },
+      } as typeof session.placement;
+      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
+      await page.getByRole("button", { name: "Runs on device" }).waitFor();
+      expect(await page.locator(".chat-pane__placement-note").count()).toBe(0);
+
+      session.placement = {
+        ...session.placement,
+        runner: { kind: "device", status: "offline" },
+      } as typeof session.placement;
+      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
+      await page.getByRole("button", { name: "Device offline" }).waitFor();
+      const continueAction = page.getByText("Continue on Gateway…", { exact: true });
+      if (!(await continueAction.isVisible())) {
+        await page.getByRole("button", { name: "Device offline" }).click();
+      }
+      const moveItem = page.locator(".chat-pane__placement-move");
+      const reclaimItem = page.locator(".chat-pane__placement-reclaim");
+      expect(await moveItem.isDisabled()).toBe(false);
+      expect(await reclaimItem.isDisabled()).toBe(true);
+      expect(await reclaimItem.getAttribute("title")).toContain("Reconnect the device");
+      await captureRunnerOffline(page);
+      await continueAction.click();
+      await page.getByText("Unsynced device files", { exact: false }).waitFor();
+      await page.getByRole("button", { name: "Continue on Gateway", exact: true }).click();
+
+      const request = await gateway.waitForRequest("sessions.move");
+      expect(request.params).toEqual({
+        key: "agent:main:placement-move",
+        agentId: "main",
+        expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+        target: { kind: "gateway" },
+        abandonSource: true,
+      });
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+      expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

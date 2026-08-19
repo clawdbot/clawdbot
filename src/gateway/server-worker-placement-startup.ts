@@ -28,6 +28,7 @@ import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/pla
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
+import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
@@ -93,6 +94,7 @@ export function createGatewayWorkerPlacementRuntime(
     githubPublicationRuntime?: ReturnType<typeof createGitHubPublicationRuntime>;
   },
 ) {
+  let nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport | undefined;
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const {
     coordinator: githubPublication,
@@ -114,6 +116,11 @@ export function createGatewayWorkerPlacementRuntime(
     placements: params.placements,
     environments: params.environments,
     warn: params.warn,
+  });
+  const runnerAvailability = createWorkerPlacementRunnerAvailabilityReader({
+    environments: params.environments,
+    hasCurrentDeviceRunner: (deviceId) =>
+      nodeWorkerSupervisorTransport?.hasCurrentRunner(deviceId) === true,
   });
   const reclaimBarriers = createGatewayWorkerPlacementReclaimBarriers({
     placements: params.placements,
@@ -170,6 +177,7 @@ export function createGatewayWorkerPlacementRuntime(
     createWorkerPlacementDispatchService({
       placements: params.placements,
       environments: params.environments,
+      runnerAvailability,
       ...workspaceConflictHandlers,
       ...reclaimBarriers,
       runLocalBarrier: async ({
@@ -699,11 +707,14 @@ export function createGatewayWorkerPlacementRuntime(
     dispatchService,
     admissionProvider,
     diskSpace,
+    runnerAvailability,
     placements: params.placements,
     githubPublication,
     resolveNodeWorkspaceBinding,
-    bindNodeWorkerSupervisorTransport: (transport: NodeWorkerSupervisorTransport) =>
-      nodeWorkspaceRetention.bindTransport(transport),
+    bindNodeWorkerSupervisorTransport: (transport: NodeWorkerSupervisorTransport) => {
+      nodeWorkerSupervisorTransport = transport;
+      nodeWorkspaceRetention.bindTransport(transport);
+    },
     scheduleNodeWorkspaceRetention: (nodeId?: string) => nodeWorkspaceRetention.schedule(nodeId),
     startRuntime,
   };

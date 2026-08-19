@@ -74,6 +74,7 @@ type NodeWorkerBundleStatusObservation = {
 
 export type NodeWorkerSupervisorTransport = {
   listCurrentNodes(): Promise<readonly NodeWorkerSupervisorNodeProof[]>;
+  hasCurrentRunner(nodeId: string): boolean;
   getIssue?(nodeId: string): NodeRunnerInventoryIssue | undefined;
   getBundleStatus?(nodeId: string): NodeWorkerBundleStatusObservation | undefined;
   acceptBundleStatus?(
@@ -461,6 +462,14 @@ export function registerNodeRegistryPrivateRuntime(
         const proof = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
         return proof ? [proof] : [];
       });
+    },
+    hasCurrentRunner: (nodeId) => {
+      const node = context.getNode(nodeId);
+      return Boolean(
+        node &&
+        node.client.invalidated !== true &&
+        resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn),
+      );
     },
     getIssue: (nodeId) => {
       const node = context.getNode(nodeId);

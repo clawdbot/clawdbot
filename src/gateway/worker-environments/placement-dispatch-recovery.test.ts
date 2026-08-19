@@ -485,6 +485,7 @@ describe("worker placement restart recovery", () => {
       const recovery = createWorkerPlacementDispatchService({
         placements,
         environments: workerService,
+        runnerAvailability: { read: () => undefined },
         workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
         runLocalBarrier: async ({ startDispatch }) => startDispatch(),
         runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),

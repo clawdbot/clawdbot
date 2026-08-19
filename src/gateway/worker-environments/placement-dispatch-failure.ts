@@ -35,6 +35,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "beginPlacementMove"
   | "cancelPlacementMove"
   | "completePlacementMoveSourceToLocal"
+  | "completeAbandonedPlacementMoveSourceToLocal"
   | "completePlacementMoveToWorker"
   | "getPlacementMove"
   | "listPlacementMoves"
