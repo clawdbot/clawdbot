@@ -94,7 +94,7 @@ describe("llama-server provider catalog", () => {
     const ctx = catalogContext();
     ctx.config.models = {
       providers: {
-        "llama-server": {
+        "llama-cpp": {
           baseUrl: "http://localhost:8080/v1",
           headers: { Authorization: "Bearer proxy-key" },
           models: [],
@@ -125,7 +125,7 @@ describe("llama-server provider catalog", () => {
     const ctx = catalogContext();
     ctx.config.models = {
       providers: {
-        "llama-server": {
+        "llama-cpp": {
           baseUrl: "http://localhost:8080/v1",
           models: [model().config],
         },
@@ -147,7 +147,7 @@ describe("llama-server provider catalog", () => {
     await expect(listLlamaServerCatalog(ctx)).resolves.toEqual([
       expect.objectContaining({
         kind: "text",
-        provider: "llama-server",
+        provider: "llama-cpp",
         model: "org/model:Q4",
         source: "live",
         warnings: ["llama-server model is sleeping"],
@@ -175,7 +175,7 @@ describe("llama-server provider catalog", () => {
     discoverMock.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
     const base = {
       config: {},
-      provider: "llama-server",
+      provider: "llama-cpp",
       modelId: "org/model:Q4",
       modelRegistry: {},
       providerConfig: {
@@ -216,7 +216,7 @@ describe("llama-server provider catalog", () => {
       (_, index) =>
         ({
           config: {},
-          provider: "llama-server",
+          provider: "llama-cpp",
           modelId: "org/model:Q4",
           modelRegistry: {},
           agentRuntimeId: `runtime-${index}`,
@@ -322,7 +322,7 @@ describe("llama-server provider catalog", () => {
     discoverMock.mockResolvedValue(success());
     const ctx = {
       config: {},
-      provider: "llama-server",
+      provider: "llama-cpp",
       modelId: "org/model:Q4",
       modelRegistry: {},
       providerConfig: {
@@ -334,7 +334,7 @@ describe("llama-server provider catalog", () => {
     await prepareLlamaServerDynamicModels(ctx);
 
     expect(resolveLlamaServerDynamicModel(ctx)).toMatchObject({
-      provider: "llama-server",
+      provider: "llama-cpp",
       id: "org/model:Q4",
       baseUrl: "http://localhost:8080/v1",
       api: "openai-completions",

@@ -64,7 +64,7 @@ export {
 } from "../agents/auth-profiles/store.js";
 export {
   listProfilesForProvider,
-  removeProviderAuthProfilesWithLock,
+  removeAuthProfilesWithLock,
   upsertAuthProfile,
   upsertAuthProfileWithLock,
 } from "../agents/auth-profiles/profiles.js";

@@ -16,7 +16,7 @@ function capturePayloadHook(
     streamFn: underlying,
     thinkingLevel,
   } as ProviderWrapStreamFnContext);
-  void wrapped({ provider: "llama-server" } as never, { messages: [] }, options as never);
+  void wrapped({ provider: "llama-cpp" } as never, { messages: [] }, options as never);
   if (!payloadHook) {
     throw new Error("expected llama-server payload hook");
   }

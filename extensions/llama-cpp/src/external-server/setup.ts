@@ -9,32 +9,33 @@ import {
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   normalizeOptionalSecretInput,
-  removeProviderAuthProfilesWithLock,
   upsertAuthProfileWithLock,
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
+import {
+  removeAuthProfileConfig,
+  removeProviderAuthProfilesWithLock,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   type ModelProviderConfig,
   selectPreferredLocalModelId,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyProviderDefaultModel } from "openclaw/plugin-sdk/provider-setup";
 import {
+  buildLlamaCppAuthProfileRemovalPatch,
+  LLAMA_CPP_DEFAULT_PROFILE_ID as PROFILE_ID,
+} from "../auth-config.js";
+import { LLAMA_CPP_PROVIDER_ID, LLAMA_CPP_PROVIDER_LABEL } from "../defaults.js";
+import {
   hasLlamaServerAuthorizationHeader,
   resolveLlamaServerProviderHeaders,
   resolveLlamaServerRuntimeApiKey,
 } from "./auth.js";
-import {
-  LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
-  LLAMA_SERVER_DEFAULT_ORIGIN,
-  LLAMA_SERVER_PROVIDER_ID,
-  LLAMA_SERVER_PROVIDER_LABEL,
-} from "./defaults.js";
+import { LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR, LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
 import { discoverLlamaServer, type LlamaServerDiscoveryResult } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
-
-const PROFILE_ID = `${LLAMA_SERVER_PROVIDER_ID}:default`;
 
 function selectSetupModelId(discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>) {
   const healthy = discovery.models.filter((model) => !model.failed);
@@ -63,47 +64,56 @@ function describeDiscoveryFailure(
   }
 }
 
-function stripCredentialOverrides(
+function stripAuthOverrides(
   provider: ModelProviderConfig | undefined,
+  removeAuthorization: boolean,
 ): ModelProviderConfig | undefined {
   if (!provider) {
     return provider;
   }
-  const headers = Object.fromEntries(
-    Object.entries(provider.headers ?? {}).filter(
-      ([name]) => name.toLowerCase() !== "authorization",
-    ),
-  );
+  const headers = removeAuthorization
+    ? Object.fromEntries(
+        Object.entries(provider.headers ?? {}).filter(
+          ([name]) => name.toLowerCase() !== "authorization",
+        ),
+      )
+    : provider.headers;
   return {
     ...provider,
     auth: undefined,
     apiKey: undefined,
-    headers: Object.keys(headers).length > 0 ? headers : undefined,
+    ...(removeAuthorization
+      ? { headers: headers && Object.keys(headers).length > 0 ? headers : undefined }
+      : {}),
   };
-}
-
-function stripApiKeyOverrides(
-  provider: ModelProviderConfig | undefined,
-): ModelProviderConfig | undefined {
-  return provider
-    ? {
-        ...provider,
-        auth: undefined,
-        apiKey: undefined,
-      }
-    : undefined;
 }
 
 function stripEndpointCredentials(
   provider: ModelProviderConfig | undefined,
 ): ModelProviderConfig | undefined {
-  return provider
-    ? {
-        ...provider,
-        apiKey: undefined,
-        headers: undefined,
-      }
-    : undefined;
+  if (!provider) {
+    return undefined;
+  }
+  const { localService: _localService, ...external } = provider;
+  if (!provider.localService) {
+    return { ...external, auth: undefined, apiKey: undefined, headers: undefined };
+  }
+  const {
+    auth: _auth,
+    apiKey: _apiKey,
+    headers: _headers,
+    localService: _managedService,
+    models: _managedModels,
+    params: managedParams,
+    timeoutSeconds: _managedTimeout,
+    ...externalProvider
+  } = provider;
+  const { modelCacheDir: _modelCacheDir, ...params } = managedParams ?? {};
+  return {
+    ...externalProvider,
+    models: [],
+    params: Object.keys(params).length > 0 ? params : undefined,
+  };
 }
 
 function hasEndpointChanged(provider: ModelProviderConfig | undefined, baseUrl: string): boolean {
@@ -117,33 +127,9 @@ function hasEndpointChanged(provider: ModelProviderConfig | undefined, baseUrl: 
   );
 }
 
-function removeLlamaServerAuthProfileConfig(config: OpenClawConfig): OpenClawConfig {
-  const profiles = Object.fromEntries(
-    Object.entries(config.auth?.profiles ?? {}).filter(([id]) => id !== PROFILE_ID),
-  );
-  const order = Object.entries(config.auth?.order ?? {}).reduce<Record<string, string[]>>(
-    (nextOrder, [providerId, providerOrder]) => {
-      const next = providerOrder.filter((id) => id !== PROFILE_ID);
-      if (next.length > 0 || next.length === providerOrder.length) {
-        nextOrder[providerId] = next;
-      }
-      return nextOrder;
-    },
-    {},
-  );
-  return {
-    ...config,
-    auth: {
-      ...config.auth,
-      profiles,
-      order: Object.keys(order).length > 0 ? order : undefined,
-    },
-  };
-}
-
 function stripLlamaServerEndpointAuth(config: OpenClawConfig): OpenClawConfig {
-  const withoutProfile = removeLlamaServerAuthProfileConfig(config);
-  const provider = withoutProfile.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const withoutProfile = removeAuthProfileConfig(config, PROFILE_ID);
+  const provider = withoutProfile.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const endpointSafeProvider = stripEndpointCredentials(provider);
   if (!endpointSafeProvider) {
     return withoutProfile;
@@ -154,87 +140,69 @@ function stripLlamaServerEndpointAuth(config: OpenClawConfig): OpenClawConfig {
       ...withoutProfile.models,
       providers: {
         ...withoutProfile.models?.providers,
-        [LLAMA_SERVER_PROVIDER_ID]: endpointSafeProvider,
+        [LLAMA_CPP_PROVIDER_ID]: endpointSafeProvider,
       },
     },
   };
 }
 
-function buildAuthProfileRemovalPatch(config: OpenClawConfig): Partial<OpenClawConfig> {
-  const profiles = config.auth?.profiles;
-  const order = config.auth?.order;
-  const profileExists = profiles ? Object.hasOwn(profiles, PROFILE_ID) : false;
-  const referencedOrders = Object.entries(order ?? {}).filter(([, ids]) =>
-    ids.includes(PROFILE_ID),
-  );
-  if (!profileExists && referencedOrders.length === 0) {
-    return {};
-  }
-  const profilePatch = profileExists ? { [PROFILE_ID]: undefined } : undefined;
-  const orderPatch = Object.fromEntries(
-    referencedOrders.map(([providerId, ids]) => {
-      const next = ids.filter((id) => id !== PROFILE_ID);
-      return [providerId, next.length > 0 ? next : undefined];
-    }),
-  );
-  const authPatch: NonNullable<OpenClawConfig["auth"]> = {};
-  // Config patches use undefined map values as deletion markers.
-  if (profilePatch) {
-    Reflect.set(authPatch, "profiles", profilePatch);
-  }
-  if (referencedOrders.length > 0) {
-    Reflect.set(authPatch, "order", orderPatch);
-  }
-  return { auth: authPatch };
+type EndpointTransition<T> = {
+  endpoint: "unchanged" | "replacement";
+  auth: { kind: "preserve" } | { kind: "api-key"; value: T } | { kind: "no-api-key" };
+};
+
+function buildExistingProviderConfig(params: {
+  config: OpenClawConfig;
+  discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
+  transition: EndpointTransition<unknown>;
+}): ModelProviderConfig {
+  const configured = params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  const endpointSafe =
+    params.transition.endpoint === "replacement"
+      ? stripEndpointCredentials(configured)
+      : configured;
+  const existing =
+    params.transition.auth.kind === "preserve"
+      ? endpointSafe
+      : stripAuthOverrides(endpointSafe, params.transition.auth.kind === "api-key");
+  return buildLlamaServerProviderConfig({
+    configured: {
+      ...existing,
+      baseUrl: params.discovery.endpoint.inferenceBaseUrl,
+      models: existing?.models ?? [],
+    },
+    discoveredModels: params.discovery.models,
+  });
 }
 
 function buildSetupResult(params: {
   config: OpenClawConfig;
   discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
   modelId: string;
-  credentialInput?: SecretInput;
-  useApiKey?: boolean;
-  clearApiKeyOverrides?: boolean;
-  clearStoredProfile?: boolean;
-  clearEndpointCredentials?: boolean;
+  transition: EndpointTransition<SecretInput | undefined>;
 }): ProviderAuthResult {
-  const configuredProvider = params.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
-  const endpointSafeProvider = params.clearEndpointCredentials
-    ? stripEndpointCredentials(configuredProvider)
-    : configuredProvider;
-  const existingProvider = params.useApiKey
-    ? stripCredentialOverrides(endpointSafeProvider)
-    : params.clearApiKeyOverrides
-      ? stripApiKeyOverrides(endpointSafeProvider)
-      : endpointSafeProvider;
+  const credentialInput =
+    params.transition.auth.kind === "api-key" ? params.transition.auth.value : undefined;
   return {
-    profiles: params.credentialInput
+    profiles: credentialInput
       ? [
           {
             profileId: PROFILE_ID,
-            credential: buildApiKeyCredential(
-              LLAMA_SERVER_PROVIDER_ID,
-              params.credentialInput,
-              undefined,
-              { config: params.config },
-            ),
+            credential: buildApiKeyCredential(LLAMA_CPP_PROVIDER_ID, credentialInput, undefined, {
+              config: params.config,
+            }),
           },
         ]
       : [],
-    defaultModel: `${LLAMA_SERVER_PROVIDER_ID}/${params.modelId}`,
+    defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${params.modelId}`,
     configPatch: {
-      ...(params.clearStoredProfile ? buildAuthProfileRemovalPatch(params.config) : {}),
+      ...(params.transition.auth.kind !== "preserve" && !credentialInput
+        ? buildLlamaCppAuthProfileRemovalPatch(params.config)
+        : {}),
       models: {
         mode: params.config.models?.mode ?? "merge",
         providers: {
-          [LLAMA_SERVER_PROVIDER_ID]: buildLlamaServerProviderConfig({
-            configured: {
-              ...existingProvider,
-              baseUrl: params.discovery.endpoint.inferenceBaseUrl,
-              models: existingProvider?.models ?? [],
-            },
-            discoveredModels: params.discovery.models,
-          }),
+          [LLAMA_CPP_PROVIDER_ID]: buildExistingProviderConfig(params),
         },
       },
     },
@@ -244,7 +212,7 @@ function buildSetupResult(params: {
 async function removeDefaultAuthProfile(agentDir?: string): Promise<void> {
   const updated = await removeProviderAuthProfilesWithLock({
     agentDir,
-    provider: LLAMA_SERVER_PROVIDER_ID,
+    provider: LLAMA_CPP_PROVIDER_ID,
     profileIds: [PROFILE_ID],
   });
   if (!updated) {
@@ -264,7 +232,7 @@ async function discoverForSetup(params: {
   reuseStoredAuth?: boolean;
 }): Promise<LlamaServerDiscoveryResult> {
   const reuseStoredAuth = params.reuseStoredAuth !== false;
-  const providerConfig = params.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const providerConfig = params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const headers = reuseStoredAuth
     ? await resolveLlamaServerProviderHeaders({
         config: params.config,
@@ -293,7 +261,10 @@ async function discoverForSetup(params: {
 export async function detectLlamaServerSetup(
   ctx: ProviderAppGuidedSetupContext,
 ): Promise<{ modelRef: string; detail?: string } | null> {
-  const provider = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (provider?.localService) {
+    return null;
+  }
   const baseUrl = provider?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN;
   let discovery: LlamaServerDiscoveryResult;
   try {
@@ -314,7 +285,7 @@ export async function detectLlamaServerSetup(
     return null;
   }
   return {
-    modelRef: `${LLAMA_SERVER_PROVIDER_ID}/${modelId}`,
+    modelRef: `${LLAMA_CPP_PROVIDER_ID}/${modelId}`,
     detail: `${modelId} at ${discovery.endpoint.origin}`,
   };
 }
@@ -323,7 +294,10 @@ export async function detectLlamaServerSetup(
 export async function prepareLlamaServerSetup(
   ctx: ProviderAppGuidedSetupContext & { modelRef: string },
 ): Promise<ProviderAuthResult | null> {
-  const provider = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (provider?.localService) {
+    return null;
+  }
   let discovery: LlamaServerDiscoveryResult;
   try {
     discovery = await discoverForSetup({
@@ -338,26 +312,32 @@ export async function prepareLlamaServerSetup(
   if (discovery.kind !== "success") {
     return null;
   }
-  const prefix = `${LLAMA_SERVER_PROVIDER_ID}/`;
+  const prefix = `${LLAMA_CPP_PROVIDER_ID}/`;
   const modelId = ctx.modelRef.startsWith(prefix) ? ctx.modelRef.slice(prefix.length) : "";
   if (!modelId || !discovery.models.some((model) => model.config.id === modelId)) {
     return null;
   }
-  return buildSetupResult({ config: ctx.config, discovery, modelId });
+  return buildSetupResult({
+    config: ctx.config,
+    discovery,
+    modelId,
+    transition: { endpoint: "unchanged", auth: { kind: "preserve" } },
+  });
 }
 
 /** Interactive setup for an existing llama-server endpoint. */
 export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  const existing = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const defaultOrigin = resolveLlamaServerEndpoint(existing?.baseUrl).origin;
   const baseUrl = await ctx.prompter.text({
-    message: `${LLAMA_SERVER_PROVIDER_LABEL} URL`,
+    message: `${LLAMA_CPP_PROVIDER_LABEL} URL`,
     initialValue: defaultOrigin,
     placeholder: LLAMA_SERVER_DEFAULT_ORIGIN,
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
   const endpoint = resolveLlamaServerEndpoint(baseUrl);
-  const endpointChanged = hasEndpointChanged(existing, endpoint.inferenceBaseUrl);
+  const endpointChanged =
+    Boolean(existing?.localService) || hasEndpointChanged(existing, endpoint.inferenceBaseUrl);
 
   const hasExplicitAuthorization =
     !endpointChanged && hasLlamaServerAuthorizationHeader(existing?.headers);
@@ -376,7 +356,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     apiKey = await ensureApiKeyFromEnvOrPrompt({
       config: endpointChanged ? stripLlamaServerEndpointAuth(ctx.config) : ctx.config,
       env: endpointChanged ? {} : ctx.env,
-      provider: LLAMA_SERVER_PROVIDER_ID,
+      provider: LLAMA_CPP_PROVIDER_ID,
       envLabel: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
       promptMessage: "Enter the llama-server API key",
       normalize: (value) => value.trim(),
@@ -412,11 +392,10 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     config: ctx.config,
     discovery,
     modelId,
-    credentialInput,
-    useApiKey: Boolean(apiKey),
-    clearApiKeyOverrides: !usesApiKey,
-    clearStoredProfile: !credentialInput,
-    clearEndpointCredentials: endpointChanged,
+    transition: {
+      endpoint: endpointChanged ? "replacement" : "unchanged",
+      auth: usesApiKey ? { kind: "api-key", value: credentialInput } : { kind: "no-api-key" },
+    },
   });
 }
 
@@ -425,19 +404,19 @@ async function validateNonInteractiveDiscovery(
 ): Promise<{
   discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
   modelId: string;
-  resolvedApiKey: Awaited<ReturnType<typeof ctx.resolveApiKey>>;
-  endpointChanged: boolean;
+  transition: EndpointTransition<NonNullable<Awaited<ReturnType<typeof ctx.resolveApiKey>>>>;
 } | null> {
-  const configuredProvider = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const configuredProvider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const baseUrl =
     normalizeOptionalSecretInput(ctx.opts.customBaseUrl) ??
     configuredProvider?.baseUrl ??
     LLAMA_SERVER_DEFAULT_ORIGIN;
-  const endpointChanged = hasEndpointChanged(configuredProvider, baseUrl);
+  const endpointChanged =
+    Boolean(configuredProvider?.localService) || hasEndpointChanged(configuredProvider, baseUrl);
   const providerApiKey = normalizeOptionalSecretInput(ctx.opts.llamaServerApiKey);
   const customApiKey = normalizeOptionalSecretInput(ctx.opts.customApiKey);
   const resolvedApiKey = await ctx.resolveApiKey({
-    provider: LLAMA_SERVER_PROVIDER_ID,
+    provider: LLAMA_CPP_PROVIDER_ID,
     flagValue: providerApiKey ?? customApiKey,
     flagName: providerApiKey === undefined ? "--custom-api-key" : "--llama-server-api-key",
     envVar: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
@@ -481,7 +460,14 @@ async function validateNonInteractiveDiscovery(
     ctx.runtime.exit(1);
     return null;
   }
-  return { discovery, modelId, resolvedApiKey: selectedApiKey, endpointChanged };
+  return {
+    discovery,
+    modelId,
+    transition: {
+      endpoint: endpointChanged ? "replacement" : "unchanged",
+      auth: selectedApiKey ? { kind: "api-key", value: selectedApiKey } : { kind: "preserve" },
+    },
+  };
 }
 
 export async function validateLlamaServerNonInteractive(
@@ -498,20 +484,10 @@ export async function configureLlamaServerNonInteractive(
   if (!validated) {
     return null;
   }
-  const configuredProvider = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
-  const endpointSafeProvider = validated.endpointChanged
-    ? stripEndpointCredentials(configuredProvider)
-    : configuredProvider;
-  const existingProvider = validated.resolvedApiKey
-    ? stripCredentialOverrides(endpointSafeProvider)
-    : endpointSafeProvider;
-  const providerConfig = buildLlamaServerProviderConfig({
-    configured: {
-      ...existingProvider,
-      baseUrl: validated.discovery.endpoint.inferenceBaseUrl,
-      models: existingProvider?.models ?? [],
-    },
-    discoveredModels: validated.discovery.models,
+  const providerConfig = buildExistingProviderConfig({
+    config: ctx.config,
+    discovery: validated.discovery,
+    transition: validated.transition,
   });
   let config: OpenClawConfig = {
     ...ctx.config,
@@ -520,15 +496,15 @@ export async function configureLlamaServerNonInteractive(
       mode: ctx.config.models?.mode ?? "merge",
       providers: {
         ...ctx.config.models?.providers,
-        [LLAMA_SERVER_PROVIDER_ID]: providerConfig,
+        [LLAMA_CPP_PROVIDER_ID]: providerConfig,
       },
     },
   };
 
-  if (validated.resolvedApiKey) {
+  if (validated.transition.auth.kind === "api-key") {
     const credential = ctx.toApiKeyCredential({
-      provider: LLAMA_SERVER_PROVIDER_ID,
-      resolved: validated.resolvedApiKey,
+      provider: LLAMA_CPP_PROVIDER_ID,
+      resolved: validated.transition.auth.value,
     });
     if (!credential) {
       return null;
@@ -540,14 +516,14 @@ export async function configureLlamaServerNonInteractive(
     });
     config = applyAuthProfileConfig(config, {
       profileId: PROFILE_ID,
-      provider: LLAMA_SERVER_PROVIDER_ID,
+      provider: LLAMA_CPP_PROVIDER_ID,
       mode: "api_key",
     });
   } else {
     await removeDefaultAuthProfile(ctx.agentDir);
-    config = removeLlamaServerAuthProfileConfig(config);
+    config = removeAuthProfileConfig(config, PROFILE_ID);
   }
 
-  ctx.runtime.log(`Default ${LLAMA_SERVER_PROVIDER_LABEL} model: ${validated.modelId}`);
-  return applyProviderDefaultModel(config, `${LLAMA_SERVER_PROVIDER_ID}/${validated.modelId}`);
+  ctx.runtime.log(`Default ${LLAMA_CPP_PROVIDER_LABEL} model: ${validated.modelId}`);
+  return applyProviderDefaultModel(config, `${LLAMA_CPP_PROVIDER_ID}/${validated.modelId}`);
 }

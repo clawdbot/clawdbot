@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildLlamaServerAuthHeaders,
   hasLlamaServerAuthorizationHeader,
   resolveLlamaServerProviderHeaders,
   shouldUseLlamaServerSyntheticAuth,
@@ -35,34 +34,11 @@ describe("llama-server auth", () => {
     expect(hasLlamaServerAuthorizationHeader({ authorization: "Bearer proxy-token" })).toBe(true);
   });
 
-  it("preserves configured headers unless a real API key replaces authorization", () => {
-    expect(
-      buildLlamaServerAuthHeaders(undefined, {
-        Authorization: "Bearer proxy-token",
-        "X-Tenant": "one",
-      }),
-    ).toEqual({
-      Accept: "application/json",
-      Authorization: "Bearer proxy-token",
-      "X-Tenant": "one",
-    });
-    expect(
-      buildLlamaServerAuthHeaders("server-key", {
-        authorization: "Bearer proxy-token",
-        "X-Tenant": "one",
-      }),
-    ).toEqual({
-      Accept: "application/json",
-      Authorization: "Bearer server-key",
-      "X-Tenant": "one",
-    });
-  });
-
   it("resolves provider header templates for discovery", async () => {
     const config = {
       models: {
         providers: {
-          "llama-server": {
+          "llama-cpp": {
             baseUrl: "http://localhost:8080/v1",
             headers: { "X-Proxy-Key": "${LLAMA_PROXY_TOKEN}" },
             models: [],
@@ -74,7 +50,7 @@ describe("llama-server auth", () => {
       resolveLlamaServerProviderHeaders({
         config,
         env: { LLAMA_PROXY_TOKEN: "proxy-token" },
-        headers: config.models.providers["llama-server"].headers,
+        headers: config.models.providers["llama-cpp"].headers,
       }),
     ).resolves.toEqual({ "X-Proxy-Key": "proxy-token" });
   });
