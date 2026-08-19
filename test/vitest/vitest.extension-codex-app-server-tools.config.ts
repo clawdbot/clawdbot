@@ -15,7 +15,6 @@ function createExtensionCodexAppServerToolsVitestConfig(
       "extensions/codex/src/app-server/native-hook-relay.test.ts",
       "extensions/codex/src/app-server/openclaw-owned-tool-runtime-contract.test.ts",
       "extensions/codex/src/app-server/request.test.ts",
-      "extensions/codex/src/app-server/run-attempt-tools.test.ts",
       "extensions/codex/src/app-server/sandbox-exec-server*.test.ts",
       "extensions/codex/src/app-server/schema-normalization-runtime-contract.test.ts",
       "extensions/codex/src/app-server/user-input-bridge.test.ts",
