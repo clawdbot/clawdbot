@@ -209,7 +209,11 @@ vi.mock("./monitor-ingress.js", async (importOriginal) => {
           if (payload.event !== "posted" || !post) {
             return;
           }
-          await options.dispatch(post, payload, {
+          const senderId = post.user_id?.trim();
+          if (!senderId) {
+            throw new Error("Mattermost posted event is missing post.user_id");
+          }
+          await options.dispatch({ ...post, user_id: senderId }, payload, {
             abortSignal: new AbortController().signal,
             onAdopted: async () => {},
             onDeferred: () => {},
