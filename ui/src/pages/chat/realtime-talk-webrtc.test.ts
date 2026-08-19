@@ -79,16 +79,13 @@ function stubAnswerSdpFetch(): void {
 }
 
 function createPendingSdpResponse(signal: AbortSignal | undefined): Response {
-  return {
-    ok: true,
-    status: 200,
-    headers: new Headers(),
-    body: new ReadableStream<Uint8Array>({
+  return new Response(
+    new ReadableStream<Uint8Array>({
       start(controller) {
         signal?.addEventListener(
           "abort",
           () => {
-            const reason = signal.reason;
+            const reason = signal?.reason;
             controller.error(
               reason instanceof Error ? reason : new Error("offer request aborted"),
             );
@@ -97,7 +94,7 @@ function createPendingSdpResponse(signal: AbortSignal | undefined): Response {
         );
       },
     }),
-  } as Response;
+  );
 }
 
 function createOpenAiTransport(
