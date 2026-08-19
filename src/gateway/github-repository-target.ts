@@ -12,6 +12,16 @@ type GitHubRepositoryTarget = {
   pullRequest: GitHubRepositoryRef & { defaultBranch: string };
 };
 
+export function resolveGitHubForkParent(value: unknown): GitHubRepositoryRef | undefined {
+  if (!isRecord(value) || value.fork !== true || !isRecord(value.parent)) {
+    return undefined;
+  }
+  const parentOwner = isRecord(value.parent.owner) ? value.parent.owner : undefined;
+  const owner = readNonBlankString(parentOwner?.login)?.trim();
+  const repo = readNonBlankString(value.parent.name)?.trim();
+  return owner && repo ? { owner, repo } : undefined;
+}
+
 /** Projects GitHub's repository response into the canonical push/head/base relationship. */
 export function resolveGitHubRepositoryTarget(
   value: unknown,
@@ -26,18 +36,14 @@ export function resolveGitHubRepositoryTarget(
       ? { fork: false, push, pullRequest: { ...push, defaultBranch } }
       : undefined;
   }
-  if (!isRecord(value.parent)) {
-    return undefined;
-  }
-  const parentOwner = isRecord(value.parent.owner) ? value.parent.owner : undefined;
-  const owner = readNonBlankString(parentOwner?.login)?.trim();
-  const repo = readNonBlankString(value.parent.name)?.trim();
-  const parentDefaultBranch = readNonBlankString(value.parent.default_branch)?.trim();
-  return owner && repo && parentDefaultBranch
+  const parent = resolveGitHubForkParent(value);
+  const parentRecord = isRecord(value.parent) ? value.parent : undefined;
+  const parentDefaultBranch = readNonBlankString(parentRecord?.default_branch)?.trim();
+  return parent && parentDefaultBranch
     ? {
         fork: true,
         push,
-        pullRequest: { owner, repo, defaultBranch: parentDefaultBranch },
+        pullRequest: { ...parent, defaultBranch: parentDefaultBranch },
       }
     : undefined;
 }

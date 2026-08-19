@@ -101,6 +101,7 @@ describe("worker placement startup health lifetime", () => {
     const warn = vi.fn();
     const runtime = createGatewayWorkerPlacementRuntime({
       placements: {
+        workspaceResultInstanceId: () => "gateway-test",
         get: () => undefined,
         list: () => [],
         retireSessionPlacement: vi.fn(),
@@ -191,6 +192,7 @@ describe("worker placement startup health lifetime", () => {
     };
     const runtime = createGatewayWorkerPlacementRuntime({
       placements: {
+        workspaceResultInstanceId: () => "gateway-test",
         get: () => placement,
         list: () => [placement],
         retireSessionPlacement: vi.fn(),
@@ -257,6 +259,7 @@ describe("worker placement startup health lifetime", () => {
     };
     const runtime = createGatewayWorkerPlacementRuntime({
       placements: {
+        workspaceResultInstanceId: () => "gateway-test",
         get: () => undefined,
         list: () => [],
         retireSessionPlacement: vi.fn(),
@@ -303,7 +306,7 @@ describe("worker placement move destination", () => {
       reconcileActive: vi.fn(),
     });
     createGatewayWorkerPlacementRuntime({
-      placements: {} as never,
+      placements: { workspaceResultInstanceId: () => "gateway-test" } as never,
       environments: {} as never,
       gatewayNamespace: "gateway-test",
       revokeSessionAuthority: vi.fn(),
