@@ -266,6 +266,63 @@ describe("runGlobalPackageUpdateSteps", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "rebases staged local-directory package symlinks when activating them",
+    async () => {
+      await withTestDir({ prefix: "openclaw-package-update-local-link-" }, async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        const checkoutRoot = path.join(base, "checkout");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await writePackageRoot(checkoutRoot, "2.0.0");
+        await fs.writeFile(path.join(checkoutRoot, "openclaw.mjs"), "#!/usr/bin/env node\n", {
+          mode: 0o755,
+        });
+
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: checkoutRoot,
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+            await fs.mkdir(stageLayout.globalRoot, { recursive: true });
+            await fs.symlink(
+              path.relative(stageLayout.globalRoot, checkoutRoot),
+              path.join(stageLayout.globalRoot, "openclaw"),
+            );
+            await fs.mkdir(stageLayout.binDir, { recursive: true });
+            await fs.symlink(
+              "../lib/node_modules/openclaw/openclaw.mjs",
+              path.join(stageLayout.binDir, "openclaw"),
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        await expect(fs.realpath(packageRoot)).resolves.toBe(await fs.realpath(checkoutRoot));
+        await expect(fs.access(path.join(prefix, "bin", "openclaw"))).resolves.toBeUndefined();
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "swaps npm package roots that contain package-manager hardlinks",
     async () => {
       await withTestDir({ prefix: "openclaw-package-update-hardlinks-" }, async (base) => {
