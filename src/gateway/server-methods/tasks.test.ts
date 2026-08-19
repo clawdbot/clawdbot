@@ -39,6 +39,7 @@ type TaskResponsePayload = {
   task?: Record<string, unknown>;
   found?: boolean;
   cancelled?: boolean;
+  reason?: string;
   nextCursor?: string;
   results?: Array<{ taskId?: string; ok?: boolean; reason?: string }>;
 };

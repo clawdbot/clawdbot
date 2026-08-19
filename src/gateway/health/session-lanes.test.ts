@@ -3,11 +3,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { getQueueState } from "../../process/command-queue.state.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import {
-  buildSessionLaneHealthSummary,
-  SESSION_LANE_DEGRADED_AFTER_MS,
-  SESSION_LANE_UNHEALTHY_AFTER_MS,
-} from "./session-lanes.js";
+import { buildSessionLaneHealthSummary } from "./session-lanes.js";
+
+const SESSION_LANE_DEGRADED_AFTER_MS = 15 * 60_000;
+const SESSION_LANE_UNHEALTHY_AFTER_MS = 60 * 60_000;
 
 describe("session lane health", () => {
   beforeEach(() => {

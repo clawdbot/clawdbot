@@ -73,7 +73,9 @@ async function waitForCliTaskCancellationSettlement(taskId: string): Promise<Tas
     if (Date.now() >= deadline) {
       return null;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, CLI_TASK_CANCEL_POLL_MS));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, CLI_TASK_CANCEL_POLL_MS);
+    });
   }
 }
 

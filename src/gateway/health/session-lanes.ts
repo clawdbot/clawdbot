@@ -1,8 +1,8 @@
 import { getCommandLaneSnapshots } from "../../process/command-queue.js";
 import type { SessionLaneHealthSummary } from "./types.js";
 
-export const SESSION_LANE_DEGRADED_AFTER_MS = 15 * 60_000;
-export const SESSION_LANE_UNHEALTHY_AFTER_MS = 60 * 60_000;
+const SESSION_LANE_DEGRADED_AFTER_MS = 15 * 60_000;
+const SESSION_LANE_UNHEALTHY_AFTER_MS = 60 * 60_000;
 
 /** Builds a cheap live health projection for resident per-session command lanes. */
 export function buildSessionLaneHealthSummary(now = Date.now()): SessionLaneHealthSummary {
