@@ -1,4 +1,3 @@
-import { readSkillProposalRevisionChangedError } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
@@ -31,12 +30,16 @@ export type SkillWorkshopRevisionAdmissionOutcome =
   | { id: string; status: "revision-changed" }
   | { error: string; id: string; status: "retryable-failed" };
 
+type AdmissionExecutorResult =
+  | { sessionKey: string; status: "admitted" }
+  | { status: "revision-changed" };
+
 type AdmissionExecutor = (
   entry: SkillWorkshopRevisionAdmissionEntry,
   materialize: (
     binding: SkillWorkshopRevisionAdmissionBinding,
   ) => SkillWorkshopRevisionAdmissionEntry | null,
-) => Promise<{ sessionKey: string }>;
+) => Promise<AdmissionExecutorResult>;
 
 type SkillWorkshopRevisionAdmissionRun = {
   completion: Promise<SkillWorkshopRevisionAdmissionOutcome>;
@@ -92,21 +95,16 @@ export function createSkillWorkshopRevisionAdmissions(): ApplicationSkillWorksho
     };
     const completion = entry
       .execute(copyEntry(entry), materialize)
-      .then(({ sessionKey }): SkillWorkshopRevisionAdmissionOutcome => {
-        if (entries.get(entry.value.id) === entry) {
+      .then((result): SkillWorkshopRevisionAdmissionOutcome => {
+        if (entries.get(entry.value.id) === entry && entry.generation === generation) {
           entries.delete(entry.value.id);
           publish();
         }
-        return { id: entry.value.id, sessionKey, status: "admitted" };
+        return result.status === "admitted"
+          ? { id: entry.value.id, sessionKey: result.sessionKey, status: "admitted" }
+          : { id: entry.value.id, status: "revision-changed" };
       })
       .catch((error: unknown): SkillWorkshopRevisionAdmissionOutcome => {
-        if (readSkillProposalRevisionChangedError(error)) {
-          if (entries.get(entry.value.id) === entry && entry.generation === generation) {
-            entries.delete(entry.value.id);
-            publish();
-          }
-          return { id: entry.value.id, status: "revision-changed" };
-        }
         const message = error instanceof Error ? error.message : String(error);
         if (entries.get(entry.value.id) === entry && entry.generation === generation) {
           entry.value = { ...entry.value, error: message, phase: "retryable-failed" };
