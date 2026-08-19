@@ -53,9 +53,18 @@ describe("runtime config capability", () => {
   });
 
   it.each([
-    { label: "same-client reconnect", replaceClient: false },
-    { label: "client replacement", replaceClient: true },
-  ])("refreshes config and schema after a $label", async ({ replaceClient }) => {
+    {
+      label: "read-only same-client reconnect",
+      replaceClient: false,
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["config.get", "config.schema"] },
+      } as GatewayHelloOk,
+    },
+    { label: "client replacement", replaceClient: true, hello: undefined },
+  ])("refreshes config and schema after a $label", async ({ replaceClient, hello }) => {
     let snapshot = {
       config: { endpoint: "initial" },
       hash: "hash-initial",
@@ -78,6 +87,9 @@ describe("runtime config capability", () => {
     const clientB = { request: requestB } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(clientA);
     const runtimeConfig = createRuntimeConfigCapability(gateway);
+    if (hello) {
+      publish(true, clientA, hello);
+    }
     await runtimeConfig.ensureLoaded();
     await runtimeConfig.ensureSchemaLoaded();
 
@@ -89,7 +101,7 @@ describe("runtime config capability", () => {
     };
     schema = { ...schema, version: "schema-current" };
     publish(false, clientA);
-    publish(true, replaceClient ? clientB : clientA);
+    publish(true, replaceClient ? clientB : clientA, hello);
 
     await vi.waitFor(() => expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-current"));
     expect(runtimeConfig.state.configForm).toEqual({ endpoint: "current" });
@@ -108,16 +120,6 @@ describe("runtime config capability", () => {
   });
 
   it.each([
-    {
-      label: "same-client scope downgrade",
-      replaceClient: false,
-      hello: {
-        type: "hello-ok",
-        protocol: 1,
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["config.get", "config.schema"] },
-      } as GatewayHelloOk,
-    },
     {
       label: "replacement without config.schema",
       replaceClient: true,

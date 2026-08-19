@@ -168,7 +168,8 @@ export function createService(
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
-      | "resolveWorkerGateway"
+      | "prepareNodeEnrollment"
+      | "retireNodeEnrollment"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
@@ -186,7 +187,6 @@ export function createService(
     prepareInstallation: testState.prepareInstallation,
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
-    resolveWorkerGateway: () => ({ host: "127.0.0.1", port: 18_789 }),
     generateWorkerCredential: () => CREDENTIAL,
     executeInference: async () => ({
       type: "error",
@@ -207,6 +207,7 @@ export function createService(
 export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
   return {
     id: "fake",
+    supportedExecutionModes: ["remote-exec"],
     provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
     inspect: async () => ({ status: "active" }),
     destroy: async () => {},

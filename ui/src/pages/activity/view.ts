@@ -12,6 +12,7 @@ import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
 import "../../styles/activity.css";
+import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 
 registerActivityEnglish();
@@ -19,6 +20,7 @@ registerActivityEnglish();
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 
 type ActivityProps = {
+  basePath: string;
   entries: ActivityEntry[];
   filterText: string;
   statusFilters: Record<ActivityStatus, boolean>;
@@ -180,7 +182,11 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
                 <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
                 <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
               `}
-          <span class="mono">${t("activity.runId")}: ${entry.runId}</span>
+          <a
+            class="activity-entry__run-link mono"
+            href=${activityRunInspectorHref(entry.runId, props.basePath)}
+            >${t("activity.runId")}: ${entry.runId}</a
+          >
           ${entry.sessionKey
             ? html`<span class="mono">${t("activity.session")}: ${entry.sessionKey}</span>`
             : nothing}

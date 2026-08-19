@@ -2,6 +2,7 @@
 // Owner schema module import keeps the ProtocolSchemas registry out of the
 // public plugin-sdk dts graph (check-plugin-sdk-exports guards this).
 import type { NodePluginToolDescriptor } from "../../../packages/gateway-protocol/src/schema/nodes.js";
+import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
@@ -37,6 +38,8 @@ type PluginManagedWorktree = {
 
 type SubagentRunResult = {
   runId: string;
+  /** Canonical accepted session identity. Optional for explicit/custom runtimes. */
+  sessionKey?: string;
   runtime?: {
     harness: string;
     provider: string;
@@ -47,11 +50,6 @@ type SubagentRunResult = {
 type SubagentWaitParams = {
   runId: string;
   timeoutMs?: number;
-};
-
-type SubagentWaitResult = {
-  status: "ok" | "error" | "timeout";
-  error?: string;
 };
 
 type SubagentGetSessionMessagesParams = {
@@ -76,8 +74,12 @@ type RuntimeNodeListResult = {
   nodes: Array<{
     nodeId: string;
     displayName?: string;
+    platform?: string;
+    clientId?: string;
     remoteIp?: string;
     connected?: boolean;
+    connectedAtMs?: number;
+    lastSeenAtMs?: number;
     caps?: string[];
     commands?: string[];
     /** True only for the node host installed alongside this Gateway. */
@@ -94,6 +96,7 @@ type RuntimeNodeInvokeParams = {
   params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
+  sessionKey?: string;
   /** Cancel the invocation and any work already dispatched to a first-party node. */
   signal?: AbortSignal;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
@@ -120,7 +123,7 @@ export type PluginRuntime = PluginRuntimeCore & {
   };
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
-    waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
+    waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;
@@ -180,6 +183,8 @@ export type PluginRuntime = PluginRuntimeCore & {
 };
 
 export type CreatePluginRuntimeOptions = {
+  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+  gateway?: PluginRuntime["gateway"];
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;

@@ -445,6 +445,24 @@ export class ExtensionRelayBridge {
     };
   }
 
+  private enumerateTargetInfos():
+    | { status: "available"; targetInfos: Record<string, unknown>[] }
+    | {
+        status: "unavailable";
+        reason: "extension-disconnected" | "target-identity-unresolved";
+      } {
+    if (!this.extensionConnected) {
+      return { status: "unavailable", reason: "extension-disconnected" };
+    }
+    if ([...this.tabs.values()].some((tab) => !tab.attached)) {
+      return { status: "unavailable", reason: "target-identity-unresolved" };
+    }
+    const targetInfos = [...this.tabs.values()].map((tab) =>
+      this.targetInfoForTab(tab, tab.attached?.targetId ?? ""),
+    );
+    return { status: "available", targetInfos };
+  }
+
   private announceAttachedTab(
     tabId: number,
     targetId: string,
@@ -772,10 +790,16 @@ export class ExtensionRelayBridge {
         return;
       }
       case "Target.getTargets": {
-        const targetInfos = [...this.tabs.values()]
-          .filter((tab) => tab.attached)
-          .map((tab) => this.targetInfoForTab(tab, tab.attached?.targetId ?? ""));
-        this.respond(client, request, { targetInfos });
+        const enumeration = this.enumerateTargetInfos();
+        if (enumeration.status === "unavailable") {
+          const message =
+            enumeration.reason === "extension-disconnected"
+              ? "Extension is disconnected"
+              : "Target identities are unavailable";
+          this.respondError(client, request, message, -32002);
+          return;
+        }
+        this.respond(client, request, { targetInfos: enumeration.targetInfos });
         return;
       }
       case "Target.attachToBrowserTarget": {

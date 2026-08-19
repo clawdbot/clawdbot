@@ -46,6 +46,19 @@ describe("createMessageReceiptFromOutboundResults", () => {
     expect(receipt.platformMessageIds).toEqual(["jid-1"]);
   });
 
+  it("does not use target routing metadata as platform message identity", () => {
+    const target = { kind: "channel" as const, id: "route-only" };
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "demo", messageId: "", target }],
+      sentAt: 123,
+    });
+
+    expect(receipt.primaryPlatformMessageId).toBeUndefined();
+    expect(receipt.platformMessageIds).toEqual([]);
+    expect(receipt.parts).toEqual([]);
+    expect(receipt.raw).toEqual([{ channel: "demo", messageId: "", target }]);
+  });
+
   it.each([
     {
       label: "Synology Chat destination IDs",

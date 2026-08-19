@@ -36,6 +36,8 @@ type VoiceResponseParams = {
   sessionKey?: string;
   /** Caller's phone number */
   from: string;
+  /** Caller ownership prepared by the call boundary. */
+  senderIsOwner: boolean | undefined;
   /** Agent frozen on the call record. */
   agentId?: string;
   /** Conversation transcript */
@@ -245,6 +247,7 @@ export async function generateVoiceResponse(
     callId,
     sessionKey,
     from,
+    senderIsOwner,
     transcript,
     userMessage,
     coreConfig,
@@ -407,6 +410,7 @@ export async function generateVoiceResponse(
           lane: "voice",
           extraSystemPrompt,
           agentDir,
+          senderIsOwner,
           toolsAllow,
           abortSignal,
           blockReplyBreak: "text_end",

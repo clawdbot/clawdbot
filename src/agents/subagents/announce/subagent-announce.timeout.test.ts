@@ -589,7 +589,7 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.params?.message).not.toContain("older fallback");
   });
 
-  it("preserves NO_REPLY when timeout history ends with silence after earlier progress", async () => {
+  it("does not let pre-tool NO_REPLY hide a later timeout", async () => {
     chatHistoryMessages = [
       {
         role: "assistant",
@@ -613,7 +613,10 @@ describe("subagent announce timeout config", () => {
       roundOneReply: undefined,
     });
 
-    expect(findFinalDirectAgentCall()).toBeUndefined();
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("2 tool call(s) made without visible output.");
   });
 
   it("prefers visible assistant progress over a later raw tool result", async () => {
@@ -640,7 +643,7 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).not.toContain("grep output");
   });
 
-  it("preserves NO_REPLY when timeout partial-progress history mixes prior text and later silence", async () => {
+  it("reports tool progress when a later tool invalidates timeout silence", async () => {
     chatHistoryMessages = [
       ...createTimeoutHistoryWithNoReply(),
       {
@@ -654,9 +657,12 @@ describe("subagent announce timeout config", () => {
       roundOneReply: undefined,
     });
 
-    expect(
-      findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
-    ).toBeUndefined();
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("2 tool call(s) made without visible output.");
   });
 
   it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {

@@ -18,7 +18,7 @@ type TranscriptReplaySanitizerHelpers = {
 };
 
 type TranscriptReplayDescriptor = {
-  replayType: string;
+  replayTypes: readonly string[];
   suppressionType: string;
   matchesRoute: (
     route: TranscriptReplayRoute | undefined,
@@ -42,7 +42,7 @@ type TranscriptReplayDescriptor = {
 };
 
 const OPENAI_REPLAY_DESCRIPTOR: TranscriptReplayDescriptor = {
-  replayType: "openai-responses-compaction",
+  replayTypes: ["openai-responses-compaction", "openai-responses-retained-compaction"],
   suppressionType: "openai-responses-compaction-suppression",
   matchesRoute: (route, helpers) => helpers.isOpenAIResponsesRoute(route),
   matchesApi: (api, _route, helpers) =>
@@ -56,7 +56,7 @@ const OPENAI_REPLAY_DESCRIPTOR: TranscriptReplayDescriptor = {
 };
 
 const ANTHROPIC_REPLAY_DESCRIPTOR: TranscriptReplayDescriptor = {
-  replayType: "anthropic-compaction",
+  replayTypes: ["anthropic-compaction"],
   suppressionType: "anthropic-compaction-suppression",
   matchesRoute: (route, helpers) => helpers.isAnthropicReasoningRoute(route),
   matchesApi: (api, route) => api === route?.api,
@@ -75,9 +75,10 @@ export function sanitizeCompactionReplayState(
   if (!value || typeof value !== "object" || !helpers.isPlainTranscriptObject(value)) {
     return undefined;
   }
+  const replayType = typeof value.type === "string" ? value.type : "";
   const descriptor = REPLAY_DESCRIPTORS.find(
-    ({ replayType, suppressionType }) =>
-      value.type === replayType || value.type === suppressionType,
+    ({ replayTypes, suppressionType }) =>
+      replayTypes.includes(replayType) || replayType === suppressionType,
   );
   const isSuppression = value.type === descriptor?.suppressionType;
   if (
@@ -85,6 +86,7 @@ export function sanitizeCompactionReplayState(
     !descriptor.matchesRoute(route, helpers) ||
     value.v !== 1 ||
     typeof value.data !== "string" ||
+    (value.type === "openai-responses-retained-compaction" && value.replayIndex !== undefined) ||
     (value.replayIndex !== undefined &&
       (isSuppression ||
         !Number.isSafeInteger(value.replayIndex) ||

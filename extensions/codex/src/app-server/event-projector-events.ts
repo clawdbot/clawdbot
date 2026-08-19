@@ -53,6 +53,13 @@ function guardianActionCommand(action: JsonObject | undefined): string | undefin
   return argv.length > 0 ? argv.join(" ") : readString(action, "program");
 }
 
+function normalizeApprovalReviewStatus(status: string | undefined): string | undefined {
+  return status === "inProgress" ? "in_progress" : status === "timedOut" ? "timed_out" : status;
+}
+
+const GUARDIAN_TIMEOUT_WARNING =
+  "Automatic approval review timed out while evaluating the requested approval.";
+
 export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
   item: CodexThreadItem | undefined;
@@ -96,6 +103,7 @@ export function projectNormalizedToolItem(params: {
 
 export class CodexEventProjection {
   private reviewCount = 0;
+  private pendingGuardianWarning: string | undefined;
 
   constructor(
     private readonly threadId: string,
@@ -114,28 +122,97 @@ export class CodexEventProjection {
     this.reviewCount += 1;
     const review = isJsonObject(params.review) ? params.review : undefined;
     const action = isJsonObject(params.action) ? params.action : undefined;
+    const reviewId = readString(params, "reviewId");
+    const targetItemId = readNullableString(params, "targetItemId");
+    const reviewStatus = review ? readString(review, "status") : undefined;
+    const status = normalizeApprovalReviewStatus(reviewStatus);
+    const riskLevel = review ? readString(review, "riskLevel") : undefined;
+    const userAuthorization = review ? readString(review, "userAuthorization") : undefined;
+    const rationale = review ? readNullableString(review, "rationale") : undefined;
+    // Codex emits the routine warning immediately before its structured terminal fact.
+    // Exact byte equality consumes only that duplicate; every other warning is flushed.
+    const expectedWarning =
+      status === "timed_out"
+        ? GUARDIAN_TIMEOUT_WARNING
+        : rationale &&
+            riskLevel &&
+            userAuthorization &&
+            (status === "approved" || status === "denied")
+          ? `Automatic approval review ${status} (risk: ${riskLevel}, authorization: ${userAuthorization}): ${rationale}`
+          : undefined;
+    const warningMatchesReview =
+      Boolean(targetItemId) && Boolean(reviewId) && this.pendingGuardianWarning === expectedWarning;
+    if (warningMatchesReview) {
+      this.pendingGuardianWarning = undefined;
+    } else {
+      this.flushPendingGuardianWarning();
+    }
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: {
         method,
         phase: method.endsWith("/started") ? "started" : "completed",
-        reviewId: readString(params, "reviewId"),
-        targetItemId: readNullableString(params, "targetItemId"),
+        reviewId,
+        targetItemId,
         decisionSource: readString(params, "decisionSource"),
-        status: review ? readString(review, "status") : undefined,
-        riskLevel: review ? readString(review, "riskLevel") : undefined,
-        userAuthorization: review ? readString(review, "userAuthorization") : undefined,
-        rationale: review ? readNullableString(review, "rationale") : undefined,
+        status: reviewStatus,
+        riskLevel,
+        userAuthorization,
+        rationale,
         actionType: action ? readString(action, "type") : undefined,
         command: guardianActionCommand(action),
       },
     });
+    if (reviewId && targetItemId && status) {
+      const approvalReview: JsonObject = {
+        id: reviewId,
+        label: "Guardian",
+        status,
+        ...(riskLevel ? { riskLevel } : {}),
+        ...(userAuthorization ? { userAuthorization } : {}),
+        ...(rationale ? { rationale } : {}),
+      };
+      const approvalReviewOutcome = this.toolTranscript.recordToolApprovalReview(
+        targetItemId,
+        reviewId,
+        status,
+        approvalReview,
+      );
+      this.emitAgentEvent({
+        stream: "tool",
+        data: {
+          phase: "review",
+          toolCallId: targetItemId,
+          hideFromChannelProgress: true,
+          approvalReviewOutcome,
+          review: approvalReview,
+        },
+      });
+    }
   }
 
   handleGuardianWarning(params: JsonObject): void {
+    this.flushPendingGuardianWarning();
+    const message = readString(params, "message");
+    if (message) {
+      this.pendingGuardianWarning = message;
+      return;
+    }
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
-      data: { phase: "warning", message: readString(params, "message") },
+      data: { phase: "warning", message },
+    });
+  }
+
+  flushPendingGuardianWarning(): void {
+    const pending = this.pendingGuardianWarning;
+    if (!pending) {
+      return;
+    }
+    this.pendingGuardianWarning = undefined;
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: { phase: "warning", message: pending },
     });
   }
 
@@ -214,6 +291,13 @@ export class CodexEventProjection {
     }
     const { item } = params;
     const { name, status, args, meta, event } = projection;
+    const approvalReviewOutcome =
+      params.phase === "result"
+        ? this.toolTranscript.finalizeToolApprovalReviews(item.id)
+        : undefined;
+    if (event && approvalReviewOutcome) {
+      event.data.approvalReviewOutcome = approvalReviewOutcome;
+    }
     this.toolTranscript.recordTrajectoryEvent({ phase: params.phase, item, name, args, status });
     if (params.phase === "result") {
       this.toolProgress.recordNativeToolError({ item, name, meta, status });

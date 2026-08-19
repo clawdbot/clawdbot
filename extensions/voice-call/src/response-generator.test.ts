@@ -41,6 +41,7 @@ type EmbeddedAgentArgs = {
   agentId?: string;
   workspaceDir?: string;
   sessionFile?: string;
+  senderIsOwner?: boolean;
   toolsAllow?: string[];
   blockReplyBreak?: "text_end" | "message_end";
   onBlockReply?: (
@@ -196,6 +197,7 @@ async function runGenerateVoiceResponse(
     runtime?: OpenClawPluginApi["runtime"]["agent"];
     transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
     onEarlyText?: (text: string) => Promise<boolean>;
+    senderIsOwner?: boolean;
   },
 ) {
   const voiceConfig = VoiceCallConfigSchema.parse({
@@ -210,6 +212,7 @@ async function runGenerateVoiceResponse(
     agentRuntime: runtime,
     callId: "call-123",
     from: "+15550001111",
+    senderIsOwner: overrides?.senderIsOwner,
     transcript: overrides?.transcript ?? [{ speaker: "user", text: "hello there" }],
     userMessage: "hello there",
     onEarlyText: overrides?.onEarlyText,
@@ -219,6 +222,22 @@ async function runGenerateVoiceResponse(
 }
 
 describe("generateVoiceResponse", () => {
+  it("marks classic inbound callers as non-owners", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+
+    await runGenerateVoiceResponse([], { runtime, senderIsOwner: false });
+
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent).senderIsOwner).toBe(false);
+  });
+
+  it("preserves delegated authority for outbound conversations", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+
+    await runGenerateVoiceResponse([], { runtime });
+
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent).senderIsOwner).toBeUndefined();
+  });
+
   it("suppresses reasoning payloads and reads structured spoken output", async () => {
     const { runtime, runEmbeddedAgent, runWithWorkAdmission } = createAgentRuntime([
       { text: "Reasoning: hidden", isReasoning: true },
@@ -536,6 +555,7 @@ describe("generateVoiceResponse", () => {
       agentRuntime: runtime,
       callId: "call-123",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "hello there" }],
       userMessage: "hello there",
     });
@@ -585,6 +605,7 @@ describe("generateVoiceResponse", () => {
       agentRuntime: runtime,
       callId: "call-123",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "hello there" }],
       userMessage: "hello there",
     });
@@ -632,6 +653,7 @@ describe("generateVoiceResponse", () => {
       callId: "call-123",
       sessionKey,
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "continue" }],
       userMessage: "continue",
     });
@@ -663,6 +685,7 @@ describe("generateVoiceResponse", () => {
       callId: "call-123",
       sessionKey: "voice:call:call-123",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "hello there" }],
       userMessage: "hello there",
     });
@@ -693,6 +716,7 @@ describe("generateVoiceResponse", () => {
       callId: "call-123",
       sessionKey: "meet-room-1",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });
@@ -719,6 +743,7 @@ describe("generateVoiceResponse", () => {
         callId: "call-123",
         sessionKey,
         from: "+15550001111",
+        senderIsOwner: undefined,
         transcript: [],
         userMessage: "hello there",
       });
@@ -756,6 +781,7 @@ describe("generateVoiceResponse", () => {
       callId: "call-123",
       sessionKey: "agent:voice:main",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });
@@ -782,6 +808,7 @@ describe("generateVoiceResponse", () => {
       agentRuntime: runtime,
       callId: "call-123",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });
@@ -830,6 +857,7 @@ describe("generateVoiceResponse", () => {
       agentRuntime: runtime,
       callId: "call-123",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });
@@ -871,6 +899,7 @@ describe("generateVoiceResponse", () => {
       agentId: "support",
       sessionKey: "agent:support:google-meet:meet-1",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });
@@ -906,6 +935,7 @@ describe("generateVoiceResponse", () => {
       agentRuntime: runtime,
       callId: "call-123",
       from: "+15550001111",
+      senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
     });

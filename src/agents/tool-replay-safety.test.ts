@@ -9,7 +9,7 @@ import {
 describe("agent tool replay safety", () => {
   it("allows only audited unconditional core tools", () => {
     expect(isAgentToolReplaySafe({ name: "search" })).toBe(true);
-    expect(isAgentToolReplaySafe({ name: "update_plan" })).toBe(true);
+    expect(isAgentToolReplaySafe({ name: "progress_card" })).toBe(false);
     expect(isAgentToolReplaySafe({ name: "process" })).toBe(false);
     expect(isAgentToolReplaySafe({ name: "vendor_widget" })).toBe(false);
   });

@@ -94,6 +94,7 @@ export function resolveSessionDisplayDefaults(
 
 function normalizeCliRuntimeDisplayRef(
   cfg: OpenClawConfig,
+  agentId: string | undefined,
   ref: SessionDisplayModelRef,
   defaultRef: SessionDisplayModelRef,
   classifyCliProvider: CliProviderClassifier,
@@ -112,6 +113,7 @@ function normalizeCliRuntimeDisplayRef(
   const inferredProvider = inferUniqueProviderFromConfiguredModels({
     cfg,
     model: ref.model,
+    agentId,
   });
   if (inferredProvider && !classifyCliProvider(inferredProvider)) {
     return { provider: inferredProvider, model: ref.model };
@@ -142,8 +144,10 @@ export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
   classifyCliProvider: CliProviderClassifier = (provider) => isCliProvider(provider, cfg),
+  ownerAgentId?: string,
 ): SessionDisplayModelRef {
-  const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
+  const agentId =
+    ownerAgentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: row.providerOverride,
@@ -159,6 +163,7 @@ export function resolveSessionDisplayModelRef(
   if (row.model) {
     return normalizeCliRuntimeDisplayRef(
       cfg,
+      agentId,
       parseModelRef(row.model, row.modelProvider ?? defaultRef.provider),
       defaultRef,
       classifyCliProvider,

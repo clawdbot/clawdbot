@@ -34,6 +34,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
+  archiveStaleDashboardEntries,
   capEntryCount,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
@@ -65,6 +66,7 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
 
 type SessionCleanupAction =
   | "keep"
+  | "archive-dashboard"
   | "prune-missing"
   | "prune-model-run"
   | "prune-stale"
@@ -81,6 +83,7 @@ export type SessionCleanupSummary = {
   missing: number;
   dmScopeRetired: number;
   modelRunPruned: number;
+  archived?: number;
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
@@ -107,6 +110,7 @@ type SessionsCleanupRunResult = {
     beforeStore: Record<string, SessionEntry>;
     missingKeys: Set<string>;
     modelRunPrunedKeys: Set<string>;
+    archivedKeys?: Set<string>;
     staleKeys: Set<string>;
     cappedKeys: Set<string>;
     dmScopeRetiredKeys: Set<string>;
@@ -183,6 +187,7 @@ export function resolveSessionCleanupAction(params: {
   key: string;
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
+  archivedKeys?: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
@@ -195,6 +200,9 @@ export function resolveSessionCleanupAction(params: {
   }
   if (params.modelRunPrunedKeys.has(params.key)) {
     return "prune-model-run";
+  }
+  if (params.archivedKeys?.has(params.key)) {
+    return "archive-dashboard";
   }
   if (params.staleKeys.has(params.key)) {
     return "prune-stale";
@@ -381,6 +389,7 @@ async function previewStoreCleanup(params: {
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
   const modelRunPrunedKeys = new Set<string>();
+  const archivedKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
   const missing =
     params.fixMissing === true
@@ -426,6 +435,17 @@ async function previewStoreCleanup(params: {
         },
       })
     : 0;
+  const archived = archiveStaleDashboardEntries(
+    previewStore,
+    params.maintenance.archiveDashboardAfterMs,
+    {
+      log: false,
+      onArchived: ({ key }) => {
+        archivedKeys.add(key);
+      },
+      preserveKeys: preserveSessionKeys,
+    },
+  );
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     preserveKeys: preserveSessionKeys,
@@ -497,6 +517,7 @@ async function previewStoreCleanup(params: {
     missing > 0 ||
     dmScopeRetired > 0 ||
     modelRunPruned > 0 ||
+    archived > 0 ||
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
@@ -515,6 +536,7 @@ async function previewStoreCleanup(params: {
     missing,
     dmScopeRetired,
     modelRunPruned,
+    archived,
     pruned,
     capped,
     unreferencedArtifacts,
@@ -528,6 +550,7 @@ async function previewStoreCleanup(params: {
     beforeStore,
     missingKeys,
     modelRunPrunedKeys,
+    archivedKeys,
     staleKeys,
     cappedKeys,
     dmScopeRetiredKeys,
@@ -674,6 +697,7 @@ export async function runSessionsCleanup(params: {
         missing,
         dmScopeRetired,
         modelRunPruned: lifecycleResult.modelRunPruned,
+        archived: lifecycleResult.archived,
         pruned: lifecycleResult.pruned,
         capped: lifecycleResult.capped,
         unreferencedArtifacts,
@@ -681,6 +705,7 @@ export async function runSessionsCleanup(params: {
         diskBudget: appliedDiskBudget,
         wouldMutate:
           lifecycleResult.removedEntries > 0 ||
+          lifecycleResult.archived > 0 ||
           maintenanceRemovedEntries > 0 ||
           unreferencedArtifacts.removedFiles > 0 ||
           (appliedDiskBudget?.removedEntries ?? 0) > 0 ||

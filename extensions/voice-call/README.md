@@ -67,7 +67,7 @@ Put under `plugins.entries.voice-call.config`:
   // Public exposure (pick one):
   // publicUrl: "https://example.ngrok.app/voice/webhook",
   // tunnel: { provider: "ngrok" },
-  // tailscale: { mode: "funnel", path: "/voice/webhook" }
+  // tailscale: { mode: "funnel", port: 8443, path: "/voice/webhook" }
 
   outbound: {
     defaultMode: "notify", // or "conversation"
@@ -98,6 +98,7 @@ Put under `plugins.entries.voice-call.config`:
 Notes:
 
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
+- `tailscale.port` defaults to `443` and owns the external HTTPS port for both legacy `tailscale.mode` and unified Tailscale tunnel providers. Funnel supports `443`, `8443`, or `10000`; Serve accepts any valid TCP port.
 - Twilio defaults to US1. For a non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials created in that Region; see [Twilio's regional REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.

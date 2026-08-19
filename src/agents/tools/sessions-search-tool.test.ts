@@ -39,6 +39,7 @@ function createTool(params: {
   sandboxed?: boolean;
   requests?: CallGatewayRequest[];
   sessionLinkBase?: string;
+  indexing?: boolean;
   truncated?: boolean;
 }) {
   const config = params.config ?? { tools: { sessions: { visibility: "self" } } };
@@ -92,6 +93,7 @@ function createTool(params: {
         results: results.filter(
           (row) => Array.isArray(sessionKeys) && sessionKeys.includes(row.sessionKey),
         ),
+        ...(params.indexing ? { indexing: true } : {}),
         ...(params.truncated ? { truncated: true } : {}),
       } as T;
     },
@@ -147,8 +149,21 @@ describe("sessions_search tool", () => {
     expect(error.details).toMatchObject({ status: "error", error: expect.any(String) });
     expect(Value.Check(tool.outputSchema!, error.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; indexing?: true; sessionLinkRule?: string; truncated?: true } | { error: string; status: "error" | "forbidden" }',
+      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
     );
+  });
+
+  it("warns that indexing makes search results incomplete", async () => {
+    const result = await createTool({
+      results: [hit()],
+      indexing: true,
+    }).execute("indexing-warning", { query: "text" });
+
+    expect(result.details).toMatchObject({
+      indexing: true,
+      warning:
+        "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.",
+    });
   });
 
   it("rejects empty queries and invalid limits", async () => {

@@ -18,6 +18,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  resolveExecApprovalsFromFile,
   updateExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
@@ -104,6 +105,7 @@ function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
     exists: snapshot.exists,
     hash: snapshot.hash,
     file: redactExecApprovals(snapshot.file),
+    resolvedDefaults: resolveExecApprovalsFromFile({ file: snapshot.file }).defaults,
   };
 }
 

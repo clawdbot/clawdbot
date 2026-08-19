@@ -208,7 +208,6 @@ describe("cross-client session projection conformance", () => {
       { message: firstImport, type: "messagePersisted" },
     ]);
 
-    expect(state.entries).toHaveLength(4);
     expect(state.entries.map((entry) => entry.identity?.externalSource)).toEqual([
       null,
       JSON.stringify(["provider-a", "cli-a", externalId]),

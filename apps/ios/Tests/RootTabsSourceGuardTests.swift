@@ -59,7 +59,6 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("layoutMode: self.isSidebarDrawerLayout ? .drawer : .split"))
         #expect(componentSource.contains("OpenClawSidebarHeaderLeadingSlot"))
         #expect(componentSource.contains(".frame(width: 44, height: 44)"))
-        #expect(source.contains(".safeAreaPadding(.top, 8)"))
         #expect(source.contains("Self.sidebarShowButtonAccessibilityIdentifier"))
         #expect(source.contains("Self.sidebarHideButtonAccessibilityIdentifier"))
         #expect(source.contains("accessibilityLabel: .localized(\"Hide Sidebar\")"))

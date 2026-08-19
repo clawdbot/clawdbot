@@ -33,6 +33,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
@@ -261,6 +262,7 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
 }
 
 function exitHooksCliWithError(err: unknown): never {
+  rethrowExpectedCliError(err);
   defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
   defaultRuntime.exit(1);
   throw new Error("unreachable");

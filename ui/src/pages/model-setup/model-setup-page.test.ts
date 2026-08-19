@@ -115,6 +115,7 @@ function createContext() {
         subscribe: () => () => undefined,
       },
       basePath: "/openclaw",
+      resourceBasePath: "/openclaw",
       navigate: vi.fn(),
       runtimeConfig,
     } as unknown as ApplicationContext,
