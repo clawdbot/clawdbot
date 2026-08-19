@@ -44,7 +44,9 @@ function createRuntime(
     Parameters<typeof createGatewayNodeSessionRuntime>[0]["isPairingStateCurrent"]
   > = (_nodeId, expected) =>
     expected.identity === "identity-a" && expected.generation === "generation-a",
-  onRunnerInventoryChanged?: (nodeId: string) => void,
+  onRunnerStateChanged?: Parameters<
+    typeof createGatewayNodeSessionRuntime
+  >[0]["onRunnerStateChanged"],
 ) {
   return createGatewayNodeSessionRuntime({
     broadcast,
@@ -53,7 +55,7 @@ function createRuntime(
       generation: await resolveCurrentPairingGeneration(),
     }),
     isPairingStateCurrent,
-    onRunnerInventoryChanged,
+    onRunnerStateChanged,
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
   });
@@ -102,14 +104,19 @@ describe("gateway node session runtime", () => {
     const broadcast = vi.fn((event: string) => {
       order.push(`broadcast:${event}`);
     });
-    const onRunnerInventoryChanged = vi.fn(() => {
-      order.push("lifecycle");
+    const onRunnerStateChanged = vi.fn((_nodeId, change) => {
+      if (change.availabilityChanged) {
+        order.push("availability");
+      }
+      if (change.inventoryChanged) {
+        order.push("inventory");
+      }
     });
     const runtime = createRuntime(
       async () => "generation-a",
       broadcast,
       undefined,
-      onRunnerInventoryChanged,
+      onRunnerStateChanged,
     );
     registerNode(runtime, "conn-original", "generation-a", []);
 
@@ -137,9 +144,13 @@ describe("gateway node session runtime", () => {
       { dropIfSlow: true },
     );
     expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(true);
-    expect(onRunnerInventoryChanged).toHaveBeenLastCalledWith("node-a");
+    expect(onRunnerStateChanged).toHaveBeenLastCalledWith("node-a", {
+      inventoryChanged: true,
+      availabilityChanged: true,
+    });
     expect(order).toEqual([
-      "lifecycle",
+      "availability",
+      "inventory",
       `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
       "broadcast:sessions.changed",
     ]);
@@ -147,7 +158,7 @@ describe("gateway node session runtime", () => {
     registerNode(runtime, "conn-replacement", "generation-a", []);
 
     expect(broadcast).toHaveBeenCalledTimes(4);
-    expect(onRunnerInventoryChanged).toHaveBeenCalledTimes(2);
+    expect(onRunnerStateChanged).toHaveBeenCalledTimes(2);
     expect(broadcast).toHaveBeenNthCalledWith(
       3,
       GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
@@ -161,11 +172,52 @@ describe("gateway node session runtime", () => {
       { dropIfSlow: true },
     );
     expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(false);
-    expect(order.slice(3)).toEqual([
-      "lifecycle",
+    expect(order.slice(4)).toEqual([
+      "availability",
+      "inventory",
       `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
       "broadcast:sessions.changed",
     ]);
+  });
+
+  test("does not publish a session availability edge for a capacity-only update", () => {
+    const broadcast = vi.fn();
+    const onRunnerStateChanged = vi.fn();
+    const runtime = createRuntime(
+      async () => "generation-a",
+      broadcast,
+      undefined,
+      onRunnerStateChanged,
+    );
+    registerNode(runtime, "conn-original", "generation-a", []);
+    const publish = (available: number) =>
+      updateNodeRunnerInventory({
+        registry: runtime.nodeRegistry,
+        nodeId: "node-a",
+        connId: "conn-original",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: { enabled: true, capacity: { total: 1, available } },
+        },
+      });
+
+    expect(publish(1)).toEqual({ changed: true });
+    broadcast.mockClear();
+    onRunnerStateChanged.mockClear();
+
+    expect(publish(0)).toEqual({ changed: true });
+
+    expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(true);
+    expect(onRunnerStateChanged).toHaveBeenCalledExactlyOnceWith("node-a", {
+      inventoryChanged: true,
+      availabilityChanged: false,
+    });
+    expect(broadcast).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith(
+      GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+      { nodeId: "node-a" },
+      { dropIfSlow: true },
+    );
   });
 
   test("forwards subscribed payload json without parsing it again", async () => {
