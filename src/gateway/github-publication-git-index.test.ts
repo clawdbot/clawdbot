@@ -1,14 +1,34 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   assertGitHubPublicationRefCasCompleted,
   updateGitHubPublicationBranchAndIndex,
 } from "./github-publication-git-index.js";
+import { assertGitHubPublicationTreeHasNoFilters } from "./github-publication-git-transport.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let testState: OpenClawTestState;
+let directoryIndex = 0;
+
+beforeEach(async () => {
+  testState = await createOpenClawTestState({ prefix: "openclaw-publication-index-" });
+  directoryIndex = 0;
+});
+
+afterEach(async () => {
+  await testState.cleanup();
+});
+
+async function makeDirectory(label: string): Promise<string> {
+  const directory = testState.path(`${label}-${directoryIndex++}`);
+  await fs.mkdir(directory, { recursive: true });
+  return directory;
+}
 
 async function git(
   cwd: string,
@@ -30,7 +50,7 @@ async function git(
 }
 
 async function createFixture() {
-  const cwd = tempDirs.make("openclaw-publication-index-");
+  const cwd = await makeDirectory("git");
   await git(cwd, ["init", "--initial-branch=main"]);
   await git(cwd, ["config", "user.name", "OpenClaw Test"]);
   await git(cwd, ["config", "user.email", "openclaw@example.test"]);
@@ -64,6 +84,31 @@ function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture
 }
 
 describe("GitHub publication index update", () => {
+  it("rejects a filter from Git's default global attributes file", async () => {
+    const cwd = await makeDirectory("attributes");
+    const globalAttributes = path.join(cwd, "global-attributes");
+    await fs.writeFile(globalAttributes, "*.secret filter=redact\n");
+
+    await expect(
+      assertGitHubPublicationTreeHasNoFilters(cwd, "a".repeat(40), async (argv) => {
+        const command = argv.join(" ");
+        if (command === "git var GIT_ATTR_GLOBAL") {
+          return { code: 0, stdout: Buffer.from(globalAttributes) };
+        }
+        if (command === "git var GIT_ATTR_SYSTEM") {
+          return { code: 0, stdout: Buffer.from(path.join(cwd, "missing-system-attributes")) };
+        }
+        if (argv.includes("ls-tree")) {
+          return { code: 0, stdout: Buffer.alloc(0) };
+        }
+        if (command === "git rev-parse --git-path info/attributes") {
+          return { code: 0, stdout: Buffer.from(path.join(cwd, "missing-info-attributes")) };
+        }
+        throw new Error(`unexpected command: ${command}`);
+      }),
+    ).rejects.toThrow("unsupported Git clean filter");
+  });
+
   it("moves the branch and index together without changing accepted worktree content", async () => {
     const fixture = await createFixture();
     await updateGitHubPublicationBranchAndIndex({
