@@ -111,6 +111,36 @@ describe("doctor config analysis helpers", () => {
     expect((result.config as Record<string, unknown>).hooks).toStrictEqual({});
   });
 
+  it("preserves eager tool input streaming compatibility metadata", () => {
+    const result = stripUnknownConfigKeys({
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com",
+            models: [
+              {
+                id: "test-model",
+                name: "Test Model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 4096,
+                compat: { supportsEagerToolInputStreaming: false },
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.removed).not.toContain(
+      "models.providers.custom.models[0].compat.supportsEagerToolInputStreaming",
+    );
+    expect(
+      result.config.models?.providers?.custom?.models?.[0]?.compat?.supportsEagerToolInputStreaming,
+    ).toBe(false);
+  });
+
   it("strips unknown root model metadata while preserving supported agent metadata", () => {
     const result = stripUnknownConfigKeys({
       defaultModel: "minimax/MiniMax-M2.7",
