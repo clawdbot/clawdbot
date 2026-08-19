@@ -1,7 +1,7 @@
 // Vitest extension codex app server attempt extra config wires the extension codex app server attempt extra test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-function createExtensionCodexAppServerAttemptExtraVitestConfig(
+export function createExtensionCodexAppServerAttemptExtraVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
   return createScopedVitestConfig(
