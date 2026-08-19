@@ -104,7 +104,10 @@ suite.define(() => {
       await secondRow.getByText("Using bash").waitFor();
       const heightAfter = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
 
-      expect(heightAfter).toBe(heightBefore);
+      // Sub-pixel tolerance: getBoundingClientRect returns 1/65536 fractions that
+      // drift under CPU contention, so exact equality fails ~1 run in 3 in a loaded
+      // shard. The contract is "the row does not change size", not bit-identical floats.
+      expect(heightAfter).toBeCloseTo(heightBefore, 1);
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
         await secondRow.screenshot({
