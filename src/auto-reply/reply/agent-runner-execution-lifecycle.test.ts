@@ -126,6 +126,45 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
   });
 
+  it("passes the operator-reviewed proposal revision to every embedded candidate", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.skillWorkshopProposalRevision = {
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "revision-h1",
+    };
+    state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("anthropic", "primary");
+      const result = await params.run("openai", "fallback");
+      return { result, provider: "openai", model: "fallback", attempts: [] };
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(
+      state.runEmbeddedAgentMock.mock.calls.map(
+        (call, index) =>
+          requireRecord(call[0], `embedded candidate ${index}`).skillWorkshopProposalRevision,
+      ),
+    ).toEqual([
+      {
+        agentId: "main",
+        workspaceDir: "/tmp/workspace",
+        proposalId: "proposal-h1",
+        expectedRevisionHash: "revision-h1",
+      },
+      {
+        agentId: "main",
+        workspaceDir: "/tmp/workspace",
+        proposalId: "proposal-h1",
+        expectedRevisionHash: "revision-h1",
+      },
+    ]);
+  });
+
   it("records diagnostic progress from global-lane wait notifications", async () => {
     const replyOperation = createReplyOperation({
       sessionKey: "agent:main:global-lane-progress",

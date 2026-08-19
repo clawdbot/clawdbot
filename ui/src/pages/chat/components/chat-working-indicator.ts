@@ -49,7 +49,7 @@ export function renderPlacementStartupStatus(
       <div class="chat-error chat-cloud-startup-error" role="alert">
         <span class="chat-error__dot" aria-hidden="true"></span>
         <span class="chat-error__content"
-          >${t("newSession.cloudStartFailed", {
+          >${t("newSession.placementStartFailed", {
             error: status.error ?? t("newSession.createFailed"),
           })}</span
         >

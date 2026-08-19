@@ -8,7 +8,6 @@ function createExtensionCodexAppServerAttemptExtraVitestConfig(
     [
       "extensions/codex/src/app-server/run-attempt-lifecycle-controller.test.ts",
       "extensions/codex/src/app-server/run-attempt-thread-cleanup.test.ts",
-      "extensions/codex/src/app-server/run-attempt-tools.test.ts",
       "extensions/codex/src/app-server/run-attempt.configured-mcp.test.ts",
       "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
       "extensions/codex/src/app-server/run-attempt.dynamic-tools.test.ts",

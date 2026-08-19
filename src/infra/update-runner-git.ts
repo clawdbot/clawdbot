@@ -71,7 +71,7 @@ export async function updateGitCheckout(params: {
   const devTarget = channel === "dev" ? opts.devTarget : undefined;
   const hasDevTarget = devTarget !== undefined;
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
-  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
   let stepIndex = 0;
   const step = (
@@ -100,9 +100,6 @@ export async function updateGitCheckout(params: {
   let liveBuildStarted = false;
   let recovery: UpdateRunResult["recovery"];
   const prepareMutation = async (revision: string) => {
-    if (mutationPrepared) {
-      return;
-    }
     const preparation = await prepareGitMutation({
       runCommand,
       root: gitRoot,
@@ -110,12 +107,8 @@ export async function updateGitCheckout(params: {
       timeoutMs,
       beforeGitMutation: opts.beforeGitMutation,
     });
-    if (typeof preparation.allowGatewayServiceRepair === "boolean") {
-      allowGatewayServiceRepair = preparation.allowGatewayServiceRepair;
-    }
-    if (typeof preparation.allowGatewayActivation === "boolean") {
-      allowGatewayActivation = preparation.allowGatewayActivation;
-    }
+    allowGatewayServiceRepair = preparation.allowGatewayServiceRepair ?? allowGatewayServiceRepair;
+    allowGatewayActivation = preparation.allowGatewayActivation ?? allowGatewayActivation;
     mutationPrepared = true;
   };
   const buildError = (reason: string, status: "error" | "skipped" = "error"): UpdateRunResult => ({

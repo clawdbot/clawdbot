@@ -37,7 +37,6 @@ type FixtureOptions = {
   phase?: "connected" | "connecting";
   agents?: unknown[];
   methods?: string[];
-  nodes?: unknown[];
   scopes?: string[];
   selfUser?: { id: string };
   request?: (method: string) => Promise<unknown>;
@@ -45,9 +44,6 @@ type FixtureOptions = {
 
 function createDraftFixture(options: FixtureOptions = {}) {
   const request = vi.fn((method: string) => {
-    if (method === "node.list") {
-      return Promise.resolve({ nodes: options.nodes ?? [] });
-    }
     if (options.request) {
       return options.request(method);
     }
@@ -128,9 +124,6 @@ function createDraftFixture(options: FixtureOptions = {}) {
     gateway,
     () => ({
       context,
-      nodes: place?.nodes ?? [],
-      folder: place?.folder ?? "",
-      execNode: place?.execNode ?? "",
       isAdmin: place?.isAdmin() ?? false,
     }),
     {
@@ -150,7 +143,7 @@ function createDraftFixture(options: FixtureOptions = {}) {
       context,
       data: undefined,
       submitting: flow?.submitting ?? false,
-      pendingCloudSessionKey: flow?.pendingPlacement.sessionKey ?? "",
+      pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
     }),
     {
       requestUpdate: vi.fn(),
@@ -229,7 +222,7 @@ describe("DraftSubmissionFlow submit gates", () => {
         build: () => {
           const fixture = createDraftFixture();
           fixture.flow.setMessage("hello");
-          fixture.flow.markPendingCloudUnavailable("gateway-changed");
+          fixture.flow.markPendingPlacementUnavailable("gateway-changed");
           return fixture;
         },
       },
@@ -308,6 +301,7 @@ describe("DraftSubmissionFlow submit gates", () => {
 
   it("blocks a retained device choice when the selected runtime cannot dispatch there", async () => {
     const fixture = createDraftFixture({
+      methods: ["environments.list", "sessions.create", "sessions.dispatch"],
       scopes: ["operator.admin", "operator.read", "operator.write"],
       agents: [
         {
@@ -323,25 +317,35 @@ describe("DraftSubmissionFlow submit gates", () => {
           },
         },
       ],
-      nodes: [
-        {
-          nodeId: "build-mac",
-          displayName: "Build Mac",
-          connected: true,
-          commands: ["system.run"],
-        },
-      ],
+      request: async (method) =>
+        method === "environments.list"
+          ? {
+              environments: [
+                {
+                  id: "node:build-mac",
+                  type: "node",
+                  label: "Build Mac",
+                  status: "available",
+                  sessionHost: true,
+                  workerSlots: { total: 1, available: 1 },
+                },
+              ],
+              profiles: [],
+            }
+          : {},
     });
-    await vi.waitFor(() => expect(fixture.place.execNodes()).toHaveLength(1));
-    fixture.place.selectExecNode("build-mac");
+    await fixture.gateway.refreshCloudProfiles();
+    await vi.waitFor(() => expect(fixture.place.devices()).toHaveLength(1));
+    fixture.place.selectDevice("build-mac");
     fixture.flow.setMessage("run on the device");
 
     expect(fixture.flow.submitBlock()).toEqual({
-      gate: "node-runtime",
+      gate: "device-runtime",
       reason: "Needs the embedded runtime",
     });
     expect(fixture.flow.canSubmit()).toBe(false);
     expect(fixture.flow.submitDisabledReason()).toBe("Needs the embedded runtime");
+    expect(fixture.request).not.toHaveBeenCalledWith("node.list", expect.anything());
   });
 });
 
@@ -369,7 +373,7 @@ describe("DraftSubmissionFlow", () => {
     flow.attachmentDraft.reset({ release: true });
   });
 
-  it("releases the displaced payload and renders cloud recovery once without a user mutation", () => {
+  it("releases the displaced payload and renders placement recovery once without a user mutation", () => {
     const revokeObjectURL = stubObjectUrls("blob:current-draft");
     const { flow, requestUpdate } = createDraftFixture();
     const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
@@ -500,9 +504,6 @@ describe("DraftSubmissionFlow", () => {
       gateway,
       () => ({
         context,
-        nodes: place?.nodes ?? [],
-        folder: place?.folder ?? "",
-        execNode: place?.execNode ?? "",
         isAdmin: place?.isAdmin() ?? false,
       }),
       {
@@ -522,7 +523,7 @@ describe("DraftSubmissionFlow", () => {
         context,
         data: undefined,
         submitting: flow?.submitting ?? false,
-        pendingCloudSessionKey: flow?.pendingPlacement.sessionKey ?? "",
+        pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
       }),
       {
         requestUpdate: vi.fn(),
@@ -599,9 +600,6 @@ describe("DraftSubmissionFlow", () => {
       recoveryScope: "principal-a",
       recoveryScopeReady: true,
       request: vi.fn(async (method: string) => {
-        if (method === "node.list") {
-          return { nodes: [] };
-        }
         if (method === "worktrees.branches") {
           return { repositoryStatus: "git", branches: [] };
         }
@@ -618,7 +616,7 @@ describe("DraftSubmissionFlow", () => {
           hello: {
             auth: {
               role: "operator",
-              scopes: ["operator.read", "operator.write"],
+              scopes: ["operator.admin", "operator.read", "operator.write"],
             },
             features: { methods: ["sessions.create", "sessions.dispatch"] },
           },
@@ -679,9 +677,6 @@ describe("DraftSubmissionFlow", () => {
       gateway,
       () => ({
         context,
-        nodes: place?.nodes ?? [],
-        folder: place?.folder ?? "",
-        execNode: place?.execNode ?? "",
         isAdmin: place?.isAdmin() ?? false,
       }),
       {
@@ -701,7 +696,7 @@ describe("DraftSubmissionFlow", () => {
         context,
         data: undefined,
         submitting: flow?.submitting ?? false,
-        pendingCloudSessionKey: flow?.pendingPlacement.sessionKey ?? "",
+        pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
       }),
       {
         requestUpdate: vi.fn(),
@@ -736,7 +731,7 @@ describe("DraftSubmissionFlow", () => {
       createParams,
     });
     flow.pendingPlacement.retryAllowed = true;
-    place.applyPendingCloud({ agentId: "cloud", profileId: "aws", cwd: "/workspace" });
+    place.applyPendingPlacement({ agentId: "cloud", profileId: "aws", cwd: "/workspace" });
     flow.attachmentDraft.replace([
       {
         id: "attachment-1",

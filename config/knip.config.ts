@@ -424,7 +424,6 @@ const config = {
     "src/system-agent/greeting.ts": ["exports", "types"],
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
-    "extensions/google-meet/src/plugin-registration.ts": ["exports"],
     "extensions/signal/src/setup-core.ts": ["exports"],
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
@@ -575,6 +574,7 @@ const config = {
         "src/index.ts!",
         "src/agent-id.ts!",
         "src/boolean-coercion.ts!",
+        "src/browser-error-runtime.ts!",
         "src/error-coercion.ts!",
         "src/expect.ts!",
         "src/json-coercion.ts!",

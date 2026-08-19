@@ -11,7 +11,11 @@ import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
-import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import {
+  authenticatedProfileUnavailableError,
+  gatewayClientSessionCreator,
+  isGatewayClientProfilePending,
+} from "./server-methods/gateway-client-identity.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -25,8 +29,12 @@ import {
   type SessionSharingSnapshot,
 } from "./session-sharing-snapshot-cache.js";
 import {
+  isApprovalSessionTargetMethod,
+  isRequiredSessionTargetMethod,
+  isSessionProfileDependentMethod,
   readSessionSharingStringParam as readStringParam,
   resolveDirectIncognitoTargets,
+  sessionMutationTargetFields,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
 import type {
@@ -138,7 +146,7 @@ export function resolveSessionSharingRole(params: {
   const identity = gatewayClientSessionCreator(params.client);
   // Shared-secret/no-auth solo deployments have no durable person identity.
   if (!identity) {
-    return "owner";
+    return params.client?.authenticatedGitHubIdentitySync ? "viewer" : "owner";
   }
   if (params.target.entry.createdActor?.id === identity.id) {
     return "owner";
@@ -197,6 +205,9 @@ export function authorizeIncognitoSessionTarget(params: {
   if (isGatewayAdmin(params.client)) {
     return null;
   }
+  if (isGatewayClientProfilePending(params.client)) {
+    return authenticatedProfileUnavailableError();
+  }
   const identity = gatewayClientSessionCreator(params.client);
   if (!identity) {
     return null;
@@ -231,6 +242,9 @@ export function authorizeResolvedSessionMutation(params: {
   if (isGatewayAdmin(params.client)) {
     return null;
   }
+  if (isGatewayClientProfilePending(params.client)) {
+    return authenticatedProfileUnavailableError();
+  }
   const target = resolveSessionSharingTarget(params);
   const incognitoError = authorizeIncognitoSessionTarget({
     client: params.client,
@@ -262,78 +276,6 @@ export function authorizeSessionSharingTarget(params: {
         },
       });
 }
-
-type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
-const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutationTargetField[]>([
-  ["agent", ["sessionKey"]],
-  ["board.event", ["sessionKey"]],
-  ["board.update", ["sessionKey"]],
-  ["board.widget.grant", ["sessionKey"]],
-  ["board.widget.put", ["sessionKey"]],
-  ["chat.abort", ["sessionKey"]],
-  ["chat.inject", ["sessionKey"]],
-  ["chat.send", ["sessionKey"]],
-  ["message.action", ["sessionKey"]],
-  ["plugins.sessionAction", ["sessionKey"]],
-  ["progressCard.get", ["sessionKey"]],
-  ["progressCard.put", ["sessionKey"]],
-  ["send", ["sessionKey"]],
-  ["session.discussion.open", ["sessionKey"]],
-  ["sessions.abort", ["key"]],
-  ["sessions.compaction.branch", ["key"]],
-  ["sessions.compaction.restore", ["key"]],
-  ["sessions.compact", ["key"]],
-  ["sessions.create", ["key", "parentSessionKey"]],
-  ["sessions.delete", ["key"]],
-  ["sessions.dispatch", ["key"]],
-  ["sessions.files.set", ["sessionKey"]],
-  ["sessions.fork", ["sessionKey"]],
-  ["sessions.patch", ["key"]],
-  ["sessions.pluginPatch", ["key"]],
-  ...(["sessions.move", "sessions.reclaim"] as const).map((method) => [method, ["key"]] as const),
-  ["sessions.recover", ["key"]],
-  ["sessions.reset", ["key"]],
-  ["sessions.rewind", ["sessionKey"]],
-  ["sessions.send", ["key"]],
-  ["sessions.steer", ["key"]],
-  ["sessions.branches.switch", ["sessionKey"]],
-  ["tools.invoke", ["sessionKey"]],
-]);
-
-const REQUIRED_SESSION_TARGET_METHODS = new Set([
-  "board.action",
-  "board.event",
-  "board.update",
-  "board.widget.grant",
-  "board.widget.put",
-  "chat.abort",
-  "chat.inject",
-  "chat.send",
-  "progressCard.get",
-  "progressCard.put",
-  "session.discussion.open",
-  "sessions.abort",
-  "sessions.branches.switch",
-  "sessions.compact",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
-  "sessions.delete",
-  "sessions.dispatch",
-  "sessions.files.set",
-  "sessions.fork",
-  "sessions.groups.delete",
-  "sessions.groups.rename",
-  "sessions.groups.update",
-  "sessions.patch",
-  "sessions.pluginPatch",
-  "sessions.reclaim",
-  "sessions.recover",
-  "sessions.move",
-  "sessions.reset",
-  "sessions.rewind",
-  "sessions.send",
-  "sessions.steer",
-]);
 
 function resolveSessionGroupMutationTargets(params: {
   getCfg: () => OpenClawConfig;
@@ -401,11 +343,7 @@ function resolveSessionMutationTargets(params: {
       requestParams: params.requestParams,
     });
   }
-  if (
-    params.method === "exec.approval.resolve" ||
-    params.method === "plugin.approval.resolve" ||
-    params.method === "approval.resolve"
-  ) {
+  if (isApprovalSessionTargetMethod(params.method)) {
     const target = resolveApprovalSessionTarget(
       params.method,
       params.requestParams,
@@ -415,7 +353,7 @@ function resolveSessionMutationTargets(params: {
   }
   const requestedAgentId = readStringParam(params.requestParams, "agentId");
   const directTargets: SessionMutationTarget[] = [];
-  for (const field of SESSION_TARGET_FIELDS_BY_METHOD.get(params.method) ?? []) {
+  for (const field of sessionMutationTargetFields(params.method)) {
     const sessionKey = readStringParam(params.requestParams, field);
     if (!sessionKey) {
       continue;
@@ -466,6 +404,12 @@ export function resolveSessionMutationAuthorization(params: {
 }): { authorization?: SessionMutationAuthorization; error: ErrorShape | null } {
   if (isGatewayAdmin(params.client)) {
     return { error: null };
+  }
+  if (
+    isGatewayClientProfilePending(params.client) &&
+    isSessionProfileDependentMethod(params.method)
+  ) {
+    return { error: authenticatedProfileUnavailableError() };
   }
   // Resolve runtime config at most once per request and only when a path needs it. The context
   // getter reloads/resolves gateway config, so non-session requests (the vast majority) must not
@@ -525,7 +469,7 @@ export function resolveSessionMutationAuthorization(params: {
     getCfg,
   });
   if (!targetRefs) {
-    if (REQUIRED_SESSION_TARGET_METHODS.has(params.method)) {
+    if (isRequiredSessionTargetMethod(params.method)) {
       return {
         error: errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
           details: { code: "SESSION_MUTATION_TARGET_REQUIRED", method: params.method },

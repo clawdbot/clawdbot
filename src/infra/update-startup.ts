@@ -65,6 +65,7 @@ import {
 } from "./update-dev-target.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
+import { runGatewayUpdatePreflight } from "./update-runner.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -499,6 +500,16 @@ async function runAutoUpdateCommand(params: AutoUpdateRunParams): Promise<AutoUp
   const supervisor = detectRespawnSupervisor(process.env, process.platform, {
     includeLinuxOpenClawGatewayServiceMarker: true,
   });
+  if (supervisor && params.devTarget) {
+    const failure = await runGatewayUpdatePreflight(
+      params.root,
+      params.timeoutMs,
+      params.devTarget,
+    );
+    if (failure) {
+      return { ok: false, code: 1, reason: failure.reason ?? "preflight-failed" };
+    }
+  }
   if (supervisor) {
     return await startManagedServiceAutoUpdateHandoff({
       channel: params.channel,

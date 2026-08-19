@@ -26,7 +26,6 @@ import { resolveHomeDir, shortenHomeInString, shortenHomePath } from "../utils.j
 
 type RemovalResult = {
   ok: boolean;
-  skipped?: boolean;
 };
 
 type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
@@ -171,7 +170,7 @@ export async function removePath(
   opts?: RemovalOptions,
 ): Promise<RemovalResult> {
   if (!target?.trim()) {
-    return { ok: false, skipped: true };
+    return { ok: false };
   }
   const resolved = path.resolve(target);
   const label = opts?.label ?? resolved;
@@ -182,7 +181,7 @@ export async function removePath(
   }
   if (opts?.dryRun) {
     runtime.log(`[dry-run] remove ${displayLabel}`);
-    return { ok: true, skipped: true };
+    return { ok: true };
   }
   try {
     await fs.rm(resolved, { recursive: true, force: true });
@@ -271,7 +270,7 @@ async function removePathPreserving(
   opts?: RemovalOptions,
 ): Promise<RemovalResult> {
   if (!target?.trim()) {
-    return { ok: false, skipped: true };
+    return { ok: false };
   }
   const resolved = path.resolve(target);
   const label = opts?.label ?? resolved;
@@ -281,7 +280,7 @@ async function removePathPreserving(
     return { ok: false };
   }
   if (shouldPreservePath(resolved, preservePaths)) {
-    return { ok: true, skipped: true };
+    return { ok: true };
   }
   if (!pathContainsPreservedPath(resolved, preservePaths)) {
     return removePath(resolved, runtime, opts);
@@ -292,7 +291,7 @@ async function removePathPreserving(
       .map((preservePath) => shortenHomeInString(preservePath))
       .join(", ");
     runtime.log(`[dry-run] remove ${displayLabel} preserving ${preserved}`);
-    return { ok: true, skipped: true };
+    return { ok: true };
   }
   try {
     const stat = await fs.lstat(resolved);

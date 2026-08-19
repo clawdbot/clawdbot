@@ -3783,7 +3783,8 @@ describe("handleSendChat", () => {
         }),
       ),
     );
-    expect(host.chatRunId).toBe("steer-run");
+    expect(host.chatRunId).toBe("run-1");
+    expect(host.chatStream).toBe("Working...");
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
         queueMode: "steer",
@@ -3794,6 +3795,19 @@ describe("handleSendChat", () => {
     const payload = findRequestPayload(host.request, "chat.send", "default steer payload");
     expect(payload).not.toHaveProperty("expectedRunId");
     expect(payload).not.toHaveProperty("expectedLeafEntryId");
+  });
+
+  it("adopts a steer-mode ACK when no run is active", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { status: "started", runId: "started-run" },
+      },
+      chatMessage: "start through steer mode",
+    });
+
+    await handleSendChat(host, undefined, { followUpMode: "steer" });
+
+    expect(host.chatRunId).toBe("started-run");
   });
 
   it("sends a fresh mode-bearing row ahead of older outbox reconciliation", async () => {

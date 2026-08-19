@@ -2,6 +2,7 @@
 // Control UI tests cover skill workshop controller behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -21,6 +22,7 @@ type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 const ISO_NOW = "2026-06-16T12:00:00.000Z";
 const DRAFT_HASH = "a".repeat(64);
 const REVISION_HASH = "b".repeat(64);
+const UPDATED_REVISION_HASH = "c".repeat(64);
 
 function createFixture(
   overrides: Partial<SkillWorkshopState> = {},
@@ -135,6 +137,10 @@ function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshop
   };
 }
 
+function proposalDecision(expectedRevisionHash: string | null = REVISION_HASH) {
+  return { proposalId: "proposal-1", expectedRevisionHash };
+}
+
 function clearNoticeTimer(state: SkillWorkshopState): void {
   if (state.skillWorkshopActionNoticeTimer) {
     globalThis.clearTimeout(state.skillWorkshopActionNoticeTimer);
@@ -158,7 +164,7 @@ describe("Skill Workshop proposal RPCs", () => {
       },
     );
 
-    await runSkillWorkshopLifecycleAction(state, context, "apply", "proposal-1");
+    await runSkillWorkshopLifecycleAction(state, context, "apply", proposalDecision());
     await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
     await expect(requestSkillWorkshopRevision(state, context, "proposal-1", vi.fn())).resolves.toBe(
       null,
@@ -292,13 +298,14 @@ describe("Skill Workshop proposal RPCs", () => {
       });
 
       try {
-        await runSkillWorkshopLifecycleAction(state, context, action, "proposal-1");
+        await runSkillWorkshopLifecycleAction(state, context, action, proposalDecision());
       } finally {
         clearNoticeTimer(state);
       }
 
       expect(request).toHaveBeenNthCalledWith(1, method, {
         agentId: "reviewer",
+        expectedRevisionHash: REVISION_HASH,
         proposalId: "proposal-1",
       });
       expect(request).toHaveBeenNthCalledWith(2, "skills.proposals.list", {
@@ -308,6 +315,132 @@ describe("Skill Workshop proposal RPCs", () => {
         agentId: "reviewer",
         proposalId: "proposal-1",
       });
+    },
+  );
+
+  it.each(["apply", "reject"] as const)(
+    "%s refuses to act without the reviewed revision hash",
+    async (action) => {
+      const method = `skills.proposals.${action}`;
+      const { state, context, request } = createFixture(
+        { skillWorkshopProposals: [proposal({ revisionHash: null })] },
+        {},
+        [method],
+      );
+
+      await runSkillWorkshopLifecycleAction(state, context, action, proposalDecision(null));
+
+      expect(request).not.toHaveBeenCalled();
+      expect(state.skillWorkshopError).toBe(
+        "The current proposal revision could not be identified.",
+      );
+    },
+  );
+
+  it.each([
+    ["apply", "skills.proposals.apply"],
+    ["reject", "skills.proposals.reject"],
+  ] as const)(
+    "%s refreshes a changed proposal without replaying the stale decision",
+    async (action, method) => {
+      const updatedAt = "2026-06-16T12:01:00.000Z";
+      const updatedManifest = manifest();
+      updatedManifest.updatedAt = updatedAt;
+      updatedManifest.proposals[0] = {
+        ...updatedManifest.proposals[0]!,
+        description: "Clean inbox triage with an explicit archive review",
+        updatedAt,
+      };
+      const updatedInspect = inspectResult();
+      updatedInspect.record = {
+        ...updatedInspect.record,
+        description: "Clean inbox triage with an explicit archive review",
+        proposedVersion: "v2",
+        updatedAt,
+      };
+      updatedInspect.revisionHash = UPDATED_REVISION_HASH;
+      updatedInspect.content = "Review unread mail, confirm archive candidates, then archive.";
+      const { state, context, request } = createFixture(
+        {
+          skillWorkshopAgentId: "reviewer",
+          skillWorkshopProposals: [proposal()],
+          skillWorkshopSelectedKey: "proposal-1",
+        },
+        { assistantAgentId: "reviewer" },
+        [method, "skills.proposals.list", "skills.proposals.inspect"],
+      );
+      let stale = true;
+      request.mockImplementation(async (calledMethod: string) => {
+        if (calledMethod === method) {
+          if (stale) {
+            stale = false;
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "Skill proposal revision changed",
+              details: {
+                code: "SKILL_PROPOSAL_REVISION_CHANGED",
+                currentRevisionHash: UPDATED_REVISION_HASH,
+                expectedRevisionHash: REVISION_HASH,
+              },
+            });
+          }
+          return {};
+        }
+        if (calledMethod === "skills.proposals.list") {
+          return updatedManifest;
+        }
+        if (calledMethod === "skills.proposals.inspect") {
+          return updatedInspect;
+        }
+        return {};
+      });
+
+      await runSkillWorkshopLifecycleAction(state, context, action, proposalDecision());
+
+      const actionCalls = () =>
+        request.mock.calls.filter(([calledMethod]) => calledMethod === method);
+      expect(actionCalls()).toEqual([
+        [
+          method,
+          {
+            agentId: "reviewer",
+            expectedRevisionHash: REVISION_HASH,
+            proposalId: "proposal-1",
+          },
+        ],
+      ]);
+      expect(state.skillWorkshopProposals[0]).toMatchObject({
+        body: "Review unread mail, confirm archive candidates, then archive.",
+        revisionHash: UPDATED_REVISION_HASH,
+        version: 2,
+      });
+      expect(state.skillWorkshopActionNotice).toMatchObject({
+        key: "proposal-1",
+        label: "Proposal changed. Review the updated draft before choosing another action.",
+      });
+      expect(state.skillWorkshopActionNoticeTimer).toBeNull();
+      expect(state.skillWorkshopError).toBeNull();
+
+      try {
+        await runSkillWorkshopLifecycleAction(
+          state,
+          context,
+          action,
+          proposalDecision(UPDATED_REVISION_HASH),
+        );
+      } finally {
+        clearNoticeTimer(state);
+      }
+
+      expect(actionCalls()).toHaveLength(2);
+      expect(actionCalls()[1]).toEqual([
+        method,
+        {
+          agentId: "reviewer",
+          expectedRevisionHash: UPDATED_REVISION_HASH,
+          proposalId: "proposal-1",
+        },
+      ]);
     },
   );
 

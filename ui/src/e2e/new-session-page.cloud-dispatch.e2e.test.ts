@@ -40,7 +40,7 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
-      operatorScopes: ["operator.read", "operator.write"],
+      operatorScopes: ["operator.admin", "operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [
         "chat.metadata",
@@ -207,7 +207,7 @@ suite.define(() => {
       await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("release");
       await project.getByLabel("Base branch").fill("main");
       await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
-        "Syncs target-repo to the cloud worker",
+        "Syncs target-repo to the selected runner",
       );
       await page.keyboard.press("Escape");
       await expect
@@ -238,7 +238,7 @@ suite.define(() => {
       }
       await checkoutName.fill("cloud-e2e");
       await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
-        "Syncs OpenClaw to the cloud worker",
+        "Syncs OpenClaw to the selected runner",
       );
       await captureUiProof(page, "01-cloud-worker-target.png");
       await page.keyboard.press("Escape");
@@ -341,7 +341,7 @@ suite.define(() => {
           ts: Date.now(),
         });
         await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-        await pollLocatorText(startupStatus).toContain(`Cloud worker: ${state}`);
+        await pollLocatorText(startupStatus).toContain(`Runner: ${state}`);
       };
 
       for (const [state, generation] of [
@@ -371,7 +371,7 @@ suite.define(() => {
         app.runtime?.context.navigate("chat", { pathname });
       }, controlUiSessionPath(sessionKey));
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
-      await pollLocatorText(startupStatus).toContain("Cloud worker: starting");
+      await pollLocatorText(startupStatus).toContain("Runner: starting");
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);

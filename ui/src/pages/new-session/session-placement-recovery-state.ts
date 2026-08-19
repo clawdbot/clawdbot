@@ -11,7 +11,7 @@ import {
 } from "../../lib/sessions/session-placement-recovery.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 
-export type SubmissionOutcomeReason = "gateway-changed" | "cloud-interrupted";
+export type SubmissionOutcomeReason = "gateway-changed" | "placement-interrupted";
 
 export function resolveSubmissionOutcomeReason(params: {
   gatewayIdentityChanged: boolean;
@@ -19,7 +19,7 @@ export function resolveSubmissionOutcomeReason(params: {
 }): SubmissionOutcomeReason {
   return params.gatewayIdentityChanged || !params.placementDraftOwned
     ? "gateway-changed"
-    : "cloud-interrupted";
+    : "placement-interrupted";
 }
 
 export function resolveScope(

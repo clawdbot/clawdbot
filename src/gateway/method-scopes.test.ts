@@ -99,8 +99,6 @@ describe("method scope resolution", () => {
     ["projects.list", ["operator.read"]],
     ["users.prefs.get", ["operator.read"]],
     ["users.prefs.set", ["operator.write"]],
-    ["users.setGitHubIdentity", ["operator.write"]],
-    ["users.clearGitHubIdentity", ["operator.write"]],
     ["projects.register", ["operator.admin"]],
     ["projects.remove", ["operator.admin"]],
     ["projects.add", ["operator.write"]],
@@ -426,6 +424,84 @@ describe("method scope resolution", () => {
         nodeId: "macbook",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it.each([
+    [
+      "device dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", deviceId: "device-1" },
+      "operator.write",
+    ],
+    [
+      "profile dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", profileId: "development" },
+      "operator.admin",
+    ],
+    [
+      "configured-default dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread" },
+      "operator.admin",
+    ],
+    [
+      "gateway move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+      "operator.write",
+    ],
+    [
+      "device move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "device", deviceId: "device-1" },
+      },
+      "operator.write",
+    ],
+    [
+      "profile move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "profile", profileId: "development" },
+      },
+      "operator.admin",
+    ],
+  ] as const)(
+    "derives %s authorization from its placement target",
+    (_name, method, params, scope) => {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod(method, params)).toEqual([scope]);
+      expect(authorizeOperatorScopesForMethod(method, [scope], params)).toEqual({ allowed: true });
+      if (scope === "operator.admin") {
+        expect(authorizeOperatorScopesForMethod(method, ["operator.write"], params)).toEqual({
+          allowed: false,
+          missingScope: "operator.admin",
+        });
+      }
+    },
+  );
+
+  it.each([
+    [
+      "sessions.dispatch",
+      { key: "agent:main:thread", profileId: "development", deviceId: "device-1" },
+    ],
+    ["sessions.move", { key: "agent:main:thread", target: { kind: "profile" } }],
+  ] as const)("keeps malformed %s params write-scoped for handler validation", (method, params) => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(method, params)).toEqual([
+      "operator.write",
+    ]);
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"], params)).toEqual({
+      allowed: true,
+    });
   });
 
   it("keeps sessions.create project IDs at write scope", () => {

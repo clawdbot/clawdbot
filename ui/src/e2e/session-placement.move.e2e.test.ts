@@ -54,23 +54,6 @@ function activeSession(placementMove?: {
   };
 }
 
-function localSession() {
-  return {
-    key: "agent:main:placement-move",
-    kind: "direct" as const,
-    label: "Move proof",
-    updatedAt: 3,
-    hasActiveRun: false,
-    placement: {
-      state: "local" as const,
-      generation: 10,
-      createdAtMs: 1,
-      updatedAtMs: 3,
-      stateChangedAtMs: 3,
-    },
-  };
-}
-
 suite.define(() => {
   beforeAll(async () => {
     if (captureProof) {
@@ -78,19 +61,50 @@ suite.define(() => {
     }
   });
 
-  it("moves the selected session through the exact-source RPC", async () => {
+  it("shows authoritative device targets to writers and moves through the exact-source RPC", async () => {
     const context = await suite.newBrowserContext(contextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.startup", "environments.list", "node.list", "sessions.move"],
+      featureMethods: ["chat.startup", "environments.list", "sessions.move"],
+      operatorScopes: ["operator.read", "operator.write"],
       historyMessages: [{ role: "assistant", content: "Placement move proof." }],
       methodResponses: {
         "sessions.list": chatSessionListResponse([activeSession()]),
         "environments.list": {
           profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
-          environments: [],
+          environments: [
+            {
+              id: "node:writer-runner",
+              type: "node",
+              label: "Writer runner",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 1, available: 1 },
+            },
+            {
+              id: "node:saturated",
+              type: "node",
+              label: "Busy runner",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 2, available: 0 },
+            },
+            {
+              id: "node:offline",
+              type: "node",
+              label: "Offline runner",
+              status: "unavailable",
+              sessionHost: true,
+            },
+            {
+              id: "node:nonhost",
+              type: "node",
+              label: "Hosting disabled",
+              status: "available",
+              sessionHost: false,
+            },
+          ],
         },
-        "node.list": { nodes: [] },
       },
       sessionKey: "agent:main:placement-move",
     });
@@ -101,6 +115,17 @@ suite.define(() => {
       await page.getByRole("button", { name: "Runs on Cloud" }).click();
       await page.getByText("Move session…", { exact: true }).click();
       await page.getByText("The active turn will be interrupted.", { exact: false }).waitFor();
+      await page.locator('[data-value="gateway"]').waitFor();
+      await page.locator('[data-value="device:writer-runner"]').waitFor();
+      expect(await page.locator('[data-value="cloud:aws"]').count()).toBe(0);
+      expect(await page.locator('[data-value="device:saturated"]').isDisabled()).toBe(true);
+      expect(await page.locator('[data-value="device:offline"]').isDisabled()).toBe(true);
+      expect(await page.locator('[data-value="device:nonhost"]').isDisabled()).toBe(true);
+      await page.getByText("No worker slots are available", { exact: false }).waitFor();
+      await page.getByText("Device unavailable", { exact: false }).waitFor();
+      await page.getByText("Session hosting is disabled", { exact: false }).waitFor();
+      expect(await gateway.getRequests("node.list")).toHaveLength(0);
+      await page.locator('[data-value="device:writer-runner"]').click();
       await capture(page, "01-destination-picker-with-warning.png");
       await page.getByRole("button", { name: "Move session", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.move");
@@ -108,19 +133,17 @@ suite.define(() => {
         key: "agent:main:placement-move",
         agentId: "main",
         expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
-        target: { kind: "gateway" },
+        target: { kind: "device", deviceId: "writer-runner" },
       });
       await page.getByRole("button", { name: "Moving session…" }).waitFor();
       await capture(page, "03-moving.png");
 
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([localSession()]));
       await gateway.resolveDeferred("sessions.move", {
         ok: true,
         key: "agent:main:placement-move",
         sessionId: "session-placement-move",
-        placement: { state: "local", generation: 10 },
+        placement: { state: "active", generation: 10 },
       });
-      await page.getByRole("button", { name: "Runs on Cloud" }).waitFor({ state: "detached" });
       await capture(page, "04-moved.png");
     } finally {
       await suite.closeBrowserContext(context);
@@ -136,7 +159,8 @@ suite.define(() => {
       const context = await suite.newBrowserContext(contextOptions());
       const page = await context.newPage();
       const gateway = await installMockGateway(page, {
-        featureMethods: ["chat.startup", "environments.list", "node.list", "sessions.move"],
+        featureMethods: ["chat.startup", "environments.list", "sessions.move"],
+        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
         historyMessages: [{ role: "assistant", content: "Placement machine proof." }],
         methodResponses: {
           "sessions.list": chatSessionListResponse([activeSession()]),
@@ -154,7 +178,6 @@ suite.define(() => {
             ],
             environments: [],
           },
-          "node.list": { nodes: [] },
         },
         sessionKey: "agent:main:placement-move",
       });
@@ -195,7 +218,7 @@ suite.define(() => {
     const context = await suite.newBrowserContext(contextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
-      featureMethods: ["chat.startup", "environments.list", "node.list", "sessions.move"],
+      featureMethods: ["chat.startup", "environments.list", "sessions.move"],
       historyMessages: [{ role: "assistant", content: "Placement failure proof." }],
       methodResponses: {
         "sessions.list": chatSessionListResponse([

@@ -244,11 +244,16 @@ function expectPendingApprovalText(
   expect(pendingText).toContain(options.command);
   if (options.interactive) {
     expect(pendingText).toContain("Mode: foreground (interactive approvals available).");
+  }
+  if (options.interactive && options.host !== "node") {
     expect(pendingText).toContain(
       (options.allowedDecisions ?? "").includes("allow-always")
         ? "Background mode requires pre-approved policy"
         : "Background mode requires an effective policy that allows pre-approval",
     );
+  }
+  if (options.host === "node") {
+    expect(pendingText).not.toContain("Background mode");
   }
   return details;
 }
