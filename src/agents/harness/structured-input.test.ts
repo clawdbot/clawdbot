@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import type { StructuredInputCompilerOptions } from "./structured-input-boundary.js";
 import {
   compileStructuredInputForm,
   compileStructuredInputUrl,
   snapshotStructuredInput,
   type StructuredInputCompileResult,
-  type StructuredInputCompilerOptions,
 } from "./structured-input.js";
 
 const baseOptions: StructuredInputCompilerOptions = {

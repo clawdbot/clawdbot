@@ -11,6 +11,13 @@ import {
   structuredInputString as ownString,
   structuredInputValue as ownValue,
 } from "./structured-input-boundary.js";
+import type {
+  StructuredInputCompileResult,
+  StructuredInputCompilerOptions,
+  StructuredInputField,
+  StructuredInputRecord,
+  StructuredInputValue,
+} from "./structured-input-boundary.js";
 import { compileStructuredInputField } from "./structured-input-schema.js";
 import type { AgentHarnessUserInputQuestion } from "./user-input-bridge.js";
 
@@ -22,46 +29,13 @@ const MAX_URL_TEXT = 2_048;
 const MAX_URL_QUESTION_TEXT = 3_200;
 
 export { isStructuredInputRecord, snapshotStructuredInput };
-
-type StructuredInputScalar = string | number | boolean | null;
-export type StructuredInputValue =
-  | StructuredInputScalar
-  | StructuredInputValue[]
-  | StructuredInputRecord;
-export type StructuredInputRecord = { [key: string]: StructuredInputValue };
-export type StructuredInputAnswerValue = string | number | boolean | string[];
-
-type StructuredInputDecodeResult =
-  | { kind: "absent" }
-  | { kind: "invalid"; message: string }
-  | { kind: "present"; entries: Array<[string, StructuredInputAnswerValue]> };
-
-export type StructuredInputField = {
-  question: AgentHarnessUserInputQuestion;
-  decode: (values: readonly string[]) => StructuredInputDecodeResult;
-};
-
-type StructuredInputPlan =
-  | { kind: "form"; intro: string; fields: StructuredInputField[] }
-  | { kind: "url"; question: AgentHarnessUserInputQuestion };
-
-export type StructuredInputCompileResult =
-  | { kind: "ready"; plan: StructuredInputPlan }
-  | { kind: "unsupported"; message: string };
-
-export type StructuredInputCompilerOptions = {
-  protocolName: string;
-  allowEmptyForm?: boolean;
-  minimumChoiceCount?: 1 | 2;
-  allowEnumNames?: boolean;
-  allowImagePicker?: boolean;
-  booleanLabels?: readonly [string, string];
-  metadata?: {
-    secretPath?: readonly string[];
-    otherAnswerPath?: readonly string[];
-    otherQuestionIdPath?: readonly string[];
-  };
-};
+export type {
+  StructuredInputAnswerValue,
+  StructuredInputCompileResult,
+  StructuredInputField,
+  StructuredInputRecord,
+  StructuredInputValue,
+} from "./structured-input-boundary.js";
 
 type FieldMetadata = {
   secret: boolean;

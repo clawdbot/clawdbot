@@ -17,7 +17,7 @@ import type {
   StructuredInputCompilerOptions,
   StructuredInputField,
   StructuredInputRecord,
-} from "./structured-input.js";
+} from "./structured-input-boundary.js";
 import type { AgentHarnessUserInputOption } from "./user-input-bridge.js";
 
 const MAX_SCHEMA_KEYS = 24;
