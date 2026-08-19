@@ -1111,6 +1111,20 @@
             "archived": {
               "type": "boolean"
             },
+            "category": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "hasWorktree": {
+              "type": "boolean"
+            },
             "includeDerivedTitles": {
               "type": "boolean"
             },
@@ -1135,9 +1149,27 @@
               "minimum": 0,
               "type": "integer"
             },
+            "needsAttention": {
+              "type": "boolean"
+            },
+            "ownerId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "projectId": {
+              "minLength": 1,
+              "type": "string"
+            },
             "search": {
               "minLength": 1,
               "type": "string"
+            },
+            "status": {
+              "enum": ["queued", "running", "done", "failed", "killed", "timeout"],
+              "type": "string"
+            },
+            "unread": {
+              "type": "boolean"
             }
           },
           "type": "object"
@@ -1151,12 +1183,17 @@
         "inputSchema": {
           "properties": {
             "limit": {
-              "maximum": 25,
+              "maximum": 100,
               "minimum": 1,
               "type": "integer"
             },
             "query": {
               "maxLength": 4096,
+              "type": "string"
+            },
+            "resultMode": {
+              "description": "One hit per message or session.",
+              "enum": ["messages", "sessions"],
               "type": "string"
             },
             "sessionKey": {
