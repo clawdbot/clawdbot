@@ -32,6 +32,28 @@ function isUnsupportedAuthenticatedMediaEndpointError(err: unknown): boolean {
 }
 
 export abstract class MatrixClientCore extends MatrixClientBase {
+  async waitForEncryptedRoomReady(
+    roomId: string,
+    params: { abortSignal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<void> {
+    await this.waitForSyncCondition({
+      abortSignal: params.abortSignal,
+      check: async () => {
+        const state = this.client.getSyncState();
+        const room = this.client.getRoom(roomId);
+        return (
+          this.client.getSyncStateData()?.fromCache !== true &&
+          (state === "PREPARED" || state === "SYNCING") &&
+          room?.getMyMembership() === "join" &&
+          room.hasEncryptionStateEvent() &&
+          (await this.client.getCrypto()?.isEncryptionEnabledInRoom(roomId)) === true
+        );
+      },
+      timeoutMessage: `Matrix encrypted room ${roomId} did not become ready within ${params.timeoutMs ?? 30_000}ms`,
+      timeoutMs: params.timeoutMs ?? 30_000,
+    });
+  }
+
   async getUserId(): Promise<string> {
     const fromClient = this.client.getUserId();
     if (fromClient) {
@@ -420,11 +442,17 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     return await request(legacyEndpoint);
   }
 
-  async uploadContent(file: Buffer, contentType?: string, filename?: string): Promise<string> {
+  async uploadContent(
+    file: Buffer,
+    contentType?: string,
+    filename?: string,
+    abortController?: AbortController,
+  ): Promise<string> {
     const uploaded = await this.client.uploadContent(new Uint8Array(file), {
       type: contentType || "application/octet-stream",
       name: filename,
       includeFilename: Boolean(filename),
+      abortController,
     });
     return uploaded.content_uri;
   }

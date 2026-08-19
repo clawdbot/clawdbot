@@ -22,6 +22,7 @@ function assertMatrixJsSdkSyncVersion(): void {
 
 export async function quiesceMatrixClientSync(params: {
   client: MatrixJsClient;
+  deadlineMs?: number;
   emitter: EventEmitter;
   markStopped: () => void;
   started: boolean;
@@ -30,6 +31,7 @@ export async function quiesceMatrixClientSync(params: {
     "discardPendingSyncCursorPersistence" | "freezeSyncCursorPersistence"
   >;
 }): Promise<void> {
+  const deadlineMs = params.deadlineMs ?? Date.now() + MATRIX_SYNC_QUIESCE_TIMEOUT_MS;
   await params.syncStore?.freezeSyncCursorPersistence();
   try {
     assertMatrixJsSdkSyncVersion();
@@ -77,10 +79,11 @@ export async function quiesceMatrixClientSync(params: {
         settle();
       }
     };
+    const remainingMs = Math.max(0, deadlineMs - Date.now());
     const timeout = setTimeout(() => {
       params.syncStore?.discardPendingSyncCursorPersistence();
-      settle(new Error(`Matrix classic sync did not reach STOPPED within 5000ms`));
-    }, MATRIX_SYNC_QUIESCE_TIMEOUT_MS);
+      settle(new Error(`Matrix classic sync did not reach STOPPED before shutdown deadline`));
+    }, remainingMs);
     timeout.unref?.();
 
     params.emitter.on("sync.state", onSyncState);

@@ -146,8 +146,8 @@ describe("shared Matrix client generations", () => {
     expect(repeatedFirstLease.client).toBe(firstClient);
     expect(secondLease.client).toBe(secondClient);
     expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-    expect(firstCrypto.prepare).toHaveBeenCalledTimes(1);
-    expect(secondCrypto.prepare).toHaveBeenCalledTimes(1);
+    expect(firstCrypto.prepare).not.toHaveBeenCalled();
+    expect(secondCrypto.prepare).not.toHaveBeenCalled();
 
     await firstLease.release();
     expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
@@ -723,6 +723,25 @@ describe("shared Matrix client generations", () => {
     await Promise.resolve();
     const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
     expect(replacement.client).toBe(replacementClient);
+    await replacement.release({ mode: "discard" });
+  });
+
+  it("retires and replaces a generation whose startup fails", async () => {
+    const cause = new Error("crypto startup failed");
+    const firstClient = createMockClient("first");
+    const replacementClient = createMockClient("replacement");
+    firstClient.start.mockRejectedValue(cause);
+    createMatrixClientMock
+      .mockResolvedValueOnce(firstClient)
+      .mockResolvedValueOnce(replacementClient);
+    const auth = authFor("main");
+
+    await expect(acquireSharedMatrixClient({ auth })).rejects.toBe(cause);
+    const replacement = await acquireSharedMatrixClient({ auth });
+
+    expect(replacement.client).toBe(replacementClient);
+    expect(firstClient.stopWithoutPersist).toHaveBeenCalledTimes(1);
+    expect(replacementClient.start).toHaveBeenCalledTimes(1);
     await replacement.release({ mode: "discard" });
   });
 

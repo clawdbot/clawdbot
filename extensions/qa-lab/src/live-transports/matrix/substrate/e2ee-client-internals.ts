@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { inheritMatrixQaReplacementRelation, type MatrixQaObservedEvent } from "./events.js";
 
 export type MatrixQaE2eeActorId = "driver" | "observer" | `driver-${string}` | `cli-${string}`;
@@ -16,21 +17,12 @@ async function withMatrixQaE2eeTimeout<T>(
   message: string,
   onTimeout?: () => void,
 ): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      onTimeout?.();
-      reject(new Error(message));
-    }, timeoutMs);
-    timer.unref();
-  });
-
+  const timeoutError = new Error(message);
   try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    return await withTimeout(promise, timeoutMs, { createError: () => timeoutError });
+  } catch (error) {
+    if (error === timeoutError) onTimeout?.();
+    throw error;
   }
 }
 
@@ -38,10 +30,10 @@ export function createMatrixQaE2eeClientLifecycle(params: {
   detachListeners: () => void;
   drainPendingDecryptions: () => Promise<void>;
   shutdownTimeoutMs: number;
-  stopAndPersist: () => Promise<void>;
+  stopAndPersist: (params: { deadlineMs: number }) => Promise<void>;
   stopWithoutPersist: () => void;
 }) {
-  const activeOperations = new Set<Promise<unknown>>();
+  const activeOperations = new Map<Promise<unknown>, AbortController>();
   let shutdownStarted = false;
   let stopPromise: Promise<void> | undefined;
 
@@ -64,10 +56,11 @@ export function createMatrixQaE2eeClientLifecycle(params: {
     stopPromise = (async () => {
       const deadline = Date.now() + params.shutdownTimeoutMs;
       params.detachListeners();
+      activeOperations.forEach((controller) => controller.abort());
       if (activeOperations.size > 0) {
         const graceMs = Math.min(1_000, Math.max(0, deadline - Date.now()));
         await withMatrixQaE2eeTimeout(
-          Promise.allSettled(activeOperations),
+          Promise.allSettled(activeOperations.keys()),
           graceMs,
           "active Matrix SDK operations did not settle before shutdown",
         ).catch((error: unknown) => {
@@ -81,14 +74,16 @@ export function createMatrixQaE2eeClientLifecycle(params: {
       ).catch((error: unknown) => {
         failShutdown("draining pending Matrix decryptions", error);
       });
-      await params.stopAndPersist();
+      await params.stopAndPersist({ deadlineMs: deadline }).catch((error: unknown) => {
+        failShutdown("persisting Matrix state", error);
+      });
     })();
     return stopPromise;
   };
 
   const runMatrixQaE2eeClientOperation = async <T>(operation: {
     label: string;
-    run: () => Promise<T>;
+    run: (abortController: AbortController) => Promise<T>;
     timeoutMs: number;
   }): Promise<T> => {
     if (shutdownStarted) {
@@ -96,15 +91,19 @@ export function createMatrixQaE2eeClientLifecycle(params: {
         `Matrix E2EE client shutdown has started; cannot start ${operation.label}. Retry the QA scenario with a fresh client.`,
       );
     }
-    const active = operation.run();
-    activeOperations.add(active);
+    const controller = new AbortController();
+    const active = operation.run(controller);
+    activeOperations.set(active, controller);
     void active.finally(() => activeOperations.delete(active)).catch(() => undefined);
 
     return withMatrixQaE2eeTimeout(
       active,
       operation.timeoutMs,
       `${operation.label} timed out after ${operation.timeoutMs}ms`,
-      () => void stop().catch(() => undefined),
+      () => {
+        controller.abort();
+        void stop().catch(() => undefined);
+      },
     );
   };
 

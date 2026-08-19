@@ -343,7 +343,7 @@ export async function createMatrixQaE2eeScenarioClient(
     },
     drainPendingDecryptions: () => client.drainPendingDecryptions(),
     shutdownTimeoutMs,
-    stopAndPersist: () => client.stopAndPersist(),
+    stopAndPersist: ({ deadlineMs }) => client.stopAndPersist({ deadlineMs }),
     stopWithoutPersist: () => client.stopWithoutPersist(),
   });
 
@@ -398,11 +398,22 @@ export async function createMatrixQaE2eeScenarioClient(
     }
     return client.crypto;
   };
-  const runClientOperation = <T>(label: string, run: () => Promise<T>) =>
+  const runClientOperation = <T>(
+    label: string,
+    run: (abortController: AbortController) => Promise<T>,
+  ) =>
     lifecycle.runOperation({
       label,
       run,
       timeoutMs: params.timeoutMs,
+    });
+  const sendReadyMessage = (label: string, roomId: string, content: MessageEventContent) =>
+    runClientOperation(label, async ({ signal }) => {
+      await client.waitForEncryptedRoomReady(roomId, {
+        abortSignal: signal,
+        timeoutMs: params.timeoutMs,
+      });
+      return client.sendMessage(roomId, content);
     });
 
   return {
@@ -465,28 +476,37 @@ export async function createMatrixQaE2eeScenarioClient(
       return await requireCrypto().scanVerificationQr(id, qrDataBase64);
     },
     async sendTextMessage(opts) {
-      return await runClientOperation("Matrix E2EE text send", () =>
-        client.sendMessage(opts.roomId, buildMatrixQaMessageContent(opts) as MessageEventContent),
+      return await sendReadyMessage(
+        "Matrix E2EE text send",
+        opts.roomId,
+        buildMatrixQaMessageContent(opts) as MessageEventContent,
       );
     },
     async sendNoticeMessage(opts) {
-      return await runClientOperation("Matrix E2EE notice send", () =>
-        client.sendMessage(opts.roomId, {
-          ...buildMatrixQaMessageContent(opts),
-          msgtype: "m.notice",
-        } as MessageEventContent),
-      );
+      return await sendReadyMessage("Matrix E2EE notice send", opts.roomId, {
+        ...buildMatrixQaMessageContent(opts),
+        msgtype: "m.notice",
+      } as MessageEventContent);
     },
     async sendImageMessage(opts) {
-      const encrypted = await requireCrypto().encryptMedia(opts.buffer);
-      const contentUri = await client.uploadContent(
-        encrypted.buffer,
-        opts.contentType,
-        opts.fileName,
-      );
-      const file: EncryptedFile = { url: contentUri, ...encrypted.file };
-      return await runClientOperation("Matrix E2EE image send", () =>
-        client.sendMessage(opts.roomId, {
+      return await runClientOperation("Matrix E2EE image send", async (abortController) => {
+        const { signal } = abortController;
+        await client.waitForEncryptedRoomReady(opts.roomId, {
+          abortSignal: signal,
+          timeoutMs: params.timeoutMs,
+        });
+        signal.throwIfAborted();
+        const encrypted = await requireCrypto().encryptMedia(opts.buffer);
+        signal.throwIfAborted();
+        const contentUri = await client.uploadContent(
+          encrypted.buffer,
+          opts.contentType,
+          opts.fileName,
+          abortController,
+        );
+        signal.throwIfAborted();
+        const file: EncryptedFile = { url: contentUri, ...encrypted.file };
+        return await client.sendMessage(opts.roomId, {
           ...buildMatrixQaMessageContent({
             body: opts.body,
             mentionUserIds: opts.mentionUserIds,
@@ -498,8 +518,8 @@ export async function createMatrixQaE2eeScenarioClient(
             size: opts.buffer.byteLength,
           },
           msgtype: "m.image",
-        } as MessageEventContent),
-      );
+        } as MessageEventContent);
+      });
     },
     async startVerification(id, method) {
       return await requireCrypto().startVerification(id, method);

@@ -307,10 +307,12 @@ export async function persistIdbToDisk(params?: {
   snapshotPath?: string;
   databasePrefix?: string;
   strict?: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<void> {
   const snapshotPath = params?.snapshotPath ?? resolveDefaultIdbSnapshotPath();
   let callbackStarted = false;
   try {
+    params?.abortSignal?.throwIfAborted();
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     const persistedCount = await withFileLock(
@@ -330,6 +332,7 @@ export async function persistIdbToDisk(params?: {
         }
         throwIfLegacySnapshotNeedsDoctor(snapshotPath, storedSnapshotJson);
         const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
+        params?.abortSignal?.throwIfAborted();
         if (snapshot.length === 0) {
           return 0;
         }

@@ -183,4 +183,34 @@ describe("Matrix IndexedDB persistence", () => {
       databasesSpy.mockRestore();
     }
   });
+
+  it("does not commit a snapshot after persistence is aborted", async () => {
+    const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
+    await seedDatabase({
+      name: cryptoDatabaseName,
+      storeName: "sessions",
+      records: [{ key: "room-1", value: { session: "late" } }],
+    });
+    const databaseList = await indexedDB.databases();
+    const pending = Promise.withResolvers<IDBDatabaseInfo[]>();
+    const databasesSpy = vi.spyOn(indexedDB, "databases").mockReturnValueOnce(pending.promise);
+    const abortController = new AbortController();
+    try {
+      const persist = persistIdbToDisk({
+        snapshotPath,
+        databasePrefix: DATABASE_PREFIX,
+        strict: true,
+        abortSignal: abortController.signal,
+      });
+      await vi.waitFor(() => expect(databasesSpy).toHaveBeenCalledTimes(1));
+      abortController.abort();
+      pending.resolve(databaseList);
+
+      await expect(persist).rejects.toMatchObject({ name: "AbortError" });
+      expect(readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
+    } finally {
+      pending.resolve(databaseList);
+      databasesSpy.mockRestore();
+    }
+  });
 });
