@@ -210,6 +210,20 @@ export function resolveCompletionFromSessionEntry(
       reason: SUBAGENT_ENDED_REASON_ERROR,
     };
   }
+  if (status === "interrupted") {
+    if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
+      return null;
+    }
+    return {
+      startedAt,
+      endedAt,
+      outcome: {
+        status: "error",
+        error: sessionEntry?.lastRunError ?? "subagent run was interrupted",
+      },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+    };
+  }
   if (status === "killed") {
     if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
       return null;

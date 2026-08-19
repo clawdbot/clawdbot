@@ -1,6 +1,5 @@
-import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry, PersistedSessionRunStatus } from "./types.js";
 
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
@@ -22,7 +21,7 @@ export type SessionTranscriptTurnExpectedState = {
   restartRecoverySourceIngress: SessionRestartRecoveryState["restartRecoverySourceIngress"];
   restartRecoverySourceReplyDeliveryMode: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
   restartRecoveryTerminalRunIds: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
-  status: SessionRunStatus | undefined;
+  status: PersistedSessionRunStatus | undefined;
 };
 
 /** Lifecycle fields committed with an accepted transcript turn. */
@@ -50,6 +49,6 @@ export type SessionTranscriptTurnLifecyclePatch = {
   restartRecoveryTerminalRunIds?: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   runtimeMs?: number;
   startedAt?: number;
-  status?: SessionRunStatus;
+  status?: PersistedSessionRunStatus;
   updatedAt?: number;
 };

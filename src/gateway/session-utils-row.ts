@@ -315,6 +315,7 @@ export function buildGatewaySessionRow(params: {
             ? resolveSubagentSessionStatus(subagentRun)
             : undefined))
     : undefined;
+  const projectedSessionStatus = subagentRun ? subagentStatus : persistedSessionStatus;
   const subagentStartedAt = subagentRun
     ? liveSubagentRunActive
       ? getSubagentSessionStartedAt(subagentRun)
@@ -608,7 +609,7 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     goal,
     estimatedCostUsd,
-    status: subagentRun ? subagentStatus : entry?.status,
+    status: projectedSessionStatus === "interrupted" ? "failed" : projectedSessionStatus,
     lastRunError: entry?.lastRunError,
     hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,

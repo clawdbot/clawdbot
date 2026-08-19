@@ -203,8 +203,14 @@ function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
+  const projectedEntry = params.entry
+    ? {
+        ...params.entry,
+        status: params.entry.status === "interrupted" ? "failed" : params.entry.status,
+      }
+    : undefined;
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
-    session: params.entry ?? undefined,
+    session: projectedEntry,
     event: params.event,
   });
   const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
@@ -243,7 +249,10 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
     lifecycleRunId: _lifecycleRunId,
     ...patch
   } = derivePersistedSessionLifecyclePatch(params);
-  return patch;
+  return {
+    ...patch,
+    status: patch.status === "interrupted" ? "failed" : patch.status,
+  };
 }
 
 export function isRestartRecoveryLifecycleEvent(params: {

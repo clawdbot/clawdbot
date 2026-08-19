@@ -7,11 +7,26 @@ import {
   type DoctorSessionSqliteRestoreReport,
 } from "../commands/doctor-session-sqlite-types.js";
 import {
+  listSessionEntriesReadOnly,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
 } from "../config/sessions/startup-migration.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasProjectedAgentRunForSession } from "../infra/agent-run-registry.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+
+const INTERRUPTED_SUBAGENT_REASON =
+  "subagent run was interrupted before a terminal lifecycle event was persisted";
+
+function isFiniteTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
 
 type SessionSqliteStartupImportRunner = (params: {
   allAgents: true;
@@ -36,6 +51,9 @@ type SessionSqliteDatabaseExists = (params: {
 }) => boolean;
 
 type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {
+  hasProjectedAgentRunForSession?: typeof hasProjectedAgentRunForSession;
+  processStartedAtMs?: number;
+  readActiveGatewayLockIdentity?: typeof readActiveGatewayLockIdentity;
   reconcileSessionTranscriptIndexes?: typeof import("../config/sessions/session-transcript-reconcile.js").reconcileSessionTranscriptIndexes;
   restoreSessionSqliteMigrationRun?: SessionSqliteStartupRestoreRunner;
   runDoctorSessionSqlite?: SessionSqliteStartupImportRunner;
@@ -55,10 +73,142 @@ export async function runStartupSessionMigration(params: {
   log: SessionStartupMigrationLogger;
   deps?: SessionMigrationDeps;
 }): Promise<void> {
-  if (await runSessionStartupMigration(params)) {
+  const hasSessionStores = await runSessionStartupMigration(params);
+  if (hasSessionStores) {
     await runStartupSessionSqliteImport(params);
+    await reconcileInterruptedSubagentSessions(params);
   }
   await reconcileStartupSessionTranscriptIndexes(params);
+}
+
+async function reconcileInterruptedSubagentSessions(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  log: SessionStartupMigrationLogger;
+  deps?: SessionMigrationDeps;
+}): Promise<void> {
+  const env = params.env ?? process.env;
+  const readGatewayLock =
+    params.deps?.readActiveGatewayLockIdentity ?? readActiveGatewayLockIdentity;
+  let gatewayLock: Awaited<ReturnType<typeof readGatewayLock>>;
+  try {
+    gatewayLock = await readGatewayLock({ env });
+  } catch (error) {
+    params.log.warn(
+      `session: skipped interrupted-subagent reconciliation because gateway ownership could not be verified: ${String(error)}`,
+    );
+    return;
+  }
+  if (gatewayLock?.pid !== process.pid) {
+    params.log.warn(
+      "session: skipped interrupted-subagent reconciliation because this process does not own the verified gateway lock",
+    );
+    return;
+  }
+
+  const processStartedAtMs = params.deps?.processStartedAtMs ?? performance.timeOrigin;
+  if (!Number.isFinite(processStartedAtMs)) {
+    params.log.warn(
+      "session: skipped interrupted-subagent reconciliation because the process start boundary is unavailable",
+    );
+    return;
+  }
+
+  const resolveTargets =
+    params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
+  let targets: ReturnType<typeof resolveTargets>;
+  try {
+    targets = resolveTargets(params.cfg, { env });
+  } catch {
+    // The shared startup discovery pass already logged this failure.
+    return;
+  }
+
+  const hasCurrentRun =
+    params.deps?.hasProjectedAgentRunForSession ?? hasProjectedAgentRunForSession;
+  let reconciled = 0;
+  for (const target of targets) {
+    let entries: ReturnType<typeof listSessionEntriesReadOnly>;
+    try {
+      entries = listSessionEntriesReadOnly({
+        agentId: target.agentId,
+        clone: false,
+        env,
+        storePath: target.storePath,
+      });
+    } catch (error) {
+      params.log.warn(
+        `session: interrupted-subagent reconciliation could not read ${target.agentId}; continuing: ${String(error)}`,
+      );
+      continue;
+    }
+    for (const { entry, sessionKey } of entries) {
+      if (
+        entry.status !== "running" ||
+        !isSubagentSessionKey(sessionKey) ||
+        !isFiniteTimestamp(entry.startedAt) ||
+        entry.startedAt >= processStartedAtMs ||
+        entry.restartRecoveryRuns?.length
+      ) {
+        continue;
+      }
+      const runIdentity = {
+        agentId: target.agentId,
+        sessionId: entry.sessionId,
+        sessionKeys: [sessionKey],
+      };
+      try {
+        if (hasCurrentRun(runIdentity)) {
+          continue;
+        }
+      } catch (error) {
+        params.log.warn(
+          `session: interrupted-subagent reconciliation could not verify run ownership for ${sessionKey}; continuing: ${String(error)}`,
+        );
+        continue;
+      }
+      try {
+        const updated = await patchSessionEntryCore(
+          {
+            agentId: target.agentId,
+            env,
+            sessionKey,
+            storePath: target.storePath,
+          },
+          (current) =>
+            current.status === "running" &&
+            isFiniteTimestamp(current.startedAt) &&
+            current.startedAt < processStartedAtMs &&
+            !current.restartRecoveryRuns?.length
+              ? {
+                  abortedLastRun: true,
+                  lastRunError: INTERRUPTED_SUBAGENT_REASON,
+                  status: "interrupted",
+                }
+              : null,
+          {
+            assertCommitAllowed: () => {
+              if (hasCurrentRun(runIdentity)) {
+                throw new Error("a current-process run owns this session");
+              }
+            },
+            preserveActivity: true,
+            skipMaintenance: true,
+          },
+        );
+        if (updated?.status === "interrupted") {
+          reconciled += 1;
+        }
+      } catch (error) {
+        params.log.warn(
+          `session: interrupted-subagent reconciliation skipped ${sessionKey}; continuing: ${String(error)}`,
+        );
+      }
+    }
+  }
+  if (reconciled > 0) {
+    params.log.info(`session: marked ${reconciled} prior-process subagent run(s) interrupted`);
+  }
 }
 
 async function reconcileStartupSessionTranscriptIndexes(params: {
