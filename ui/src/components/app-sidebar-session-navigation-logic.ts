@@ -495,6 +495,19 @@ export function resolveLatestSidebarAgentSession(input: {
   });
 }
 
+export function collectSidebarSessionCandidateRows(input: {
+  rows: readonly GatewaySessionRow[];
+  childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+}): GatewaySessionRow[] {
+  return [
+    ...new Map(
+      [...Object.values(input.childRowsByParent).flat(), ...input.rows].map(
+        (row) => [row.key, row] as const,
+      ),
+    ).values(),
+  ];
+}
+
 /**
  * Promote the hidden main session's children to top-level threads, with the
  * same visibility rules as ordinary roots so archived, cron, or
@@ -502,13 +515,12 @@ export function resolveLatestSidebarAgentSession(input: {
  */
 export function collectPromotedMainChildRows(input: {
   rows: readonly GatewaySessionRow[];
-  childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
   mainSessionKeys: ReadonlySet<string>;
   scopedRootKeys: ReadonlySet<string>;
   showCron: boolean;
   showSystem: boolean;
 }): GatewaySessionRow[] {
-  return [...input.rows, ...Object.values(input.childRowsByParent).flat()].filter((row) => {
+  return input.rows.filter((row) => {
     const parentKey = resolveUiSessionNavigationParentKey(row);
     return (
       parentKey != null &&

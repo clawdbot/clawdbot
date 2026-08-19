@@ -31,6 +31,7 @@ import {
   buildSidebarSessionNavigationState,
   collectCategorizedChildRootRows,
   collectPromotedMainChildRows,
+  collectSidebarSessionCandidateRows,
   compareSidebarSessionRowsByMode,
   collectKnownSidebarSessionCatalogIds,
   collectKnownSidebarSessionGroups,
@@ -653,16 +654,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     ) {
       scopedRootRows.push(lineageRoot);
     }
-    const categorizedChildRows = collectCategorizedChildRootRows({
+    const sessionCandidateRows = collectSidebarSessionCandidateRows({
       rows,
+      childRowsByParent: this.sessionData.childSessionRowsByParent,
+    });
+    const categorizedChildRows = collectCategorizedChildRootRows({
+      rows: sessionCandidateRows,
       scopedRoots: scopedRootRows,
       visibilityOptions,
     });
     scopedRootRows.push(...categorizedChildRows);
     const scopedRootKeys = new Set(scopedRootRows.map((row) => row.key));
     const promotedRows = collectPromotedMainChildRows({
-      rows,
-      childRowsByParent: this.sessionData.childSessionRowsByParent,
+      rows: sessionCandidateRows,
       mainSessionKeys,
       scopedRootKeys,
       showCron: this.sessionsShowCron,
