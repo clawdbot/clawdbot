@@ -1,11 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveExecApprovalsLocked = vi.hoisted(() => vi.fn());
+const resolveExecSafeBinRuntimePolicy = vi.hoisted(() => vi.fn());
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/exec-approvals.js")>();
   return {
     ...actual,
     resolveExecApprovalsLocked: (...args: unknown[]) => resolveExecApprovalsLocked(...args),
+  };
+});
+vi.mock("../infra/exec-safe-bin-runtime-policy.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/exec-safe-bin-runtime-policy.js")>();
+  resolveExecSafeBinRuntimePolicy.mockImplementation((...args: unknown[]) =>
+    (actual.resolveExecSafeBinRuntimePolicy as (...a: unknown[]) => unknown)(...args),
+  );
+  return {
+    ...actual,
+    resolveExecSafeBinRuntimePolicy: (...args: unknown[]) =>
+      resolveExecSafeBinRuntimePolicy(...args),
   };
 });
 import {
@@ -309,6 +321,41 @@ describe("authorizeCronJobPrecheckCommand", () => {
     if (!result.allowed) {
       expect(result.reason).toContain(PRECHECK_POLICY_DENIED_REASON);
     }
+  });
+
+  it("forwards tools.exec safe-bin scopes into resolveExecSafeBinRuntimePolicy", async () => {
+    // ClawSweeper P1 on #112375: precheck must not call resolveExecSafeBinRuntimePolicy({}).
+    resolveExecSafeBinRuntimePolicy.mockClear();
+    resolveExecApprovalsLocked.mockResolvedValueOnce({
+      agent: { security: "full", ask: "off" },
+      allowlist: [],
+    });
+    const result = await authorizeCronJobPrecheckCommand({
+      command: "true",
+      authz: {
+        triggersEnabled: true,
+        toolsExec: {
+          security: "full",
+          safeBins: ["jq"],
+          safeBinTrustedDirs: ["/usr/bin"],
+          safeBinProfiles: { jq: { minPositional: 0 } },
+        },
+        agentToolsExec: {
+          safeBins: ["jq", "rg"],
+          safeBinTrustedDirs: ["/opt/bin"],
+        },
+      },
+    });
+    expect(result.allowed).toBe(true);
+    expect(resolveExecSafeBinRuntimePolicy).toHaveBeenCalled();
+    const arg = resolveExecSafeBinRuntimePolicy.mock.calls.at(-1)?.[0] as {
+      global?: { safeBins?: string[]; safeBinTrustedDirs?: string[] };
+      local?: { safeBins?: string[]; safeBinTrustedDirs?: string[] };
+    };
+    expect(arg.global?.safeBins).toEqual(["jq"]);
+    expect(arg.global?.safeBinTrustedDirs).toEqual(["/usr/bin"]);
+    expect(arg.local?.safeBins).toEqual(["jq", "rg"]);
+    expect(arg.local?.safeBinTrustedDirs).toEqual(["/opt/bin"]);
   });
 });
 

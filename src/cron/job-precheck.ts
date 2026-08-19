@@ -184,6 +184,10 @@ type ExecToolConfigLayer = {
   mode?: ExecMode;
   security?: ExecSecurity;
   ask?: ExecAsk;
+  /** Same fields as tools.exec / system-run safe-bin policy scopes. */
+  safeBins?: string[] | null;
+  safeBinProfiles?: Record<string, unknown> | null;
+  safeBinTrustedDirs?: string[] | null;
 };
 
 type CronJobPrecheckAuthz = {
@@ -212,6 +216,26 @@ type CronJobPrecheckAuthz = {
    */
   securityOverrideOnly?: boolean;
 };
+
+/** Safe-bin scopes from tools.exec layers (parity with system-run). */
+function resolvePrecheckSafeBinPolicy(authz: CronJobPrecheckAuthz) {
+  return resolveExecSafeBinRuntimePolicy({
+    global: authz.toolsExec
+      ? {
+          safeBins: authz.toolsExec.safeBins,
+          safeBinProfiles: authz.toolsExec.safeBinProfiles as never,
+          safeBinTrustedDirs: authz.toolsExec.safeBinTrustedDirs,
+        }
+      : undefined,
+    local: authz.agentToolsExec
+      ? {
+          safeBins: authz.agentToolsExec.safeBins,
+          safeBinProfiles: authz.agentToolsExec.safeBinProfiles as never,
+          safeBinTrustedDirs: authz.agentToolsExec.safeBinTrustedDirs,
+        }
+      : undefined,
+  });
+}
 
 /** Normalize security strings; invalid values fail closed to deny. */
 function normalizeExecSecurity(value: unknown): ExecSecurity | undefined {
@@ -251,7 +275,7 @@ export async function authorizeCronJobPrecheckCommand(params: {
       return { allowed: true };
     }
     // allowlist without live file → evaluate command against empty allowlist
-    const safeBinPolicy = resolveExecSafeBinRuntimePolicy({});
+    const safeBinPolicy = resolvePrecheckSafeBinPolicy(params.authz);
     const allowlistEval = await evaluateShellAllowlistWithAuthorization({
       command: params.command,
       allowlist: [],
@@ -381,7 +405,7 @@ export async function authorizeCronJobPrecheckCommand(params: {
     };
   }
 
-  const safeBinPolicy = resolveExecSafeBinRuntimePolicy({});
+  const safeBinPolicy = resolvePrecheckSafeBinPolicy(params.authz);
   const allowlistEval = await evaluateShellAllowlistWithAuthorization({
     command: params.command,
     allowlist: approvals.allowlist,
