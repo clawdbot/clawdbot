@@ -20,6 +20,7 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
@@ -253,6 +254,7 @@ export async function deliverAgentHarnessTaskCompletion(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
     signal: params.signal,
+    resolveGatewayContext: getGatewayContextResolver(scope),
   });
 }
 

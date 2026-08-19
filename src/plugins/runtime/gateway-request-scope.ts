@@ -11,6 +11,7 @@ import type { PluginRegistry } from "../registry-types.js";
 
 type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
+  resolveGatewayContext?: GatewayContextResolver;
   client?: GatewayRequestOptions["client"];
   isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
   pluginId?: string;
@@ -61,6 +62,21 @@ export function withPluginRuntimeGatewayRequestScope<T>(
   run: () => T,
 ): T {
   return pluginRuntimeGatewayRequestScope.run(scope, run);
+}
+
+/** Runs detached plugin work against one lifecycle-fenced Gateway instance. */
+export function withPluginRuntimeGatewayContextResolver<T>(
+  resolveGatewayContext: GatewayContextResolver,
+  run: () => T,
+): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  const scoped: PluginRuntimeGatewayRequestScope = {
+    ...current,
+    isWebchatConnect: current?.isWebchatConnect ?? (() => false),
+    resolveGatewayContext,
+  };
+  delete scoped.context;
+  return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }
 
 /** Runs work against an owned registry handle while preserving any gateway request facts. */

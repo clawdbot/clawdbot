@@ -20,6 +20,7 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/subagent-requester-context.js";
@@ -461,10 +462,14 @@ function createGatewayPluginRuntimeBindings(
         const sessionWorkerPlacementContext = getInProcessGatewayRequestContext(
           resolveBoundGatewayContext,
         );
-        return await dispatchReplyFromConfig({
-          ...params,
-          ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
-        });
+        return await withPluginRuntimeGatewayContextResolver(
+          resolveBoundGatewayContext,
+          async () =>
+            await dispatchReplyFromConfig({
+              ...params,
+              ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
+            }),
+        );
       },
       gateway: {
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),

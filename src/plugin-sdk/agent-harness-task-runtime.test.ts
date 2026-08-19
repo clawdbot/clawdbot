@@ -166,8 +166,12 @@ describe("agent-harness-task-runtime", () => {
   });
 
   it("delivers a generic harness completion through subagent announcement delivery", async () => {
+    const gatewayContextResolver = vi.fn();
     await deliverAgentHarnessTaskCompletion({
-      scope: createScope("agent:main:main"),
+      scope: createAgentHarnessTaskRuntimeScope({
+        requesterSessionKey: "agent:main:main",
+        gatewayContextResolver,
+      }),
       childSessionKey: "harness-thread:child",
       childSessionId: "child",
       announceId: "harness:parent:child:succeeded",
@@ -186,6 +190,7 @@ describe("agent-harness-task-runtime", () => {
         sourceTool: "agent_harness_task",
         expectsCompletionMessage: true,
         directIdempotencyKey: "announce:harness:parent:child:succeeded",
+        resolveGatewayContext: gatewayContextResolver,
       }),
     );
   });

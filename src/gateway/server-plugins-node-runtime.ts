@@ -5,7 +5,8 @@ import type { GatewayContextResolver, GatewayRequestContext } from "./server-met
 export function hasInProcessGatewayContext(
   resolveGatewayContext?: GatewayContextResolver,
 ): boolean {
-  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? resolveGatewayContext?.());
+  const scope = getPluginRuntimeGatewayRequestScope();
+  return Boolean(resolveGatewayContext?.() ?? scope?.resolveGatewayContext?.() ?? scope?.context);
 }
 
 export function projectGatewayRuntimeNodes(

@@ -83,6 +83,13 @@ import type { PluginRuntime } from "./types.js";
 export function createRuntimeChannel(options?: {
   dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
 }): PluginRuntime["channel"] {
+  const dispatchInbound: typeof dispatchRoutedChannelTurn = (params) =>
+    dispatchRoutedChannelTurn({
+      ...params,
+      ...(options?.dispatchReplyFromConfig
+        ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
+        : {}),
+    });
   const sessionRuntime = {
     resolveStorePath: resolveSessionStorePathCore,
     readSessionUpdatedAt: readSessionUpdatedAtCore,
@@ -190,7 +197,7 @@ export function createRuntimeChannel(options?: {
       buildContext: buildChannelInboundEventContext,
       run: runChannelTurn,
       runPreparedReply: runPreparedChannelTurn,
-      dispatch: dispatchRoutedChannelTurn,
+      dispatch: dispatchInbound,
       dispatchReply: dispatchAssembledChannelTurn,
     },
     threadBindings: {
