@@ -292,10 +292,35 @@ try {
               [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
               [stoppedRoot, { ...stoppedSentinel, ppid: 1 }],
             ]
+          : mode === "root-resumed"
+            ? [
+                [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+                [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+                [stoppedRoot, { ...stoppedSentinel, ppid: root.pid }],
+              ]
+            : mode === "traced"
+              ? [
+                  [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                  [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                  [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+                  [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+                  [
+                    stoppedRoot,
+                    { ...stoppedSentinel, ppid: root.pid, state: "t" },
+                  ],
+                ]
           : [
               [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
               [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
-              [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+              ...Array.from({ length: 8 }, () => [
+                [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+                [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
+              ]).flat(),
+              [stoppedRoot, { ...stoppedSentinel, ppid: root.pid }],
             ];
   await fs.writeFile(counterPath, "0");
   await fs.writeFile(scenarioPath, JSON.stringify({ snapshots }));
@@ -322,7 +347,9 @@ process.stdout.write(JSON.stringify(result));
         ["reuse", true],
         ["late", false],
         ["reparented", false],
-        ["exhausted", false],
+        ["root-resumed", false],
+        ["traced", false],
+        ["extended", false],
       ] as const) {
         const output = execFileSync(
           process.execPath,

@@ -14,7 +14,6 @@ type PosixProcess = {
   startedAt: string;
 };
 
-const MAX_PROCESS_QUIESCE_PASSES = 8;
 const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
 
 export function terminateCodexAppServerDescendants(child: ContainableTransport): void {
@@ -31,7 +30,7 @@ export function terminateCodexAppServerDescendants(child: ContainableTransport):
     return;
   }
 
-  const initialDescendants = collectDescendants(snapshot, rootPid);
+  const initialDescendants = collectDescendants(snapshot, [rootPid]);
   const stoppedDescendants = new Map<string, PosixProcess>();
   if (!signalSameRoot(root, "SIGSTOP")) {
     return;
@@ -63,7 +62,7 @@ function quiesceDescendants(
   stopped: Map<string, PosixProcess>,
 ): PosixProcess[] | undefined {
   const provenByPid = new Map(initialDescendants.map((descendant) => [descendant.pid, descendant]));
-  for (let pass = 0; pass < MAX_PROCESS_QUIESCE_PASSES; pass += 1) {
+  for (;;) {
     const snapshot = readProcessSnapshot();
     if (!snapshot) {
       return undefined;
@@ -73,9 +72,27 @@ function quiesceDescendants(
       return undefined;
     }
     if (!isSameLiveRoot(currentRoot, root, true)) {
+      if (!signalSameRoot(root, "SIGSTOP")) {
+        return undefined;
+      }
       continue;
     }
-    const descendants = collectDescendants(snapshot, root.pid);
+    const snapshotByPid = new Map(snapshot.map((process) => [process.pid, process]));
+    const liveProven: PosixProcess[] = [];
+    for (const proven of provenByPid.values()) {
+      const current = snapshotByPid.get(proven.pid);
+      if (!current) {
+        continue;
+      }
+      if (!hasSameIdentity(proven, current)) {
+        return undefined;
+      }
+      liveProven.push(current);
+    }
+    const descendants = collectDescendants(snapshot, [
+      root.pid,
+      ...liveProven.map(({ pid }) => pid),
+    ]);
     for (const descendant of descendants) {
       const proven = provenByPid.get(descendant.pid);
       if (proven && !hasSameIdentity(proven, descendant)) {
@@ -83,23 +100,27 @@ function quiesceDescendants(
       }
       provenByPid.set(descendant.pid, descendant);
     }
-    let allStopped = true;
+    const quiescenceTargets = new Map(liveProven.map((process) => [process.pid, process]));
     for (const descendant of descendants) {
-      if (descendant.state.startsWith("T") || descendant.state.startsWith("Z")) {
+      quiescenceTargets.set(descendant.pid, descendant);
+    }
+    let allStopped = true;
+    for (const descendant of quiescenceTargets.values()) {
+      if (isStoppedState(descendant.state)) {
         continue;
       }
-      allStopped = false;
-      if (signalSameProcess(descendant, "SIGSTOP")) {
+      const stopQueued = signalSameProcess(descendant, "SIGSTOP");
+      if (stopQueued) {
         stopped.set(identityKey(descendant), descendant);
+      }
+      if (!descendant.state.startsWith("D") || !stopQueued) {
+        allStopped = false;
       }
     }
     if (allStopped) {
       return [...provenByPid.values()];
     }
   }
-  // Bounded quiescence must not fail open. Kill every identity proven while it
-  // belonged to the stopped root, including processes that have since reparented.
-  return [...provenByPid.values()];
 }
 
 function readProcessSnapshot(): PosixProcess[] | undefined {
@@ -147,7 +168,7 @@ function parseProcesses(output: string): PosixProcess[] {
   return rows;
 }
 
-function collectDescendants(snapshot: PosixProcess[], rootPid: number): PosixProcess[] {
+function collectDescendants(snapshot: PosixProcess[], rootPids: number[]): PosixProcess[] {
   const childrenByParent = new Map<number, PosixProcess[]>();
   for (const row of snapshot) {
     const children = childrenByParent.get(row.ppid) ?? [];
@@ -155,14 +176,27 @@ function collectDescendants(snapshot: PosixProcess[], rootPid: number): PosixPro
     childrenByParent.set(row.ppid, children);
   }
   const descendants: PosixProcess[] = [];
-  const pending = [rootPid];
+  const pending = [...new Set(rootPids)];
+  const seen = new Set(pending);
   for (const parentPid of pending) {
     for (const child of childrenByParent.get(parentPid) ?? []) {
+      if (seen.has(child.pid)) {
+        continue;
+      }
+      seen.add(child.pid);
       descendants.push(child);
       pending.push(child.pid);
     }
   }
   return descendants;
+}
+
+function isStoppedState(state: string): boolean {
+  return state.startsWith("T") || state.startsWith("t") || state.startsWith("Z");
+}
+
+function isQuiescedState(state: string): boolean {
+  return isStoppedState(state) || state.startsWith("D");
 }
 
 function isSameLiveProcess(current: PosixProcess, expected: PosixProcess): boolean {
@@ -180,7 +214,7 @@ function isSameLiveRoot(
 ): boolean {
   return (
     current.ppid === process.pid &&
-    (!requireStopped || current.state.startsWith("T")) &&
+    (!requireStopped || isQuiescedState(current.state)) &&
     isSameLiveProcess(current, expected)
   );
 }
