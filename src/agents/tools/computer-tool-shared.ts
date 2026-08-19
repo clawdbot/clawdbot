@@ -15,6 +15,11 @@ export const MODEL_OBSERVATION_MAX_ELEMENTS = 200;
 
 export type ComputerToolAction = ComputerUseV2ActionName;
 
+export const COMPUTER_TOOL_LOCAL_ACTIONS = [
+  "screenshot",
+  "wait",
+] as const satisfies readonly ComputerToolAction[];
+
 export type ComputerTarget = { nodeId: string; screenIndex: number };
 
 export type ComputerFrame = {

@@ -12,9 +12,13 @@ import {
 } from "../../plugins/computer-use-contract.js";
 import { readFiniteNumberParam, readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import type { ComputerObservationState, ComputerToolAction } from "./computer-tool-shared.js";
-import { COMPUTER_REF_WIDTH, MAX_HOLD_SECONDS } from "./computer-tool-shared.js";
+import {
+  COMPUTER_REF_WIDTH,
+  COMPUTER_TOOL_LOCAL_ACTIONS,
+  MAX_HOLD_SECONDS,
+} from "./computer-tool-shared.js";
 
-const LOCAL_ACTIONS = new Set<ComputerUseV2ActionName>(["screenshot", "wait"]);
+const LOCAL_ACTIONS = new Set<ComputerUseV2ActionName>(COMPUTER_TOOL_LOCAL_ACTIONS);
 const INPUT_ACTIONS = new Set<ComputerUseV2ActionName>(
   COMPUTER_USE_V2_ACTION_NAMES.filter((action) => !LOCAL_ACTIONS.has(action)),
 );

@@ -28,8 +28,17 @@ describe("createComputerTool v2 execution", () => {
 
     await tool.execute("select", { action: "screenshot" });
 
-    expect(readActionEnum(tool)).toEqual(actions);
+    expect(readActionEnum(tool)).toEqual([...actions, "wait"]);
     expect(tool.description).toContain("Observe first with `get_window_state`");
+  });
+
+  it("keeps local wait available when the node omits it", async () => {
+    const actions: ComputerUseV2ActionName[] = ["screenshot", "list_apps"];
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    const tool = createVisionComputerTool();
+
+    await expect(tool.execute("wait", { action: "wait", duration: 0 })).resolves.toBeDefined();
+    expect(sleepMock).toHaveBeenCalledWith(0, undefined);
   });
 
   it("advertises execution-owned actions only with an attempt cleanup owner", async () => {
@@ -42,11 +51,11 @@ describe("createComputerTool v2 execution", () => {
 
     const withoutCleanup = createVisionComputerTool();
     await withoutCleanup.execute("bind-without-cleanup", { action: "screenshot" });
-    expect(readActionEnum(withoutCleanup)).toEqual(["screenshot"]);
+    expect(readActionEnum(withoutCleanup)).toEqual(["screenshot", "wait"]);
 
     const withCleanup = createVisionComputerTool({ registerRunCleanup: () => {} });
     await withCleanup.execute("bind-with-cleanup", { action: "screenshot" });
-    expect(readActionEnum(withCleanup)).toEqual(actions);
+    expect(readActionEnum(withCleanup)).toEqual([...actions, "wait"]);
   });
 
   it("projects a provider observation without taking a duplicate desktop screenshot", async () => {
