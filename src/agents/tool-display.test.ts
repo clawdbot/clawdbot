@@ -304,11 +304,7 @@ describe("tool display details", () => {
     const functionKeyword = "function f { echo one; echo two; }";
     const hyphenatedFunction = "function deploy-prod { echo one; echo two; }";
     const namespacedFunction = "function log::info { echo one; echo two; }";
-    const hyphenatedParenFunction = "deploy-prod() { echo one; echo two; }";
-    const namespacedParenFunction = "log::info() { echo one; echo two; }";
     const selectLoop = 'select d in a b; do echo "$d"; break; done';
-    const namedCoprocess = "coproc worker { echo one; echo two; }";
-    const anonymousCoprocess = "coproc (echo one; echo two)";
     const doubleBracket = "[[ -f package.json && -f pnpm-lock.yaml ]] && pnpm test";
     const pipedSelect = "printf x | select d in a b; do break; done";
     const pipedDoubleBracket = "printf x | [[ -n x ]]";
@@ -319,8 +315,6 @@ describe("tool display details", () => {
     const doubleBracketFunction = "function check [[ -n x ]]";
     const arithmeticFunction = "function bump (( n++ )) && pnpm test";
     const subshellFunction = "function sub() (echo one; echo two)";
-    const keywordSubshellFunction = "function worker (echo one; echo two)";
-    const adjacentKeywordSubshellFunction = "function worker(echo one; echo two)";
     const posixConditionalFunction = "plain() if true; then echo ok; fi";
     const negatedDoubleBracket = "! [[ -f a && -f b ]] && pnpm test";
     const timedArithmetic = "time (( n++ )) && pnpm test";
@@ -332,7 +326,6 @@ describe("tool display details", () => {
     const operatorTimedSubshell = "time(echo one; echo two)";
     const operatorArithmeticFunction = "function bump(( n++ )) && pnpm test";
     const portableTimedDoubleDashArithmetic = "time -p -- (( n++ )) && pnpm test";
-    const timedDoubleDashConditional = "time -- if true; then echo one; echo two; fi";
 
     for (const command of [
       loop,
@@ -342,11 +335,11 @@ describe("tool display details", () => {
       functionKeyword,
       hyphenatedFunction,
       namespacedFunction,
-      hyphenatedParenFunction,
-      namespacedParenFunction,
+      "deploy-prod() { echo one; echo two; }",
+      "log::info() { echo one; echo two; }",
       selectLoop,
-      namedCoprocess,
-      anonymousCoprocess,
+      "coproc worker { echo one; echo two; }",
+      "coproc (echo one; echo two)",
       doubleBracket,
       pipedSelect,
       pipedDoubleBracket,
@@ -357,8 +350,8 @@ describe("tool display details", () => {
       doubleBracketFunction,
       arithmeticFunction,
       subshellFunction,
-      keywordSubshellFunction,
-      adjacentKeywordSubshellFunction,
+      "function worker (echo one; echo two)",
+      "function worker(echo one; echo two)",
       posixConditionalFunction,
       negatedDoubleBracket,
       timedArithmetic,
@@ -370,7 +363,7 @@ describe("tool display details", () => {
       operatorTimedSubshell,
       operatorArithmeticFunction,
       portableTimedDoubleDashArithmetic,
-      timedDoubleDashConditional,
+      "time -- if true; then echo one; echo two; fi",
     ]) {
       expect(splitTopLevelStages(command)).toEqual([command]);
       expect(
