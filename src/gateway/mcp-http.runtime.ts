@@ -25,18 +25,6 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 const TOOL_CACHE_TTL_MS = 30_000;
 const TOOL_CACHE_MAX_ENTRIES = 256;
 const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
-const CLI_NATIVE_HANDOFF_CAPABILITIES = new Map<string, string>([
-  ["bash", "exec"],
-  ["exec", "exec"],
-  ["exec_command", "exec"],
-  ["run_shell_command", "exec"],
-  ["read", "read"],
-  ["write", "apply_patch"],
-  ["edit", "apply_patch"],
-  ["apply_patch", "apply_patch"],
-  ["agent", "spawn_agent"],
-  ["spawn_agent", "spawn_agent"],
-]);
 
 type CachedScopedTools = {
   agentId: string | undefined;
@@ -136,17 +124,6 @@ function resolveMcpLoopbackTools(
       return name ? [{ name }] : [];
     }),
   );
-  // CLI-native tools do not appear in the loopback catalog. Carry only named
-  // capability equivalents; an unknown native name narrows the child instead
-  // of accidentally granting a same-named OpenClaw or plugin tool.
-  const effectiveNames = new Set(sessionsSendToolPolicy.allow);
-  for (const nativeName of params.cliToolAvailability?.native ?? []) {
-    const capability = CLI_NATIVE_HANDOFF_CAPABILITIES.get(normalizeToolPolicyName(nativeName));
-    if (capability && !effectiveNames.has(capability)) {
-      effectiveNames.add(capability);
-      sessionsSendToolPolicy.allow.push(capability);
-    }
-  }
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,

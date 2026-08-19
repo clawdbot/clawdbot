@@ -105,7 +105,7 @@ describe("resolveMcpLoopbackScopedTools", () => {
     );
   });
 
-  it("adds only recognized CLI-native equivalents to fresh-session handoffs", () => {
+  it("keeps opaque CLI-native names out of fresh-session handoff authority", () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["message"]));
 
     resolveMcpLoopbackScopedTools(
@@ -120,7 +120,7 @@ describe("resolveMcpLoopbackScopedTools", () => {
 
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0].sessionsSendToolPolicy).toEqual({
       version: 1,
-      allow: ["message", "read", "exec", "apply_patch", "spawn_agent"],
+      allow: ["message"],
       deny: [],
     });
   });
