@@ -70,7 +70,8 @@ import {
   resolveCodexDynamicToolsLoading,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
-import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import {
   buildCodexNativeHookRelayConfig,
@@ -503,7 +504,7 @@ export async function runCodexAppServerSideQuestion(
           return undefined;
         }
         if (request.method === "mcpServer/elicitation/request") {
-          return handleCodexAppServerElicitationRequest({
+          const approvalResult = await routeCodexAppServerElicitationRequest({
             requestParams: request.params,
             paramsForRun: sideRunParams,
             threadId: childThreadId,
@@ -511,6 +512,11 @@ export async function runCodexAppServerSideQuestion(
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
             signal: runAbortController.signal,
           });
+          return approvalResult.kind === "handled"
+            ? approvalResult.response
+            : createCodexElicitationResponse("decline", null, {
+                message: "OpenClaw Codex side questions do not support interactive MCP input.",
+              });
         }
         if (request.method === "item/tool/requestUserInput") {
           return isSideUserInputRequest(request.params, childThreadId, turnId)

@@ -346,6 +346,10 @@ describe("CodexAppServerClient", () => {
         },
         capabilities: {
           experimentalApi: true,
+          extensions: {
+            "openai/standard-form-input": {},
+            "openai/form": {},
+          },
         },
       },
     });
@@ -764,6 +768,34 @@ describe("CodexAppServerClient", () => {
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
       id: "input-1",
       result: { answers: {} },
+    });
+  });
+
+  it("returns an explicit bounded decline for unhandled MCP elicitations", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    harness.send({
+      id: "elicitation-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: null,
+        serverName: "forms",
+        mode: "form",
+        message: "Enter a value",
+        requestedSchema: { type: "object", properties: {} },
+      },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "elicitation-1",
+      result: {
+        action: "decline",
+        content: null,
+        _meta: { message: "OpenClaw has no interactive handler for this elicitation." },
+      },
     });
   });
 });
