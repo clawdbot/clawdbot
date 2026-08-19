@@ -86,7 +86,6 @@ describe("codex plugin", () => {
     const registerAgentHarness = vi.fn();
     const registerNodeHostCommand = vi.fn();
     const registerSessionCatalog = vi.fn();
-
     expect(() =>
       plugin.register(
         createTestPluginApi({
@@ -112,6 +111,122 @@ describe("codex plugin", () => {
         "codex.terminal.resume.v1",
       ]),
     );
+  });
+
+  const METADATA_ONLY_REGISTRATION_MODES = [
+    "discovery",
+    "setup-only",
+    "setup-runtime",
+    "cli-metadata",
+  ] as const;
+
+  const codexCliDescriptor = {
+    descriptors: [
+      {
+        name: "codex",
+        description: "Inspect and branch from Codex sessions through the Gateway",
+        hasSubcommands: true,
+      },
+    ],
+  };
+
+  it.each(METADATA_ONLY_REGISTRATION_MODES)(
+    "registers only CLI metadata in %s mode without runtime wiring",
+    (registrationMode) => {
+      const registerCli = vi.fn();
+      const registerAgentHarness = vi.fn();
+      const registerCommand = vi.fn();
+      const registerTool = vi.fn();
+      const registerService = vi.fn();
+      const on = vi.fn();
+
+      expect(() =>
+        plugin.register(
+          createTestPluginApi({
+            id: "codex",
+            name: "Codex",
+            source: "test",
+            config: {},
+            pluginConfig: {
+              appServer: {
+                transport: "websocket",
+                url: "ws://127.0.0.1:39175",
+              },
+            },
+            registrationMode,
+            runtime: {} as never,
+            registerCli,
+            registerAgentHarness,
+            registerCommand,
+            registerTool,
+            registerService,
+            on,
+          }),
+        ),
+      ).not.toThrow();
+
+      expect(registerCli).toHaveBeenCalledWith(expect.any(Function), codexCliDescriptor);
+      expect(registerAgentHarness).not.toHaveBeenCalled();
+      expect(registerCommand).not.toHaveBeenCalled();
+      expect(registerTool).not.toHaveBeenCalled();
+      expect(registerService).not.toHaveBeenCalled();
+      expect(on).not.toHaveBeenCalled();
+    },
+  );
+
+  it("registers tools and providers in tool-discovery mode without harness or hooks", () => {
+    const registerCli = vi.fn();
+    const registerAgentHarness = vi.fn();
+    const registerCommand = vi.fn();
+    const registerMediaUnderstandingProvider = vi.fn();
+    const registerWebSearchProvider = vi.fn();
+    const registerTool = vi.fn();
+    const registerToolMetadata = vi.fn();
+    const registerMigrationProvider = vi.fn();
+    const registerService = vi.fn();
+    const on = vi.fn();
+
+    expect(() =>
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            appServer: {
+              transport: "websocket",
+              url: "ws://127.0.0.1:39175",
+            },
+          },
+          registrationMode: "tool-discovery",
+          runtime: createCodexTestRuntime(),
+          registerCli,
+          registerAgentHarness,
+          registerCommand,
+          registerMediaUnderstandingProvider,
+          registerWebSearchProvider,
+          registerTool,
+          registerToolMetadata,
+          registerMigrationProvider,
+          registerService,
+          on,
+        }),
+      ),
+    ).not.toThrow();
+
+    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), codexCliDescriptor);
+    expect(registerMediaUnderstandingProvider).toHaveBeenCalledOnce();
+    expect(registerWebSearchProvider).toHaveBeenCalledOnce();
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_threads" });
+    expect(registerToolMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "codex_threads", risk: "high" }),
+    );
+    expect(registerAgentHarness).not.toHaveBeenCalled();
+    expect(registerCommand).not.toHaveBeenCalled();
+    expect(registerMigrationProvider).not.toHaveBeenCalled();
+    expect(registerService).not.toHaveBeenCalled();
+    expect(on).not.toHaveBeenCalled();
   });
 
   it("proactively monitors an explicitly configured remote websocket app-server", () => {

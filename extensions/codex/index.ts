@@ -67,6 +67,22 @@ export default definePluginEntry({
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
     setManagedCodexPluginRoot(api.rootDir);
+
+    // Dedicated cli-metadata entry is preferred for unknown-command discovery.
+    // Still register descriptors first here so any host that loads the full
+    // entry under a partial registrationMode stays side-effect free (#107219).
+    registerCodexCliMetadata(api);
+
+    const mode = api.registrationMode;
+    // Metadata/setup loads are non-activating: CLI descriptors only.
+    if (
+      mode === "cli-metadata" ||
+      mode === "discovery" ||
+      mode === "setup-only" ||
+      mode === "setup-runtime"
+    ) {
+      return;
+    }
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
@@ -99,15 +115,6 @@ export default definePluginEntry({
       return livePluginConfig;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
-    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
-    if (appServerConfig?.transport === "websocket") {
-      api.registerService(
-        createCodexAppServerConnectionHealthService({
-          getPluginConfig: resolveCurrentPluginConfig,
-          getRuntimeConfig: resolveCurrentConfig,
-        }),
-      );
-    }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
     const openBindingStateStore = () =>
       (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
@@ -129,35 +136,8 @@ export default definePluginEntry({
       },
     };
     const bindingStore = createLazyCodexAppServerBindingStore(lazyBindingStateStore);
-    registerCodexCliMetadata(api);
-    const sessionCatalogControlFactory = createCodexSessionCatalogControl({
-      config: api.config as OpenClawConfig,
-      getPluginConfig: resolveCurrentPluginConfig,
-      getRuntimeConfig: resolveCurrentConfig,
-    });
-    const sessionCatalogEnabled =
-      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
-    if (sessionCatalogEnabled) {
-      codexSessionCatalogRuntime.register({
-        api,
-        bindingStore,
-        control: sessionCatalogControlFactory,
-        getPluginConfig: resolveCurrentPluginConfig,
-        getRuntimeConfig: resolveCurrentConfig,
-      });
-      for (const command of createCodexSessionCatalogNodeHostCommands(
-        sessionCatalogControlFactory,
-        {
-          getPluginConfig: resolveCurrentPluginConfig,
-          getRuntimeConfig: () => resolveCurrentConfig() ?? (api.config as OpenClawConfig),
-        },
-      )) {
-        api.registerNodeHostCommand(command);
-      }
-    }
-    for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
-      api.registerNodeInvokePolicy(policy);
-    }
+
+    // Capability surfaces shared by tool-discovery and full.
     if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
       api.registerTool(
         (context) => {
@@ -178,23 +158,12 @@ export default definePluginEntry({
         { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },
       );
     }
-    const agentHarnessOptions = {
-      bindingStore,
-      sessionCatalogControlFactory,
-      resolveConfig: resolveCurrentConfig,
-      resolvePluginConfig: resolveCurrentPluginConfig,
-      runtime: api.runtime,
-    };
-    api.registerAgentHarness(createCodexAppServerAgentHarness(agentHarnessOptions), {
-      nativeCompaction: createCodexAppServerNativeCompaction(agentHarnessOptions),
-    });
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
     api.registerWebSearchProvider(
       createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
     );
-    api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     api.registerTool(
       (context) =>
         createCodexThreadsTool({
@@ -228,6 +197,61 @@ export default definePluginEntry({
       risk: "low",
       tags: ["codex", "plugins", "discovery"],
     });
+
+    // tool-discovery is capability-only: tools/providers, no harness/hooks/services.
+    if (mode === "tool-discovery") {
+      return;
+    }
+
+    // full: durable runtime wiring.
+    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
+    if (appServerConfig?.transport === "websocket") {
+      api.registerService(
+        createCodexAppServerConnectionHealthService({
+          getPluginConfig: resolveCurrentPluginConfig,
+          getRuntimeConfig: resolveCurrentConfig,
+        }),
+      );
+    }
+    const sessionCatalogControlFactory = createCodexSessionCatalogControl({
+      config: api.config as OpenClawConfig,
+      getPluginConfig: resolveCurrentPluginConfig,
+      getRuntimeConfig: resolveCurrentConfig,
+    });
+    const sessionCatalogEnabled =
+      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+    if (sessionCatalogEnabled) {
+      codexSessionCatalogRuntime.register({
+        api,
+        bindingStore,
+        control: sessionCatalogControlFactory,
+        getPluginConfig: resolveCurrentPluginConfig,
+        getRuntimeConfig: resolveCurrentConfig,
+      });
+      for (const command of createCodexSessionCatalogNodeHostCommands(
+        sessionCatalogControlFactory,
+        {
+          getPluginConfig: resolveCurrentPluginConfig,
+          getRuntimeConfig: () => resolveCurrentConfig() ?? (api.config as OpenClawConfig),
+        },
+      )) {
+        api.registerNodeHostCommand(command);
+      }
+    }
+    for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
+      api.registerNodeInvokePolicy(policy);
+    }
+    const agentHarnessOptions = {
+      bindingStore,
+      sessionCatalogControlFactory,
+      resolveConfig: resolveCurrentConfig,
+      resolvePluginConfig: resolveCurrentPluginConfig,
+      runtime: api.runtime,
+    };
+    api.registerAgentHarness(createCodexAppServerAgentHarness(agentHarnessOptions), {
+      nativeCompaction: createCodexAppServerNativeCompaction(agentHarnessOptions),
+    });
+    api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);
     }
