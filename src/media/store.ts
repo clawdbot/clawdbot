@@ -23,10 +23,7 @@ import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
-import {
-  CHANNEL_HISTORY_MEDIA_TTL_MS,
-  createChannelHistoryMediaBudget,
-} from "./channel-history-budget.js";
+import { createChannelHistoryMediaBudget } from "./channel-history-budget.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
 
@@ -46,7 +43,6 @@ const OUTBOUND_STAGING_SUBDIR = "outbound";
 // Match delivery-queue orphan grace: staged files get a full day to reach
 // every direct, streamed, fan-out, or queue-owned delivery path.
 const OUTBOUND_STAGING_TTL_MS = 24 * 60 * 60_000;
-export { CHANNEL_HISTORY_MEDIA_TTL_MS };
 /** Fixed disk budget for cached playback renditions; oldest outputs are evicted first. */
 const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 /** Playback renditions outlive transient media but are still retired after one week. */

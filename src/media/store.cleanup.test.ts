@@ -134,7 +134,7 @@ describe("cleanOldMedia managed-subtree retention", () => {
     expect(cleanup.deletedFileCount).toBe(0);
     await expect(fs.stat(legacyOrphanPath)).resolves.toMatchObject({ size: 15 });
 
-    const expiredHistory = Date.now() - store.CHANNEL_HISTORY_MEDIA_TTL_MS - 1_000;
+    const expiredHistory = Date.now() - 24 * 60 * 60_000 - 1_000;
     await fs.utimes(channelHistory.path, expiredHistory / 1000, expiredHistory / 1000);
     await store.pruneChannelHistoryMedia();
     await expect(fs.stat(channelHistory.path)).rejects.toMatchObject({ code: "ENOENT" });
