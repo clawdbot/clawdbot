@@ -12,6 +12,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import type { SafeBinProfileFixtures } from "../infra/exec-safe-bin-policy.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { evaluateSystemRunPolicy } from "../node-host/exec-policy.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -186,7 +187,7 @@ type ExecToolConfigLayer = {
   ask?: ExecAsk;
   /** Same fields as tools.exec / system-run safe-bin policy scopes. */
   safeBins?: string[] | null;
-  safeBinProfiles?: Record<string, unknown> | null;
+  safeBinProfiles?: SafeBinProfileFixtures | null;
   safeBinTrustedDirs?: string[] | null;
 };
 
@@ -223,16 +224,14 @@ function resolvePrecheckSafeBinPolicy(authz: CronJobPrecheckAuthz) {
     global: authz.toolsExec
       ? {
           safeBins: authz.toolsExec.safeBins,
-          // SAFETY: tools.exec.safeBinProfiles is a string-keyed profile map; runtime policy expects its Record shape.
-          safeBinProfiles: authz.toolsExec.safeBinProfiles as never,
+          safeBinProfiles: authz.toolsExec.safeBinProfiles,
           safeBinTrustedDirs: authz.toolsExec.safeBinTrustedDirs,
         }
       : undefined,
     local: authz.agentToolsExec
       ? {
           safeBins: authz.agentToolsExec.safeBins,
-          // SAFETY: agent tools.exec.safeBinProfiles is a string-keyed profile map; runtime policy expects its Record shape.
-          safeBinProfiles: authz.agentToolsExec.safeBinProfiles as never,
+          safeBinProfiles: authz.agentToolsExec.safeBinProfiles,
           safeBinTrustedDirs: authz.agentToolsExec.safeBinTrustedDirs,
         }
       : undefined,
