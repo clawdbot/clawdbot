@@ -134,7 +134,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.status = status
         self.lastRunError = lastRunError
         self.hasActiveRun = hasActiveRun
-        self.activeRunIds = activeRunIds
+        self.activeRunIds = activeRunIds ?? session?.activeRunIds
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.swarmGroupId = swarmGroupId
@@ -145,7 +145,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.observerDigestPresent = observerDigestPresent ?? (observerDigest != nil)
         self.statusPresent = statusPresent ?? (status != nil)
         self.lastRunErrorPresent = lastRunErrorPresent ?? (lastRunError != nil)
-        self.activeRunIdsPresent = activeRunIdsPresent ?? (activeRunIds != nil)
+        self.activeRunIdsPresent = activeRunIdsPresent ?? (activeRunIds != nil || session?.activeRunIds != nil)
     }
 
     public init(from decoder: Decoder) throws {

@@ -193,6 +193,34 @@ test("sessions.changed clears exact run ids only for an explicit tombstone", () 
   expect(tombstoned.row?.activeRunIds).toBeUndefined();
 });
 
+test("authoritative snapshot omission clears cached exact run ids", () => {
+  const key = "agent:main:main";
+  const result = buildResult([
+    {
+      key,
+      kind: "direct",
+      sessionId: "session-main",
+      updatedAt: 1,
+      hasActiveRun: true,
+      activeRunIds: ["run-stale"],
+    },
+  ]);
+
+  const reconciled = reconcileSessionHistory(
+    result,
+    {
+      key,
+      kind: "direct",
+      sessionId: "session-main",
+      updatedAt: 2,
+      hasActiveRun: true,
+    },
+    undefined,
+  );
+
+  expect(reconciled?.sessions[0]?.activeRunIds).toBeUndefined();
+});
+
 test("sessions.changed invalidates the complete owner facet until canonical refresh", () => {
   const key = "agent:main:main";
   const result = buildResult([
