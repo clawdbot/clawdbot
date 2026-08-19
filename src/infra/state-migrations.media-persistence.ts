@@ -58,13 +58,6 @@ type MediaMigrationDatabase = Pick<
   "schema_meta" | "session_windows" | "trajectory_runtime_events" | "transcript_events"
 >;
 
-type TrajectoryRowRewritePlan = {
-  eventJson: string;
-  rewrittenEventJson: string;
-  seq: number;
-  sessionId: string;
-};
-
 type ArchiveSourceSnapshot = {
   dev: number;
   ino: number;
@@ -122,6 +115,38 @@ function assertEventIdentitiesUnchanged(
   }
 }
 
+function forEachMediaEventBatch(params: {
+  database: DatabaseSync;
+  table: "trajectory_runtime_events" | "transcript_events";
+  visit: (sessionId: string, rows: Array<{ event_json: string; seq: number }>) => void;
+}): void {
+  const db = getNodeSqliteKysely<MediaMigrationDatabase>(params.database);
+  const sessionIds = executeSqliteQuerySync(
+    params.database,
+    db.selectFrom(params.table).select("session_id").distinct().orderBy("session_id", "asc"),
+  ).rows.map((row) => row.session_id);
+  for (const sessionId of sessionIds) {
+    let afterSeq: number | undefined;
+    while (true) {
+      let query = db
+        .selectFrom(params.table)
+        .select(["seq", "event_json"])
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "asc")
+        .limit(MEDIA_MIGRATION_ROW_BATCH_SIZE);
+      if (afterSeq !== undefined) {
+        query = query.where("seq", ">", afterSeq);
+      }
+      const rows = executeSqliteQuerySync(params.database, query).rows;
+      if (rows.length === 0) {
+        break;
+      }
+      params.visit(sessionId, rows);
+      afterSeq = rows.at(-1)?.seq;
+    }
+  }
+}
+
 function scanTranscriptRows(params: {
   database: DatabaseSync;
   pathname: string;
@@ -134,31 +159,14 @@ function scanTranscriptRows(params: {
     db.selectFrom("session_windows").select(["session_id", "session_key"]),
   ).rows;
   const sessionKeys = new Map(sessionRows.map((row) => [row.session_id, row.session_key]));
-  const sessionIds = executeSqliteQuerySync(
+  const changedSessionIds = new Set<string>();
+  forEachMediaEventBatch({
     database,
-    db.selectFrom("transcript_events").select("session_id").distinct().orderBy("session_id", "asc"),
-  ).rows.map((row) => row.session_id);
-  let changedSessions = 0;
-  for (const sessionId of sessionIds) {
-    const sessionKey = sessionKeys.get(sessionId);
-    if (!sessionKey) {
-      throw new Error(`${pathname}:${sessionId} has transcript rows without a session window`);
-    }
-    let afterSeq: number | undefined;
-    let sessionChanged = false;
-    while (true) {
-      let query = db
-        .selectFrom("transcript_events")
-        .select(["seq", "event_json"])
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "asc")
-        .limit(MEDIA_MIGRATION_ROW_BATCH_SIZE);
-      if (afterSeq !== undefined) {
-        query = query.where("seq", ">", afterSeq);
-      }
-      const rows = executeSqliteQuerySync(database, query).rows;
-      if (rows.length === 0) {
-        break;
+    table: "transcript_events",
+    visit: (sessionId, rows) => {
+      const sessionKey = sessionKeys.get(sessionId);
+      if (!sessionKey) {
+        throw new Error(`${pathname}:${sessionId} has transcript rows without a session window`);
       }
       const rewrites = rows.flatMap((row) => {
         const owner = `${pathname}:${sessionId}:${row.seq}`;
@@ -170,7 +178,7 @@ function scanTranscriptRows(params: {
         if (eventIdentity(event) !== eventIdentity(transformed.event)) {
           throw new Error(`${owner} event identity changed during media migration`);
         }
-        sessionChanged = true;
+        changedSessionIds.add(sessionId);
         return [{ event: transformed.event, expectedEventJson: row.event_json, seq: row.seq }];
       });
       if (writer && rewrites.length > 0) {
@@ -180,36 +188,22 @@ function scanTranscriptRows(params: {
           rewrites,
         );
       }
-      afterSeq = rows.at(-1)?.seq;
-    }
-    if (sessionChanged) {
-      changedSessions += 1;
-    }
-  }
-  return changedSessions;
+    },
+  });
+  return changedSessionIds.size;
 }
 
-function planTrajectoryRowRewrite(params: {
-  eventJson: string;
-  owner: string;
-  seq: number;
-  sessionId: string;
-}): TrajectoryRowRewritePlan {
+function rewriteTrajectoryEventJson(eventJson: string, owner: string): string {
   let event: unknown;
   try {
-    event = JSON.parse(params.eventJson) as unknown;
+    event = JSON.parse(eventJson) as unknown;
   } catch (error) {
-    throw new Error(`${params.owner} contains invalid trajectory JSON: ${String(error)}`, {
+    throw new Error(`${owner} contains invalid trajectory JSON: ${String(error)}`, {
       cause: error,
     });
   }
   if (!isRecord(event) || !isRecord(event.data) || !Array.isArray(event.data.messagesSnapshot)) {
-    return {
-      eventJson: params.eventJson,
-      rewrittenEventJson: params.eventJson,
-      seq: params.seq,
-      sessionId: params.sessionId,
-    };
+    return eventJson;
   }
   let changed = false;
   const messagesSnapshot = event.data.messagesSnapshot.map((message) => {
@@ -220,17 +214,9 @@ function planTrajectoryRowRewrite(params: {
     changed ||= canonical.changed;
     return canonical.message;
   });
-  return {
-    eventJson: params.eventJson,
-    rewrittenEventJson: changed
-      ? JSON.stringify({
-          ...event,
-          data: { ...event.data, messagesSnapshot },
-        })
-      : params.eventJson,
-    seq: params.seq,
-    sessionId: params.sessionId,
-  };
+  return changed
+    ? JSON.stringify({ ...event, data: { ...event.data, messagesSnapshot } })
+    : eventJson;
 }
 
 function scanTrajectoryRows(params: {
@@ -240,39 +226,17 @@ function scanTrajectoryRows(params: {
 }): number {
   const { database, pathname, rewrite } = params;
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
-  const sessionIds = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("trajectory_runtime_events")
-      .select("session_id")
-      .distinct()
-      .orderBy("session_id", "asc"),
-  ).rows.map((row) => row.session_id);
   let changedRows = 0;
-  for (const sessionId of sessionIds) {
-    let afterSeq: number | undefined;
-    while (true) {
-      let query = db
-        .selectFrom("trajectory_runtime_events")
-        .select(["seq", "event_json"])
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "asc")
-        .limit(MEDIA_MIGRATION_ROW_BATCH_SIZE);
-      if (afterSeq !== undefined) {
-        query = query.where("seq", ">", afterSeq);
-      }
-      const rows = executeSqliteQuerySync(database, query).rows;
-      if (rows.length === 0) {
-        break;
-      }
+  forEachMediaEventBatch({
+    database,
+    table: "trajectory_runtime_events",
+    visit: (sessionId, rows) => {
       for (const row of rows) {
-        const planned = planTrajectoryRowRewrite({
-          eventJson: row.event_json,
-          owner: `${pathname}:${sessionId}:${row.seq}`,
-          seq: row.seq,
-          sessionId,
-        });
-        if (planned.rewrittenEventJson === planned.eventJson) {
+        const rewrittenEventJson = rewriteTrajectoryEventJson(
+          row.event_json,
+          `${pathname}:${sessionId}:${row.seq}`,
+        );
+        if (rewrittenEventJson === row.event_json) {
           continue;
         }
         changedRows += 1;
@@ -281,15 +245,14 @@ function scanTrajectoryRows(params: {
             database,
             db
               .updateTable("trajectory_runtime_events")
-              .set({ event_json: planned.rewrittenEventJson })
+              .set({ event_json: rewrittenEventJson })
               .where("session_id", "=", sessionId)
               .where("seq", "=", row.seq),
           );
         }
       }
-      afterSeq = rows.at(-1)?.seq;
-    }
-  }
+    },
+  });
   return changedRows;
 }
 
@@ -304,27 +267,26 @@ type MediaSourceVersion = {
 
 function readMediaSourceVersion(database: DatabaseSync): MediaSourceVersion {
   const dataVersionRow = database.prepare("PRAGMA data_version").get();
-  const transcript = database
+  const counts = database
     .prepare(
-      "SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(event_json)), 0) AS bytes, " +
-        "COALESCE(SUM(created_at), 0) AS created_at FROM transcript_events",
-    )
-    .get();
-  const trajectory = database
-    .prepare(
-      "SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(event_json)), 0) AS bytes " +
-        "FROM trajectory_runtime_events",
+      `SELECT
+        (SELECT COUNT(*) FROM transcript_events) AS transcript_rows,
+        (SELECT COALESCE(SUM(LENGTH(event_json)), 0) FROM transcript_events) AS transcript_bytes,
+        (SELECT COALESCE(SUM(created_at), 0) FROM transcript_events) AS transcript_created_at,
+        (SELECT COUNT(*) FROM trajectory_runtime_events) AS trajectory_rows,
+        (SELECT COALESCE(SUM(LENGTH(event_json)), 0) FROM trajectory_runtime_events) AS trajectory_bytes`,
     )
     .get();
   const number = (value: unknown): number =>
     typeof value === "bigint" ? Number(value) : typeof value === "number" ? value : 0;
+  const count = (key: string): number => number(isRecord(counts) ? counts[key] : undefined);
   return {
     dataVersion: number(isRecord(dataVersionRow) ? dataVersionRow.data_version : undefined),
-    trajectoryBytes: number(isRecord(trajectory) ? trajectory.bytes : undefined),
-    trajectoryRows: number(isRecord(trajectory) ? trajectory.rows : undefined),
-    transcriptBytes: number(isRecord(transcript) ? transcript.bytes : undefined),
-    transcriptCreatedAt: number(isRecord(transcript) ? transcript.created_at : undefined),
-    transcriptRows: number(isRecord(transcript) ? transcript.rows : undefined),
+    trajectoryBytes: count("trajectory_bytes"),
+    trajectoryRows: count("trajectory_rows"),
+    transcriptBytes: count("transcript_bytes"),
+    transcriptCreatedAt: count("transcript_created_at"),
+    transcriptRows: count("transcript_rows"),
   };
 }
 
