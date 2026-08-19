@@ -5,13 +5,13 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import plugin from "./index.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig } from "./src/config.js";
-import { testing as googleMeetPluginTesting } from "./src/plugin-registration.js";
 import type { GoogleMeetRuntime } from "./src/runtime.js";
 import {
   captureStdout,
   invokeGoogleMeetGatewayMethodForTest,
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
+import { testing as googleMeetPluginTesting } from "./test-api.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
   createVoiceCallGateway: vi.fn(
