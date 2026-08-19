@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -16,7 +16,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
   createChannelTestPluginBase,
@@ -89,9 +89,11 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
 }));
 
-vi.mock("../../channels/plugins/message-action-dispatch.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../channels/plugins/message-action-dispatch.js")>()),
+vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
+  prepareExternalMessageActionTargetForResolution: (ctx: { params: Record<string, unknown> }) =>
+    ctx.params,
+  shouldDeferExternalMessageActionTargetResolution: () => false,
 }));
 
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
@@ -694,6 +696,11 @@ describe("gateway send mirroring", () => {
 
   beforeAll(async () => {
     await loadSendHandlersForTest();
+    await import("../../infra/outbound/message-action-runner.js");
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
   });
 
   beforeEach(async () => {
