@@ -217,17 +217,31 @@ jobs:
           set -euo pipefail
           exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-sut.ts" "\$@"
           EOF
-          cat >"${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" <<EOF
+          recorder_user="$(id -un)"
+          cat >"${RUNNER_TEMP}/telegram-desktop-recorder-exec" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
           exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-desktop-recorder.ts" "\$@"
           EOF
+          cat >"${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          # The agent user is kept out of the docker group so it cannot start an
+          # unattested candidate container outside the SUT wrapper. The recorder needs the
+          # daemon, so it runs as ${recorder_user} through the one sudoers entry that names
+          # this exact exec path; the image it starts is fixed in the recorder source.
+          if [ "\$(id -un)" = "${recorder_user}" ]; then
+            exec /usr/local/lib/mantis-toolchain/telegram-desktop-recorder "\$@"
+          fi
+          exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-desktop-recorder "\$@"
+          EOF
           chmod 0755 "${RUNNER_TEMP}/mantis-node" "${RUNNER_TEMP}/mantis-pnpm"
-          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder"
+          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" "${RUNNER_TEMP}/telegram-desktop-recorder-exec"
           sudo install -d -m 0755 /usr/local/lib/mantis-toolchain
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-node" /usr/local/lib/mantis-toolchain/node
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-pnpm" /usr/local/lib/mantis-toolchain/pnpm
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" /usr/local/bin/openclaw-telegram-mantis-sut
+          sudo install -m 0755 "${RUNNER_TEMP}/telegram-desktop-recorder-exec" /usr/local/lib/mantis-toolchain/telegram-desktop-recorder
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" /usr/local/bin/openclaw-telegram-desktop-recorder
           sudo install -m 0755 scripts/mantis/mantis-sut-container.sh /usr/local/sbin/openclaw-mantis-sut-container
           printf '/tmp/openclaw-mantis-proof-worktrees-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
@@ -394,6 +408,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          recorder_user="$(id -un)"
           sudo useradd --create-home --shell /bin/bash codex
           {
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
@@ -403,6 +418,7 @@ jobs:
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CREDENTIAL_OWNER_ID"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD OPENCLAW_TELEGRAM_MANTIS_SUT_CMD OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD OPENCLAW_TELEGRAM_USER_DRIVER_CMD TELEGRAM_USER_DRIVER_STATE_DIR"'
             printf '%s\n' 'codex ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container'
+            printf '%s\n' "codex ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-desktop-recorder"
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
           codex_home="/tmp/mantis-codex-home-${GITHUB_RUN_ID}"
@@ -417,6 +433,14 @@ jobs:
           done
           sudo chown -R codex:codex "$GITHUB_WORKSPACE"
           sudo chown -R codex:codex "$(dirname "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE")"
+          # The recorder runs as ${recorder_user} for docker while the agent runs as codex,
+          # so proof output and Telegram driver state need both users on the ACL. Without the
+          # default entries, files one user creates are unreadable to the other.
+          sudo install -d -m 2770 -o codex -g codex "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
+          for shared_dir in "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR" "$(dirname "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE")"; do
+            sudo setfacl -R -m "u:${recorder_user}:rwx,u:codex:rwx" "$shared_dir"
+            sudo setfacl -R -d -m "u:${recorder_user}:rwx,u:codex:rwx" "$shared_dir"
+          done
           proof_worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo chown -R root:root "$proof_worktree_root"
           sudo chmod -R a-w "$proof_worktree_root"

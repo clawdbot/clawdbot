@@ -542,6 +542,23 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(proofScript).not.toContain('curl -fL "$tdlib_url" -o');
   });
 
+  it("gives the agent docker only through the recorder path", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    // Docker group membership would let the agent start the candidate build outside
+    // /usr/local/sbin/openclaw-mantis-sut-container, making the attestation step decorative.
+    // It reaches the daemon as the runner user, for this one exec path, instead.
+    expect(workflow).not.toMatch(/usermod[^\n]*docker/);
+    expect(workflow).not.toMatch(/groups[^\n]*codex[^\n]*docker/);
+    expect(workflow).toContain(
+      "printf '%s\\n' \"codex ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-desktop-recorder\"",
+    );
+    expect(workflow).toContain(
+      "exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-desktop-recorder",
+    );
+    // Proof output and driver state are written by one user and read by the other.
+    expect(workflow).toContain('sudo setfacl -R -d -m "u:${recorder_user}:rwx,u:codex:rwx"');
+  });
+
   it("does not pass the full workflow environment into the local Telegram SUT", () => {
     const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
     const prompt = readFileSync(PROMPT, "utf8");
