@@ -223,6 +223,8 @@ function makeRuntime(): RuntimeEnv {
 function promptModelAllowlistOptions(index = 0) {
   return mocks.promptModelAllowlist.mock.calls[index]?.[0] as
     | {
+        agentDir?: string;
+        agentId?: string;
         allowedKeys?: string[];
         initialSelections?: string[];
         loadCatalog?: boolean;
@@ -775,6 +777,10 @@ describe("promptAuthConfig", () => {
     expect(result.agents?.entries?.ops?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
     expect(result.agents?.defaults?.model).toBeUndefined();
     expect(result.agents?.defaults?.modelPolicy).toBeUndefined();
+    expect(promptModelAllowlistOptions()).toMatchObject({
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+    });
   });
 
   it("projects provider-auth model defaults onto the explicit target", async () => {
