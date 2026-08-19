@@ -649,21 +649,26 @@ export async function stopRecorder(
   }
   const motionVideoPath = path.join(outputDir, "telegram-desktop-recorder-session-motion.mp4");
   const motionGifPath = path.join(outputDir, "telegram-desktop-recorder-session-motion.gif");
-  await attempt("motion preview", async () => {
-    await operations.createMotionPreview({
-      crabboxBin,
-      cwd,
-      fps: DEFAULT_PREVIEW_FPS,
-      gifPath: motionGifPath,
-      run: operations.runCommand,
-      trimmedVideoPath: motionVideoPath,
-      videoPath,
-      width: DEFAULT_PREVIEW_WIDTH,
+  // Previews read the recovered recording; with no lease there is no video to
+  // trim, and running ffmpeg on the missing file would fail an otherwise
+  // complete cleanup.
+  if (artifacts.video) {
+    await attempt("motion preview", async () => {
+      await operations.createMotionPreview({
+        crabboxBin,
+        cwd,
+        fps: DEFAULT_PREVIEW_FPS,
+        gifPath: motionGifPath,
+        run: operations.runCommand,
+        trimmedVideoPath: motionVideoPath,
+        videoPath,
+        width: DEFAULT_PREVIEW_WIDTH,
+      });
+      artifacts.previewGif = motionGifPath;
+      artifacts.trimmedVideo = motionVideoPath;
     });
-    artifacts.previewGif = motionGifPath;
-    artifacts.trimmedVideo = motionVideoPath;
-  });
-  if (opts.crop === "telegram-window") {
+  }
+  if (opts.crop === "telegram-window" && artifacts.trimmedVideo) {
     const croppedVideoPath = path.join(
       outputDir,
       "telegram-desktop-recorder-session-motion-telegram-window.mp4",

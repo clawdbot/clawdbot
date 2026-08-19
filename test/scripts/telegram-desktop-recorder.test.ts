@@ -565,6 +565,36 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     });
   });
 
+  it("finishes cleanly without previews when the lease is already gone", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    writeRecorderSession(sessionPath, testSession());
+    const preview = vi.fn(async () => ({}));
+    const cropped = vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 650 }));
+    const operations = {
+      createCroppedMotionPreview: cropped,
+      createMotionPreview: preview,
+      inspectCrabbox: vi.fn(async () => {
+        throw new Error("local-container lease not found: cbx_test123");
+      }),
+      runCommand: (async () => ({
+        stderr: "",
+        stdout: JSON.stringify({ ok: true }),
+      })) as RunCommand,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    const stopped = await stopRecorder(
+      root,
+      { command: "stop", crop: "telegram-window", keepBox: false, sessionPath },
+      operations,
+    );
+    expect(stopped.cleanupErrors).toBeUndefined();
+    expect(preview).not.toHaveBeenCalled();
+    expect(cropped).not.toHaveBeenCalled();
+  });
+
   it("still stops Crabbox and reports failure when local session termination fails", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");

@@ -1,4 +1,6 @@
-FROM ubuntu:24.04
+# Digest-pinned like the repo's other images: a moving tag would change the
+# recorded desktop's OS bytes outside review.
+FROM docker.io/library/ubuntu:24.04@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb
 
 ENV DEBIAN_FRONTEND=noninteractive
 
