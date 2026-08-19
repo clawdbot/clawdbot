@@ -13,8 +13,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
+  resolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -86,8 +85,7 @@ function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): 
   }
   const agentId =
     requestedAgentId ??
-    tryResolveLegacyCompatibilityAgentId(config) ??
-    resolveDefaultAgentId(config, {
+    resolveAmbientOwnerAgentId(config, {
       surface: "hooks status reporting",
       hint: "Pass --agent <id> to select a configured agent.",
     });

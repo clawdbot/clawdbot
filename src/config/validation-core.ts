@@ -7,7 +7,7 @@ import {
   listAgentEntriesWithSource,
   listAgentIds,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
   tryResolveLegacyCompatibilityAgentId,
   tryResolveSystemAgentTargetAgentId,
 } from "../agents/agent-scope.js";
@@ -203,7 +203,7 @@ function validateIdentityAvatar(
     }
     const workspaceDir = resolveAgentWorkspaceDir(
       config,
-      entry.id ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveDefaultAgentId(config),
+      entry.id ?? resolveAmbientOwnerAgentId(config),
       env,
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
