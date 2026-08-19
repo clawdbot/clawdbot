@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callSessionHandoffAgent } from "./session-handoff-agent-call.js";
 
 const mocks = vi.hoisted(() => ({
@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./gateway.js", () => ({
   callGatewayTool: mocks.callGatewayTool,
 }));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("callSessionHandoffAgent", () => {
   it("fences server admission with an exact-run abort mutation", async () => {
@@ -38,5 +42,37 @@ describe("callSessionHandoffAgent", () => {
       { sessionKey: "agent:main:target", runId: "target-run" },
       { timeoutMs: 5_000 },
     );
+  });
+
+  it("returns the accepted response while retaining the final request", async () => {
+    let resolveFinal = (_value: unknown) => {};
+    mocks.callGatewayTool.mockImplementationOnce(
+      async (_method, _options, _params, extra) =>
+        await new Promise((resolve) => {
+          resolveFinal = resolve;
+          extra?.onAccepted?.({ runId: "target-run", status: "accepted" });
+        }),
+    );
+
+    const response = await callSessionHandoffAgent<{ runId: string }>({
+      request: {
+        method: "agent",
+        params: {
+          sessionKey: "agent:main:target",
+          idempotencyKey: "target-run",
+          message: "work",
+        },
+        expectFinal: true,
+      },
+      authority: { agentId: "main", sessionKey: "agent:main:source" },
+      context: {
+        inheritedToolPolicy: { version: 1, allow: ["read"], deny: [] },
+        requester: { messageProvider: "discord", senderId: "speaker-1" },
+      },
+    });
+
+    expect(response).toEqual({ runId: "target-run", status: "accepted" });
+    expect(mocks.callGatewayTool.mock.calls[0]?.[3]).toMatchObject({ expectFinal: true });
+    resolveFinal({ runId: "target-run", status: "ok" });
   });
 });

@@ -5,7 +5,10 @@
  */
 import crypto from "node:crypto";
 import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
-import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  addTimerTimeoutGraceMs,
+  finiteSecondsToTimerSafeMilliseconds,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
@@ -383,6 +386,7 @@ async function startAgentRun(params: {
   allowActiveRunQueueDelivery?: boolean;
   allowActiveRunQueueFallback?: boolean;
   expectedSessionId?: string;
+  retainAbortThroughWait?: boolean;
 }): Promise<
   | {
       ok: true;
@@ -394,6 +398,12 @@ async function startAgentRun(params: {
   | { ok: false; result: ReturnType<typeof jsonResult> }
 > {
   try {
+    const agentRequestOptions = params.retainAbortThroughWait
+      ? {
+          expectFinal: true,
+          timeoutMs: addTimerTimeoutGraceMs(params.deliveryTimeoutMs ?? 10_000, 2_000),
+        }
+      : { timeoutMs: 10_000 };
     const activeRunSessionId =
       params.allowActiveRunQueueDelivery && isRunScopedAgentSessionKey(params.sessionKey)
         ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
@@ -450,7 +460,7 @@ async function startAgentRun(params: {
             sessionKey: fallbackSessionKey,
             idempotencyKey: crypto.randomUUID(),
           },
-          timeoutMs: 10_000,
+          ...agentRequestOptions,
         });
         return {
           ok: true,
@@ -467,7 +477,7 @@ async function startAgentRun(params: {
     const response = await params.callAgent<{ runId: string }>({
       method: "agent",
       params: params.sendParams,
-      timeoutMs: 10_000,
+      ...agentRequestOptions,
     });
     return {
       ok: true,
@@ -1243,6 +1253,7 @@ export function createSessionsSendTool(opts?: {
             sendParams,
             sessionKey: displayKey,
             deliveryTimeoutMs: announceTimeoutMs,
+            retainAbortThroughWait: handoffContext !== undefined,
           });
           if (!start.ok) {
             return start.result;

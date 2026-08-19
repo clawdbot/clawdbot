@@ -18,7 +18,7 @@ import { agentCommandMock, testState, writeSessionStore } from "./test-helpers.j
 async function runSessionsSendAdmissionFenceScenario(params: {
   createOpenClawTools: typeof import("../agents/openclaw-tools.js").createOpenClawTools;
   dir: string;
-  mode: "abort" | "authority-closure";
+  mode: "abort" | "authority-closure" | "post-accept-abort";
 }): Promise<void> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
@@ -48,8 +48,35 @@ async function runSessionsSendAdmissionFenceScenario(params: {
   const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const previousHookRegistry = getGlobalPluginRegistry();
   const operationAbort = new AbortController();
+  let resolveProviderStarted = () => {};
+  const providerStarted = new Promise<void>((resolve) => {
+    resolveProviderStarted = resolve;
+  });
   let fenceTriggered = false;
   let authorityReleased = false;
+  let providerAbortObserved = false;
+  let protectedSinkReached = false;
+  if (params.mode === "post-accept-abort") {
+    agentCommand.mockImplementation(async (opts: unknown) => {
+      fenceTriggered = true;
+      resolveProviderStarted();
+      const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+          if (signal?.aborted) {
+            resolve();
+          }
+        }),
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 250);
+        }),
+      ]);
+      providerAbortObserved = signal?.aborted === true;
+      protectedSinkReached = !providerAbortObserved;
+      signal?.throwIfAborted();
+    });
+  }
   initializeGlobalHookRunner(
     createMockPluginRegistry([
       {
@@ -63,7 +90,7 @@ async function runSessionsSendAdmissionFenceScenario(params: {
             fenceTriggered = true;
             if (params.mode === "abort") {
               operationAbort.abort(new Error("sessions_send operation cancelled"));
-            } else {
+            } else if (params.mode === "authority-closure") {
               authorityReleased = releaseAgentRunDelegatedAuthority(delegatedAuthority);
             }
           }
@@ -88,8 +115,10 @@ async function runSessionsSendAdmissionFenceScenario(params: {
     const message =
       params.mode === "abort"
         ? "do not dispatch after cancellation"
-        : "do not dispatch after closure";
-    const result = await withGatewayToolCallerIdentity(
+        : params.mode === "post-accept-abort"
+          ? "stop after target acceptance"
+          : "do not dispatch after closure";
+    const execution = withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: sourceSessionKey, operationalRunInstance },
       () =>
         tool.execute(
@@ -99,26 +128,41 @@ async function runSessionsSendAdmissionFenceScenario(params: {
             message,
             timeoutSeconds: 5,
           },
-          params.mode === "abort" ? operationAbort.signal : undefined,
+          params.mode === "authority-closure" ? undefined : operationAbort.signal,
         ),
     );
+    if (params.mode === "post-accept-abort") {
+      await providerStarted;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      operationAbort.abort(new Error("sessions_send operation cancelled after acceptance"));
+    }
+    const result = await execution.catch((error: unknown) => ({
+      details: { status: "error", error: error instanceof Error ? error.message : String(error) },
+    }));
     expect(result.details).toMatchObject({ status: "error" });
     expect(fenceTriggered).toBe(true);
     expect(authorityReleased).toBe(params.mode === "authority-closure");
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
-    expect(
-      agentCommand.mock.calls.filter(
-        ([opts]) => (opts as { sessionKey?: string }).sessionKey === targetSessionKey,
-      ),
-    ).toEqual([]);
-    const targetEvents = await loadTranscriptEvents({
-      sessionId: "authority-race-target",
-      sessionKey: targetSessionKey,
-      storePath: testState.sessionStorePath,
-    });
-    expect(JSON.stringify(targetEvents)).not.toContain(message);
+    const targetCalls = agentCommand.mock.calls.filter(
+      ([opts]) => (opts as { sessionKey?: string }).sessionKey === targetSessionKey,
+    );
+    if (params.mode === "post-accept-abort") {
+      expect(targetCalls).toHaveLength(1);
+      expect(providerAbortObserved).toBe(true);
+      expect(protectedSinkReached).toBe(false);
+    } else {
+      expect(targetCalls).toEqual([]);
+      const targetEvents = await loadTranscriptEvents({
+        sessionId: "authority-race-target",
+        sessionKey: targetSessionKey,
+        storePath: testState.sessionStorePath,
+      });
+      expect(JSON.stringify(targetEvents)).not.toContain(message);
+    }
   } finally {
     releaseAgentRunDelegatedAuthority(delegatedAuthority);
     if (previousHookRegistry) {
@@ -142,4 +186,11 @@ export async function runSessionsSendCancellationScenario(params: {
   dir: string;
 }): Promise<void> {
   await runSessionsSendAdmissionFenceScenario({ ...params, mode: "abort" });
+}
+
+export async function runSessionsSendPostAcceptanceCancellationScenario(params: {
+  createOpenClawTools: typeof import("../agents/openclaw-tools.js").createOpenClawTools;
+  dir: string;
+}): Promise<void> {
+  await runSessionsSendAdmissionFenceScenario({ ...params, mode: "post-accept-abort" });
 }

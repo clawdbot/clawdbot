@@ -32,6 +32,7 @@ import { captureEnv } from "../test-utils/env.js";
 import {
   runSessionsSendAuthorityClosureScenario,
   runSessionsSendCancellationScenario,
+  runSessionsSendPostAcceptanceCancellationScenario,
 } from "./server.sessions-send.authority-race.test-support.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
@@ -285,6 +286,13 @@ describe("sessions_send gateway loopback", () => {
     await runSessionsSendCancellationScenario({
       createOpenClawTools,
       dir: tempDirs.make("openclaw-sessions-send-cancellation-race-"),
+    });
+  });
+
+  it("aborts target provider work when cancellation follows acceptance", async () => {
+    await runSessionsSendPostAcceptanceCancellationScenario({
+      createOpenClawTools,
+      dir: tempDirs.make("openclaw-sessions-send-post-accept-cancellation-"),
     });
   });
 

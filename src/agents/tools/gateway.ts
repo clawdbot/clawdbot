@@ -621,6 +621,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   params?: unknown,
   extra?: {
     expectFinal?: boolean;
+    onAccepted?: import("../../gateway/call.js").CallGatewayOptions["onAccepted"];
     onSignalAbort?: import("../../gateway/call.js").CallGatewayOptions["onSignalAbort"];
     scopes?: OperatorScope[];
     requireAgentRuntimeIdentity?: boolean;
@@ -668,6 +669,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     params: callParams,
     timeoutMs: gateway.timeoutMs,
     signal: extra?.signal,
+    onAccepted: extra?.onAccepted,
     onSignalAbort: extra?.onSignalAbort,
     expectFinal: extra?.expectFinal,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
