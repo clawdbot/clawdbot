@@ -4,7 +4,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleA2uiHttpRequestWithRootResolver } from "./a2ui-route.js";
+import {
+  handleA2uiHttpRequestWithRootResolver,
+  type A2uiHttpRequest,
+  type A2uiHttpResponse,
+} from "./a2ui-route.js";
 
 export { A2UI_PATH, CANVAS_HOST_PATH } from "./a2ui-shared.js";
 
@@ -12,13 +16,6 @@ let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
 let cachedA2uiResolvedAtMs = 0;
 const A2UI_ROOT_RETRY_NULL_AFTER_MS = 10_000;
-
-type A2uiHttpRequest = { method?: string; url?: string };
-type A2uiHttpResponse = {
-  statusCode: number;
-  setHeader(name: string, value: number | string | readonly string[]): void;
-  end(chunk?: Buffer | string): void;
-};
 
 async function resolveA2uiRoot(): Promise<string | null> {
   const here = path.dirname(fileURLToPath(import.meta.url));

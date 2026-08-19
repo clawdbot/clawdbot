@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { build } from "tsdown";
 import {
   collectPluginSourceEntries,
@@ -96,10 +97,6 @@ function getStringRecord(value: unknown) {
       ([, entryValue]) => typeof entryValue === "string" && entryValue.trim().length > 0,
     ),
   );
-}
-
-function getRecord(value: unknown) {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 }
 
 function createNeverBundleDependencyMatcher(packageJson: PluginPackageJson) {
@@ -298,8 +295,8 @@ function resolvePluginNpmRuntimePackagePeerMetadata(plan: {
     );
   }
   const existingPeerDependencies = getStringRecord(plan.packageJson.peerDependencies);
-  const existingPeerDependenciesMeta = getRecord(plan.packageJson.peerDependenciesMeta);
-  const existingOpenClawMeta = getRecord(existingPeerDependenciesMeta.openclaw);
+  const existingPeerDependenciesMeta = asNonArrayRecord(plan.packageJson.peerDependenciesMeta);
+  const existingOpenClawMeta = asNonArrayRecord(existingPeerDependenciesMeta.openclaw);
   return {
     peerDependencies: {
       ...existingPeerDependencies,

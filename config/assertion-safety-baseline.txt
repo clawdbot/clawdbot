@@ -3851,7 +3851,6 @@ src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	4
 src/state/openclaw-state-db-schema-migration-required.ts	2
 src/state/openclaw-state-db-schema-repair.ts	7
-src/state/openclaw-state-lease.ts	1
 src/state/openclaw-state-ownership.ts	1
 src/state/openclaw-state-snapshot-sanitizer.ts	1
 src/state/user-profiles-tailscale-avatar.ts	2
