@@ -283,12 +283,20 @@ export function applyModelDefaults(
         const cost = resolveModelCost(
           raw.cost || catalogModel?.cost ? { ...catalogModel?.cost, ...raw.cost } : undefined,
         );
+        // resolveModelCost keeps only the flat per-token fields; carry tiered
+        // pricing through explicitly so an authored or catalog tier table is
+        // not silently discarded when other cost fields are defaulted.
+        const tieredPricing = raw.cost?.tieredPricing ?? catalogModel?.cost?.tieredPricing;
+        if (tieredPricing) {
+          cost.tieredPricing = tieredPricing;
+        }
         const costMutated =
           !raw.cost ||
           raw.cost.input !== cost.input ||
           raw.cost.output !== cost.output ||
           raw.cost.cacheRead !== cost.cacheRead ||
-          raw.cost.cacheWrite !== cost.cacheWrite;
+          raw.cost.cacheWrite !== cost.cacheWrite ||
+          raw.cost.tieredPricing !== cost.tieredPricing;
         if (costMutated) {
           modelMutated = true;
         }

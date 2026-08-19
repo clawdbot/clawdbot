@@ -243,6 +243,73 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(model.maxTokens).toBe(4_096);
   });
 
+  it("preserves catalog tiered pricing when flat cost fields are authored", async () => {
+    const { applyModelDefaults } = await import("./defaults.js");
+    const tieredRegistry = {
+      plugins: [
+        {
+          id: "openai",
+          modelCatalog: {
+            providers: {
+              openai: {
+                models: [
+                  {
+                    id: "gpt-5.6-sol",
+                    name: "GPT-5.6 Sol",
+                    input: ["text", "image"],
+                    cost: {
+                      input: 5,
+                      output: 30,
+                      cacheRead: 0.5,
+                      cacheWrite: 6.25,
+                      tieredPricing: [
+                        {
+                          input: 2.5,
+                          output: 15,
+                          cacheRead: 0.25,
+                          cacheWrite: 3,
+                          maxInputTokens: 200_000,
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+      // SAFETY: minimal manifest record carrying only the fields applyModelDefaults reads.
+    } as never;
+    const cfg = applyModelDefaults(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                // SAFETY: mirrors an operator override with explicit flat cost only.
+                {
+                  id: "gpt-5.6-sol",
+                  name: "GPT-5.6",
+                  cost: { input: 4, output: 24, cacheRead: 0.4, cacheWrite: 5 },
+                } as never,
+              ],
+            },
+          },
+        },
+      },
+      { manifestRegistry: tieredRegistry },
+    );
+    const model = expectDefined(
+      cfg.models?.providers?.openai?.models?.[0],
+      "materialized model entry",
+    );
+    expect(model.cost?.input).toBe(4);
+    expect(model.cost?.tieredPricing).toHaveLength(1);
+    expect(model.input).toEqual(["text", "image"]);
+  });
+
   it("falls back to generic defaults when no catalog row matches", async () => {
     const { applyModelDefaults } = await import("./defaults.js");
     const cfg = applyModelDefaults(
