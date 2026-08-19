@@ -97,7 +97,7 @@ Core validates and wraps the widget document before handing it to Discord. The p
 - Widgets expire after seven days, with at most 64 retained per Discord plugin instance.
 - Widget HTML is authored by your agent and should be treated as trusted content. Do not embed secrets you would not want a buggy widget to expose.
 - The widget can navigate within its own nested frame. The `sandbox="allow-scripts"` iframe blocks top-level navigation, popups, and same-origin access, while its Content Security Policy blocks network connections and external resources. These controls are defense-in-depth, not a security boundary against the agent that authored the widget.
-- When Activities is disabled, `/discord/activity` is not registered at all.
+- When Activities is disabled or its required account credentials are unavailable, the route remains registered internally but public requests under `/discord/activity` are left unhandled and return the normal 404.
 
 The public Activity shell and token-exchange route become reachable through your tunnel when enabled. They do not expose widget HTML without a valid OAuth session and one-time document capability.
 
@@ -108,7 +108,7 @@ The public Activity shell and token-exchange route become reachable through your
 - confirm the tunnel is running and routes to the gateway's actual bind port
 - confirm the Developer Portal target includes `/discord/activity`
 - restart the gateway after changing Discord or OpenClaw configuration
-- check gateway logs for the one-line warning about a missing Activities client secret
+- confirm the Discord bot token and Activities client secret both resolve in the running gateway; incomplete credentials keep `/discord/activity` externally hidden behind the normal 404
 
 ### Discord opens a blank page or reports `blocked:csp`
 
