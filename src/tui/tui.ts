@@ -1091,7 +1091,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       .listSessions({
         limit: TUI_SESSION_LOOKUP_LIMIT,
         search: rememberedKey,
-        includeGlobal: false,
+        includeGlobal: rememberedKey === "global",
         includeUnknown: false,
         agentId: state.currentAgentId,
       })
