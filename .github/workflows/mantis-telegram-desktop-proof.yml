@@ -191,6 +191,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      # The Telegram user driver is a PEP 723 script (`#!/usr/bin/env -S uv run --script`),
+      # so uv is a lane runtime dependency, not developer convenience. The runner image does
+      # not ship it.
+      - name: Setup uv for the Telegram user driver
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
       - name: Install local proof tools
         env:
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
@@ -265,6 +271,7 @@ jobs:
           sudo chmod 0444 /etc/openclaw-mantis-sut-worktrees /etc/openclaw-mantis-sut-revisions /etc/openclaw-mantis-sut-runtime-root
           /usr/local/lib/mantis-toolchain/node --version
           /usr/local/lib/mantis-toolchain/pnpm --version
+          /usr/local/lib/mantis-toolchain/uv --version
           /usr/local/bin/openclaw-telegram-mantis-sut --help >/dev/null
           /usr/local/bin/openclaw-telegram-desktop-recorder --help >/dev/null
 

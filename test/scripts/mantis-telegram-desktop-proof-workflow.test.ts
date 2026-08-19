@@ -588,6 +588,18 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("untrusted fork code");
   });
 
+  it("provisions uv before the step that pins it", () => {
+    // The user driver is a PEP 723 script, so uv is a lane runtime dependency. The pin step
+    // resolves it with `command -v`, which fails the run at setup when nothing installed it.
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
+    const uvSetup = steps.findIndex((step) => step.uses?.startsWith("astral-sh/setup-uv@"));
+    const toolPin = steps.findIndex((step) => step.name === "Install local proof tools");
+
+    expect(uvSetup).toBeGreaterThanOrEqual(0);
+    expect(uvSetup).toBeLessThan(toolPin);
+  });
+
   it("pins every executable the agent runs to an absolute toolchain path", () => {
     // The recorder crosses a sudo boundary, where PATH is sudo's secure_path rather than
     // the agent's. A PATH-resolved tool works locally and fails in the lane as ENOENT
