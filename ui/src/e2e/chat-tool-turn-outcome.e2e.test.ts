@@ -30,6 +30,61 @@ async function captureToolActivityProof(page: import("playwright").Page, name: s
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
 }
 
+type DisclosureFrame = {
+  expanded: boolean;
+  mountedBodies: number;
+  rowTop: number;
+  scrollHeight: number;
+  scrollTop: number;
+};
+
+async function toggleDisclosureWithFrameTrace(
+  page: import("playwright").Page,
+  summary: import("playwright").Locator,
+): Promise<DisclosureFrame[]> {
+  return await summary.evaluate((button) => {
+    const row = button.closest<HTMLElement>(".chat-virtual-row");
+    const thread = button.closest<HTMLElement>(".chat-thread");
+    if (!row || !thread) {
+      throw new Error("Expected disclosure inside a virtual transcript row");
+    }
+    const frames: DisclosureFrame[] = [];
+    const sample = () => {
+      frames.push({
+        expanded: button.getAttribute("aria-expanded") === "true",
+        mountedBodies: row.querySelectorAll(".chat-tool-msg-body, .chat-activity-group__body")
+          .length,
+        rowTop: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+        scrollHeight: thread.scrollHeight,
+        scrollTop: thread.scrollTop,
+      });
+    };
+    sample();
+    (button as HTMLElement).click();
+    return new Promise<DisclosureFrame[]>((resolve) => {
+      let remaining = 8;
+      const next = () => {
+        sample();
+        remaining -= 1;
+        if (remaining === 0) {
+          resolve(frames);
+        } else {
+          requestAnimationFrame(next);
+        }
+      };
+      requestAnimationFrame(next);
+    });
+  });
+}
+
+function expectStableDisclosureFrames(frames: DisclosureFrame[]) {
+  const initial = frames[0];
+  expect(initial).toBeDefined();
+  expect(
+    Math.max(...frames.map((frame) => Math.abs(frame.rowTop - initial!.rowTop))),
+  ).toBeLessThanOrEqual(2);
+}
+
 async function captureFactrowProof(
   page: import("playwright").Page,
   activity: import("playwright").Locator,
@@ -227,8 +282,15 @@ suite.define(() => {
     },
   );
 
-  it("keeps the final activity row anchored while its disclosure opens", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 600, width: 900 } });
+  it("keeps completed-work and tool disclosures anchored on every expand and collapse frame", async () => {
+    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.browser.newContext({
+      reducedMotion: "reduce",
+      viewport: { height: 600, width: 900 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 600, width: 900 } } }
+        : {}),
+    });
     const page = await context.newPage();
     const transcriptPrefix = Array.from({ length: 12 }, (_, index) => [
       {
@@ -243,8 +305,14 @@ suite.define(() => {
       },
     ]).flat();
     await installMockGateway(page, {
+      sessionKey: "agent:main:dashboard:disclosure-geometry",
       historyMessages: [
         ...transcriptPrefix,
+        {
+          role: "user",
+          content: "Inspect the transcript implementation and run its focused tests.",
+          timestamp: 99,
+        },
         {
           role: "assistant",
           content: [
@@ -267,7 +335,15 @@ suite.define(() => {
           role: "toolResult",
           toolCallId: "call-anchor",
           toolName: "bash",
-          content: [{ type: "text", text: "All focused tests passed." }],
+          content: [
+            {
+              type: "text",
+              text: Array.from(
+                { length: 24 },
+                (_, index) => `Focused test ${index + 1}: passed with stable transcript geometry.`,
+              ).join("\n"),
+            },
+          ],
           timestamp: 101,
         },
         {
@@ -277,32 +353,117 @@ suite.define(() => {
           content: [{ type: "text", text: "export function renderToolCard() {}" }],
           timestamp: 102,
         },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "The transcript implementation is sound and all focused tests pass.",
+            },
+          ],
+          timestamp: 103,
+        },
+        ...Array.from({ length: 3 }, (_, index) => [
+          {
+            role: "user",
+            content: `Follow-up ${index + 1}: record the next transcript observation.`,
+            timestamp: 104 + index * 2,
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: `Observation ${index + 1} recorded.` }],
+            timestamp: 105 + index * 2,
+          },
+        ]).flat(),
+        {
+          role: "user",
+          content: "Run one short sibling tool check.",
+          timestamp: 110,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-sibling",
+              name: "bash",
+              arguments: {
+                command: "pnpm test ui/src/pages/chat/components/chat-tool-cards.test.ts",
+              },
+            },
+          ],
+          timestamp: 111,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-sibling",
+          toolName: "bash",
+          content: [{ type: "text", text: "Focused sibling passed." }],
+          timestamp: 112,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "The sibling tool check passed." }],
+          timestamp: 113,
+        },
       ],
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
-    await activity.waitFor();
+    await page.goto(
+      controlUiSessionUrl(suite.server.baseUrl, "agent:main:dashboard:disclosure-geometry"),
+    );
+    const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
+    await expect.poll(() => workSummaries.count()).toBe(2);
+    const middleWorkSummary = workSummaries.first();
+    const endWorkSummary = workSummaries.last();
     await waitForChatScrollIdle(page);
     expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
-    const virtualRow = page.locator(".chat-virtual-row").filter({ has: activity });
-    const rowTop = async () =>
-      virtualRow.evaluate((row) => {
-        const thread = row.closest<HTMLElement>(".chat-thread");
-        if (!thread) {
-          throw new Error("Expected activity row inside the chat thread");
-        }
-        return row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
-      });
-    const topBefore = await rowTop();
+    const traces: Record<string, DisclosureFrame[]> = {};
+    traces.workEndExpand = await toggleDisclosureWithFrameTrace(page, endWorkSummary);
+    traces.workEndCollapse = await toggleDisclosureWithFrameTrace(page, endWorkSummary);
 
-    await activity.click();
-    await page.locator(".chat-activity-group__body:not([hidden])").waitFor();
+    await middleWorkSummary.evaluate((button) => {
+      const row = button.closest<HTMLElement>(".chat-virtual-row");
+      const thread = button.closest<HTMLElement>(".chat-thread");
+      if (!row || !thread) {
+        throw new Error("Expected disclosure inside a virtual transcript row");
+      }
+      const rowTop = row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+      thread.scrollTop += Math.round(rowTop - thread.clientHeight / 2);
+    });
     await waitForChatScrollIdle(page);
+    traces.workMiddleExpand = await toggleDisclosureWithFrameTrace(page, middleWorkSummary);
+    const activitySummary = page.locator(
+      ".chat-group--activity > .chat-group-messages > .chat-activity-group > .chat-activity-group__summary",
+    );
+    traces.activityMiddleExpand = await toggleDisclosureWithFrameTrace(page, activitySummary);
+    const toolSummary = page.locator(".chat-group--activity .chat-tool-msg-summary").first();
+    traces.toolMiddleExpand = await toggleDisclosureWithFrameTrace(page, toolSummary);
+    traces.toolMiddleCollapse = await toggleDisclosureWithFrameTrace(page, toolSummary);
+    traces.activityMiddleCollapse = await toggleDisclosureWithFrameTrace(page, activitySummary);
+    traces.workMiddleCollapse = await toggleDisclosureWithFrameTrace(page, middleWorkSummary);
 
-    expect(Math.abs((await rowTop()) - topBefore)).toBeLessThanOrEqual(2);
-    await captureToolActivityProof(page, "activity-disclosure-scroll-anchor");
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await fs.writeFile(
+        path.join(artifactDir, "disclosure-geometry.json"),
+        `${JSON.stringify(traces, null, 2)}\n`,
+      );
+      await page.locator(".chat-main").screenshot({
+        path: path.join(artifactDir, "disclosure-geometry-light.png"),
+      });
+      await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+        .toBe("dark");
+      await page.locator(".chat-main").screenshot({
+        path: path.join(artifactDir, "disclosure-geometry-dark.png"),
+      });
+    }
     await context.close();
+    for (const frames of Object.values(traces)) {
+      expectStableDisclosureFrames(frames);
+    }
   });
 
   it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {

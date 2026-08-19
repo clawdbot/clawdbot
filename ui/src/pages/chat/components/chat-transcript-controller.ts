@@ -140,6 +140,15 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private pruneDetachedRowsQueued = false;
   private pendingRowMeasureFrame: number | null = null;
+  private pendingDisclosureRow: HTMLElement | null = null;
+  private readonly captureDisclosureResize = (event: Event) => {
+    const target = event.target;
+    const disclosure =
+      target instanceof Element
+        ? target.closest(".chat-tool-msg-summary[aria-expanded], .chat-activity-group__summary")
+        : null;
+    this.pendingDisclosureRow = disclosure?.closest<HTMLElement>(".chat-virtual-row") ?? null;
+  };
   private measureConnectedRows(): void {
     // Only width invalidation owns forced DOM reads. Ordinary row refs stay on
     // TanStack's observer path so resizeItem cannot perturb scroll restoration.
@@ -328,6 +337,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
+    this.reconcileDisclosureResize();
     this.reconcileImplicitEndAnchor();
     this.applyPendingScrollOffset();
   }
@@ -389,7 +399,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
         this.syncAnnouncement(announcement, announce);
         const virtualRows = virtualizer.getVirtualItems();
         return html`
-          <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
+          <div
+            class="chat-thread-inner chat-thread-inner--virtual"
+            ${ref(this.scrollElementRef)}
+            @click=${this.captureDisclosureResize}
+          >
             <div
               class="chat-virtual-sizer"
               style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
@@ -528,6 +542,22 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
 
   handleFocusOut(event: FocusEvent): void {
     this.focusedRowKey = this.rowKeyFromEvent(event, event.relatedTarget);
+  }
+
+  private reconcileDisclosureResize(): void {
+    const row = this.pendingDisclosureRow;
+    this.pendingDisclosureRow = null;
+    if (!row?.isConnected || !this.scrollElement?.contains(row)) {
+      return;
+    }
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const index = virtualizer.indexFromElement(row);
+    const options = virtualizer.options;
+    // The clicked row is the interaction anchor. Measure its committed height
+    // before paint without letting the transcript's ordinary end anchor compete.
+    virtualizer.setOptions({ ...options, anchorTo: "start" });
+    virtualizer.resizeItem(index, row.offsetHeight);
+    virtualizer.setOptions(options);
   }
 
   private rowKeyFromEvent(event: FocusEvent, target: EventTarget | null = event.target) {

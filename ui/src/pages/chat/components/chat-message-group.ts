@@ -50,7 +50,6 @@ import {
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
-  toggleToolDisclosureKeepingScroll,
 } from "./chat-tool-cards.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -285,9 +284,7 @@ export function renderActivityGroup(
             @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                toggleToolDisclosureKeepingScroll(event, () =>
-                  opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded),
-                );
+                opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
               }
             }}
           >
