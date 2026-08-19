@@ -393,7 +393,17 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.usage.timeseries", "usage", "operator.read", "<=2026.7", { advertise: false }],
   ["sessions.usage.logs", "usage", "operator.read", "<=2026.7", { advertise: false }],
   ["poll", "send", "operator.write", "<=2026.7", { advertise: false }],
-  ["sessions.steer", "sessions-messaging", "operator.write", "<=2026.7", { advertise: false }],
+  [
+    "sessions.steer",
+    "sessions-messaging",
+    "operator.write",
+    "<=2026.7",
+    {
+      advertise: false,
+      description:
+        "Deprecated alias for chat.send queueMode interrupt; removal per protocol deprecation policy.",
+    },
+  ],
   ["push.test", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["attach.grant", "attach", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["attach.revoke", "attach", "operator.admin", "<=2026.7"],

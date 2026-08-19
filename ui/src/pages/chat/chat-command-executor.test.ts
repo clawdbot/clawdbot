@@ -1711,12 +1711,12 @@ describe("executeSlashCommand /steer (soft inject)", () => {
 });
 
 describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
-  it("calls sessions.steer to abort and restart the current session", async () => {
+  it("calls chat.send interrupt to abort and restart the current session", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return { sessions: [row("agent:main:main")] };
       }
-      if (method === "sessions.steer") {
+      if (method === "chat.send") {
         return { status: "started", runId: "run-1", messageSeq: 2, interruptedActiveRun: true };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -1731,15 +1731,17 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
 
     expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
     expect(result.trackRunId).toBe("run-1");
-    expect(request).toHaveBeenCalledWith("sessions.steer", {
-      key: "agent:main:main",
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "agent:main:main",
       message: "start over with a new plan",
+      queueMode: "interrupt",
+      idempotencyKey: expect.any(String),
     });
   });
 
-  it("does not track a pending run when sessions.steer returns terminal ok", async () => {
+  it("does not track a pending run when chat.send returns terminal ok", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.steer") {
+      if (method === "chat.send") {
         return { status: "ok", runId: "run-ok", messageSeq: 2 };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -1759,9 +1761,9 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
   it.each([
     ["timeout", "chat.commandResults.redirect.timeout"],
     ["error", "chat.commandResults.redirect.failed"],
-  ] as const)("reports terminal %s ACK from sessions.steer", async (status, expectedKey) => {
+  ] as const)("reports terminal %s ACK from chat.send", async (status, expectedKey) => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.steer") {
+      if (method === "chat.send") {
         return { status, runId: `run-${status}`, summary: "aborted" };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -1780,7 +1782,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
 
   it("passes selected-agent scope when redirecting the selected global session", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.steer") {
+      if (method === "chat.send") {
         return { status: "started", runId: "run-global", messageSeq: 2 };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -1796,16 +1798,18 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
 
     expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
     expect(result.trackRunId).toBe("run-global");
-    expect(request).toHaveBeenCalledWith("sessions.steer", {
-      key: "global",
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "global",
       agentId: "work",
       message: "start over",
+      queueMode: "interrupt",
+      idempotencyKey: expect.any(String),
     });
   });
 
   it("treats subagent-looking redirect prefixes as current-session message text", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.steer") {
+      if (method === "chat.send") {
         return { status: "started", runId: "run-3", messageSeq: 1 };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -1820,9 +1824,11 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
 
     expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
     expect(result.trackRunId).toBe("run-3");
-    expect(request).toHaveBeenCalledWith("sessions.steer", {
-      key: "agent:main:main",
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "agent:main:main",
       message: "researcher start over completely",
+      queueMode: "interrupt",
+      idempotencyKey: expect.any(String),
     });
   });
 

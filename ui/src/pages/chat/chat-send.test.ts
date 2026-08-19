@@ -1422,7 +1422,7 @@ describe("handleSendChat", () => {
 
     const host = makeChatHost({
       requestHandlers: {
-        "sessions.steer": {
+        "chat.send": {
           status: "started",
           runId: "redirect-run",
           messageSeq: 2,
@@ -1445,9 +1445,11 @@ describe("handleSendChat", () => {
     settingsPatch.resolve(true);
     await send;
 
-    expect(host.request).toHaveBeenCalledWith("sessions.steer", {
-      key: "agent:main",
+    expect(host.request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "agent:main",
       message: "start over",
+      queueMode: "interrupt",
+      idempotencyKey: expect.any(String),
     });
     expect(host.request).toHaveBeenCalledTimes(1);
     expect(host.chatMessage).toBe("new draft");

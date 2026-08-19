@@ -399,6 +399,60 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send interrupt drains the captured admission before starting", async () => {
+    await withMainSessionStore(async () => {
+      const activeRunStarted = createDeferred();
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        activeRunStarted.resolve(undefined);
+        if (!opts?.abortSignal?.aborted) {
+          await new Promise<void>((resolve) => {
+            opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+        return undefined;
+      });
+      const active = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "captured active turn",
+        idempotencyKey: "idem-chat-interrupt-old",
+      });
+      expect(active.ok).toBe(true);
+      await activeRunStarted.promise;
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "replace the captured turn",
+        queueMode: "interrupt",
+        idempotencyKey: "idem-chat-interrupt-active",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload).toMatchObject({
+        runId: "idem-chat-interrupt-active",
+        status: "started",
+        interruptedActiveRun: true,
+      });
+      await waitForAgentRunDrained("idem-chat-interrupt-active");
+    });
+  });
+
+  test("chat.send interrupt starts normally when the session is idle", async () => {
+    await withMainSessionStore(async () => {
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "start from idle",
+        queueMode: "interrupt",
+        idempotencyKey: "idem-chat-interrupt-idle",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload).toMatchObject({
+        runId: "idem-chat-interrupt-idle",
+        status: "started",
+      });
+      expect(res.payload).not.toHaveProperty("interruptedActiveRun");
+      await waitForAgentRunDrained("idem-chat-interrupt-idle");
+    });
+  });
+
   test("sessions.send creates a configured agent main session before sending", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

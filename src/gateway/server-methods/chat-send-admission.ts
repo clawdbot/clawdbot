@@ -3,7 +3,9 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
+  interruptReplyRunTarget,
   isReplyRunAbortableForSignal,
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
@@ -133,6 +135,7 @@ export async function admitChatSend(params: {
   let messageInjectionTarget: ReturnType<
     typeof replyRunRegistry.resolveCurrentMessageInjectionTarget
   >;
+  let runInterruptTarget: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
   const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
@@ -204,6 +207,13 @@ export async function admitChatSend(params: {
         : undefined;
     if (commitOutcome && resolvedInjectionTarget) {
       messageInjectionTarget = resolvedInjectionTarget;
+    }
+    const resolvedInterruptTarget =
+      p.queueMode === "interrupt"
+        ? replyRunRegistry.resolveCurrentInterruptTarget(activeRunScopeKey)
+        : undefined;
+    if (commitOutcome && resolvedInterruptTarget) {
+      runInterruptTarget = resolvedInterruptTarget;
     }
     if (commitOutcome && p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
       // Runtime session identity resolves through the canonical SQLite accessor;
@@ -397,6 +407,28 @@ export async function admitChatSend(params: {
     });
     return { ok: false as const };
   }
+  let interruptedActiveRun = false;
+  if (runInterruptTarget) {
+    interruptedActiveRun = true;
+    const interruption = await interruptReplyRunTarget(
+      runInterruptTarget,
+      REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+    );
+    if (!interruption.settled) {
+      activeRunAbort.cleanup({ force: true });
+      gatewayWorkAdmission.release();
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Previous run is still shutting down. Please try again in a moment.",
+          { retryable: true, retryAfterMs: 250 },
+        ),
+      );
+      return { ok: false as const };
+    }
+  }
   // Reserved here, while the request's root is provably live, rather than after the ACK: the
   // detached dispatch must keep that root until terminal persistence settles or restart drain
   // completes early and loses the session's terminal state. Callers outside a Gateway request
@@ -405,7 +437,7 @@ export async function admitChatSend(params: {
   if (params.onAdmissionOwned) {
     let proceed: boolean;
     try {
-      proceed = await params.onAdmissionOwned();
+      proceed = await gatewayWorkAdmission.run(params.onAdmissionOwned);
     } catch (error) {
       activeRunAbort.cleanup({ force: true });
       gatewayWorkAdmission.release();
@@ -500,6 +532,7 @@ export async function admitChatSend(params: {
       finishAbortedChatSend,
       gatewayWorkAdmission,
       lifecycleGeneration,
+      interruptedActiveRun,
       messageInjectionTarget,
       originatingRoute,
       rejectSessionRoutingChanged,

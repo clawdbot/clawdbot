@@ -64,6 +64,7 @@ async function handleChatSendWithOptions(
     admittedSessionId,
     chatSendTraceAttributes,
     finishAbortedChatSend,
+    interruptedActiveRun,
     lifecycleGeneration,
     messageInjectionTarget,
     restartSafeAdmission,
@@ -250,6 +251,7 @@ async function handleChatSendWithOptions(
     const ackPayload = {
       runId: clientRunId,
       status: "started" as const,
+      ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
       ...(serverTiming ? { serverTiming } : {}),
     };
     emitDiagnosticsTimelineEvent(
