@@ -25,7 +25,14 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
-        const now = Date.now();
+        const current = new Date();
+        // Keep the automation fixtures on one local calendar day in every timezone.
+        const now = new Date(
+          current.getFullYear(),
+          current.getMonth(),
+          current.getDate() - 1,
+          12,
+        ).getTime();
         const releaseKey = "agent:main:release-readiness";
         const designKey = "agent:main:design-review";
         await installMockGateway(page, {
