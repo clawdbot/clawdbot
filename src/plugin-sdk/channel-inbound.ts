@@ -18,6 +18,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
+  hasVisibleChannelTurnDispatchFromReceipt,
   resolveChannelTurnDispatchCounts,
 } from "../channels/turn/dispatch-result.js";
 import { runPreparedChannelTurn } from "../channels/turn/execution.js";
@@ -269,6 +270,7 @@ export async function dispatchChannelInboundTurn(
 export {
   hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
   hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
+  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleInboundReplyDispatchFromReceipt,
   recordDroppedChannelTurnHistoryInternal as recordDroppedChannelInboundHistory,
   recordDroppedChannelTurnHistoryInternal as recordDroppedChannelTurnHistory,
   resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,

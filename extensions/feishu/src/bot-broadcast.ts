@@ -1,12 +1,20 @@
+import { hasVisibleInboundReplyDispatchFromReceipt } from "openclaw/plugin-sdk/channel-inbound";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
+
+export function hasVisibleFeishuBroadcastHistoryDelivery(
+  dispatchResult: Parameters<typeof hasVisibleInboundReplyDispatchFromReceipt>[0],
+  fallbackDelivered: boolean,
+): boolean {
+  return hasVisibleInboundReplyDispatchFromReceipt(dispatchResult, { fallbackDelivered });
+}
 
 export function createFeishuBroadcastIngressSettlement(params: {
   lifecycle?: FeishuIngressLifecycle;
   replayClaim?: ChannelReplayClaimHandle;
   onReplayCommitError?: (error: unknown) => void;
-  onAdopted?: () => void;
+  onVisibleDeliverySettled?: () => void;
 }): {
   createLane: (replayClaim?: ChannelReplayClaimHandle) => {
     lifecycle: FeishuIngressLifecycle;
@@ -14,6 +22,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
     onDispatchFailed: (error: unknown) => Promise<void>;
   };
   onLanePending: () => void;
+  recordVisibleDelivery: () => void;
   onDispatchComplete: () => Promise<void>;
   onDispatchFailed: (error: unknown) => Promise<void>;
 } {
@@ -32,6 +41,20 @@ export function createFeishuBroadcastIngressSettlement(params: {
   let finalizing = false;
   let deferred = false;
   let replayReleased = false;
+  let visibleDeliveryRecorded = false;
+  let visibleDeliverySettled = false;
+
+  const settleVisibleDelivery = () => {
+    if (terminal !== "adopted" || !visibleDeliveryRecorded || visibleDeliverySettled) {
+      return;
+    }
+    visibleDeliverySettled = true;
+    try {
+      params.onVisibleDeliverySettled?.();
+    } catch {
+      // Local cleanup cannot reopen an already adopted durable turn.
+    }
+  };
 
   const beginFinalizing = () => {
     if (finalizing) {
@@ -91,11 +114,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
     try {
       await params.lifecycle?.onAdopted();
       terminal = "adopted";
-      try {
-        params.onAdopted?.();
-      } catch {
-        // Local cleanup cannot reopen an already adopted durable turn.
-      }
+      settleVisibleDelivery();
       try {
         await params.replayClaim?.commit();
       } catch (error) {
@@ -223,6 +242,10 @@ export function createFeishuBroadcastIngressSettlement(params: {
       };
     },
     onLanePending: defer,
+    recordVisibleDelivery: () => {
+      visibleDeliveryRecorded = true;
+      settleVisibleDelivery();
+    },
     onDispatchComplete: async () => {
       fanoutSettled = true;
       await maybeSettle();

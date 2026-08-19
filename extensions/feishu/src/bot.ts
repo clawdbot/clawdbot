@@ -39,6 +39,7 @@ import { buildFeishuAgentBody } from "./bot-agent-body.js";
 import {
   buildBroadcastSessionKey,
   createFeishuBroadcastIngressSettlement,
+  hasVisibleFeishuBroadcastHistoryDelivery,
   resolveBroadcastAgents,
 } from "./bot-broadcast.js";
 import {
@@ -1622,12 +1623,12 @@ export async function handleFeishuMessage(params: {
           error(
             `feishu[${account.accountId}]: failed to commit broadcast replay guard: ${String(err)}`,
           ),
-        onAdopted: () => {
-          if (isGroup && historyKey && channelHistory) {
+        onVisibleDeliverySettled: () => {
+          if (isGroup && historyKey && channelHistory && historySnapshot) {
             channelHistory.consume({
               historyKey,
               limit: historyLimit,
-              snapshot: historySnapshot ?? { entries: [] },
+              snapshot: historySnapshot,
             });
           }
         },
@@ -1826,14 +1827,22 @@ export async function handleFeishuMessage(params: {
               variant,
             }),
           });
+          let fallbackDelivered = false;
           if (
             variant.kind === "active" &&
             turnResult.dispatched &&
             shouldSendNoVisibleReplyFallback(turnResult.dispatchResult)
           ) {
-            await variant.dispatcher.ensureNoVisibleReplyFallback(
+            fallbackDelivered = await variant.dispatcher.ensureNoVisibleReplyFallback(
               "broadcast-dispatch-complete-no-visible-reply",
             );
+          }
+          if (
+            variant.kind === "active" &&
+            turnResult.dispatched &&
+            hasVisibleFeishuBroadcastHistoryDelivery(turnResult.dispatchResult, fallbackDelivered)
+          ) {
+            broadcastSettlement.recordVisibleDelivery();
           }
           await lane.onDispatchComplete(turnResult.dispatched);
         } catch (err) {
