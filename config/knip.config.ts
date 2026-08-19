@@ -574,6 +574,7 @@ const config = {
         "src/index.ts!",
         "src/agent-id.ts!",
         "src/boolean-coercion.ts!",
+        "src/browser-error-runtime.ts!",
         "src/error-coercion.ts!",
         "src/expect.ts!",
         "src/json-coercion.ts!",
@@ -805,7 +806,6 @@ const config = {
       "cli.ts!",
       "web/index.html!",
       "web/src/app.ts!",
-      "web/src/error-runtime.browser.ts!",
       "web/src/main.ts!",
       "web/vite.config.ts!",
       // Imported directly from the GitHub Actions smoke-plan script.
