@@ -210,7 +210,7 @@ describe("resizable-divider", () => {
     divider.addEventListener("resize", resized);
 
     dispatchPointer(divider, "pointerdown", 100);
-    expect(document.activeElement).toBe(divider);
+    expect(document.activeElement).not.toBe(divider);
     expect([...divider.classList]).toEqual(["dragging"]);
     expect(setPointerCapture).toHaveBeenCalledWith(7);
 

@@ -3,6 +3,7 @@ import { ref } from "lit/directives/ref.js";
 
 export function renderChatResizableDivider(props: {
   className?: string;
+  edge?: "center" | "start" | "end";
   label: string;
   maxRatio?: number;
   measureRatio?: () => number;
@@ -18,6 +19,7 @@ export function renderChatResizableDivider(props: {
   return html`<resizable-divider
     ${ref(props.onElement ?? (() => {}))}
     class=${props.className ?? nothing}
+    .edge=${props.edge ?? "center"}
     .splitRatio=${props.splitRatio}
     .minRatio=${props.minRatio ?? 0.4}
     .maxRatio=${props.maxRatio ?? 0.7}

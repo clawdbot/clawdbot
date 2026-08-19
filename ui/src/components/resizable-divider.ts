@@ -14,6 +14,7 @@ class ResizableDivider extends OpenClawLitElement {
   @property({ type: Number }) maxRatio = 0.7;
   @property({ type: String }) label = "";
   @property({ type: String, reflect: true }) orientation: "vertical" | "horizontal" = "vertical";
+  @property({ type: String, reflect: true }) edge: "center" | "start" | "end" = "center";
   @property({ attribute: false }) measureRatio?: () => number;
   @property({ attribute: false }) measureSize?: () => number;
 
@@ -24,7 +25,7 @@ class ResizableDivider extends OpenClawLitElement {
 
   static override styles = css`
     :host {
-      width: var(--rail-resizer-size, 4px);
+      width: var(--resize-handle-size, 6px);
       cursor: col-resize;
       flex-shrink: 0;
       position: relative;
@@ -47,10 +48,10 @@ class ResizableDivider extends OpenClawLitElement {
       position: absolute;
       top: 0;
       bottom: 0;
-      left: 50%;
-      width: var(--rail-divider-size, 1px);
+      inset-inline-start: 50%;
+      width: var(--resize-handle-line-size, 1px);
       transform: translateX(-50%);
-      background: var(--rail-divider-color, var(--border, #1e2028));
+      background: var(--resize-handle-rest-color, var(--border, #1e2028));
       transition:
         background 150ms ease-out,
         width 150ms ease-out;
@@ -58,8 +59,8 @@ class ResizableDivider extends OpenClawLitElement {
     :host(:hover)::after,
     :host(.dragging)::after,
     :host(:focus-visible)::after {
-      width: var(--rail-divider-active-size, 2px);
-      background: var(--accent, #ff5c5c);
+      width: var(--resize-handle-active-line-size, 2px);
+      background: var(--resize-handle-active-color, currentColor);
     }
     :host(:focus-visible) {
       outline: 2px solid var(--accent, #ff5c5c);
@@ -67,7 +68,7 @@ class ResizableDivider extends OpenClawLitElement {
     }
     :host([orientation="horizontal"]) {
       width: auto;
-      height: var(--rail-resizer-size, 4px);
+      height: var(--resize-handle-size, 6px);
       cursor: row-resize;
     }
     :host([orientation="horizontal"])::before {
@@ -79,20 +80,33 @@ class ResizableDivider extends OpenClawLitElement {
     :host([orientation="horizontal"])::after {
       top: 50%;
       bottom: auto;
+      inset-inline-start: 0;
       left: 0;
       right: 0;
       width: auto;
-      height: var(--rail-divider-size, 1px);
+      height: var(--resize-handle-line-size, 1px);
       transform: translateY(-50%);
       transition:
         background 150ms ease-out,
         height 150ms ease-out;
     }
+    :host([edge="start"])::after {
+      inset-inline-start: 0;
+    }
+    :host([edge="end"])::after {
+      inset-inline-start: 100%;
+    }
+    :host([orientation="horizontal"][edge="start"])::after {
+      top: 0;
+    }
+    :host([orientation="horizontal"][edge="end"])::after {
+      top: 100%;
+    }
     :host([orientation="horizontal"]:hover)::after,
     :host([orientation="horizontal"].dragging)::after,
     :host([orientation="horizontal"]:focus-visible)::after {
       width: auto;
-      height: var(--rail-divider-active-size, 2px);
+      height: var(--resize-handle-active-line-size, 2px);
     }
   `;
 
@@ -130,7 +144,6 @@ class ResizableDivider extends OpenClawLitElement {
     this.startPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
     this.startRatio = this.currentRatio();
     this.classList.add("dragging");
-    this.focus();
     this.capturePointer(e.pointerId);
 
     document.addEventListener("pointermove", this.handlePointerMove);
