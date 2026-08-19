@@ -20,6 +20,7 @@ import type { SessionEntry } from "./types.js";
 const log = createSubsystemLogger("sessions/store");
 
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_THREAD_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MODEL_RUN_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
@@ -45,6 +46,7 @@ export type SessionMaintenanceWarning = {
 export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
+  threadRetentionMs: number | null;
   archiveDashboardAfterMs: number | null;
   maxEntries: number;
   modelRunPruneAfterMs: number;
@@ -56,10 +58,13 @@ export type ResolvedSessionMaintenanceConfig = {
 
 export type ResolvedSessionMaintenanceConfigInput = Omit<
   ResolvedSessionMaintenanceConfig,
-  "archiveDashboardAfterMs" | "modelRunPruneAfterMs"
+  "archiveDashboardAfterMs" | "modelRunPruneAfterMs" | "threadRetentionMs"
 > &
   Partial<
-    Pick<ResolvedSessionMaintenanceConfig, "archiveDashboardAfterMs" | "modelRunPruneAfterMs">
+    Pick<
+      ResolvedSessionMaintenanceConfig,
+      "archiveDashboardAfterMs" | "modelRunPruneAfterMs" | "threadRetentionMs"
+    >
   >;
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
@@ -89,6 +94,22 @@ function resolveArchiveDashboardAfterMs(maintenance?: SessionMaintenanceConfig):
     return parsed > 0 ? parsed : null;
   } catch {
     return DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS;
+  }
+}
+
+function resolveThreadRetentionMs(maintenance?: SessionMaintenanceConfig): number | null {
+  const raw = maintenance?.threadRetention;
+  if (raw === false) {
+    return null;
+  }
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
+    return DEFAULT_THREAD_RETENTION_MS;
+  }
+  try {
+    return parseDurationMs(normalized, { defaultUnit: "d" });
+  } catch {
+    return DEFAULT_THREAD_RETENTION_MS;
   }
 }
 
@@ -188,6 +209,7 @@ export function resolveMaintenanceConfigFromInput(
   return {
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
+    threadRetentionMs: resolveThreadRetentionMs(maintenance),
     archiveDashboardAfterMs: resolveArchiveDashboardAfterMs(maintenance),
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
     modelRunPruneAfterMs: DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
@@ -207,6 +229,10 @@ export function normalizeResolvedMaintenanceConfigInput(
       maintenance.archiveDashboardAfterMs === undefined
         ? DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS
         : maintenance.archiveDashboardAfterMs,
+    threadRetentionMs:
+      maintenance.threadRetentionMs === undefined
+        ? DEFAULT_THREAD_RETENTION_MS
+        : maintenance.threadRetentionMs,
     modelRunPruneAfterMs: maintenance.modelRunPruneAfterMs ?? DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
     preserveRecentMs: maintenance.preserveRecentMs ?? null,
   };
@@ -425,6 +451,86 @@ function getSessionMaintenanceActivityAt(entry: SessionEntry | undefined): numbe
   );
 }
 
+function isThreadSessionMaintenanceEntry(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): boolean {
+  if (parseSessionThreadInfoFast(sessionKey).threadId || isTelegramTopicSessionKey(sessionKey)) {
+    return true;
+  }
+  if (sessionDeliveryOrigin(entry)?.threadId != null) {
+    return true;
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(
+    entry?.chatType ?? sessionDeliveryOrigin(entry)?.chatType,
+  );
+  return chatType === "thread";
+}
+
+function hasUnresolvedSessionMaintenanceWork(entry: SessionEntry | undefined): boolean {
+  return (
+    entry?.initializationPending === true ||
+    entry?.pendingFinalDelivery !== undefined ||
+    entry?.pendingDeliveryNotice !== undefined ||
+    (entry?.pendingTranscriptRepair?.length ?? 0) > 0 ||
+    (entry?.restartRecoveryRuns?.length ?? 0) > 0 ||
+    entry?.restartRecoveryBeforeAgentReplyState === "admitted" ||
+    entry?.restartRecoveryBeforeAgentReplyState === "pending" ||
+    entry?.restartRecoveryBeforeAgentReplyState === "continue" ||
+    entry?.restartRecoveryDeliveryReceiptState === "terminal-pending"
+  );
+}
+
+/** Remove inactive thread-scoped sessions while preserving explicit user/runtime ownership. */
+export function pruneStaleThreadEntries(
+  store: Record<string, SessionEntry>,
+  retentionMs: number | null,
+  opts: {
+    log?: boolean;
+    nowMs?: number;
+    onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
+    preserveRecentMs?: number | null;
+  } = {},
+): number {
+  if (retentionMs == null) {
+    return 0;
+  }
+  const now = opts.nowMs ?? Date.now();
+  const cutoffMs = now - retentionMs;
+  let pruned = 0;
+  for (const [key, entry] of Object.entries(store)) {
+    if (
+      isSyntheticSessionMaintenanceKey(key) ||
+      !isThreadSessionMaintenanceEntry(key, entry) ||
+      entry.archivedAt !== undefined ||
+      entry.pinnedAt !== undefined ||
+      entry.modelSelectionLocked === true ||
+      hasUnresolvedSessionMaintenanceWork(entry) ||
+      opts.preserveKeys?.has(key) === true ||
+      isRecentSessionMaintenanceEntry({
+        key,
+        entry,
+        preserveRecentMs: opts.preserveRecentMs,
+        nowMs: now,
+      })
+    ) {
+      continue;
+    }
+    const activityAt = getSessionMaintenanceActivityAt(entry);
+    if (activityAt <= 0 || activityAt >= cutoffMs) {
+      continue;
+    }
+    opts.onPruned?.({ key, entry });
+    delete store[key];
+    pruned += 1;
+  }
+  if (pruned > 0 && opts.log !== false) {
+    log.info("pruned inactive thread session entries", { pruned, retentionMs });
+  }
+  return pruned;
+}
+
 /** Archive inactive dashboard sessions while retaining runtime-owned or explicitly active keys. */
 export function archiveStaleDashboardEntries(
   store: Record<string, SessionEntry>,
@@ -530,10 +636,7 @@ function isProtectedSessionMaintenanceEntry(
   if (isPrimarySessionMaintenanceKey(sessionKey)) {
     return true;
   }
-  if (parseSessionThreadInfoFast(sessionKey).threadId) {
-    return true;
-  }
-  if (isTelegramTopicSessionKey(sessionKey)) {
+  if (isThreadSessionMaintenanceEntry(sessionKey, entry)) {
     return true;
   }
   if (isExternalGroupOrChannelSessionKey(sessionKey)) {
@@ -561,6 +664,7 @@ export function shouldPreserveMaintenanceEntry(params: {
   // configured retention limits while the lock remains.
   return (
     params.entry?.modelSelectionLocked === true ||
+    hasUnresolvedSessionMaintenanceWork(params.entry) ||
     params.preserveKeys?.has(params.key) === true ||
     isRecentSessionMaintenanceEntry(params) ||
     isProtectedSessionMaintenanceEntry(params.key, params.entry)

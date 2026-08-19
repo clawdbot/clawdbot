@@ -48,6 +48,7 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
 | `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                      |
 | `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
+| `threadRetention`       | `"30d"`               | thread inactivity cutoff, independent of `pruneAfter`; `false` disables                     |
 | `archiveDashboardAfter` | `"7d"`                | inactivity cutoff for dashboard sessions; `false` or `0` disables                           |
 | `maxEntries`            | `500`                 | cap on total live session rows when protection permits                                      |
 | `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
@@ -71,7 +72,7 @@ openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --enforce
 ```
 
-`maxEntries` counts every live session row. Archived or pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers such as group sessions and thread-scoped chat sessions are never automatic eviction targets, but they still consume the cap. Cleanup removes the oldest unprotected rows until the total reaches `maxEntries` or no eligible victims remain. The store can therefore remain above the cap when protected rows alone exceed it or active work temporarily blocks eviction. Synthetic runtime entries (cron, hooks, heartbeat, ACP, sub-agents) can still be removed once they exceed the configured age, count, or disk budget. Isolated cron runs use a separate `cron.sessionRetention` control, independent of model-run probe retention.
+`maxEntries` counts every live session row. Archived or pinned sessions, active or admitted work, model-locked sessions, group/channel pointers, and retained thread pointers are not count-eviction targets, but they still consume the cap. Inactive thread pointers age out through `threadRetention` (default `30d`; `false` disables) independently of `pruneAfter`. Cleanup removes the oldest unprotected rows until the total reaches `maxEntries` or no eligible victims remain. The store can therefore remain above the cap when protected rows alone exceed it or active work temporarily blocks eviction. Synthetic runtime entries (cron, hooks, heartbeat, ACP, sub-agents) can still be removed once they exceed the configured age, count, or disk budget. Isolated cron runs use a separate `cron.sessionRetention` control, independent of model-run probe retention.
 
 `--dry-run` previews the total-row cap and identifies the unprotected rows that would satisfy it; `--enforce` applies that cleanup immediately but does not remove protection. To reduce protected history, unarchive, unpin, wait for active work to finish, or explicitly delete sessions you no longer want to retain.
 

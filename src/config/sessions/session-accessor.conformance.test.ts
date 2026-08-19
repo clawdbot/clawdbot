@@ -1656,6 +1656,84 @@ describe("sqlite session normalization", () => {
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
+  it("prunes inactive SQLite thread sessions below the entry cap on a write", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          threadRetention: "30d",
+          maxEntries: 500,
+          maxDiskBytes: false,
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const staleKey = "agent:main:slack:channel:C1:thread:stale";
+    const freshKey = "agent:main:slack:channel:C1:thread:fresh";
+    const staleSessionId = "stale-thread-session";
+    const staleUpdatedAt = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    const staleTranscriptEvent = {
+      id: "stale-thread-event",
+      timestamp: new Date(staleUpdatedAt).toISOString(),
+      type: "metadata",
+    };
+
+    await patchSessionEntryCore(
+      scopeFor(staleKey),
+      () => ({ sessionId: staleSessionId, updatedAt: staleUpdatedAt }),
+      {
+        fallbackEntry: { sessionId: staleSessionId, updatedAt: staleUpdatedAt },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await appendTranscriptEvent(
+      { ...scopeFor(staleKey), sessionId: staleSessionId },
+      staleTranscriptEvent,
+    );
+    await patchSessionEntryCore(
+      scopeFor(freshKey),
+      () => ({ sessionId: "fresh-thread-session", updatedAt: Date.now() }),
+      {
+        fallbackEntry: { sessionId: "fresh-thread-session", updatedAt: Date.now() },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+
+    await patchSessionEntryCore(
+      scopeFor("agent:main:explicit:maintenance-trigger"),
+      () => ({ sessionId: "maintenance-trigger", updatedAt: Date.now() }),
+      {
+        fallbackEntry: { sessionId: "maintenance-trigger", updatedAt: Date.now() },
+        replaceEntry: true,
+      },
+    );
+
+    expect(loadSessionEntry(scopeFor(staleKey))).toBeUndefined();
+    expect(loadSessionEntry(scopeFor(freshKey))).toBeDefined();
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: staleSessionId,
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([]);
+    expect(
+      fs
+        .readdirSync(paths.tempDir)
+        .some((file) => file.startsWith(`${staleSessionId}.jsonl.deleted.`)),
+    ).toBe(true);
+  });
+
   it("persists automatic dashboard archiving before stale-entry pruning", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       session: {

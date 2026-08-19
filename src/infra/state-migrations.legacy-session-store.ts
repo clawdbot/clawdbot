@@ -20,6 +20,7 @@ import {
   capEntryCount,
   pruneStaleEntries,
   pruneStaleModelRunEntries,
+  pruneStaleThreadEntries,
   shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
@@ -286,6 +287,11 @@ export function loadLegacySessionStore(
           preserveRecentMs: maintenance.preserveRecentMs,
         });
       }
+      pruneStaleThreadEntries(sessionStore, maintenance.threadRetentionMs, {
+        log: false,
+        preserveKeys: preserveSessionKeys,
+        preserveRecentMs: maintenance.preserveRecentMs,
+      });
       if (Object.keys(sessionStore).length > maintenance.maxEntries) {
         pruneStaleEntries(sessionStore, maintenance.pruneAfterMs, {
           log: false,

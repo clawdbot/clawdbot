@@ -143,6 +143,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     maintenance: {
       mode: "warn",
       pruneAfter: "30d",
+      threadRetention: "30d", // false keeps inactive threads indefinitely
       maxEntries: 500,
       resetArchiveRetention: "30d", // duration or false
       maxDiskBytes: "500mb", // optional

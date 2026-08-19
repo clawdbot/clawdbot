@@ -8,6 +8,7 @@ import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   pruneStaleModelRunEntries,
+  pruneStaleThreadEntries,
   pruneStaleEntries,
   shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
@@ -231,13 +232,25 @@ async function applyEnforcedMaintenance(params: {
     params.maintenance.archiveDashboardAfterMs,
     { preserveKeys: params.preserveSessionKeys },
   );
-  const pruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
+  const threadPruned = pruneStaleThreadEntries(
+    params.operation.store,
+    params.maintenance.threadRetentionMs,
+    {
+      onPruned: ({ entry }) => {
+        rememberRemovedSessionFile(removedSessionFiles, entry);
+      },
+      preserveKeys: params.preserveSessionKeys,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
+    },
+  );
+  const stalePruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
     onPruned: ({ entry }) => {
       rememberRemovedSessionFile(removedSessionFiles, entry);
     },
     preserveKeys: params.preserveSessionKeys,
     preserveRecentMs: params.maintenance.preserveRecentMs,
   });
+  const pruned = threadPruned + stalePruned;
   const countAfterPrune = Object.keys(params.operation.store).length;
   const shouldRunCapMaintenance =
     params.forceMaintenance ||

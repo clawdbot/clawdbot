@@ -32,6 +32,7 @@ import {
   archiveStaleDashboardEntries,
   capEntryCount,
   pruneStaleModelRunEntries,
+  pruneStaleThreadEntries,
   pruneStaleEntries,
   shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
@@ -434,7 +435,7 @@ async function previewStoreCleanup(params: {
       preserveKeys: preserveSessionKeys,
     },
   );
-  const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
+  const threadPruned = pruneStaleThreadEntries(previewStore, params.maintenance.threadRetentionMs, {
     log: false,
     preserveKeys: preserveSessionKeys,
     preserveRecentMs: params.maintenance.preserveRecentMs,
@@ -442,6 +443,15 @@ async function previewStoreCleanup(params: {
       staleKeys.add(key);
     },
   });
+  const stalePruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
+    log: false,
+    preserveKeys: preserveSessionKeys,
+    preserveRecentMs: params.maintenance.preserveRecentMs,
+    onPruned: ({ key }) => {
+      staleKeys.add(key);
+    },
+  });
+  const pruned = threadPruned + stalePruned;
   const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
     log: false,
     preserveKeys: preserveSessionKeys,
