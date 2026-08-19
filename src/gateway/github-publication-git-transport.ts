@@ -11,14 +11,29 @@ export async function assertSafeGitPublicationWorkspace(
   run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
 ): Promise<void> {
   const isolatedConfig = { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull };
-  const scopes: Array<"--local" | "--worktree"> = ["--local", "--worktree"];
-  const unsafe = await Promise.all(
-    scopes.map(
-      async (scope) =>
-        await run(githubPublicationUnsafeConfigArgs(scope), { cwd, env: isolatedConfig }),
+  const [localUnsafe, worktreeConfig] = await Promise.all([
+    run(githubPublicationUnsafeConfigArgs("--local"), { cwd, env: isolatedConfig }),
+    run(
+      ["git", "config", "--local", "--includes", "--bool", "--get", "extensions.worktreeConfig"],
+      { cwd, env: isolatedConfig },
     ),
-  );
-  if (unsafe.some((result) => result.code !== 1 || result.stdout.length > 0)) {
+  ]);
+  const worktreeConfigValue = worktreeConfig.stdout.toString("utf8").trim();
+  const worktreeConfigKnown =
+    (worktreeConfig.code === 0 &&
+      (worktreeConfigValue === "true" || worktreeConfigValue === "false")) ||
+    (worktreeConfig.code === 1 && worktreeConfig.stdout.length === 0);
+  if (localUnsafe.code !== 1 || localUnsafe.stdout.length > 0 || !worktreeConfigKnown) {
+    throw new Error("GitHub publication workspace has unsupported Git transport configuration.");
+  }
+  const worktreeUnsafe =
+    worktreeConfigValue === "true"
+      ? await run(githubPublicationUnsafeConfigArgs("--worktree"), {
+          cwd,
+          env: isolatedConfig,
+        })
+      : undefined;
+  if (worktreeUnsafe && (worktreeUnsafe.code !== 1 || worktreeUnsafe.stdout.length > 0)) {
     throw new Error("GitHub publication workspace has unsupported Git transport configuration.");
   }
   const [replacements, graftPath] = await Promise.all([

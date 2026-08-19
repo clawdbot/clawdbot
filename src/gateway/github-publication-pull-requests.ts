@@ -87,3 +87,34 @@ export function parseGitHubPublicationPullRequests(raw: string): GitHubPublicati
     return { userId: Number(userId), url, state, body, headSha, headRef, baseRef };
   });
 }
+
+export function resolveGitHubPublicationPullRequestUrl(
+  candidates: readonly GitHubPublicationPullRequest[],
+  params: {
+    accountId: number;
+    headCommit: string;
+    branch: string;
+    baseBranch: string;
+    marker: string;
+  },
+): string | undefined {
+  const exact = candidates.filter(
+    (candidate) =>
+      candidate.userId === params.accountId &&
+      candidate.headSha === params.headCommit &&
+      candidate.headRef === params.branch &&
+      candidate.baseRef === params.baseBranch,
+  );
+  const open = exact.find((candidate) => candidate.state === "open");
+  if (open) {
+    return open.url;
+  }
+  if (
+    exact.some(
+      (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
+    )
+  ) {
+    throw new Error("GitHub pull request was closed before publication completed.");
+  }
+  return undefined;
+}

@@ -41,14 +41,13 @@ import {
   githubPublicationCreatePullRequestArgs,
   githubPublicationPullRequestLookupArgs,
   parseGitHubPublicationPullRequests,
+  resolveGitHubPublicationPullRequestUrl,
 } from "./github-publication-pull-requests.js";
 import { recoverGitHubPublicationWorkspace } from "./github-publication-recovery.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
-const COMMAND_TIMEOUT_MS = 60_000;
-const COMMAND_OUTPUT_LIMIT = 256 * 1024;
 const PUBLICATION_MARKER = "OpenClaw-Publication";
 
 type PublicationRow = StateDatabase["github_publication_requests"];
@@ -73,8 +72,8 @@ async function runCommand(
     ...(options.cwd ? { cwd: options.cwd } : {}),
     env: { ...(options.env ?? process.env), GIT_NO_REPLACE_OBJECTS: "1" },
     ...(options.input !== undefined ? { input: options.input } : {}),
-    timeoutMs: COMMAND_TIMEOUT_MS,
-    maxOutputBytes: COMMAND_OUTPUT_LIMIT,
+    timeoutMs: 60_000,
+    maxOutputBytes: 256 * 1024,
   });
 }
 
@@ -222,6 +221,12 @@ export function resolveGitHubPublicationFailure(error: unknown): {
         "Check repository write access and branch drift, then retry without force-pushing.",
     };
   }
+  if (message.includes("pull request was closed")) {
+    return {
+      code: "github_rejected",
+      nextAction: "Reopen the closed pull request or retry to create a new publication request.",
+    };
+  }
   if (message.includes("pull request") || message.includes("GitHub")) {
     return {
       code: "github_rejected",
@@ -256,7 +261,6 @@ export async function executeGitHubPublication(params: {
   if (initial.status === "published" || initial.status === "failed") {
     return params.projectResult(initial);
   }
-  await recoverGitHubPublicationWorkspace(initial, requireCommand);
   let activeIdentity: PreparedGitHubPublicationIdentity | undefined;
   const currentWorktree = () =>
     resolveGitHubPublicationWorktreeOwner({
@@ -291,7 +295,7 @@ export async function executeGitHubPublication(params: {
     return value;
   };
   try {
-    assertAuthority();
+    await step(async () => await recoverGitHubPublicationWorkspace(initial, requireCommand));
     const { loaded, worktree } = currentWorktree();
     const repositoryIdentity = await step(
       async () => await managedWorktrees.resolveRepositoryIdentity(worktree.path),
@@ -631,15 +635,13 @@ export async function executeGitHubPublication(params: {
 
     const findPullRequest = async (): Promise<string | undefined> => {
       const pullRequests = await loadOpenPullRequests();
-      const exact = pullRequests.candidates.find(
-        (candidate) =>
-          candidate.userId === pullRequests.accountId &&
-          candidate.headSha === headCommit &&
-          candidate.headRef === branch &&
-          candidate.baseRef === baseBranch &&
-          (candidate.state === "open" || candidate.body.includes(pullRequestMarker)),
-      );
-      return exact?.url;
+      return resolveGitHubPublicationPullRequestUrl(pullRequests.candidates, {
+        accountId: pullRequests.accountId,
+        headCommit,
+        branch,
+        baseBranch,
+        marker: pullRequestMarker,
+      });
     };
     let pullRequestUrl = await step(findPullRequest);
     if (!pullRequestUrl) {

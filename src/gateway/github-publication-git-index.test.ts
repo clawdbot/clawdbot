@@ -11,7 +11,10 @@ import {
   recoverGitHubPublicationBranchAndIndex,
   updateGitHubPublicationBranchAndIndex,
 } from "./github-publication-git-index.js";
-import { assertGitHubPublicationTreeHasNoFilters } from "./github-publication-git-transport.js";
+import {
+  assertGitHubPublicationTreeHasNoFilters,
+  assertSafeGitPublicationWorkspace,
+} from "./github-publication-git-transport.js";
 
 let testState: OpenClawTestState;
 let directoryIndex = 0;
@@ -86,6 +89,31 @@ function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture
 }
 
 describe("GitHub publication index update", () => {
+  it("accepts a linked worktree without a worktree config scope", async () => {
+    const repository = await makeDirectory("worktree-config");
+    await git(repository, ["init", "--initial-branch=main"]);
+    await git(repository, ["config", "user.name", "OpenClaw Test"]);
+    await git(repository, ["config", "user.email", "openclaw@example.test"]);
+    await fs.writeFile(path.join(repository, "artifact.txt"), "base\n");
+    await git(repository, ["add", "artifact.txt"]);
+    await git(repository, ["commit", "-m", "base"]);
+    const linked = testState.path(`linked-${directoryIndex++}`);
+    await git(repository, ["worktree", "add", "-b", "publication", linked]);
+
+    await expect(
+      assertSafeGitPublicationWorkspace(
+        linked,
+        async (argv, options) =>
+          await runCommandBuffered(argv, {
+            cwd: options?.cwd ?? linked,
+            env: options?.env,
+            timeoutMs: 10_000,
+            maxOutputBytes: 64 * 1024,
+          }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("rejects a filter from Git's default global attributes file", async () => {
     const cwd = await makeDirectory("attributes");
     const globalAttributes = path.join(cwd, "global-attributes");

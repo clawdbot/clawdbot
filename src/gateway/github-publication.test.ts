@@ -274,58 +274,73 @@ describe("Gateway GitHub publication", () => {
     });
   });
 
-  it("recovers a lost pull-request POST response through exact lookup", async () => {
-    const fallback = mocks.runCommand.getMockImplementation()!;
-    let pullLookups = 0;
-    let createdBody = "";
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-      const command = argv.join(" ");
-      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=all")) {
-        pullLookups += 1;
-        return commandResult(
-          pullLookups < 3
-            ? "[]\n"
-            : JSON.stringify([
-                {
-                  url: "https://github.com/openclaw/openclaw/pull/125203",
-                  userId: 42,
-                  state: "closed",
-                  body: createdBody,
-                  headSha: NEW_HEAD,
-                  headRef: BRANCH,
-                  baseRef: "main",
-                },
-              ]),
-        );
-      }
-      if (
-        command ===
-        "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
-      ) {
-        createdBody = String(JSON.parse(options?.input ?? "{}").body ?? "");
-        return commandResult("", 1);
-      }
-      return await fallback(argv, options);
-    });
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+  it.each([
+    { state: "open" as const, expectedStatus: "published" as const },
+    { state: "closed" as const, expectedStatus: "failed" as const },
+  ])(
+    "handles a $state pull request after a lost POST response",
+    async ({ state, expectedStatus }) => {
+      const fallback = mocks.runCommand.getMockImplementation()!;
+      let pullLookups = 0;
+      let createdBody = "";
+      mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+        const command = argv.join(" ");
+        if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=all")) {
+          pullLookups += 1;
+          return commandResult(
+            pullLookups < 3
+              ? "[]\n"
+              : JSON.stringify([
+                  {
+                    url: "https://github.com/openclaw/openclaw/pull/125203",
+                    userId: 42,
+                    state,
+                    body: createdBody,
+                    headSha: NEW_HEAD,
+                    headRef: BRANCH,
+                    baseRef: "main",
+                  },
+                ]),
+          );
+        }
+        if (
+          command ===
+          "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
+        ) {
+          createdBody = String(JSON.parse(options?.input ?? "{}").body ?? "");
+          return commandResult("", 1);
+        }
+        return await fallback(argv, options);
+      });
+      const coordinator = createGitHubPublicationCoordinator({
+        placements: createWorkerSessionPlacementStore({
+          database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+        }),
+      });
 
-    const result = await coordinator.requestForSession({
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      idempotencyKey: "lost-post-response",
-    });
+      const result = await coordinator.requestForSession({
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        idempotencyKey: "lost-post-response",
+      });
 
-    expect(result).toMatchObject({
-      status: "published",
-      url: "https://github.com/openclaw/openclaw/pull/125203",
-    });
-    expect(mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("POST"))).toHaveLength(1);
-    expect(pullLookups).toBe(3);
-  });
+      expect(result).toMatchObject(
+        expectedStatus === "published"
+          ? {
+              status: "published",
+              url: "https://github.com/openclaw/openclaw/pull/125203",
+            }
+          : {
+              status: "failed",
+              code: "github_rejected",
+              nextAction:
+                "Reopen the closed pull request or retry to create a new publication request.",
+            },
+      );
+      expect(mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("POST"))).toHaveLength(1);
+      expect(pullLookups).toBe(3);
+    },
+  );
 
   it("does not reuse an open pull request targeting a different base branch", async () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
@@ -377,42 +392,6 @@ describe("Gateway GitHub publication", () => {
     );
     expect(lookup?.[0]).toContain("base=main");
     expect(mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("POST"))).toHaveLength(1);
-  });
-
-  it.each([
-    ["URL rewrite", "url.https://attacker.invalid/.insteadof https://github.com/"],
-    ["HTTP proxy", "http.proxy https://attacker.invalid/"],
-    ["push expansion", "push.followtags true"],
-    ["worktree redirect", "core.worktree /tmp/other-checkout"],
-    ["alternate refs command", "core.alternaterefscommand ./steal-profile"],
-    ["askpass command", "core.askpass ./steal-profile"],
-    ["fsmonitor command", "core.fsmonitor ./steal-profile"],
-    ["credential helper", "credential.helper ./steal-profile"],
-    ["remote upload-pack", "remote.origin.uploadpack ./steal-profile"],
-    ["upload-pack hook", "uploadpack.packobjectshook ./steal-profile"],
-  ])("rejects repository-local %s before snapshot or transport", async (label, configLine) => {
-    const fallback = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-      if (argv.includes("--includes") && argv.includes("--get-regexp")) {
-        expect(argv.some((arg) => arg === "--local" || arg === "--worktree")).toBe(true);
-        return commandResult(`${configLine}\n`);
-      }
-      return await fallback(argv, options);
-    });
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
-
-    await expect(
-      coordinator.requestForSession({
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        idempotencyKey: `unsafe-${label}`,
-      }),
-    ).rejects.toThrow("unsupported Git transport configuration");
-    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
   });
 
   it("rejects an effective clean filter before snapshotting workspace content", async () => {
@@ -884,6 +863,9 @@ describe("Gateway GitHub publication", () => {
         }
         if (command === `git reflog show --format=%H --end-of-options refs/heads/${BRANCH}`) {
           return commandResult(`${NEW_HEAD}\n${OLD_HEAD}\n`);
+        }
+        if (command === "git config --local --includes --bool --get extensions.worktreeConfig") {
+          return commandResult("", 1);
         }
         if (argv.includes("--includes") && argv.includes("--get-regexp")) {
           return commandResult("", 1);

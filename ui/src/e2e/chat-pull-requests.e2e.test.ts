@@ -71,6 +71,18 @@ async function waitForWatchedSessionKey(
   return watchedKey;
 }
 
+function publicationRequestKey(params: unknown): string {
+  if (
+    !params ||
+    typeof params !== "object" ||
+    !("idempotencyKey" in params) ||
+    typeof params.idempotencyKey !== "string"
+  ) {
+    throw new Error("Expected publication request to carry an idempotency key");
+  }
+  return params.idempotencyKey;
+}
+
 describeControlUiE2e("session pull request chips", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -522,6 +534,79 @@ describeControlUiE2e("session pull request chips", () => {
         path: path.join(publicationProofDir, "03-publication-failed.png"),
       });
     }
+  });
+
+  it("reuses the publication key after an unknown outcome and rotates it after failure", async () => {
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    const terminalFailure = {
+      requestId: "publication-failed",
+      status: "failed",
+      code: "push_rejected",
+      message: "GitHub publication failed.",
+      nextAction: "Check repository write access and retry.",
+    };
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "sessions.github.publish",
+      ],
+      methodResponses: {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+        "sessions.github.publish": terminalFailure,
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+    const watchedKey = await waitForWatchedSessionKey(gateway);
+    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [watchedKey]: {
+          pullRequests: [],
+          branch: {
+            owner: "openclaw",
+            repo: "openclaw",
+            branch: "openclaw/retry-publication",
+            additions: 2,
+            deletions: 1,
+          },
+          rateLimited: false,
+          status: "ok",
+        },
+      },
+    });
+
+    await gateway.deferNext("sessions.github.publish");
+    let requestCount = (await gateway.getRequests("sessions.github.publish")).length;
+    await page.getByRole("button", { name: "Publish PR" }).click();
+    const first = await gateway.waitForRequest("sessions.github.publish", {
+      after: requestCount,
+    });
+    await gateway.rejectDeferred("sessions.github.publish", {
+      code: "UNAVAILABLE",
+      message: "Publication response was lost.",
+    });
+    await expect
+      .poll(() => page.getByRole("button", { name: "Retry publication" }).count())
+      .toBe(1);
+
+    requestCount = (await gateway.getRequests("sessions.github.publish")).length;
+    await page.getByRole("button", { name: "Retry publication" }).click();
+    const second = await gateway.waitForRequest("sessions.github.publish", {
+      after: requestCount,
+    });
+    expect(publicationRequestKey(second.params)).toBe(publicationRequestKey(first.params));
+    await expect
+      .poll(() => page.getByRole("button", { name: "Retry publication" }).count())
+      .toBe(1);
+
+    requestCount = (await gateway.getRequests("sessions.github.publish")).length;
+    await page.getByRole("button", { name: "Retry publication" }).click();
+    const third = await gateway.waitForRequest("sessions.github.publish", {
+      after: requestCount,
+    });
+    expect(publicationRequestKey(third.params)).not.toBe(publicationRequestKey(second.params));
   });
 
   it("routes a cloud-idle publication request through the next live turn", async () => {

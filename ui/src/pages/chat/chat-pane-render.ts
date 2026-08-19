@@ -20,6 +20,7 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
@@ -453,6 +454,8 @@ export class ChatPane extends ChatPaneLayoutRender {
               return;
             }
             const sessionKey = selectedSession.key;
+            const idempotencyKey = this.githubPublicationIdempotencyKey ?? generateUUID();
+            this.githubPublicationIdempotencyKey = idempotencyKey;
             const requestVersion = ++this.githubPublicationRequestVersion;
             const ownsResult = () =>
               this.presented &&
@@ -466,6 +469,7 @@ export class ChatPane extends ChatPaneLayoutRender {
               .then(({ requestGitHubPublication }) =>
                 requestGitHubPublication(scope.client, {
                   sessionKey,
+                  idempotencyKey,
                   ...(this.sessionPullRequestsBranch?.branch
                     ? { branch: this.sessionPullRequestsBranch.branch }
                     : {}),
@@ -474,6 +478,9 @@ export class ChatPane extends ChatPaneLayoutRender {
               .then((result) => {
                 if (ownsResult()) {
                   this.githubPublicationResult = result;
+                  if (result.status === "published" || result.status === "failed") {
+                    this.githubPublicationIdempotencyKey = null;
+                  }
                 }
               })
               .catch((error: unknown) => {

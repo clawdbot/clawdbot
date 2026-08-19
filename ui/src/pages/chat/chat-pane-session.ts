@@ -63,6 +63,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       this.sessionPullRequestsBranch = undefined;
       this.githubPublicationResult = null;
       this.githubPublicationError = null;
+      this.githubPublicationIdempotencyKey = null;
       this.githubPublicationBusy = false;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
@@ -130,6 +131,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     this.sessionPullRequestsExpanded = false;
     this.githubPublicationResult = null;
     this.githubPublicationError = null;
+    this.githubPublicationIdempotencyKey = null;
     this.githubPublicationBusy = false;
     this.dismissedSessionPullRequestIds = new Set();
   }
