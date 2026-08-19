@@ -2002,7 +2002,7 @@ export const en: TranslationMap = {
     githubAgentOverride: "This Agent",
     githubToken: "Fine-grained PAT",
     githubTokenDesc:
-      "Used once to create a private managed GitHub CLI profile; the setup handoff is removed after verification.",
+      "Stored in a private managed GitHub CLI profile; only the setup handoff is removed.",
     githubTokenToggle: "Toggle token visibility",
     githubPasteToken: "Paste a fine-grained personal access token first.",
     githubAuthorName: "Author Name",
@@ -2011,7 +2011,7 @@ export const en: TranslationMap = {
     githubUseSystem: "Remove Override",
     githubUseNative: "Use Native Credentials",
     githubCloudNote:
-      "Cloud workers stay credential-free. Publication runs on the Gateway through an exact HTTPS path; existing remotes and generic Git helpers are not rewritten.",
+      "Cloud workers stay credential-free; the Gateway publishes over HTTPS without rewriting Git remotes or helpers.",
     connectedSource: "Connected: {id}",
     connected: "Connected",
     channelSource: "Channel: {id}",

@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import type { SessionGitHubPublicationResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
@@ -21,7 +20,6 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
@@ -464,14 +462,15 @@ export class ChatPane extends ChatPaneLayoutRender {
             this.githubPublicationBusy = true;
             this.githubPublicationError = null;
             this.requestUpdate();
-            void scope.client
-              .request<SessionGitHubPublicationResult>("sessions.github.publish", {
-                sessionKey,
-                idempotencyKey: generateUUID(),
-                ...(this.sessionPullRequestsBranch?.branch
-                  ? { title: `Publish ${this.sessionPullRequestsBranch.branch}` }
-                  : {}),
-              })
+            void import("./chat-github-publication.ts")
+              .then(({ requestGitHubPublication }) =>
+                requestGitHubPublication(scope.client, {
+                  sessionKey,
+                  ...(this.sessionPullRequestsBranch?.branch
+                    ? { branch: this.sessionPullRequestsBranch.branch }
+                    : {}),
+                }),
+              )
               .then((result) => {
                 if (ownsResult()) {
                   this.githubPublicationResult = result;
