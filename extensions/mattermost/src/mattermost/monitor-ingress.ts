@@ -221,7 +221,21 @@ export function createMattermostIngressMonitor(options: {
   monitor.start();
 
   return {
-    receive: (rawEvent) => monitor.admit(rawEvent).then(() => undefined),
+    receive: async (rawEvent) => {
+      try {
+        await monitor.admit(rawEvent);
+      } catch (error) {
+        // Permanent shape errors cannot recover through a reconnect; record the drop and keep
+        // reading. Storage failures still escape so the WebSocket exposes the outage.
+        if (
+          !(error instanceof MattermostIngressPermanentError) ||
+          error.reason !== "invalid-event"
+        ) {
+          throw error;
+        }
+        options.runtime.error?.(`mattermost ingress rejected invalid event: ${error.message}`);
+      }
+    },
     stop: monitor.stop,
     waitForIdle: monitor.waitForIdle,
   };
