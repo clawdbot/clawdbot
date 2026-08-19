@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../templating.js";
 import {
+  RECENT_HISTORY_MEDIA_UNTRUSTED_NOTICE,
   promoteRecentInboundHistoryMedia,
   resolveRecentInboundHistoryMedia,
 } from "./history-media.js";
@@ -10,6 +11,7 @@ describe("recent inbound history media", () => {
     const now = 1_800_000_000_000;
     const ctx: MsgContext = {
       Timestamp: now,
+      Body: "@openclaw summarize the worksheet",
       media: [{ path: "/media/current.png", contentType: "image/png", kind: "image" }],
       InboundHistory: [
         {
@@ -36,6 +38,9 @@ describe("recent inbound history media", () => {
     };
 
     expect(promoteRecentInboundHistoryMedia(ctx, { pathExists: () => true })).toHaveLength(2);
+    expect(ctx.Body).toBe(
+      `@openclaw summarize the worksheet\n\n${RECENT_HISTORY_MEDIA_UNTRUSTED_NOTICE}`,
+    );
     expect(ctx.media).toEqual([
       { path: "/media/current.png", contentType: "image/png", kind: "image" },
       {
@@ -54,6 +59,7 @@ describe("recent inbound history media", () => {
       },
     ]);
     expect(promoteRecentInboundHistoryMedia(ctx, { pathExists: () => true })).toEqual([]);
+    expect(ctx.Body?.match(/untrusted context only/g)).toHaveLength(1);
   });
 
   it("rejects remote, expired, unsupported, and over-budget history media", () => {
