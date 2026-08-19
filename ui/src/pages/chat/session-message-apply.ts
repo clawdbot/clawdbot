@@ -2,10 +2,16 @@ import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
+import type { SessionProjectionScope } from "@openclaw/gateway-client/browser";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import { persistedSteerTargetRunId, rolloverChatStream } from "./stream-causal-boundary.ts";
 
 type SessionMessageApplySource =
@@ -15,9 +21,17 @@ type SessionMessageApplySource =
 /**
  * The run this pane is finishing. A terminal chat event clears the local run
  * before its persisted reply row arrives, so the armed terminal tombstone is
- * the same pane's proof of ownership for that trailing row.
+ * the same pane's proof of ownership for that trailing row. The tombstone
+ * outlives its run by design, so it may only claim the row that carries the
+ * reply already projected for that run; a delayed older row keeps its own
+ * missing ownership instead of displacing a newer run's answer.
  */
-function finishingChatRunId(state: ChatState, source: SessionMessageApplySource): string | null {
+function finishingChatRunId(
+  state: ChatState,
+  source: SessionMessageApplySource,
+  message: unknown,
+  scope: SessionProjectionScope,
+): string | null {
   if (source.kind !== "live") {
     return null;
   }
@@ -25,7 +39,13 @@ function finishingChatRunId(state: ChatState, source: SessionMessageApplySource)
     return source.activeRunId;
   }
   const recent = state.lastLocalTerminalReconcile;
-  return recent?.sessionKey === state.sessionKey ? (recent.runId ?? null) : null;
+  const runId = recent?.sessionKey === state.sessionKey ? recent.runId : null;
+  if (!runId) {
+    return null;
+  }
+  const projected = getChatSessionProjection(state, state.chatMessages, scope).runs[runId]?.message;
+  const projectedText = extractText(projected)?.trim();
+  return projectedText && projectedText === extractText(message)?.trim() ? runId : null;
 }
 
 /** Apply one durable session.message payload through the pane-owned transcript reducer. */
@@ -44,6 +64,7 @@ export function applySessionMessagePayload(
   if (!incoming) {
     return;
   }
+  const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
   const isPreviousRunAssistant = Boolean(
     incoming.role === "assistant" &&
     incoming.sequence !== null &&
@@ -62,7 +83,7 @@ export function applySessionMessagePayload(
     !incoming.isImported &&
     !incoming.runId &&
     runActive !== true
-      ? finishingChatRunId(state, source)
+      ? finishingChatRunId(state, source, sourceMessage, scope)
       : null;
   if (
     source.kind === "live" &&
@@ -98,7 +119,6 @@ export function applySessionMessagePayload(
       ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
     },
   };
-  const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
   const previousMessageCount = state.chatMessages.length;
   const projection = reduceChatSessionProjection(
     state,

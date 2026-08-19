@@ -332,6 +332,53 @@ describe("canonical session message recovery", () => {
     ]);
   });
 
+  it("never lets a delayed older assistant row displace a newer run's reply", () => {
+    const olderReply = {
+      role: "assistant",
+      content: [{ type: "text", text: "Answer from the older run." }],
+      __openclaw: { id: "older-reply", seq: 2 },
+    };
+    const { state } = createSessionEventState({
+      chatMessages: [],
+      chatRunId: "newer-run",
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: "newer-run",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Answer from the newer run." }],
+        },
+      },
+    });
+    expect(state.chatRunId).toBeNull();
+
+    // The terminal tombstone outlives its run, so a late row carrying some
+    // other reply must not borrow that run's ownership and replace it.
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        hasActiveRun: false,
+        messageId: "older-reply",
+        messageSeq: 2,
+        message: olderReply,
+      },
+    });
+
+    expect(state.chatMessages.map((message) => extractText(message))).toEqual([
+      "Answer from the newer run.",
+    ]);
+  });
+
   it("keeps an ordinary queued user after the active run assistant", () => {
     const activeRunId = "active-run";
     const originalPrompt = {
