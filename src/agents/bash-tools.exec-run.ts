@@ -475,7 +475,8 @@ export function createExecTool(
             approvalRunningNoticeMs,
             warnings,
             foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
-            processContinuationAvailable: allowBackground,
+            // Remote system.run has no process-session owner.
+            processContinuationAvailable: false,
             notifySessionKey,
             notifyOnExit,
             trustedSafeBinDirs,

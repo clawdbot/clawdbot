@@ -57,18 +57,19 @@ existing per-session OpenClaw process scope for background follow-up. Prefer
 Codex native shell for ordinary local work.
 
 With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
-Codex also receives `node_exec` and `node_process` tools for commands on paired
-nodes. Native shell remains on the Codex app-server host and workspace
+Codex also receives `node_exec` for commands on paired nodes. Native shell
+remains on the Codex app-server host and workspace
 (Gateway-local for the default stdio deployment); `node_exec` selects a node by
-name or id and keeps OpenClaw's node approval policy in force. If a finite
-runtime allowlist disables native Code Mode and leaves the turn without an
-execution environment, OpenClaw keeps its policy-filtered `exec` and `process`
-tools available instead for direct, unsandboxed execution.
+name or id, keeps OpenClaw's node approval policy in force, and waits for the
+remote command to finish. Remote-node background follow-up is not available. If
+a finite runtime allowlist disables native Code Mode and leaves the turn without
+an execution environment, OpenClaw keeps its policy-filtered `exec` and
+`process` tools available instead for direct, unsandboxed execution.
 
 When `tools.exec.host: "node"` or `/exec host=node` makes the node the session
-default, OpenClaw hides the Codex-native shell and exposes `node_exec` and
-`node_process` as the shell path. This keeps the configured execution host from
-silently falling back to the app-server or Gateway machine.
+default, OpenClaw hides the Codex-native shell and exposes `node_exec` as the
+shell path. This keeps the configured execution host from silently falling
+back to the app-server or Gateway machine.
 
 `gateway_exec` is not exposed when an active OpenClaw sandbox, a node-default
 execution policy, memory-flush restrictions, tool allow/deny policy, or

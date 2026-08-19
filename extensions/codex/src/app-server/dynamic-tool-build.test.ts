@@ -1350,8 +1350,12 @@ describe("Codex app-server dynamic tool build", () => {
           security: { type: "string" },
           ask: { type: "string" },
           node: { type: "string" },
+          background: { type: "boolean" },
+          yieldMs: { type: "number" },
+          pty: { type: "boolean" },
+          elevated: { type: "boolean" },
         },
-        required: ["command", "host", "node"],
+        required: ["command", "host", "node", "background", "yieldMs", "pty", "elevated"],
         additionalProperties: false,
       },
     };
@@ -1364,12 +1368,7 @@ describe("Codex app-server dynamic tool build", () => {
       ],
       details: { status: "running" },
     });
-    const processTool = createRuntimeDynamicTool("process");
-    setOpenClawCodingToolsFactoryForTests(() => [
-      execTool,
-      processTool,
-      createRuntimeDynamicTool("message"),
-    ]);
+    setOpenClawCodingToolsFactoryForTests(() => [execTool, createRuntimeDynamicTool("message")]);
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
@@ -1388,11 +1387,10 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(nativeToolSurfaceEnabled).toBe(false);
-    expect(tools.map((tool) => tool.name)).toEqual(["message", "node_exec", "node_process"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["message", "node_exec"]);
     const nodeExec = tools.find((tool) => tool.name === "node_exec");
-    const nodeProcess = tools.find((tool) => tool.name === "node_process");
     expect(nodeExec?.description).toContain("host=node internally");
-    expect(nodeProcess?.description).toContain("background shell sessions");
+    expect(nodeExec?.description).toContain("background follow-up is unavailable");
     expect(nodeExec?.parameters).toEqual({
       type: "object",
       properties: {
@@ -1410,6 +1408,10 @@ describe("Codex app-server dynamic tool build", () => {
         node: "model-selected-node",
         security: "full",
         ask: "off",
+        background: true,
+        yieldMs: 10,
+        pty: true,
+        elevated: true,
       },
       undefined,
     );
@@ -1426,7 +1428,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(result?.content).toEqual([
       {
         type: "text",
-        text: "Command still running (session exec-1, pid 123). Use remote-node background-session control (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up when available.",
+        text: "Command still running (session exec-1, pid 123). Remote-node background follow-up is unavailable. Wait for the command to complete.",
       },
     ]);
 
@@ -1456,14 +1458,10 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(runtimePolicyNativeToolSurfaceEnabled).toBe(false);
-    expect(runtimePolicyTools.map((tool) => tool.name)).toEqual([
-      "message",
-      "node_exec",
-      "node_process",
-    ]);
+    expect(runtimePolicyTools.map((tool) => tool.name)).toEqual(["message", "node_exec"]);
   });
 
-  it("exposes selectable node shell tools beside native shell for auto host runs", async () => {
+  it("does not expose Gateway process sessions as remote-node control in auto host runs", async () => {
     const execTool = {
       ...createRuntimeDynamicTool("exec"),
       parameters: {
@@ -1504,8 +1502,39 @@ describe("Codex app-server dynamic tool build", () => {
       "gateway_exec",
       "gateway_process",
       "node_exec",
-      "node_process",
     ]);
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: "direct",
+    });
+    const gatewayList = await bridge.handleToolCall({
+      threadId: "auto-thread",
+      turnId: "auto-turn",
+      tool: "gateway_process",
+      callId: "gateway-process-list",
+      arguments: { action: "list" },
+    });
+    expect(gatewayList.success).toBe(true);
+    expect(processTool.execute).toHaveBeenCalledWith(
+      "gateway-process-list",
+      { action: "list" },
+      expect.any(AbortSignal),
+      undefined,
+    );
+    vi.mocked(processTool.execute).mockClear();
+    const nodeList = await bridge.handleToolCall({
+      threadId: "auto-thread",
+      turnId: "auto-turn",
+      tool: "node_process",
+      callId: "node-process-list",
+      arguments: { action: "list" },
+    });
+    expect(nodeList.success).toBe(false);
+    expect(nodeList.contentItems).toEqual([
+      { type: "inputText", text: "Unknown OpenClaw tool: node_process" },
+    ]);
+    expect(processTool.execute).not.toHaveBeenCalled();
     const nodeExec = tools.find((tool) => tool.name === "node_exec");
     expect(nodeExec?.description).toContain("Select the node by name or id");
     expect(nodeExec?.parameters).toEqual({
@@ -1621,13 +1650,7 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(nativeToolSurfaceEnabled).toBe(false);
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "exec",
-      "process",
-      "message",
-      "node_exec",
-      "node_process",
-    ]);
+    expect(tools.map((tool) => tool.name)).toEqual(["exec", "process", "message", "node_exec"]);
 
     const bridge = createCodexDynamicToolBridge({
       tools,
@@ -1711,7 +1734,6 @@ describe("Codex app-server dynamic tool build", () => {
       "process",
       "message",
       "node_exec",
-      "node_process",
     ]);
   });
 
