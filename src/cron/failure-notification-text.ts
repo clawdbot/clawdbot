@@ -1,40 +1,41 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
-import { redactToolPayloadText } from "../logging/redact.js";
+import type { CronFailureNotificationDetail, CronTriggerFailureCode } from "./types.js";
 
 const GENERIC_FAILURE_DETAIL = "Check automation history for details.";
-const EXTERNAL_CONTENT_MARKERS = [
-  "EXTERNAL_UNTRUSTED_CONTENT",
-  "SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source",
-];
 
-function safeFailureDetail(rawError: string | undefined): string | undefined {
-  if (!rawError || EXTERNAL_CONTENT_MARKERS.some((marker) => rawError.includes(marker))) {
-    return undefined;
-  }
-  const firstLine = rawError.split(/\r\n?|[\n\u2028\u2029]/u).find((line) => line.trim());
-  if (!firstLine) {
-    return undefined;
-  }
-  const detail = redactToolPayloadText(sanitizeTerminalText(firstLine.replace(/\s+/gu, " ").trim()))
-    .replace(/\s+/gu, " ")
-    .trim();
-  if (!detail) {
-    return undefined;
-  }
-  return detail.length > 200 ? `${truncateUtf16Safe(detail, 199)}…` : detail;
-}
+const SCRIPT_FAILURE_COPY = {
+  aborted: "was aborted",
+  invalid_input: "received invalid input",
+  runtime_unavailable: "runtime is unavailable",
+  timeout: "timed out",
+  output_limit_exceeded: "exceeded its output limit",
+  snapshot_limit_exceeded: "exceeded its state limit",
+  internal_error: "failed internally",
+  tool_budget_exceeded: "exceeded its tool budget",
+} satisfies Record<CronTriggerFailureCode, string>;
 
-/** Renders compact, safe failure context for operator-facing automation chat. */
+/** Renders only classified reasons or closed producer-authored failure facts. */
 export function cronFailureDetailLines(
   errorReason: FailoverReason | undefined,
-  rawError?: string,
-  detailLabel: "Last error" | "Skip reason" = "Last error",
+  failureNotificationDetail?: CronFailureNotificationDetail,
 ): string[] {
   if (errorReason) {
     return [`Cause: ${errorReason}`];
   }
-  const detail = safeFailureDetail(rawError);
-  return detail ? [`${detailLabel}: ${detail}`] : [GENERIC_FAILURE_DETAIL];
+  if (!failureNotificationDetail) {
+    return [GENERIC_FAILURE_DETAIL];
+  }
+  if (failureNotificationDetail.kind === "command-exit") {
+    return [`Cause: command exited with code ${failureNotificationDetail.exitCode}`];
+  }
+  if (failureNotificationDetail.kind === "command-timeout") {
+    return [
+      failureNotificationDetail.mode === "wall-clock"
+        ? "Cause: command timed out"
+        : "Cause: command stopped after producing no output",
+    ];
+  }
+  const label =
+    failureNotificationDetail.source === "payload" ? "automation script" : "trigger script";
+  return [`Cause: ${label} ${SCRIPT_FAILURE_COPY[failureNotificationDetail.code]}`];
 }

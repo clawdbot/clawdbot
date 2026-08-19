@@ -1,38 +1,51 @@
 import { describe, expect, it } from "vitest";
 import { cronFailureDetailLines } from "./failure-notification-text.js";
+import type { CronTriggerFailureCode } from "./types.js";
 
 const GENERIC_DETAIL = "Check automation history for details.";
 
+const SCRIPT_FAILURE_COPY = {
+  aborted: "was aborted",
+  invalid_input: "received invalid input",
+  runtime_unavailable: "runtime is unavailable",
+  timeout: "timed out",
+  output_limit_exceeded: "exceeded its output limit",
+  snapshot_limit_exceeded: "exceeded its state limit",
+  internal_error: "failed internally",
+  tool_budget_exceeded: "exceeded its tool budget",
+} satisfies Record<CronTriggerFailureCode, string>;
+
 describe("cronFailureDetailLines", () => {
   it.each(["timeout", "rate_limit"] as const)("keeps classified %s failures compact", (reason) => {
-    expect(cronFailureDetailLines(reason, "token=opaque-secret-value\nstack body")).toEqual([
+    expect(cronFailureDetailLines(reason, { kind: "command-exit", exitCode: 7 })).toEqual([
       `Cause: ${reason}`,
     ]);
   });
 
   it.each([
+    [{ kind: "command-exit", exitCode: 7 } as const, "Cause: command exited with code 7"],
+    [{ kind: "command-timeout", mode: "wall-clock" } as const, "Cause: command timed out"],
     [
-      "external wrapper",
-      'upstream rejected response\n<<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>\nprivate body',
+      { kind: "command-timeout", mode: "no-output" } as const,
+      "Cause: command stopped after producing no output",
     ],
-    [
-      "security notice",
-      "SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source (e.g., email, webhook).\nprivate body",
-    ],
-    ["empty detail", "\n \r\n"],
-  ])("uses the generic fallback for %s", (_name, error) => {
-    expect(cronFailureDetailLines(undefined, error)).toEqual([GENERIC_DETAIL]);
+  ])("renders closed command detail %#", (detail, expected) => {
+    expect(cronFailureDetailLines(undefined, detail)).toEqual([expected]);
   });
 
-  it("sanitizes controls and collapses whitespace from the first non-empty line", () => {
-    const error = "\n\u001b[31m  cron\t script \u0007 failed  \u001b[0m\nstack body";
+  it.each(Object.entries(SCRIPT_FAILURE_COPY) as Array<[CronTriggerFailureCode, string]>)(
+    "renders closed script failure %s",
+    (code, copy) => {
+      expect(
+        cronFailureDetailLines(undefined, { kind: "script-failure", source: "payload", code }),
+      ).toEqual([`Cause: automation script ${copy}`]);
+      expect(
+        cronFailureDetailLines(undefined, { kind: "script-failure", source: "trigger", code }),
+      ).toEqual([`Cause: trigger script ${copy}`]);
+    },
+  );
 
-    expect(cronFailureDetailLines(undefined, error)).toEqual(["Last error: cron script failed"]);
-  });
-
-  it("truncates without splitting a UTF-16 surrogate pair", () => {
-    const error = `${"x".repeat(198)}🎉trailing`;
-
-    expect(cronFailureDetailLines(undefined, error)).toEqual([`Last error: ${"x".repeat(198)}…`]);
+  it("uses the generic fallback without a classified or producer-authored fact", () => {
+    expect(cronFailureDetailLines(undefined)).toEqual([GENERIC_DETAIL]);
   });
 });

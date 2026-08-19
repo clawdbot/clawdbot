@@ -40,6 +40,7 @@ import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
+import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
   abortActiveCronTaskRuns,
@@ -53,12 +54,7 @@ import {
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
-import type {
-  CronJob,
-  CronPayload,
-  CronRunErrorClassification,
-  CronTriggerFailureCode,
-} from "../cron/types.js";
+import type { CronJob, CronPayload } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -120,16 +116,6 @@ export type GatewayCronState = {
   stopStreamWatchers: () => Promise<void>;
   reconcileHeartbeatJobs: (cfg?: OpenClawConfig) => Promise<void>;
 };
-
-function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorClassification {
-  if (code === "timeout") {
-    return { kind: "reason", reason: "timeout" };
-  }
-  if (code === "runtime_unavailable") {
-    return { kind: "reason", reason: "server_error" };
-  }
-  return { kind: "permanent" };
-}
 
 function formatOnExitRunSummary(exit: CronExitResult): string {
   const lines = [
@@ -890,7 +876,11 @@ export function buildGatewayCronService(params: {
     },
     runScriptJob: async ({ job, streamBatch, abortSignal }) => {
       if (!scriptRuntime || job.payload.kind !== "script") {
-        return { status: "error", error: "cron script payload executor is unavailable" };
+        return {
+          status: "error",
+          error: "cron script payload executor is unavailable",
+          ...cronScriptFailureMetadata("payload", "runtime_unavailable"),
+        };
       }
       const execution = await scriptRuntime.executePayload({
         jobId: job.id,
@@ -912,13 +902,14 @@ export function buildGatewayCronService(params: {
         return {
           status: "error",
           error: `cron script payload failed (${execution.code}): ${execution.error}`,
-          errorClassification: classifyCronScriptFailure(execution.code),
+          ...cronScriptFailureMetadata("payload", execution.code),
         };
       }
       if (execution.nextCheck && !job.pacing) {
         return {
           status: "error",
           error: "cron script payload returned nextCheck, but this job has no pacing bounds",
+          ...cronScriptFailureMetadata("payload", "invalid_input"),
         };
       }
 
@@ -996,7 +987,7 @@ export function buildGatewayCronService(params: {
         ssrfPolicy: webhookSsrfPolicy,
       }),
     log: getChildLogger({ module: "cron", storeKey: storePath }),
-    onEvent: (evt) => {
+    onEvent: (evt, context) => {
       // Any job/store change can alter session automation bindings, including
       // in-place enable flips during runs; run/schedule events bump too (cheap).
       bumpSessionAutomationVersion();
@@ -1083,6 +1074,7 @@ export function buildGatewayCronService(params: {
         const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
           evt,
+          failureNotificationDetail: context?.failureNotificationDetail,
           job,
           deps: params.deps,
           logger: cronLogger,

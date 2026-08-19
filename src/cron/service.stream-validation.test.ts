@@ -185,7 +185,7 @@ describe("cron stream schedule validation", () => {
         streamRestartExhausted: true,
       });
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
-        'Automation "stream" failed 5 times\nLast error: stream source exhausted restarts',
+        'Automation "stream" failed 5 times\nCheck automation history for details.',
         expect.any(Object),
       );
       expect(historyAtAlert).toEqual([

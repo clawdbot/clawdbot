@@ -799,7 +799,7 @@ describe("cron service timer regressions", () => {
         payload: {
           text:
             'Automation "before agent reply unhandled regression" failed 1 times\n' +
-            "Last error: cron: isolated agent run stalled before execution start (last phase: runtime-plugins)",
+            "Check automation history for details.",
         },
         runAtMs: expect.any(Number),
         channel: "telegram",

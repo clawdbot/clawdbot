@@ -20,7 +20,7 @@ import { cronFailureDetailLines } from "../cron/failure-notification-text.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
-import type { CronJob, CronMessageChannel } from "../cron/types.js";
+import type { CronFailureNotificationDetail, CronJob, CronMessageChannel } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
@@ -435,6 +435,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
 /** Dispatches completion and failure-destination notifications after a cron run finishes. */
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
+  failureNotificationDetail?: CronFailureNotificationDetail;
   job?: CronJob;
   deps: CliDeps;
   logger: CronLogger;
@@ -496,6 +497,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 
   dispatchCronFailureDestinationNotifications({
     evt: params.evt,
+    failureNotificationDetail: params.failureNotificationDetail,
     job: params.job,
     deps: params.deps,
     logger: params.logger,
@@ -508,6 +510,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 
 function dispatchCronFailureDestinationNotifications(params: {
   evt: CronEvent;
+  failureNotificationDetail?: CronFailureNotificationDetail;
   job?: CronJob;
   deps: CliDeps;
   logger: CronLogger;
@@ -599,10 +602,7 @@ function dispatchCronFailureDestinationNotifications(params: {
 
   const failureAlertText = [
     `Automation "${job.name}" ${params.evt.status === "error" ? "failed" : "delivery failed"}`,
-    ...cronFailureDetailLines(
-      job.state.lastErrorReason,
-      params.evt.error ?? params.evt.deliveryError,
-    ),
+    ...cronFailureDetailLines(job.state.lastErrorReason, params.failureNotificationDetail),
   ].join("\n");
   dispatchDetachedCronNotification({
     jobId: job.id,

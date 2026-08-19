@@ -246,7 +246,9 @@ describe("cron stream trigger composition", () => {
       expect(alert?.channel).toBe("telegram");
       expect(alert?.to).toBe("19098680");
       expect(alert?.payload).toEqual({
-        text: 'Automation "failing stream payload" failed 1 times\nLast error: boom',
+        text:
+          'Automation "failing stream payload" failed 1 times\n' +
+          "Check automation history for details.",
       });
       expect(alert?.job.state.lastError).toBe("boom");
     } finally {

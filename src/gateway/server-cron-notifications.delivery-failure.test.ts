@@ -83,7 +83,9 @@ describe("cron primary delivery failure notifications", () => {
       inheritSessionThread: false,
     });
     expect(sendFailureNotificationAnnounce.mock.calls[0]?.[5]).toEqual({
-      text: '⚠️ Automation "threaded report" delivery failed\nLast error: message thread not found',
+      text:
+        '⚠️ Automation "threaded report" delivery failed\n' +
+        "Check automation history for details.",
     });
   });
 

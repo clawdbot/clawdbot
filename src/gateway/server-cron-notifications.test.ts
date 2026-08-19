@@ -659,7 +659,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("uses the persisted run failure reason for chat without changing webhook text", async () => {
+  it("uses classified or closed producer facts for chat failure detail", () => {
     const runAtMs = Date.parse("2026-01-15T15:30:00.000Z");
     const announceJob = createWebhookJob({
       mode: "announce",
@@ -670,7 +670,6 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       },
     });
     announceJob.state.lastErrorReason = "auth";
-    announceJob.state.consecutiveErrors = 9;
 
     dispatchGatewayCronFinishedNotifications({
       evt: {
@@ -705,53 +704,31 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
     vi.clearAllMocks();
     announceJob.state.lastErrorReason = undefined;
-    dispatchGatewayCronFinishedNotifications({
-      evt: {
-        jobId: announceJob.id,
-        action: "finished",
-        status: "error",
-        error: "command exited with code 2 token=opaque-secret-value\nError: stack body",
-      },
-      job: announceJob,
-      deps: {} as CliDeps,
-      logger: { warn: vi.fn() },
-      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    const rawError = String.raw`TOKEN=opaque-secret-value | /Users/private/automation.sh | C:\Users\private\automation.ps1 | sh -lc "curl --header Authorization:secret" | https://internal.example.test/run?token=query-secret | {"error":{"message":"provider secret body"}} | Error: exploded at runAutomation (internal.js:42:7)`;
+    const dispatchRawFailure = (withDetail: boolean) =>
+      dispatchGatewayCronFinishedNotifications({
+        evt: { jobId: announceJob.id, action: "finished", status: "error", error: rawError },
+        ...(withDetail
+          ? { failureNotificationDetail: { kind: "command-exit" as const, exitCode: 2 } }
+          : {}),
+        job: announceJob,
+        deps: {} as CliDeps,
+        logger: { warn: vi.fn() },
+        resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      });
+    dispatchRawFailure(true);
+    const closedDetailPayload = mocks.sendFailureNotificationAnnounce.mock.calls[0]?.[5];
+    expect(closedDetailPayload).toEqual({
+      text: '⚠️ Automation "notification admission" failed\nCause: command exited with code 2',
     });
-    expect(mocks.sendFailureNotificationAnnounce.mock.calls[0]?.[5]).toEqual({
-      text:
-        '⚠️ Automation "notification admission" failed\n' +
-        "Last error: command exited with code 2 token=opaque…alue",
-    });
+    expect(closedDetailPayload?.text).not.toMatch(
+      /opaque-secret-value|Users.private|curl --header|internal\.example|provider secret|runAutomation/u,
+    );
 
     vi.clearAllMocks();
-    const webhookJob = createWebhookJob({
-      mode: "announce",
-      failureDestination: {
-        mode: "webhook",
-        to: "https://example.invalid/failure",
-      },
-    });
-    dispatchGatewayCronFinishedNotifications({
-      evt: {
-        jobId: webhookJob.id,
-        action: "finished",
-        status: "error",
-        error: "provider unavailable",
-        runAtMs,
-      },
-      job: webhookJob,
-      deps: {} as CliDeps,
-      logger: { warn: vi.fn() },
-      resolveCronAgent: () => ({
-        agentId: "main",
-        cfg: { agents: { defaults: { userTimezone: "America/New_York" } } },
-      }),
-    });
-
-    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce());
-    expect(webhookRequestBody()).toMatchObject({
-      message: 'Automation "notification admission" failed: provider unavailable',
-      runAtMs,
+    dispatchRawFailure(false);
+    expect(mocks.sendFailureNotificationAnnounce.mock.calls[0]?.[5]).toEqual({
+      text: '⚠️ Automation "notification admission" failed\nCheck automation history for details.',
     });
   });
 
@@ -902,7 +879,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         inheritSessionThread: false,
       },
       {
-        text: '⚠️ Automation "channel fd no mode" failed\nLast error: boom',
+        text: '⚠️ Automation "channel fd no mode" failed\nCheck automation history for details.',
       },
     );
     expect(logger.warn).not.toHaveBeenCalledWith(
