@@ -206,7 +206,7 @@ describe("Microsoft Teams durable ingress", () => {
         });
         const { app, outbound } = createOutboundCapture();
         let attempts = 0;
-        let deliveryError: unknown;
+        let deliveryError: Error | undefined;
         const dispatch: IngressDispatch = async (delivered, lifecycle, liveContext) => {
           attempts += 1;
           if (testCase.recovery === "retry" && attempts === 1) {
@@ -220,8 +220,8 @@ describe("Microsoft Teams durable ingress", () => {
           try {
             await replayContext.sendActivity({ type: "message", text: "Recovered reply" });
           } catch (error) {
-            deliveryError = error;
-            throw error;
+            deliveryError = error instanceof Error ? error : new Error(String(error));
+            throw deliveryError;
           }
           await lifecycle.onAdopted();
         };
