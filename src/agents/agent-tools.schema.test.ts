@@ -22,7 +22,8 @@ import {
 } from "./agent-tools.params.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { execSchema } from "./bash-tools.schemas.js";
+import { createProcessTool } from "./bash-tools.process.js";
+import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import {
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
@@ -59,6 +60,101 @@ describe("direct exec tool schema", () => {
     expect(describeField("ask")).toContain("tools.exec.ask");
     expect(describeField("ask")).toContain("channel-origin");
     expect(describeField("ask")).toContain("ask=off");
+  });
+});
+
+describe("direct process tool schema", () => {
+  it("keeps the action enum canonical at the agent-loop boundary", () => {
+    expect(processSchema.properties.action.type).toBe("string");
+    const actionEnum = processSchema.properties.action as Type.TString & { enum?: string[] };
+    expect(actionEnum.enum?.join("|")).toBe(
+      "list|poll|log|write|send-keys|submit|paste|kill|clear|remove",
+    );
+    expect(() =>
+      validateToolArguments(createProcessTool(), {
+        type: "toolCall",
+        id: "call-invalid-process-action",
+        name: "process",
+        arguments: { action: "delete" },
+      }),
+    ).toThrow('Validation failed for tool "process"');
+  });
+
+  it("rejects unknown process actions without starting execution", async () => {
+    const processTool = createProcessTool();
+    const execute = vi.spyOn(processTool, "execute");
+    const events: AgentEvent[] = [];
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-unknown-process-action",
+                    name: "process",
+                    arguments: { action: "delete" },
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "inspect processes", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [processTool] },
+      {
+        model: {
+          id: "faux-1",
+          name: "Faux",
+          provider: "faux",
+          api: "faux",
+          baseUrl: "http://localhost:0",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+          maxTokens: 1024,
+        },
+        convertToLlm: (agentMessages) => agentMessages as never,
+      },
+      (event) => {
+        events.push(event);
+      },
+      undefined,
+      streamFn,
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    const toolResult = messages.find((message) => message.role === "toolResult");
+    expect(JSON.stringify(toolResult)).toContain('Validation failed for tool \\"process\\"');
+    expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+      executionStarted: false,
+      errorKind: "argument-validation",
+    });
   });
 });
 

@@ -14,7 +14,6 @@ import {
   getTaskById,
   isParentFlowLinkError,
   linkTaskToFlowById,
-  listTaskRecordsUnsorted as listTaskRecordsUnsortedInRegistry,
   listTasksForFlowId,
   markTaskTerminalById as markTaskTerminalByIdInRegistry,
   markTaskRunningByRunId,
@@ -132,10 +131,6 @@ export function createRunningTaskRunCore(
 
 export function findTaskByRunId(runId: string): TaskRecord | undefined {
   return findTaskByRunIdInRegistry(runId);
-}
-
-export function listTaskRecordsUnsorted(): TaskRecord[] {
-  return listTaskRecordsUnsortedInRegistry();
 }
 
 type RunTaskInFlowParams = {

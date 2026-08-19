@@ -1,6 +1,7 @@
 // Telegram plugin module implements sticker cache store behavior.
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 import {
   normalizeCachedStickerForStore,
@@ -18,10 +19,6 @@ function openStickerCacheStore(): TelegramStickerCacheStore {
     namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
     maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
   });
-}
-
-function normalizeStickerSearchText(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function readStickerCacheStore<T>(
@@ -61,7 +58,7 @@ export function cacheSticker(sticker: CachedSticker): void {
  * Search cached stickers by text query (fuzzy match on description + emoji + setName).
  */
 export function searchStickers(query: string, limit = 10): CachedSticker[] {
-  const queryLower = normalizeStickerSearchText(query);
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
   for (const { value: sticker } of readStickerCacheStore(
@@ -70,7 +67,7 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
     [],
   )) {
     let score = 0;
-    const descLower = normalizeStickerSearchText(sticker.description);
+    const descLower = normalizeLowercaseStringOrEmpty(sticker.description);
 
     // Exact substring match in description
     if (descLower.includes(queryLower)) {
@@ -92,7 +89,7 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
     }
 
     // Set name match
-    if (normalizeStickerSearchText(sticker.setName).includes(queryLower)) {
+    if (normalizeLowercaseStringOrEmpty(sticker.setName).includes(queryLower)) {
       score += 3;
     }
 

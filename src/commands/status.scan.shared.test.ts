@@ -528,29 +528,50 @@ describe("resolveGatewayProbeSnapshot", () => {
 });
 
 describe("buildTailscaleHttpsUrl", () => {
-  it("uses the configured Tailscale Service hostname for Serve", () => {
+  it("uses the device hostname and configured Control UI base path", () => {
     expect(
       buildTailscaleHttpsUrl({
         tailscaleMode: "serve",
         tailscaleDns: "node.tailnet.ts.net",
-        serviceName: "svc:openclaw",
         controlUiBasePath: "/control",
       }),
-    ).toBe("https://openclaw.tailnet.ts.net/control");
+    ).toBe("https://node.tailnet.ts.net/control");
   });
 
-  it("does not advertise a node-IP URL for named Services", () => {
+  it("uses a Tailscale IP when MagicDNS is unavailable", () => {
     expect(
       buildTailscaleHttpsUrl({
         tailscaleMode: "serve",
         tailscaleDns: "100.64.0.8",
-        serviceName: "svc:openclaw",
       }),
-    ).toBeNull();
+    ).toBe("https://100.64.0.8");
   });
 });
 
 describe("resolveSharedMemoryStatusSnapshot", () => {
+  it("skips agent-scoped memory when an explicit fleet has no selected owner", async () => {
+    const resolveMemoryConfig = vi.fn();
+    const getMemorySearchManager = vi.fn();
+
+    await expect(
+      resolveSharedMemoryStatusSnapshot({
+        cfg: {
+          agents: {
+            ownership: "explicit",
+            entries: { alpha: {}, beta: {} },
+          },
+        },
+        agentStatus: { defaultId: null },
+        memoryPlugin: { enabled: true, slot: "memory-core" },
+        resolveMemoryConfig,
+        getMemorySearchManager,
+      }),
+    ).resolves.toBeNull();
+
+    expect(resolveMemoryConfig).not.toHaveBeenCalled();
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "top-level defaults",

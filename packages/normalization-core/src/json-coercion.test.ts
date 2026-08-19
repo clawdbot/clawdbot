@@ -1,7 +1,16 @@
+import {
+  safeParseJson as safeParseJsonFromRoot,
+  safeParseJsonRecord as safeParseJsonRecordFromRoot,
+} from "@openclaw/normalization-core";
+import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { describe, expect, it } from "vitest";
-import { safeParseJson, safeParseJsonRecord } from "./json-coercion.js";
 
 describe("json-coercion", () => {
+  it("preserves the root exports alongside the focused package subpath", () => {
+    expect(safeParseJsonFromRoot).toBe(safeParseJson);
+    expect(safeParseJsonRecordFromRoot).toBe(safeParseJsonRecord);
+  });
+
   it.each<[string, unknown]>([
     ['{"ok":true}', { ok: true }],
     ["[1]", [1]],

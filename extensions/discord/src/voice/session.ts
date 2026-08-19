@@ -103,6 +103,7 @@ export type VoiceSessionEntry = {
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
+  ttsStreamFallbackWarned: boolean;
   capture: VoiceCaptureState;
   realtimeLifecycle: VoiceRealtimeLifecycle;
   transcripts?: {

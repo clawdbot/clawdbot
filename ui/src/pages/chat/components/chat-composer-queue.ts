@@ -8,7 +8,7 @@ import {
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
-import { isInflightSteer, isSteeredQueueItem } from "../steered-chip.ts";
+import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 type ChatQueueProps = {
@@ -18,7 +18,11 @@ type ChatQueueProps = {
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, toIndex: number) => void;
   onQueueEdit?: (id: string) => void;
+  onQueueEditChange?: (text: string) => void;
+  onQueueEditSubmit?: () => void;
+  onQueueEditCancel?: () => void;
   editingId?: string | null;
+  editingText?: string;
   onQueueRemove: (id: string) => void;
 };
 
@@ -97,25 +101,22 @@ function renderChatQueueItem(
 ) {
   const stateLabel = sendStateLabel(item);
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
-  const steered = isSteeredQueueItem(item) && !failed;
+  const steerMode = item.queueMode === "steer";
   const reconnecting = item.sendState === "waiting-reconnect";
-  const busy = item.sendState === "executing-command" || isInflightSteer(item);
+  const busy = item.sendState === "executing-command";
+  const editing = props.editingId === item.id;
   const canSteer =
-    Boolean(props.canAbort && props.onQueueSteer) &&
-    !steered &&
-    (item.sendState === undefined || item.sendState === "waiting-idle") &&
-    !item.localCommandName;
+    Boolean(props.canAbort && props.onQueueSteer) && isSteerableQueuedMessage(item) && !editing;
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);
   const move = props.onQueueMove;
-  const editing = props.editingId === item.id;
   // Queue-level: once any row can move, every row reserves the handle column so
   // the pill and text stay on one x whatever state a row is in. Row-level: only
   // a row that may actually move gets a live handle.
   const showsHandle = Boolean(move) && reorder.offered;
   const canMove = showsHandle && moveIndex >= 0 && segment.length > 1;
-  // Every row keeps its handle, pencil and discard slots in every state and goes
-  // inert instead of empty while an edit is open, so no column moves mid-flow.
+  // Every row keeps its handle and action slots in every state and goes inert
+  // instead of empty while an edit is open, so no column moves mid-flow.
   const editable =
     Boolean(props.onQueueEdit) && isMovableChatQueueItem(item) && !item.localCommandName;
   const canEdit = editable && !props.editingId;
@@ -124,11 +125,9 @@ function renderChatQueueItem(
     (item.attachments?.length
       ? t("chat.queue.imageCount", { count: String(item.attachments.length) })
       : "");
-  const itemClass = `chat-queue__item${steered ? " chat-queue__item--steered" : ""}${
-    failed ? " chat-queue__item--failed" : ""
-  }${reconnecting ? " chat-queue__item--reconnect" : ""}${
-    editing ? " chat-queue__item--editing" : ""
-  }`;
+  const itemClass = `chat-queue__item${failed ? " chat-queue__item--failed" : ""}${
+    reconnecting ? " chat-queue__item--reconnect" : ""
+  }${editing ? " chat-queue__item--editing" : ""}`;
   // Row order keeps the actions on the first flex line; the error wraps below
   // them via flex-basis so failed rows grow by one line instead of a card.
   return html`
@@ -198,14 +197,10 @@ function renderChatQueueItem(
       ${reconnecting
         ? html`<span class="chat-queue__dot" aria-hidden="true"></span>`
         : html`<span class="chat-queue__icon" aria-hidden="true">
-            ${failed ? icons.alertTriangle : icons.clock}
+            ${failed ? icons.alertTriangle : icons.outbox}
           </span>`}
       ${renderChatAuthorAvatar(item.sender)}
-      ${steered
-        ? html`<span class="chat-queue__badge chat-queue__badge--steered"
-            >${t("chat.queue.states.steering")}</span
-          >`
-        : nothing}
+      ${steerMode ? html`<span class="chat-queue__badge">${t("chat.queue.steer")}</span>` : nothing}
       ${editing
         ? html`<span class="chat-queue__badge">${t("chat.queue.states.editing")}</span>`
         : stateLabel
@@ -215,12 +210,35 @@ function renderChatQueueItem(
               >${stateLabel}</span
             >`
           : nothing}
-      <span class="chat-queue__text" title=${text}>${text}</span>
+      ${editing
+        ? html`<textarea
+            class="chat-queue__edit-input"
+            rows="1"
+            .value=${props.editingText ?? item.text}
+            aria-label=${t("chat.queue.editQueuedMessage")}
+            @input=${(event: Event) => {
+              if (event.currentTarget instanceof HTMLTextAreaElement) {
+                props.onQueueEditChange?.(event.currentTarget.value);
+              }
+            }}
+            @keydown=${(event: KeyboardEvent) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                props.onQueueEditCancel?.();
+              } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                props.onQueueEditSubmit?.();
+              }
+            }}
+            autofocus
+          ></textarea>`
+        : html`<span class="chat-queue__text" title=${text}>${text}</span>`}
       <span class="chat-queue__actions">
-        ${failed && props.onQueueRetry
+        ${failed && !editing && props.onQueueRetry
           ? html`
               <button
-                class="chat-queue__retry"
+                class="chat-queue__action chat-queue__retry"
                 type="button"
                 aria-label=${t("chat.queue.retryQueuedMessage")}
                 @click=${() => props.onQueueRetry?.(item.id)}
@@ -233,7 +251,7 @@ function renderChatQueueItem(
         ${canSteer
           ? html`
               <button
-                class="chat-queue__steer"
+                class="chat-queue__action"
                 type="button"
                 aria-label=${t("chat.queue.steerQueuedMessage")}
                 @click=${() => props.onQueueSteer?.(item.id)}
@@ -243,22 +261,41 @@ function renderChatQueueItem(
               </button>
             `
           : nothing}
-        ${editable
+        ${editing
           ? html`
-              <openclaw-tooltip .content=${t("chat.queue.editQueuedMessage")}>
-                <button
-                  class="chat-queue__edit"
-                  type="button"
-                  ?disabled=${!canEdit}
-                  aria-label=${t("chat.queue.editQueuedMessage")}
-                  @click=${() => props.onQueueEdit?.(item.id)}
-                >
-                  ${icons.pencil}
-                </button>
-              </openclaw-tooltip>
+              <button
+                class="chat-queue__edit-submit"
+                type="button"
+                aria-label=${t("chat.runControls.sendMessage")}
+                @click=${() => props.onQueueEditSubmit?.()}
+              >
+                ${icons.check}
+              </button>
+              <button
+                class="chat-queue__edit-cancel"
+                type="button"
+                aria-label=${t("chat.queue.cancelEdit")}
+                @click=${() => props.onQueueEditCancel?.()}
+              >
+                ${icons.x}
+              </button>
             `
-          : nothing}
-        ${busy
+          : editable
+            ? html`
+                <openclaw-tooltip .content=${t("chat.queue.editQueuedMessage")}>
+                  <button
+                    class="chat-queue__edit"
+                    type="button"
+                    ?disabled=${!canEdit}
+                    aria-label=${t("chat.queue.editQueuedMessage")}
+                    @click=${() => props.onQueueEdit?.(item.id)}
+                  >
+                    ${icons.pencil}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
+        ${busy || editing
           ? nothing
           : html`
               <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>
@@ -267,7 +304,13 @@ function renderChatQueueItem(
                   type="button"
                   ?disabled=${editing}
                   aria-label=${t("chat.queue.removeQueuedMessage")}
-                  @click=${() => props.onQueueRemove(item.id)}
+                  @click=${(event: MouseEvent) => {
+                    // Chromium retargets click 2 after row removal; detail still owns the gesture.
+                    if (event.detail <= 1) {
+                      props.onQueueRemove(item.id);
+                    }
+                  }}
+                  @dblclick=${(event: MouseEvent) => event.stopPropagation()}
                 >
                   ${icons.x}
                 </button>

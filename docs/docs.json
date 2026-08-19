@@ -89,6 +89,10 @@
       "destination": "/gateway/external-apps"
     },
     {
+      "source": "/reference/wizard",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
       "source": "/reference/maturity-scorecard",
       "destination": "/maturity/scorecard"
     },
@@ -1088,6 +1092,7 @@
                 "pages": [
                   "install/backups",
                   "install/updating",
+                  "install/update-troubleshooting",
                   {
                     "group": "Migrating",
                     "pages": [
@@ -1115,6 +1120,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/cloudflare",
                   "install/daytona",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
@@ -1385,6 +1391,7 @@
                   "tools/code-mode",
                   "tools/diffs",
                   "tools/screen",
+                  "tools/progress-card",
                   "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
@@ -1700,7 +1707,8 @@
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
-                      "gateway/sandbox-vs-tool-policy-vs-elevated"
+                      "gateway/sandbox-vs-tool-policy-vs-elevated",
+                      "gateway/permission-modes"
                     ]
                   },
                   {
@@ -1724,6 +1732,7 @@
                       "network",
                       "gateway/pairing",
                       "gateway/discovery",
+                      "gateway/portals",
                       "gateway/bonjour"
                     ]
                   }
@@ -1735,7 +1744,8 @@
                   "gateway/remote",
                   "gateway/remote-gateway-readme",
                   "gateway/stable-https-url",
-                  "gateway/tailscale"
+                  "gateway/tailscale",
+                  "gateway/cloudflare-access"
                 ]
               },
               {
@@ -1857,6 +1867,7 @@
                       "cli/browser",
                       "cli/cron",
                       "cli/flows",
+                      "cli/connect",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox",
@@ -1972,7 +1983,6 @@
                 "group": "Technical reference",
                 "pages": [
                   "agent-runtime-architecture",
-                  "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
                   "reference/openclaw-ai",

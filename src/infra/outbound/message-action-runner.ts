@@ -28,6 +28,7 @@ import type {
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
@@ -94,7 +95,11 @@ async function handleBroadcastAction(
     resolveEffectiveMessageToolsConfig({ cfg: input.cfg, agentId: input.agentId })?.broadcast
       ?.enabled !== false;
   if (!broadcastEnabled) {
-    throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
+    throw new MessageActionDeniedError(
+      "Broadcast is disabled. Set tools.message.broadcast.enabled to true.",
+      "message_broadcast_disabled",
+      "message-broadcast:enabled",
+    );
   }
   const rawTargets = readStringArrayParam(params, "targets", { required: true });
   if (rawTargets.length === 0) {
@@ -117,6 +122,7 @@ async function handleBroadcastAction(
               cfg: input.cfg,
               channel: channelHint,
               fallbackChannel: input.toolContext?.currentChannelProvider,
+              agentId: input.agentId,
             })
           ).channel,
         ]
@@ -142,10 +148,12 @@ async function handleBroadcastAction(
     result?: MessageSendResult;
   }> = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
+  let attemptIndex = 0;
   for (const targetChannel of targetChannels) {
     throwIfAborted(input.abortSignal);
     for (const target of rawTargets) {
       throwIfAborted(input.abortSignal);
+      const receiptDiscriminator = `broadcast:${attemptIndex++}`;
       try {
         const targetAccountId = validateExplicitMessageAccountSelection({
           cfg: input.cfg,
@@ -184,6 +192,11 @@ async function handleBroadcastAction(
       } catch (err) {
         if (isAbortError(err)) {
           throw err;
+        }
+        if (err instanceof MessageActionDeniedError) {
+          // Preserve the owner fact before broadcast converts the failure to result text;
+          // otherwise admitted-run audit would have to infer policy from presentation.
+          input.onActionDenied?.(err, targetChannel, receiptDiscriminator);
         }
         results.push({
           channel: targetChannel,
@@ -324,7 +337,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     action,
   });
   if (action === "broadcast") {
-    return handleBroadcastAction(input, params);
+    return handleBroadcastAction({ ...input, agentId: resolvedAgentId }, params);
   }
   if (action === "send" && hasPollCreationParams(params)) {
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');

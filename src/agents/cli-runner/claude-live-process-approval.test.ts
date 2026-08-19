@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   markMcpLoopbackToolCallFinished,
@@ -24,11 +27,6 @@ import {
 import { callGatewayTool } from "../tools/gateway.js";
 import { resetClaudeLiveSessionsForTest } from "./claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
-
-vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -233,6 +231,87 @@ describe("Claude live process approvals", () => {
       }),
       { expectFinal: false },
     );
+  });
+
+  it("denies Claude Bash when an approved script operand changes before release", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-drift-"));
+    const scriptPath = path.join(workspaceDir, "script.sh");
+    try {
+      await fs.writeFile(scriptPath, "#!/bin/sh\necho approved\n");
+      mockCallGatewayTool
+        .mockResolvedValueOnce({ id: "claude-native-script-drift" })
+        .mockImplementationOnce(async () => {
+          await fs.writeFile(scriptPath, "#!/bin/sh\necho mutated\n");
+          return { id: "claude-native-script-drift", decision: "allow-once" };
+        });
+      const live = mockClaudeLiveRun(supervisorSpawnMock, {
+        events: buildClaudeControlRequestEvents({
+          requestId: "req-script-drift",
+          toolUseId: "tool-script-drift",
+          input: { command: "sh script.sh" },
+          sessionId: "live-script-drift",
+        }),
+      });
+
+      await executePreparedCliRun(
+        buildClaudeLiveRunContext({
+          workspaceDir,
+          config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+        }),
+      );
+
+      await vi.waitFor(() =>
+        expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+      );
+      expectClaudeControlDecision(live, {
+        behavior: "deny",
+        requestId: "req-script-drift",
+        messageIncludes: "approval script operand changed before execution",
+      });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("releases Claude Bash when the approved script operand is unchanged", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-stable-"));
+    const scriptPath = path.join(workspaceDir, "script.sh");
+    try {
+      await fs.writeFile(scriptPath, "#!/bin/sh\necho approved\n");
+      mockCallGatewayTool
+        .mockResolvedValueOnce({ id: "claude-native-script-stable" })
+        .mockResolvedValueOnce({
+          id: "claude-native-script-stable",
+          decision: "allow-once",
+        });
+      const live = mockClaudeLiveRun(supervisorSpawnMock, {
+        events: buildClaudeControlRequestEvents({
+          requestId: "req-script-stable",
+          toolUseId: "tool-script-stable",
+          input: { command: "sh script.sh" },
+          sessionId: "live-script-stable",
+        }),
+      });
+
+      await executePreparedCliRun(
+        buildClaudeLiveRunContext({
+          workspaceDir,
+          config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+        }),
+      );
+
+      await vi.waitFor(() =>
+        expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+      );
+      expectClaudeControlDecision(live, {
+        behavior: "allow",
+        requestId: "req-script-stable",
+        toolUseId: "tool-script-stable",
+        updatedInput: { command: "sh script.sh" },
+      });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("sends full reviewer detail for oversized non-Bash tool input", async () => {

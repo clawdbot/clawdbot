@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import type { Result } from "@openclaw/normalization-core/result";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -66,6 +67,34 @@ export type OpenClawPluginHttpRouteParams = {
 export type OpenClawPluginHostedMediaResolver = (
   mediaUrl: string,
 ) => string | null | undefined | Promise<string | null | undefined>;
+
+export type WidgetPresenterTarget = "node_panel";
+
+type WidgetPresenterSessionContext = {
+  sessionKey?: string;
+};
+
+export type WidgetPresentationError =
+  | { code: "no_eligible_node"; message: string }
+  | { code: "node_error"; message: string; nodeId?: string };
+
+export type WidgetPresentationSuccess = {
+  nodeId: string;
+  nodeName?: string;
+};
+
+export type WidgetPresenter = {
+  target: WidgetPresenterTarget;
+  description: string;
+  availability: (
+    sessionContext: WidgetPresenterSessionContext,
+  ) => Promise<Result<{ available: true }, WidgetPresentationError>>;
+  present: (params: {
+    documentUrlPath: string;
+    title: string;
+    sessionContext: WidgetPresenterSessionContext;
+  }) => Promise<Result<WidgetPresentationSuccess, WidgetPresentationError>>;
+};
 
 export type OpenClawPluginCliContext = {
   /**
@@ -194,6 +223,11 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     connId?: string;
     scopes?: string[];
   } | null;
+  risk?: {
+    level: "ordinary" | "high";
+    /** Stable, content-free family name; never include user or action arguments. */
+    family: string;
+  };
   approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
   invokeNode: (input?: {
     params?: unknown;
@@ -233,6 +267,13 @@ export type OpenClawPluginNodeInvokePolicy = {
    * when an iOS node reports BACKGROUND_UNAVAILABLE.
    */
   foregroundRestrictedOnIos?: boolean;
+  /**
+   * Classify exact command arguments before the policy handler or node transport runs.
+   * Throwing rejects the invocation before dispatch.
+   */
+  classifyRisk?: (
+    ctx: Pick<OpenClawPluginNodeInvokePolicyContext, "command" | "params">,
+  ) => NonNullable<OpenClawPluginNodeInvokePolicyContext["risk"]>;
   handle: (
     ctx: OpenClawPluginNodeInvokePolicyContext,
   ) => Promise<OpenClawPluginNodeInvokePolicyResult> | OpenClawPluginNodeInvokePolicyResult;
@@ -271,11 +312,17 @@ export type OpenClawGatewayDiscoveryService = {
 };
 
 /** Context passed to long-lived plugin services. */
+export type OpenClawPluginServiceHealth = {
+  reportFailure: (error: unknown) => void;
+  clearFailure: () => void;
+};
+
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  serviceHealth?: OpenClawPluginServiceHealth;
   gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;

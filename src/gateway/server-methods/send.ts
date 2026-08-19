@@ -12,7 +12,6 @@ import {
   validatePollParams,
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
@@ -75,9 +74,11 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
+import { selectMessageActionRequesterIdentity } from "../message-action-turn-capability.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
@@ -207,16 +208,15 @@ function resolveTrustedMessageActionToolContext(params: {
     sessionId?: string;
   };
 }):
-  | {
+  | ({
       ok: true;
       toolContext: InternalChannelThreadingToolContext | undefined;
-      requesterAccountId: string | undefined;
-      requesterSenderId: string | undefined;
       sessionId: string | undefined;
       sourceReplySessionKey: string | undefined;
       sourceReplyFinal: boolean | undefined;
       sourceReplyToolCallId: string | undefined;
-    }
+      runtimeAgentId: string | undefined;
+    } & ReturnType<typeof selectMessageActionRequesterIdentity>)
   | { ok: false; error: ReturnType<typeof errorShape> } {
   // Current-turn metadata can relax channel read policy. It must come from the
   // signed ingress-issued turn context, never from message.action request fields.
@@ -226,12 +226,12 @@ function resolveTrustedMessageActionToolContext(params: {
     return {
       ok: true,
       toolContext: undefined,
-      requesterAccountId: undefined,
-      requesterSenderId: undefined,
+      ...selectMessageActionRequesterIdentity(undefined),
       sessionId: undefined,
       sourceReplySessionKey: undefined,
       sourceReplyFinal: undefined,
       sourceReplyToolCallId: undefined,
+      runtimeAgentId: undefined,
     };
   }
   if (Date.now() >= messageActionContext.expiresAtMs) {
@@ -260,8 +260,8 @@ function resolveTrustedMessageActionToolContext(params: {
     (sessionAgentId && normalizeAgentId(sessionAgentId) !== identityAgentId) ||
     (messageActionContext.sessionId && requestSessionId !== messageActionContext.sessionId) ||
     (sourceReplySessionKey &&
-      (!sourceReplySessionAgentId ||
-        normalizeAgentId(sourceReplySessionAgentId) !== identityAgentId))
+      sourceReplySessionAgentId &&
+      normalizeAgentId(sourceReplySessionAgentId) !== identityAgentId)
   ) {
     return {
       ok: false,
@@ -274,12 +274,12 @@ function resolveTrustedMessageActionToolContext(params: {
   return {
     ok: true,
     toolContext: messageActionContext.toolContext,
-    requesterAccountId: messageActionContext.requesterAccountId,
-    requesterSenderId: messageActionContext.requesterSenderId,
+    ...selectMessageActionRequesterIdentity(messageActionContext),
     sessionId: messageActionContext.sessionId,
     sourceReplySessionKey,
     sourceReplyFinal: messageActionContext.sourceReplyFinal,
     sourceReplyToolCallId: messageActionContext.sourceReplyToolCallId,
+    runtimeAgentId: identityAgentId,
   };
 }
 
@@ -980,35 +980,44 @@ export const sendHandlers: GatewayRequestHandlers = {
       work: async ({ cfg, channel, accountId, dedupeKey, authorize }) => {
         try {
           const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
-          const agentId =
-            normalizeOptionalString(request.agentId) ??
-            (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+          const requestedAgentId =
+            normalizeOptionalString(request.agentId) ?? trustedContext.runtimeAgentId;
+          const sessionOwner = sessionKey
+            ? resolveRequestedSessionAgentId(cfg, sessionKey, requestedAgentId)
+            : undefined;
+          if (sessionOwner && !sessionOwner.ok) {
+            return { ok: false, error: sessionOwner.error, meta: { channel } };
+          }
+          const agentId = sessionOwner?.agentId ?? requestedAgentId;
+          const sourceReplySessionKey = trustedContext.sourceReplySessionKey;
+          const sourceReplyOwner = sourceReplySessionKey
+            ? resolveRequestedSessionAgentId(cfg, sourceReplySessionKey, agentId)
+            : undefined;
+          if (sourceReplyOwner && !sourceReplyOwner.ok) {
+            return { ok: false, error: sourceReplyOwner.error, meta: { channel } };
+          }
           if (accountId) {
             request.params.accountId = accountId;
           }
-          const resolvedMediaAccess =
-            request.action === "send"
-              ? resolveAgentScopedOutboundMediaAccess({
-                  cfg,
-                  agentId,
-                  sessionKey,
-                  messageProvider: sessionKey ? undefined : channel,
-                  accountId: sessionKey
-                    ? (trustedContext.requesterAccountId ?? accountId)
-                    : accountId,
-                  requesterSenderId: trustedContext.requesterSenderId,
-                })
-              : undefined;
-          // Gateway identities omit trusted sender aliases; expose roots/workspace
-          // only so a host reader cannot bypass alias-based group read policy.
-          const mediaAccess = resolvedMediaAccess
-            ? {
-                localRoots: resolvedMediaAccess.localRoots,
-                ...(resolvedMediaAccess.workspaceDir
-                  ? { workspaceDir: resolvedMediaAccess.workspaceDir }
-                  : {}),
-              }
-            : undefined;
+          const resolvedMediaAccess = resolveAgentScopedOutboundMediaAccess({
+            cfg,
+            agentId,
+            sessionKey,
+            messageProvider: sessionKey ? undefined : channel,
+            accountId: sessionKey ? (trustedContext.requesterAccountId ?? accountId) : accountId,
+            requesterSenderId: trustedContext.requesterSenderId,
+            requesterSenderName: trustedContext.requesterSenderName,
+            requesterSenderUsername: trustedContext.requesterSenderUsername,
+            requesterSenderE164: trustedContext.requesterSenderE164,
+          });
+          // Gateway actions receive policy-scoped roots/workspace only; the
+          // originating agent turn never delegates its host reader over RPC.
+          const mediaAccess = {
+            localRoots: resolvedMediaAccess.localRoots,
+            ...(resolvedMediaAccess.workspaceDir
+              ? { workspaceDir: resolvedMediaAccess.workspaceDir }
+              : {}),
+          };
           if (request.action === "send") {
             await hydrateAttachmentParamsForAction({
               cfg,
@@ -1017,7 +1026,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               args: request.params,
               action: "send",
               mediaPolicy: resolveAttachmentMediaPolicy({
-                mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+                mediaAccess: resolvedMediaAccess,
               }),
             });
           }
@@ -1028,7 +1037,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             accountId,
             currentAccountId: trustedContext.requesterAccountId,
-            sessionKey: trustedContext.sourceReplySessionKey ?? sessionKey,
+            sessionKey: sourceReplySessionKey ?? sessionKey,
             sessionId: trustedContext.sessionId,
             agentId,
             toolContext: trustedContext.toolContext,
@@ -1064,8 +1073,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             params: request.params,
             accountId,
-            requesterAccountId: trustedContext.requesterAccountId,
-            requesterSenderId: trustedContext.requesterSenderId,
+            ...selectMessageActionRequesterIdentity(trustedContext),
             senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
               ? request.senderIsOwner === true
               : false,
@@ -1074,9 +1082,8 @@ export const sendHandlers: GatewayRequestHandlers = {
             sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
             inboundEventKind: request.inboundTurnKind,
             agentId,
-            ...(mediaAccess
-              ? { mediaAccess, mediaLocalRoots: mediaAccess.localRoots }
-              : { mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId) }),
+            mediaAccess,
+            mediaLocalRoots: mediaAccess.localRoots,
             toolContext: trustedContext.toolContext,
             dryRun: false,
             gatewayClientScopes,
@@ -1227,11 +1234,29 @@ export const sendHandlers: GatewayRequestHandlers = {
           const providedSessionKey =
             normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
           const explicitAgentId = normalizeOptionalString(request.agentId);
-          const sessionAgentId = providedSessionKey
-            ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+          const sessionOwner = providedSessionKey
+            ? resolveRequestedSessionAgentId(cfg, providedSessionKey, explicitAgentId)
             : undefined;
-          const defaultAgentId = resolveSessionAgentId({ config: cfg });
-          const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
+          if (sessionOwner && !sessionOwner.ok) {
+            return { ok: false, error: sessionOwner.error, meta: { channel } };
+          }
+          const sessionAgentId = sessionOwner?.agentId;
+          const implicitAgent =
+            !explicitAgentId && !sessionAgentId
+              ? resolveRequestedSessionAgentId(cfg, "main")
+              : undefined;
+          if (implicitAgent && !implicitAgent.ok) {
+            return { ok: false, error: implicitAgent.error, meta: { channel } };
+          }
+          const effectiveAgentId =
+            explicitAgentId ?? sessionAgentId ?? (implicitAgent?.ok ? implicitAgent.agentId : null);
+          if (!effectiveAgentId) {
+            return {
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required"),
+              meta: { channel },
+            };
+          }
           const sendArgs: Record<string, unknown> = {
             mediaUrl,
             mediaUrls,
@@ -1318,14 +1343,23 @@ export const sendHandlers: GatewayRequestHandlers = {
               };
             }
           }
-          if (outboundRoute) {
+          // Durable route/session persistence commits only after platform
+          // evidence: a failed send must not rebind the folded main session's
+          // delivery route. Once-only across multi-payload results, and before
+          // the in-delivery transcript mirror so first contacts have a row.
+          let outboundRoutePersisted = false;
+          const commitOutboundSessionRoute = async () => {
+            if (outboundRoutePersisted || !outboundRoute) {
+              return;
+            }
+            outboundRoutePersisted = true;
             await ensureOutboundSessionEntry({
               cfg,
               channel,
               accountId,
               route: outboundRoute,
             });
-          }
+          };
           const outboundSession = buildOutboundSessionContext({
             cfg,
             agentId: effectiveAgentId,
@@ -1352,6 +1386,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             gatewayClientScopes: client?.connect?.scopes ?? [],
             silent: request.silent,
             formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
+            onDeliveryResult: commitOutboundSessionRoute,
             mirror: outboundSessionKey
               ? {
                   sessionKey: outboundSessionKey,
@@ -1362,6 +1397,11 @@ export const sendHandlers: GatewayRequestHandlers = {
                 }
               : undefined,
           });
+          // Safety net for adapters whose results carry no platform identity:
+          // any partially or fully sent batch still binds the route.
+          if (send.status === "sent" || send.status === "partial_failed") {
+            await commitOutboundSessionRoute();
+          }
           if (send.status === "failed" || send.status === "partial_failed") {
             throw send.error;
           }

@@ -127,6 +127,10 @@
   border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
 }
 
+.model-providers__probe--warning {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
+}
+
 .model-providers__probe--error {
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
 }
@@ -161,6 +165,13 @@
   margin-top: 16px;
 }
 
+.model-providers__utility-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: fit-content;
+}
+
 .model-providers__fallbacks {
   margin-top: 16px;
 }
@@ -191,7 +202,7 @@
   grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 768px) {
   .model-providers__head {
     align-items: flex-start;
     flex-wrap: wrap;

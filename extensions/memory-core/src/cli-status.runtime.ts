@@ -7,11 +7,11 @@ import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatAuditCounts,
   formatExtraPaths,
+  formatMemoryIndexOutcome,
   resolveMemoryPluginConfig,
-  scanMemorySources,
+  scanMemoryManagerSources,
   withMemoryCommand,
   type MemoryManager,
-  type MemorySourceName,
   type MemorySourceScan,
 } from "./cli-runtime-common.js";
 import {
@@ -43,23 +43,10 @@ const { accent, heading, info, muted, success, warn } = theme;
 type LlamaCppRuntimeStatus = {
   state?: string;
   backend?: string;
-  buildType?: string;
-  deviceNames?: string[];
-  memory?: {
-    totalBytes: number;
-    usedBytes: number;
-    freeBytes: number;
-    unifiedBytes: number;
-    observedAtMs: number;
-  };
-  offload?: {
-    supported: boolean;
-    offloadedLayers?: number;
-    totalLayers?: number;
-  };
-  context?: {
-    requestedSize: number | "auto";
-  };
+  buildInfo?: string;
+  model?: { id?: string; path?: string };
+  capabilities?: { vision?: boolean; draft?: boolean };
+  endpoints?: Record<string, string>;
   loadError?: string;
 };
 function readLlamaCppRuntimeStatus(
@@ -88,19 +75,6 @@ function formatMemoryIndexIdentityWarning(
     reason,
     fix: `Run: openclaw memory status --index --agent ${agentId}`,
   };
-}
-function formatRuntimeBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = units[0];
-  for (let index = 1; index < units.length && value >= 1024; index += 1) {
-    value /= 1024;
-    unit = units[index];
-  }
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
@@ -257,16 +231,8 @@ export async function runMemoryStatus(
         }
       }
       const status = manager.status();
-      const sources = (status.sources?.length ? status.sources : ["memory"]) as MemorySourceName[];
+      const scan = await scanMemoryManagerSources(status, agentId);
       const workspaceDir = status.workspaceDir;
-      const scan = workspaceDir
-        ? await scanMemorySources({
-            workspaceDir,
-            agentId,
-            sources,
-            extraPaths: status.extraPaths,
-          })
-        : undefined;
       let audit: ShortTermAuditSummary | undefined;
       let repair: RepairShortTermPromotionArtifactsResult | undefined;
       let dreamingAudit: DreamingArtifactsAuditSummary | undefined;
@@ -320,7 +286,9 @@ export async function runMemoryStatus(
         ? `${filesIndexed}/? files · ${chunksIndexed} chunks`
         : `${filesIndexed}/${totalFiles} files · ${chunksIndexed} chunks`;
     if (opts.index) {
-      const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
+      const line = indexError
+        ? `Memory index failed: ${indexError}`
+        : formatMemoryIndexOutcome(status, scan, agentId);
       defaultRuntime.log(line);
     }
     const requestedProvider = status.requestedProvider ?? status.provider;
@@ -360,33 +328,30 @@ export async function runMemoryStatus(
     if (llamaCppRuntime) {
       const runtime = llamaCppRuntime;
       const backend = runtime.backend ?? "unknown";
-      const build = runtime.buildType ? ` (${runtime.buildType})` : "";
-      lines.push(`${label("llama.cpp")} ${info(backend)}${muted(build)}`);
-      if (runtime.deviceNames?.length) {
-        lines.push(`${label("Devices")} ${info(runtime.deviceNames.join(", "))}`);
+      const build = runtime.buildInfo ? ` (${runtime.buildInfo})` : "";
+      lines.push(`${label("llama.cpp server")} ${info(backend)}${muted(build)}`);
+      if (runtime.model?.id) {
+        lines.push(`${label("Server model")} ${info(runtime.model.id)}`);
       }
-      if (runtime.memory) {
-        const unified =
-          runtime.memory.unifiedBytes > 0
-            ? ` · ${formatRuntimeBytes(runtime.memory.unifiedBytes)} unified`
-            : "";
+      if (runtime.model?.path) {
+        lines.push(`${label("Model path")} ${info(shortenHomePath(runtime.model.path))}`);
+      }
+      if (runtime.capabilities) {
+        const capabilities = [
+          runtime.capabilities.vision ? "vision" : null,
+          runtime.capabilities.draft ? "draft" : null,
+        ].filter(Boolean);
         lines.push(
-          `${label("VRAM snapshot")} ${info(`${formatRuntimeBytes(runtime.memory.usedBytes)} used · ${formatRuntimeBytes(runtime.memory.freeBytes)} free · ${formatRuntimeBytes(runtime.memory.totalBytes)} total${unified}`)} ${muted(`(${new Date(runtime.memory.observedAtMs).toISOString()})`)}`,
+          `${label("Capabilities")} ${info(capabilities.length ? capabilities.join(", ") : "text only")}`,
         );
       }
-      if (runtime.offload) {
-        const layers =
-          typeof runtime.offload.offloadedLayers === "number" &&
-          typeof runtime.offload.totalLayers === "number"
-            ? `${runtime.offload.offloadedLayers}/${runtime.offload.totalLayers} layers`
-            : runtime.offload.supported
-              ? "supported"
-              : "unsupported";
-        lines.push(`${label("GPU offload")} ${info(layers)}`);
-      }
-      if (runtime.context) {
+      if (runtime.endpoints) {
         lines.push(
-          `${label("Requested context")} ${info(`${runtime.context.requestedSize} tokens`)}`,
+          `${label("Endpoints")} ${info(
+            Object.entries(runtime.endpoints)
+              .map(([name, state]) => `${name}=${state}`)
+              .join(" "),
+          )}`,
         );
       }
       if (runtime.loadError) {

@@ -1,10 +1,12 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import {
@@ -144,6 +146,7 @@ export async function persistCliAssistantTranscript(params: {
   };
 }): Promise<{
   owned: boolean;
+  idempotencyKey?: string;
   terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
 }> {
   const { runParams } = params;
@@ -165,6 +168,7 @@ export async function persistCliAssistantTranscript(params: {
     return { owned: false };
   }
   try {
+    const idempotencyKey = `cli-assistant:${runParams.runId}`;
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
@@ -176,7 +180,7 @@ export async function persistCliAssistantTranscript(params: {
         ? { expectedWriterRunId: runParams.expectedWriterRunId }
         : {}),
       storePath: runParams.storePath,
-      idempotencyKey: `cli-assistant:${runParams.runId}`,
+      idempotencyKey,
       config: runParams.config,
       beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       message: buildAssistantMessage({
@@ -200,7 +204,11 @@ export async function persistCliAssistantTranscript(params: {
       log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`);
       return { owned: result.code === "blocked" || result.code === "session-rebound" };
     }
-    return { owned: true, ...(result.anchor ? { terminalAnchor: result.anchor } : {}) };
+    return {
+      owned: true,
+      idempotencyKey,
+      ...(result.anchor ? { terminalAnchor: result.anchor } : {}),
+    };
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
     return { owned: false };
@@ -256,7 +264,27 @@ export async function persistCliRunBlock(
 
   try {
     const sessionKey = params.sessionKey?.trim() || params.sessionId;
-    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+    const targetAgentId = params.sessionTarget?.agentId;
+    const targetStorePath = params.sessionTarget?.storePath;
+    const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+      config: params.config ?? {},
+      sessionKey,
+      storePath: targetStorePath,
+    });
+    const explicitAlternateStoreAgentId =
+      targetAgentId &&
+      targetStorePath &&
+      !parseAgentSessionKey(sessionKey)?.agentId &&
+      targetStoreOwner.kind === "none"
+        ? targetAgentId
+        : undefined;
+    const agentId =
+      explicitAlternateStoreAgentId ??
+      resolveSessionAgentId({
+        agentId: targetAgentId ?? params.agentId,
+        config: params.config,
+        sessionKey,
+      });
     let sessionManager = params.sessionManager;
     if (!sessionManager) {
       const sessionTarget = params.sessionTarget ?? {

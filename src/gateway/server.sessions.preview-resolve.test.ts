@@ -70,8 +70,11 @@ test("sessions.preview returns transcript previews", async () => {
   const entry = preview.payload?.previews[0];
   expect(entry?.key).toBe("main");
   expect(entry?.status).toBe("ok");
-  expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
-  expect(entry?.items[1]?.text).toContain("call weather");
+  expect(entry?.items).toEqual([
+    { role: "user", text: "Hello" },
+    { role: "assistant", text: "Hi" },
+    { role: "assistant", text: "Forecast ready" },
+  ]);
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
@@ -153,10 +156,12 @@ test("sessions.resolve returns short-id ambiguity as a protocol-success result",
     ok: false,
     candidates: [
       {
+        agentId: "main",
         key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
         displayName: "Newer",
       },
       {
+        agentId: "main",
         key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
         displayName: "Older",
       },

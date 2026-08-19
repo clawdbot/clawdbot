@@ -869,6 +869,7 @@ export function createImageGenerateTool(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -924,7 +925,10 @@ export function createImageGenerateTool(options?: {
         });
       }
       if (action === "status") {
-        return createImageGenerateStatusActionResult(options?.agentSessionKey);
+        return createImageGenerateStatusActionResult(
+          options?.agentSessionKey,
+          options?.requesterAgentId,
+        );
       }
 
       const model = readToolStringParam(params, "model");
@@ -949,7 +953,7 @@ export function createImageGenerateTool(options?: {
 
       const activeDuplicateGuardResult = createImageGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt },
+        { prompt, agentId: options?.requesterAgentId },
       );
       if (activeDuplicateGuardResult) {
         return activeDuplicateGuardResult;
@@ -1018,7 +1022,7 @@ export function createImageGenerateTool(options?: {
       });
       const duplicateGuardResult = createImageGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt, requestKey },
+        { prompt, requestKey, agentId: options?.requesterAgentId },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;
@@ -1073,17 +1077,20 @@ export function createImageGenerateTool(options?: {
       signal?.throwIfAborted();
       const taskHandle = createImageGenerationTaskRun({
         sessionKey: options?.agentSessionKey,
+        requesterAgentId: options?.requesterAgentId,
         requesterOrigin: options?.requesterOrigin,
         prompt,
         providerId: selectedProvider?.id,
       });
       const shouldDetach = Boolean(
-        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+        taskHandle &&
+        shouldDetachMediaGenerationTask(options?.agentSessionKey, options?.requesterAgentId),
       );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({
           sessionKey: options?.agentSessionKey,
+          agentId: options?.requesterAgentId,
           taskKind: "image_generation",
           sourcePrefix: "image_generate",
           taskId: taskHandle.taskId,

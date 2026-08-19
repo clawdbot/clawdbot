@@ -217,6 +217,28 @@ describe("audit gateway methods", () => {
     });
   });
 
+  it.each([
+    { kind: "agent_run", direction: "inbound" },
+    { kind: "agent_run", channel: "telegram" },
+    { kind: "message", sessionKey: "agent:main:main" },
+    { sessionKey: "agent:main:main", direction: "inbound" },
+    { sessionKey: "agent:main:main", channel: "telegram" },
+  ])(
+    "rejects impossible activity filters before storage: $kind $direction $channel",
+    async (params) => {
+      const respond = await runAuditHandler("audit.activity.list", params);
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("invalid audit.activity.list filters"),
+        }),
+      );
+      expect(listAuditEvents).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["audit.list", "audit.activity.list"] as const)(
     "rejects malformed cursors and inverted ranges for %s",
     async (method) => {
@@ -290,6 +312,45 @@ describe("audit gateway methods", () => {
       executionId: "execution-1",
       decisionLimit: 20,
     });
+
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: "1",
+      decisionCursor: "1",
+      decisionLimit: 25,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionOffset: 1,
+      executionLimit: 50,
+      decisionCursor: "1",
+      decisionLimit: 25,
+    });
+
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: "001",
+      decisionCursor: "001",
+      decisionLimit: 25,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionOffset: 1,
+      executionLimit: 50,
+      decisionCursor: "001",
+      decisionLimit: 25,
+    });
+
+    await runAuditHandler("audit.run.inspect", {
+      executionId: "execution-1",
+      decisionCursor: "1",
+      decisionLimit: 20,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      executionId: "execution-1",
+      decisionCursor: "1",
+      decisionLimit: 20,
+    });
   });
 
   it("rejects malformed run inspection before storage access", async () => {
@@ -299,6 +360,11 @@ describe("audit gateway methods", () => {
     expect(
       await runAuditHandler("audit.run.inspect", { runId: "run-1", decisionCursor: "0" }),
     ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    for (const decisionCursor of ["-1", "1.5", "1a", "a:1:2x", "9007199254740992"]) {
+      expect(
+        await runAuditHandler("audit.run.inspect", { runId: "run-1", decisionCursor }),
+      ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    }
     expect(
       await runAuditHandler("audit.run.inspect", {
         runId: "run-1",

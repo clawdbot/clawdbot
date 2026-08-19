@@ -182,6 +182,22 @@ export async function pressBrowserKey(
   });
 }
 
+export async function resizeBrowserViewport(
+  client: GatewayBrowserClient,
+  params: { targetId: string; width: number; height: number },
+) {
+  await browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
+  });
+}
+
 async function evaluateInBrowser<T>(
   client: GatewayBrowserClient,
   params: { targetId: string; fn: string },

@@ -19,23 +19,15 @@ export function resolveDeviceIdentityCoordinatorPath(
 export function resolveDeviceIdentityCoordinatorPaths(params: {
   databasePath: string;
   stateDir: string;
-  temporaryDirectory: string;
   uid: number | undefined;
 }): string[] {
-  const suffix = params.uid === undefined ? "openclaw" : `openclaw-${params.uid}`;
-  const filename = resolveDeviceIdentityCoordinatorFilename(params.databasePath);
+  // The process-temp bridge existed only in v2026.8.1-beta.2; current runtimes
+  // use the state-local identity lock behind the shared lifecycle coordinator.
   const canonicalStateDir = resolvePathViaExistingAncestorSync(params.stateDir);
-  const orderedPaths = [
-    path.join(path.resolve(params.temporaryDirectory), suffix, filename),
-    path.join(resolveGatewayLockDir(canonicalStateDir, params.uid), filename),
+  return [
+    path.join(
+      resolveGatewayLockDir(canonicalStateDir, params.uid),
+      resolveDeviceIdentityCoordinatorFilename(params.databasePath),
+    ),
   ];
-  const seen = new Set<string>();
-  return orderedPaths.filter((coordinatorPath) => {
-    const canonicalPath = resolvePathViaExistingAncestorSync(coordinatorPath);
-    if (seen.has(canonicalPath)) {
-      return false;
-    }
-    seen.add(canonicalPath);
-    return true;
-  });
 }

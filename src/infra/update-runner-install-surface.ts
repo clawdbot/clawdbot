@@ -64,13 +64,16 @@ export async function resolveGitRoot(
   runCommand: CommandRunner,
   candidates: string[],
   timeoutMs: number,
+  packageRoot?: string | null,
 ): Promise<string | null> {
   for (const dir of candidates) {
     const result = await runCommand(["git", "-C", dir, "rev-parse", "--show-toplevel"], {
       timeoutMs,
     }).catch(() => null);
     const root = result?.code === 0 ? result.stdout.trim() : "";
-    if (root) {
+    // A launcher may live inside an unrelated checkout (for example nvm).
+    // Keep probing until the Git root owns the discovered OpenClaw package.
+    if (root && (!packageRoot || updateInstallRootsMatch(root, packageRoot))) {
       return root;
     }
   }
@@ -117,10 +120,7 @@ export async function resolveUpdateInstallSurface(
   const candidates = buildStartDirs(opts);
   const packageRoot = await findPackageRoot(candidates);
 
-  let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
-  if (gitRoot && packageRoot && !updateInstallRootsMatch(gitRoot, packageRoot)) {
-    gitRoot = null;
-  }
+  const gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs, packageRoot);
   if (gitRoot && !packageRoot) {
     return { kind: "missing", mode: "unknown", root: resolveUpdateInstallRoot(gitRoot) };
   }

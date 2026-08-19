@@ -2,7 +2,10 @@
 // Tracks pending operator decisions and short-lived resolved approval records.
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { buildApprovalPresentation } from "../infra/approval-presentation.js";
@@ -11,7 +14,6 @@ import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import {
@@ -126,6 +128,9 @@ type ExecApprovalManagerOptions<TPayload> = {
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
   ) => void;
   onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+  /** Durable timeout expiry can be first observed by a timer, lookup, or replay.
+   * Publish from the local settlement owner so every ordering reaches reviewers. */
+  onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
   validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
 };
 
@@ -155,8 +160,7 @@ type ExecApprovalDurableLookup =
 type PendingEntry<TPayload = ExecApprovalRequestPayload> = {
   record: ExecApprovalRecord<TPayload>;
   resolve: (decision: ExecApprovalDecision | null) => void;
-  reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   handoffRetainCount: number;
   handoffReleasedAtMs: number | null;
@@ -352,17 +356,14 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     }
 
     let resolvePromise: (decision: ExecApprovalDecision | null) => void;
-    let rejectPromise: (err: Error) => void;
-    const promise = new Promise<ExecApprovalDecision | null>((resolve, reject) => {
+    const promise = new Promise<ExecApprovalDecision | null>((resolve) => {
       resolvePromise = resolve;
-      rejectPromise = reject;
     });
     // Create entry first so we can capture it in the closure (not re-fetch from map)
     const entry: PendingEntry<TPayload> = {
       record,
       resolve: resolvePromise!,
-      reject: rejectPromise!,
-      timer: null as unknown as ReturnType<typeof setTimeout>,
+      timer: null,
       cleanupTimer: null,
       handoffRetainCount: 0,
       handoffReleasedAtMs: null,
@@ -621,6 +622,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     localResolutionSource: ExecApprovalResolutionSource = "operator",
   ): boolean {
     const persistence = this.options.persistence;
+    const liveRecord = this.pending.get(record.id)?.record;
     if (
       record.kind !== this.approvalKind ||
       (persistence && record.runtimeEpoch !== persistence.runtimeEpoch) ||
@@ -649,6 +651,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     });
     if (settled) {
       this.emitLifecycle({ phase: "terminal", record });
+      if (record.status === "expired" && liveRecord) {
+        try {
+          this.options.onExpired?.(record, liveRecord);
+        } catch (error) {
+          this.reportError(error, { approvalId: record.id, operation: "expire" });
+        }
+      }
     }
     return settled;
   }
@@ -744,7 +753,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (!pending || pending.record.resolvedAtMs !== undefined) {
       return false;
     }
-    clearTimeout(pending.timer);
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
     pending.record.resolvedAtMs = params.resolvedAtMs;
     if (params.decision === null) {
       delete pending.record.decision;
@@ -862,12 +873,16 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   }
 
   private scheduleExpiryTimer(entry: PendingEntry<TPayload>): void {
-    const timerDelayMs = resolveApprovalTimeoutMs(entry.record.expiresAtMs - Date.now());
-    entry.timer = setTimeout(() => {
+    entry.timer = this.createExpiryTimer(entry.record);
+  }
+
+  private createExpiryTimer(record: ExecApprovalRecord<TPayload>): ReturnType<typeof setTimeout> {
+    const timerDelayMs = resolveApprovalTimeoutMs(record.expiresAtMs - Date.now());
+    return setTimeout(() => {
       try {
-        this.expireDue(entry.record.id);
+        this.expireDue(record.id);
       } catch (error) {
-        this.reportError(error, { approvalId: entry.record.id, operation: "expire" });
+        this.reportError(error, { approvalId: record.id, operation: "expire" });
       }
     }, timerDelayMs);
   }
@@ -1001,7 +1016,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       record.resolvedAtMs === undefined ||
       record.decision !== undefined ||
       record.consumedDecision !== undefined ||
-      record.askFallbackConsumed === true
+      record.askFallbackConsumed === true ||
+      // Only unanswered approvals (timeout or no delivery route) are
+      // re-admissible. Cancelled/fenced records also end decision-less, but
+      // their authority closed deliberately — never replay through them.
+      (record.status !== "expired" && record.terminalReason !== "no-route")
     ) {
       return false;
     }
@@ -1236,10 +1255,6 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { kind: "ambiguous", ids: matches };
     }
     return { kind: "none" };
-  }
-
-  lookupPendingId(input: string): ExecApprovalIdLookupResult {
-    return this.lookupApprovalId(input);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

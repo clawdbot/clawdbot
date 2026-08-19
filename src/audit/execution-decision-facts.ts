@@ -326,6 +326,7 @@ function retainedDecisionFactMetadata(params: {
   contextId: string;
   now: number;
   after?: ExecutionDecisionFactCursor;
+  offset?: number;
   limit: number;
 }): ExecutionDecisionMetadataRow[] {
   const boundary = params.after
@@ -377,6 +378,7 @@ function retainedDecisionFactMetadata(params: {
       ])
       .orderBy("occurred_at", "asc")
       .orderBy("receipt_id", "asc")
+      .$if(params.offset !== undefined, (query) => query.offset(params.offset!))
       .limit(params.limit),
   ).rows;
 }
@@ -522,6 +524,7 @@ export function hasExecutionDecisionFactsForRun(params: {
 export function pageExecutionDecisionFactsForContext(params: {
   context: ExecutionDecisionContext;
   after?: ExecutionDecisionFactCursor;
+  offset?: number;
   limit: number;
   now?: number;
   database?: OpenClawStateDatabaseOptions;
@@ -536,6 +539,7 @@ export function pageExecutionDecisionFactsForContext(params: {
         contextId: params.context.contextId,
         now: params.now ?? Date.now(),
         after: params.after,
+        offset: params.offset,
         limit: params.limit + 1,
       });
       const pageMetadata = metadataRows.slice(0, params.limit);

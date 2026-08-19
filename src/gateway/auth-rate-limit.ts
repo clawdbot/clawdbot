@@ -17,7 +17,10 @@
  *   {@link createAuthRateLimiter} and pass it where needed.
  */
 
-import { resolveIntegerOption, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import {
+  resolveIntegerOption,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
 // ---------------------------------------------------------------------------
@@ -56,9 +59,18 @@ export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
 // device signature can queue the bootstrap-pairing flow behind their
 // requests, blocking legitimate node onboarding during the attack.
 export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
+// Public join-code exchange burns SQLite state, so misses are serialized and
+// throttled before they can queue unbounded writes behind the shared DB lock.
+export const AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN = "device-join";
 // Public watchOS challenge issuance is throttled separately from credential
 // failures so challenge floods cannot displace legitimate device handshakes.
 export const AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE = "watch-challenge";
+// Public worker admission verifies a high-entropy dispatch credential, but
+// failures still need their own per-IP budget before store-backed retries.
+export const AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION = "worker-admission";
+// Workspace transfers use a separate public-ingress budget so blob requests
+// cannot consume worker WebSocket admission capacity, or vice versa.
+export const AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER = "worker-transfer";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 const IDENTITY_RATE_LIMIT_KEY_PREFIX = "identity:";
@@ -102,6 +114,19 @@ export interface AuthRateLimiter {
   prune(): void;
   /** Dispose the limiter and cancel periodic cleanup timers. */
   dispose(): void;
+}
+
+const authRateLimiterExemptionChecks = new WeakMap<
+  AuthRateLimiter,
+  (ip: string | undefined) => boolean
+>();
+
+/** Whether a limiter created by this module exempts the prepared client identity. */
+export function isAuthRateLimitClientExempt(
+  limiter: AuthRateLimiter,
+  ip: string | undefined,
+): boolean {
+  return authRateLimiterExemptionChecks.get(limiter)?.(ip) ?? false;
 }
 
 // ---------------------------------------------------------------------------
@@ -430,5 +455,9 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     }
   }
 
-  return { check, recordFailure, recordFailureAndDelay, reset, size, prune, dispose };
+  const limiter = { check, recordFailure, recordFailureAndDelay, reset, size, prune, dispose };
+  // Credential-fallback owners use the exact limiter policy to avoid holding
+  // exempt loopback penalty delays inside a per-identity serialization queue.
+  authRateLimiterExemptionChecks.set(limiter, (rawIp) => isExempt(normalizeIp(rawIp)));
+  return limiter;
 }

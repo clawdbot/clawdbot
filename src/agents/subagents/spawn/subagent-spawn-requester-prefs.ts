@@ -24,6 +24,7 @@ export function readRequesterThinkingLevel(params: {
     const target = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
       key: params.requesterInternalKey,
+      agentId: params.requesterAgentId,
     });
     entry = loadSessionEntry({
       storePath: target.storePath,
@@ -83,6 +84,7 @@ export function readRequesterFastMode(params: {
     const target = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
       key: params.requesterInternalKey,
+      agentId: params.requesterAgentId,
     });
     entry = loadSessionEntry({
       storePath: target.storePath,

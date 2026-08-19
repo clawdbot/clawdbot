@@ -155,6 +155,7 @@ export async function handleSubagentsFocusAction(
       ? readAcpSessionEntry({
           cfg: params.cfg,
           sessionKey: focusTarget.targetSessionKey,
+          agentId: focusTarget.agentId,
         })?.acp
       : undefined;
   if (!capabilities.placements.includes(bindingContext.placement)) {

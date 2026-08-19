@@ -1,6 +1,6 @@
 /** Detects and logs long private finals when message-tool-only delivery was expected. */
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { estimateStringChars } from "../../utils/cjk-chars.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { isSilentReplyText } from "../tokens.js";
 

@@ -41,14 +41,15 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
-  buildCronAgentDefaultsConfig,
   resolveCronActiveRuntimeConfig,
+  resolveCronAgentConfig,
 } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import {
@@ -122,14 +123,10 @@ async function prepareTriggerRuntime(params: {
   const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
   const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
   const agentConfigOverride = params.agentId?.trim() ? selectedAgentConfig : undefined;
-  const agentDefaults = buildCronAgentDefaultsConfig({
-    defaults: params.runtimeConfig.agents?.defaults,
+  const { agentDefaults, cfgWithAgentDefaults: config } = resolveCronAgentConfig({
+    config: params.runtimeConfig,
     agentConfigOverride,
   });
-  const config: OpenClawConfig = {
-    ...params.runtimeConfig,
-    agents: Object.assign({}, params.runtimeConfig.agents, { defaults: agentDefaults }),
-  };
   const workspaceDirRaw = resolveAgentWorkspaceDir(config, agentId);
   const agentDir = resolveAgentDir(config, agentId);
   const workspace = await ensureAgentWorkspace({
@@ -482,7 +479,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
             : error instanceof CodeModeHeadlessAbortError
               ? "aborted"
               : "internal_error",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessageWithCode(error),
       };
     } finally {
       evaluationScope.cleanup();
@@ -512,7 +509,7 @@ function validateCronState(candidate: Record<string, unknown>, label: string) {
     return {
       ok: false as const,
       code: "internal_error" as const,
-      error: `${label} state is not JSON-serializable: ${String(error)}`,
+      error: `${label} state is not JSON-serializable: ${formatErrorMessageWithCode(error)}`,
     };
   }
   if (serialized === undefined) {

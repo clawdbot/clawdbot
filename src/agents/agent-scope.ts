@@ -1,16 +1,16 @@
 /** Higher-level agent scope helpers for model selection, fallbacks, skills, and workspaces. */
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
-export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import {
   lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -26,12 +26,15 @@ import {
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import { resolveUserPath } from "../utils.js";
 import {
+  AgentSelectionRequiredError,
   listAgentIds,
   resolveMutableAgentEntry,
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "./agent-scope-config.js";
+export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export {
   listAgentEntries,
   listAgentEntriesWithSource,
@@ -43,8 +46,15 @@ export {
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
+  tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId,
+  resolveSoleAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+  tryResolveSystemAgentTargetAgentId,
+  tryResolveSoleAgentId,
   tryResolveDefaultAgentId,
+  AgentSelectionRequiredError,
+  type AgentSelectionContext,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 
@@ -299,13 +309,12 @@ export { resolveAgentIdFromSessionKey };
 export function resolveSessionAgentIds(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId?: string | undefined;
   fallbackAgentId?: string;
 }): {
   defaultAgentId: string;
   sessionAgentId: string;
 } {
-  const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
   const explicitAgentIdRaw = normalizeLowercaseStringOrEmpty(params.agentId);
   const explicitAgentId = explicitAgentIdRaw ? normalizeAgentId(explicitAgentIdRaw) : null;
   const fallbackAgentIdRaw = normalizeLowercaseStringOrEmpty(params.fallbackAgentId);
@@ -313,9 +322,44 @@ export function resolveSessionAgentIds(params: {
   const sessionKey = params.sessionKey?.trim();
   const normalizedSessionKey = sessionKey ? normalizeLowercaseStringOrEmpty(sessionKey) : undefined;
   const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
+  const sessionKeyAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : null;
+  const cfg = params.config ?? {};
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
+  if (sessionKeyAgentId && explicitAgentId && explicitAgentId !== sessionKeyAgentId) {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "session agent resolution",
+      hint: `The agent-scoped session key belongs to "${sessionKeyAgentId}", not "${explicitAgentId}".`,
+    });
+  }
+  const requestedUnscopedAgentId = explicitAgentId ?? fallbackAgentId;
+  if (!sessionKeyAgentId && persistedStoreOwner.kind === "retired") {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "session agent resolution",
+      hint: `The shared fixed-store row belongs to retired agent "${persistedStoreOwner.agentId}".`,
+    });
+  }
+  if (
+    !sessionKeyAgentId &&
+    persistedStoreOwner.kind === "configured" &&
+    requestedUnscopedAgentId &&
+    requestedUnscopedAgentId !== persistedStoreOwner.agentId
+  ) {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "session agent resolution",
+      hint: `The shared fixed-store row belongs to "${persistedStoreOwner.agentId}", not "${requestedUnscopedAgentId}".`,
+    });
+  }
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const sessionAgentId =
-    explicitAgentId ??
-    (parsed?.agentId ? normalizeAgentId(parsed.agentId) : (fallbackAgentId ?? defaultAgentId));
+    sessionKeyAgentId ??
+    (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
+    requestedUnscopedAgentId ??
+    compatibilityAgentId ??
+    resolveDefaultAgentId(cfg, {
+      surface: "session agent resolution",
+      hint: "Pass an agentId, an agent-scoped session key, or a prepared fallbackAgentId.",
+    });
+  const defaultAgentId = compatibilityAgentId ?? sessionAgentId;
   return { defaultAgentId, sessionAgentId };
 }
 
@@ -514,8 +558,12 @@ export function resolveRunModelFallbacksOverride(params: {
   const explicitAgentId = normalizeOptionalString(params.agentId);
   const agentId = explicitAgentId
     ? normalizeAgentId(explicitAgentId)
-    : (parseAgentSessionKey(params.sessionKey)?.agentId ??
-      (listAgentIds(params.cfg).length > 0 ? resolveDefaultAgentId(params.cfg) : undefined));
+    : listAgentIds(params.cfg).length > 0
+      ? resolveSessionAgentIds({
+          config: params.cfg,
+          sessionKey: params.sessionKey ?? undefined,
+        }).sessionAgentId
+      : undefined;
   return agentId ? resolveAgentModelFallbacksOverride(params.cfg, agentId) : undefined;
 }
 

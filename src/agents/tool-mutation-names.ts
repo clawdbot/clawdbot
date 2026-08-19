@@ -21,6 +21,7 @@ const MUTATING_TOOL_NAMES = new Set([
   // Saved transcripts predate the rename; legacy names must stay classified.
   ...LEGACY_AUTOMATIONS_TOOL_NAMES,
   "gateway",
+  "portal",
   "canvas",
   "computer",
   "mobile_ui",

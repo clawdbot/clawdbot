@@ -7,7 +7,6 @@ import {
   errorShape,
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
@@ -17,7 +16,10 @@ import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import {
@@ -193,7 +195,7 @@ async function createAgentMainSessionForSend(params: {
   }
 
   const createdKey = normalizeOptionalString(createResult.payload?.key) ?? params.canonicalKey;
-  const loaded = loadGatewaySessionEntryReadOnly(createdKey);
+  const loaded = loadGatewaySessionEntryReadOnly(createdKey, { agentId });
   if (!loaded.entry?.sessionId) {
     return {
       ok: false,
@@ -225,7 +227,7 @@ export async function interruptSessionRunIfActive(params: {
     requestedKey: params.requestedKey,
     canonicalKey: params.canonicalKey,
     agentId: params.agentId,
-    defaultAgentId: resolveDefaultAgentId(cfg),
+    defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, params.canonicalKey),
     excludeRunIds: params.excludeRunIds,
   });
   const hasEmbeddedRun =
@@ -250,6 +252,8 @@ export async function interruptSessionRunIfActive(params: {
       context: params.context,
       requestedKey: params.requestedKey,
       canonicalKey: params.canonicalKey,
+      agentId: params.agentId,
+      defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, params.canonicalKey),
     });
 
     await handleChatAbortRequestWithLifecycle(
@@ -257,9 +261,7 @@ export async function interruptSessionRunIfActive(params: {
         req: params.req,
         params: {
           sessionKey: abortSessionKey,
-          ...(params.canonicalKey === "global" && params.agentId
-            ? { agentId: params.agentId }
-            : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
         },
         respond: (ok, _payload, error) => {
           abortOk = ok;
@@ -383,7 +385,7 @@ async function handleSessionSend(params: {
         req: params.req,
         params: {
           sessionKey: canonicalKey,
-          ...(canonicalKey === "global" && requestedAgentId ? { agentId: requestedAgentId } : {}),
+          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
           message: (p as { message: string }).message,
           thinking: (p as { thinking?: string }).thinking,
           attachments: (p as { attachments?: unknown[] }).attachments,
@@ -557,7 +559,7 @@ async function handleSessionSend(params: {
       }
       emitSessionsChanged(params.context, {
         sessionKey: canonicalKey,
-        ...(canonicalKey === "global" && requestedAgentId ? { agentId: requestedAgentId } : {}),
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
         reason: interruptedActiveRun ? "steer" : "send",
       });
     }

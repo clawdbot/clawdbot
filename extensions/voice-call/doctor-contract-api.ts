@@ -138,8 +138,14 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
   switch (migration.kind) {
     case "agent-databases-composite-primary-key":
       return "agent database registry primary key -> agent_id,path";
+    case "agent-databases-relative-paths-v9":
+      return "agent database registry paths -> state-relative paths";
     case "audit-events-v2":
       return "audit event ledger -> versioned message lifecycle schema";
+    case "commitments-retirement-v7":
+      return "retired commitments storage -> removed table and indexes";
+    case "worker-placement-execution-mode-v8":
+      return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":
       return "operator approvals -> OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":

@@ -1,5 +1,10 @@
 // Gateway RPC helpers for node CLI commands, including lazy runtime loading and option parsing.
 import { randomUUID } from "node:crypto";
+import {
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -9,11 +14,6 @@ import {
 import { readConnectErrorDetailCode } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { readMissingScopeError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import {
-  parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "../../infra/parse-finite-number.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
 import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
@@ -122,6 +122,7 @@ export const callNodesGatewayCli = async (
       ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
       : GATEWAY_CLIENT_NAMES.CLI,
     mode: useLocalBackendSharedAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    sharedStateMode: "read-only",
   });
 };
 
@@ -170,6 +171,7 @@ export const callNodePairApprovalGatewayCli = async (
     scopes: callOpts.scopes,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
+    sharedStateMode: "read-only",
   });
 };
 

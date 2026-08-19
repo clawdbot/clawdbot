@@ -38,6 +38,27 @@ describe("createTerminalLaunchPolicy", () => {
     });
   });
 
+  it("requires an explicit terminal owner in explicit multi-agent fleets", () => {
+    const policy = createTerminalLaunchPolicy({
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, research: {} },
+      },
+    });
+
+    expect(policy.resolve()).toMatchObject({
+      ok: false,
+      block: {
+        kind: "owner-required",
+        message: expect.stringContaining("no explicit owner"),
+      },
+    });
+    expect(policy.resolve("research")).toMatchObject({
+      ok: true,
+      plan: { agentId: "research" },
+    });
+  });
+
   it("applies restart-bound revocations without granting access early", () => {
     const enabled = {
       gateway: { terminal: { enabled: true } },
@@ -83,13 +104,14 @@ describe("createTerminalLaunchPolicy", () => {
 
   it("keeps restart and commit restrictions isolated across agents", () => {
     const baseConfig: OpenClawConfig = {
-      agents: { list: [{ id: "alpha" }, { id: "beta" }] },
+      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
     };
     const policy = createTerminalLaunchPolicy(baseConfig);
 
     policy.prepareConfig(
       {
         agents: {
+          ownership: "explicit",
           list: [{ id: "alpha", sandbox: { mode: "all" } }, { id: "beta" }],
         },
       },
@@ -98,6 +120,7 @@ describe("createTerminalLaunchPolicy", () => {
     policy.prepareConfig(
       {
         agents: {
+          ownership: "explicit",
           list: [{ id: "alpha" }, { id: "beta", sandbox: { mode: "all" } }],
         },
       },

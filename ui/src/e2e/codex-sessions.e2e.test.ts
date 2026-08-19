@@ -479,6 +479,7 @@ suite.define(() => {
         '[data-session-section="ungrouped"] .sidebar-recent-session, [data-session-section="catalog:codex"] .sidebar-recent-session--catalog-project-child',
       );
       await expect.poll(() => threadRows.count()).toBe(4);
+      expect(await threadRows.locator(".sidebar-recent-session__link[title]").count()).toBe(0);
       const threadRowMetrics = await threadRows.evaluateAll((rows) =>
         rows.map((row) => {
           const link = row.querySelector(".sidebar-recent-session__link");
@@ -495,36 +496,17 @@ suite.define(() => {
           };
         }),
       );
-      expect(threadRowMetrics).toEqual([
-        {
-          height: 30,
+      expect(threadRowMetrics).toHaveLength(4);
+      expect(new Set(threadRowMetrics.map((metric) => metric.height)).size).toBe(1);
+      expect(threadRowMetrics[0]?.height).toBeGreaterThan(30);
+      for (const metric of threadRowMetrics) {
+        expect(metric).toMatchObject({
           minHeight: "30px",
           nameFontSize: "13px",
           paddingBottom: "3px",
           paddingTop: "3px",
-        },
-        {
-          height: 30,
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-        {
-          height: 30,
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-        {
-          height: 30,
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-      ]);
+        });
+      }
       const projectLabelTone = await openclawProject
         .locator(".sidebar-session-catalog-project__label")
         .evaluate((label) => {
@@ -971,6 +953,18 @@ suite.define(() => {
       .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
       .filter({ hasText: "prepare release" });
     await catalogPane.getByText("prepare release", { exact: true }).waitFor();
+    expect(
+      (await gateway.getRequests("sessions.catalog.list")).every(
+        (request) => (request.params as { agentId?: string } | undefined)?.agentId === "main",
+      ),
+    ).toBe(true);
+    const read = await gateway.waitForRequest("sessions.catalog.read");
+    expect(read.params).toMatchObject({
+      agentId: "main",
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-1",
+    });
     const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
     await composer.fill("continue with the final checks");
     await gateway.setMethodResponse("sessions.list", {
@@ -998,6 +992,7 @@ suite.define(() => {
     await composer.press("Enter");
     const continued = await gateway.waitForRequest("sessions.catalog.continue");
     expect(continued.params).toEqual({
+      agentId: "main",
       catalogId: "codex",
       hostId: "gateway:local",
       threadId: "thread-1",

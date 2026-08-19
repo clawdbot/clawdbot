@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
+import { resolveFetchedDiscordThreadLikeChannelContext } from "../monitor/thread-channel-context.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
@@ -68,6 +69,7 @@ export class DiscordVoiceManager {
   private nextGuildGeneration = 0;
   private readonly joinTasks = new Map<string, Promise<VoiceOperationResult>>();
   private readonly botUserId?: string;
+  private readonly client: Client;
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
   private readonly fatalAutoJoinFailures = new Map<
@@ -93,6 +95,7 @@ export class DiscordVoiceManager {
     runtime: RuntimeEnv;
     botUserId?: string;
   }) {
+    this.client = params.client;
     this.botUserId = params.botUserId;
     this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
     const voiceAccess = resolveDiscordVoiceAccess(params);
@@ -113,6 +116,7 @@ export class DiscordVoiceManager {
       params.accountId,
     );
     this.receive = new DiscordVoiceReceive({
+      accountId: params.accountId,
       admissionAllowFrom: this.admissionAllowFrom,
       botUserId: () => this.botUserId,
       cfg: params.cfg,
@@ -266,6 +270,30 @@ export class DiscordVoiceManager {
       guildId: params.guildId.trim(),
       channelId: params.channelId.trim(),
     });
+  }
+
+  async resolveAccessTarget(params: { guildId: string; channelId: string }) {
+    const [guild, channel] = await Promise.all([
+      this.client.fetchGuild(params.guildId).catch(() => null),
+      this.client.fetchChannel(params.channelId).catch(() => null),
+    ]);
+    if (!guild || !channel) {
+      return undefined;
+    }
+    const context = await resolveFetchedDiscordThreadLikeChannelContext({
+      client: this.client,
+      channel,
+      channelIdFallback: params.channelId,
+    });
+    return {
+      guild,
+      ...(context.channelName ? { channelName: context.channelName } : {}),
+      channelSlug: context.channelSlug,
+      ...(context.parentId ? { parentId: context.parentId } : {}),
+      ...(context.threadParentName ? { parentName: context.threadParentName } : {}),
+      ...(context.threadParentSlug ? { parentSlug: context.threadParentSlug } : {}),
+      scope: context.isThreadChannel ? ("thread" as const) : ("channel" as const),
+    };
   }
 
   async join(

@@ -48,9 +48,12 @@ const PROFILES = {
     contextWindow: 48_000,
     contextTokens: 48_000,
     maxTokens: 8_192,
-    compactThreshold: 32_000,
+    // Keep the reduced live probe on OpenAI's demonstrated compaction path.
+    // High-threshold Luna probes can cross the configured threshold without
+    // emitting a checkpoint, while the 1k boundary is deterministic.
+    compactThreshold: 1_000,
     denseTurnChars: 120_000,
-    maxDenseTurns: 8,
+    maxDenseTurns: 3,
     defaultToolBytes: 300_000,
     requestTimeoutMs: 2 * 60_000,
     suiteTimeoutMs: 10 * 60_000,
@@ -199,6 +202,9 @@ export function buildOpenAILongContextConfig(params: {
         workspace: params.workspace,
         skipBootstrap: true,
         thinkingDefault: "low",
+        // This suite owns the server-compaction threshold. Embedded proactive
+        // compaction would consume the same history before replay can be proved.
+        compaction: { enabled: false },
         model: { primary: profile.modelRef },
         models: {
           [profile.modelRef]: {
@@ -255,6 +261,11 @@ export function assertOpenAILongContextConfig(
     "secrets.providers.default.source",
     cfg.secrets?.providers?.default?.source,
     "env",
+  );
+  expectConfigValue(
+    "agents.defaults.compaction.enabled",
+    cfg.agents?.defaults?.compaction?.enabled,
+    false,
   );
   expectConfigValue("models.providers.openai.models.length", provider?.models.length, 1);
   const model = provider?.models[0];

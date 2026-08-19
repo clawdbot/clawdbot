@@ -298,7 +298,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use BUZZ_PRIVATE_KEY with the supplied relay URL"
-                }
+                },
+                "envVars": [
+                  "BUZZ_PRIVATE_KEY"
+                ]
               }
             ]
           }
@@ -624,7 +627,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use CLICKCLACK_BOT_TOKEN"
-                }
+                },
+                "envVars": [
+                  "CLICKCLACK_BOT_TOKEN"
+                ]
               }
             ]
           }
@@ -692,7 +698,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use DISCORD_BOT_TOKEN"
-                }
+                },
+                "envVars": [
+                  "DISCORD_BOT_TOKEN"
+                ]
               }
             ]
           },
@@ -874,7 +883,12 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Google Chat environment credentials"
-                }
+                },
+                "envVars": [
+                  "GOOGLE_CHAT_SERVICE_ACCOUNT",
+                  "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"
+                ],
+                "envVarMode": "any"
               }
             ]
           }
@@ -1059,7 +1073,11 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use IRC environment configuration"
-                }
+                },
+                "envVars": [
+                  "IRC_HOST",
+                  "IRC_NICK"
+                ]
               }
             ]
           }
@@ -1152,7 +1170,11 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use LINE environment credentials"
-                }
+                },
+                "envVars": [
+                  "LINE_CHANNEL_ACCESS_TOKEN",
+                  "LINE_CHANNEL_SECRET"
+                ]
               }
             ]
           }
@@ -1363,7 +1385,11 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Mattermost environment credentials"
-                }
+                },
+                "envVars": [
+                  "MATTERMOST_BOT_TOKEN",
+                  "MATTERMOST_URL"
+                ]
               }
             ]
           }
@@ -1518,7 +1544,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Nextcloud Talk environment credentials"
-                }
+                },
+                "envVars": [
+                  "NEXTCLOUD_TALK_BOT_SECRET"
+                ]
               }
             ]
           }
@@ -1578,7 +1607,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use NOSTR_PRIVATE_KEY"
-                }
+                },
+                "envVars": [
+                  "NOSTR_PRIVATE_KEY"
+                ]
               }
             ]
           }
@@ -2119,7 +2151,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Slack environment credentials"
-                }
+                },
+                "envVars": [
+                  "SLACK_BOT_TOKEN"
+                ]
               }
             ]
           }
@@ -2298,9 +2333,19 @@
               {
                 "key": "url",
                 "kind": "string",
+                "sensitive": true,
                 "cli": {
                   "flags": "--url <url>",
                   "description": "Synology Chat webhook URL"
+                }
+              },
+              {
+                "key": "webhookUrl",
+                "kind": "string",
+                "sensitive": true,
+                "cli": {
+                  "flags": "--webhook-url <url>",
+                  "description": "Public HTTPS Synology Chat callback URL used for attachments"
                 }
               },
               {
@@ -2317,7 +2362,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Synology Chat environment credentials"
-                }
+                },
+                "envVars": [
+                  "SYNOLOGY_CHAT_TOKEN"
+                ]
               }
             ]
           }
@@ -2656,7 +2704,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use ZALO_BOT_TOKEN"
-                }
+                },
+                "envVars": [
+                  "ZALO_BOT_TOKEN"
+                ]
               }
             ]
           }

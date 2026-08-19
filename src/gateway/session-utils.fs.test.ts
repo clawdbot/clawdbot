@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  estimateStringChars,
+  estimateTokensFromChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 // Session filesystem utility tests cover transcript reading, usage extraction,
 // preview rows, message counts, title fields, and archive candidate resolution.
@@ -12,7 +16,6 @@ import {
   openFileBackedSessionManagerForTest,
 } from "../../test/helpers/session-manager-file-fixture.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
-import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
@@ -1411,40 +1414,16 @@ describe("buildSessionPreviewItems", () => {
     return buildSessionPreviewItems(messages, maxItems, maxChars);
   }
 
-  test("returns recent preview items with tool summary", () => {
+  test("returns only recent user and assistant display text", () => {
     const sessionId = "preview-session";
     const lines = createToolSummaryPreviewTranscriptLines(sessionId);
     const result = readPreview(lines);
 
-    expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
-    expect(result[1]?.text).toContain("call weather");
-  });
-
-  test("detects tool calls from tool_use/tool_call blocks and toolName field", () => {
-    const sessionId = "preview-session-tools";
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          toolName: "camera",
-          content: [
-            { type: "tool_use", name: "read" },
-            { type: "tool_call", name: "write" },
-          ],
-        },
-      }),
-      JSON.stringify({ message: { role: "assistant", content: "Done" } }),
-    ];
-    const result = readPreview(lines);
-
-    expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
-    expect(result[1]?.text).toContain("call");
-    expect(result[1]?.text).toContain("camera");
-    expect(result[1]?.text).toContain("read");
-    // Preview text may not list every tool name; it should at least hint there were multiple calls.
-    expect(result[1]?.text).toMatch(/\+\d+/);
+    expect(result).toEqual([
+      { role: "user", text: "Hello" },
+      { role: "assistant", text: "Hi" },
+      { role: "assistant", text: "Forecast ready" },
+    ]);
   });
 
   const commentaryText = {
@@ -1467,10 +1446,10 @@ describe("buildSessionPreviewItems", () => {
       expected: [{ role: "assistant", text: `${"t".repeat(196)}...` }],
     },
     {
-      name: "strips inline directives from preview items",
-      content: "A [[reply_to:abc-123]] B [[audio_as_voice]]",
+      name: "preserves quoted inline directives in preview items",
+      content: "Use `[[reply_to_current]]` literally",
       maxChars: 120,
-      expected: [{ role: "assistant", text: "A  B" }],
+      expected: [{ role: "assistant", text: "Use `[[reply_to_current]]` literally" }],
     },
     {
       name: "prefers final_answer text for assistant preview items",

@@ -17,7 +17,10 @@ function renderSplitSide(line: DiffLine | undefined, side: "left" | "right") {
   </div>`;
 }
 
-export function renderSessionSplitDiff(rows: readonly SessionSplitDiffRow[]) {
+export function renderSessionSplitDiff(
+  rows: readonly SessionSplitDiffRow[],
+  renderSkip?: (line: DiffLine) => unknown,
+) {
   return html`<div
     class="session-diff-split"
     role="figure"
@@ -31,7 +34,7 @@ export function renderSessionSplitDiff(rows: readonly SessionSplitDiffRow[]) {
       }
       if (row.line.kind === "skip") {
         return html`<div class="session-diff-split__row session-diff-split__row--skip">
-          ${row.line.text || "⋯"}
+          ${(renderSkip?.(row.line) ?? row.line.text) || "⋯"}
         </div>`;
       }
       return html`<div class="session-diff-split__row session-diff-split__row--context">

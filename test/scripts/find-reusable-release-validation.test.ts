@@ -112,7 +112,9 @@ interface NormalizedEvidence {
 }
 
 interface RunFixture {
+  error?: string;
   exitCode?: number;
+  rawOutput?: string;
   record?: NormalizedEvidence;
   runId: string;
 }
@@ -402,12 +404,19 @@ import { join } from "node:path";
 const runIndex = process.argv.indexOf("--validate-run");
 const repoIndex = process.argv.indexOf("--repo");
 const trustedRefIndex = process.argv.indexOf("--trusted-workflow-ref");
+const verifierShaIndex = process.argv.indexOf("--verifier-source-sha");
+const verifierFileIndex = process.argv.indexOf("--verifier-source-file");
 if (
   runIndex < 0 ||
   repoIndex < 0 ||
   trustedRefIndex < 0 ||
+  verifierShaIndex < 0 ||
+  verifierFileIndex < 0 ||
   process.argv[repoIndex + 1] !== "openclaw/openclaw" ||
-  process.argv[trustedRefIndex + 1] !== "main"
+  process.argv[trustedRefIndex + 1] !== "main" ||
+  process.argv[verifierShaIndex + 1] !== process.env.FAKE_VERIFIER_SHA ||
+  process.argv[verifierFileIndex + 1] !== process.argv[1] ||
+  !process.argv.includes("--json")
 ) {
   console.error("validator invocation contract mismatch");
   process.exit(2);
@@ -416,7 +425,13 @@ const fixture = JSON.parse(
   readFileSync(join(process.env.FAKE_VALIDATOR_FIXTURES, \`\${process.argv[runIndex + 1]}.json\`), "utf8"),
 );
 if (fixture.exitCode) {
-  console.error("fixture validator rejection");
+  process.stdout.write(
+    \`\${fixture.rawOutput ?? JSON.stringify({
+      error: fixture.error ?? "fixture validator rejection",
+      schema: "openclaw.release-validation-evidence/v3",
+      valid: false,
+    })}\\n\`,
+  );
   process.exit(fixture.exitCode);
 }
 process.stdout.write(\`\${JSON.stringify(fixture.record)}\\n\`);
@@ -449,10 +464,7 @@ function setUpFixtures(runs: RunFixture[]): {
     JSON.stringify({ workflow_runs: runs.map(({ runId }) => ({ id: Number(runId) })) }),
   );
   for (const run of runs) {
-    writeFileSync(
-      join(fixtures, `${run.runId}.json`),
-      JSON.stringify({ exitCode: run.exitCode ?? 0, record: run.record }),
-    );
+    writeFileSync(join(fixtures, `${run.runId}.json`), JSON.stringify(run));
   }
   return { binDir, fixtures, validatorPath };
 }
@@ -531,6 +543,7 @@ function runResolver(args: {
         ...process.env,
         FAKE_GH_FIXTURES: args.fixtures,
         FAKE_VALIDATOR_FIXTURES: args.fixtures,
+        FAKE_VERIFIER_SHA: verifierSha,
         GITHUB_OUTPUT: "",
         OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: args.validatorPath,
         PATH: `${args.binDir}:${process.env.PATH}`,
@@ -714,11 +727,12 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "true" });
   });
 
-  it("skips validator rejection and selects the next strict record", () => {
+  it("surfaces bounded validator rejection and selects the next strict record", () => {
     const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ runId: "111", targetSha: priorSha });
+    const validatorError = `evidence source mismatch\n${"x".repeat(600)}`;
     const { binDir, fixtures, validatorPath } = setUpFixtures([
-      { exitCode: 1, runId: "222" },
+      { error: validatorError, exitCode: 1, runId: "222" },
       { record, runId: "111" },
     ]);
 
@@ -732,7 +746,33 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
-    expect(result.stderr).toContain("run 222: shared evidence validator rejected the run");
+    expect(result.stderr).toContain(
+      `run 222: shared evidence validator rejected the run: evidence source mismatch ${"x".repeat(472)}...; skipping`,
+    );
+    expect(result.stderr).not.toContain("\nxxxxxxxx");
+  });
+
+  it("uses the generic rejection diagnostic when validator output is malformed", () => {
+    const { clone, priorSha } = getSharedRepo();
+    const record = normalizedEvidence({ runId: "111", targetSha: priorSha });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([
+      { exitCode: 1, rawOutput: "not-json", runId: "222" },
+      { record, runId: "111" },
+    ]);
+
+    const result = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      validatorPath,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
+    expect(result.stderr).toContain(
+      "run 222: shared evidence validator rejected the run; skipping",
+    );
   });
 
   it.each([

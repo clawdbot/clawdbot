@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -84,10 +85,6 @@ describe("agent-tools.policy", () => {
 
   it("keeps apply_patch when write is allowlisted", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
-  });
-
-  it("keeps apply_patch when write is denylisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
   });
 });
 
@@ -340,6 +337,7 @@ describe("resolveSubagentToolPolicyForSession", () => {
       const hardDeniedTools = [
         "gateway",
         "agents_list",
+        "openclaw",
         "session_status",
         "automations",
         "cron",
@@ -508,6 +506,48 @@ describe("resolveEffectiveToolPolicy", () => {
     expect(result.agentPolicy).toEqual({ deny: ["exec"] });
   });
 
+  it("uses the retained legacy owner policy when no session scope is provided", () => {
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            ops: { tools: { deny: ["read"] } },
+            research: { tools: { deny: ["exec"] } },
+          },
+        },
+      },
+      "research",
+    );
+
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+
+    expect(result.agentId).toBe("research");
+    expect(result.agentPolicy).toEqual({ deny: ["exec"] });
+  });
+
+  it("uses the configured fixed-store owner policy for an unscoped session key", () => {
+    const cfg = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "research" } },
+        entries: {
+          ops: { tools: { deny: ["read"] } },
+          research: { tools: { deny: ["exec"] } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveEffectiveToolPolicy({ config: cfg, sessionKey: "global" });
+
+    expect(result.agentId).toBe("research");
+    expect(result.agentPolicy).toEqual({ deny: ["exec"] });
+    expect(() =>
+      resolveEffectiveToolPolicy({ config: cfg, agentId: "ops", sessionKey: "global" }),
+    ).toThrow(/belongs to "research"/);
+  });
+
   it("keeps slash-containing modelId scoped to the selected provider", () => {
     const cfg = {
       tools: {
@@ -610,14 +650,14 @@ describe("resolveEffectiveToolPolicy", () => {
             id: "messenger",
             tools: {
               profile: "messaging",
-              alsoAllow: ["image"],
+              alsoAllow: ["view_image"],
             },
           },
         ],
       },
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "messenger" });
-    expect(result.profileAlsoAllow).toEqual(["image"]);
+    expect(result.profileAlsoAllow).toEqual(["view_image"]);
     expect(result.profileAlsoAllow).not.toContain("exec");
     expect(result.profileAlsoAllow).not.toContain("process");
   });
@@ -636,7 +676,7 @@ describe("resolveEffectiveToolPolicy", () => {
               id: "sage",
               tools: {
                 profile: "messaging",
-                alsoAllow: ["image"],
+                alsoAllow: ["view_image"],
               },
             },
           ],

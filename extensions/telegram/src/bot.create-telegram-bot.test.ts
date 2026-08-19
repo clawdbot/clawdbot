@@ -105,7 +105,6 @@ const {
   buildTelegramGroupFrom,
   buildTypingThreadParams,
   resolveTelegramForumFlag,
-  resetTelegramForumFlagCacheForTest,
   resolveTelegramThreadSpec,
 } = await import("./bot/helpers.js");
 const { resolveTelegramGroupPromptSettings, resolveTelegramScopedGroupConfig } =
@@ -132,6 +131,12 @@ const TELEGRAM_TEST_TIMINGS = {
   textFragmentGapMs: 30,
 } as const;
 const INBOUND_DEBOUNCE_MS = 4321;
+let forumCacheChatId = -1_008_000_000_000;
+
+function nextForumCacheChatId(): number {
+  forumCacheChatId += 1;
+  return forumCacheChatId;
+}
 
 type TelegramMessageHandler = (ctx: TelegramMiddlewareTestContext) => Promise<void>;
 type MessagePolicyCase = {
@@ -432,7 +437,6 @@ describe("createTelegramBot", () => {
   beforeEach(async () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = createTelegramBotTestStateDir();
-    resetTelegramForumFlagCacheForTest();
     clearPluginInteractiveHandlers();
     resetTelegramAccountThrottlersForTest();
     throttlerSpy.mockReset();
@@ -1710,6 +1714,7 @@ describe("createTelegramBot", () => {
   });
 
   it("does not let unauthorized group stop cancel pending same-sender inbound debounce", async () => {
+    const chatId = nextForumCacheChatId();
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -1749,7 +1754,7 @@ describe("createTelegramBot", () => {
         ctx: {
           update: { update_id: 104 },
           message: {
-            chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+            chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
             text: "first",
             date: 1736380804,
             message_id: 104,
@@ -1767,7 +1772,7 @@ describe("createTelegramBot", () => {
         ctx: {
           update: { update_id: 105 },
           message: {
-            chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+            chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
             text: "stop",
             date: 1736380805,
             message_id: 105,
@@ -2259,7 +2264,7 @@ describe("createTelegramBot", () => {
         defaults: {
           model: "openai/gpt-4.1",
         },
-        list: [{ id: "agent-a" }, { id: "agent-b" }],
+        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
       },
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
@@ -2846,6 +2851,7 @@ describe("createTelegramBot", () => {
   });
 
   it("ignores group self-authored message updates instead of re-processing bot output", async () => {
+    const chatId = nextForumCacheChatId();
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "pairing" } },
     });
@@ -2859,7 +2865,7 @@ describe("createTelegramBot", () => {
 
     await handler({
       message: {
-        chat: { id: -1001234, type: "supergroup", title: "OpenClaw Ops" },
+        chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
         message_id: 1884,
         date: 1736380800,
         from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
@@ -3427,6 +3433,62 @@ describe("createTelegramBot", () => {
     expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([701]);
   });
 
+  it("retries a deferred spooled update after its queued turn is abandoned", async () => {
+    configureOpenDm();
+    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
+    replySpy
+      .mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        queuedLifecycle = opts?.turnAdoptionLifecycle;
+        queuedLifecycle?.onDeferred?.();
+        return undefined;
+      })
+      .mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.turnAdoptionLifecycle?.onAdopted?.();
+        return { text: "recovered" };
+      });
+    const { onUpdateId } = setupUpdateOffsetTracker({
+      lastUpdateId: 701,
+    });
+    const messageHandler = getMessageHandler();
+
+    const firstReplayPromise = dispatchSpooledPrivateText(messageHandler, {
+      updateId: 702,
+      messageId: 702,
+      text: "retry after queued turn abandonment",
+    });
+    await vi.waitFor(() => {
+      expect(queuedLifecycle?.onAbandoned).toEqual(expect.any(Function));
+    });
+    queuedLifecycle?.onAbandoned?.();
+    const firstReplay = await firstReplayPromise;
+    const firstDeferredWork = requireValue(firstReplay.deferredWork, "first deferred spooled work");
+    await expect(firstDeferredWork.task).resolves.toMatchObject({ kind: "failed-retryable" });
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).not.toHaveBeenCalled();
+
+    const secondReplay = await dispatchSpooledPrivateText(messageHandler, {
+      updateId: 702,
+      messageId: 702,
+      text: "retry after queued turn abandonment",
+    });
+    const secondDeferredWork = requireValue(
+      secondReplay.deferredWork,
+      "second deferred spooled work",
+    );
+    await expect(secondDeferredWork.task).resolves.toEqual({ kind: "completed" });
+    await flushTelegramTestMicrotasks();
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([702]);
+
+    const duplicateReplay = await dispatchSpooledPrivateText(messageHandler, {
+      updateId: 702,
+      messageId: 702,
+      text: "retry after queued turn abandonment",
+    });
+    expect(duplicateReplay.deferredWork).toBeUndefined();
+    expect(replySpy).toHaveBeenCalledTimes(2);
+  });
+
   it("skips replayed update ids even when the semantic update key differs", async () => {
     const { onUpdateId, run: runMiddlewareChain } = setupUpdateOffsetTracker({
       lastUpdateId: 300,
@@ -3689,7 +3751,7 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "agent-a" }, { id: "agent-b" }],
+        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
       },
       bindings: [
         {
@@ -3763,8 +3825,9 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "topic-a" }, { id: "topic-b" }],
+        list: [{ id: "topic-a", default: true }, { id: "topic-b" }],
       },
+      bindings: [{ agentId: "topic-a", match: { channel: "telegram", accountId: "default" } }],
     });
     loadConfig.mockImplementation(configForTopicAgent);
 
@@ -4630,14 +4693,9 @@ describe("createTelegramBot", () => {
       authorized: true,
     });
   });
-  it.each([
-    { name: "resolves topic-scoped forum metadata", messageThreadId: 99, expectedTopicId: 99 },
-    {
-      name: "resolves General topic forum metadata and typing fallback",
-      messageThreadId: undefined,
-      expectedTopicId: 1,
-    },
-  ] as const)("$name", ({ messageThreadId, expectedTopicId }) => {
+  it("resolves topic-scoped forum metadata", () => {
+    const messageThreadId = 99;
+    const expectedTopicId = 99;
     const threadSpec = resolveTelegramThreadSpec({
       isGroup: true,
       isForum: true,
@@ -4661,14 +4719,15 @@ describe("createTelegramBot", () => {
   });
 
   it("routes General-topic forum metadata via getChat when Telegram omits forum metadata", async () => {
+    const chatId = nextForumCacheChatId();
     getChatSpy.mockResolvedValue({
-      id: -1001234567890,
+      id: chatId,
       type: "supergroup",
       is_forum: true,
       title: "Forum Group",
     });
     const isForum = await resolveTelegramForumFlag({
-      chatId: -1001234567890,
+      chatId,
       chatType: "supergroup",
       isGroup: true,
       isForum: undefined,
@@ -4683,16 +4742,16 @@ describe("createTelegramBot", () => {
     const route = resolveTelegramConversationRoute({
       cfg: {},
       accountId: "default",
-      chatId: -1001234567890,
+      chatId,
       isGroup: true,
       resolvedThreadId,
     });
 
     expect(getChatSpy).toHaveBeenCalledOnce();
-    expect(getChatSpy).toHaveBeenCalledWith(-1001234567890);
-    expect(route.route.sessionKey).toContain("telegram:group:-1001234567890:topic:1");
-    expect(buildTelegramGroupFrom(-1001234567890, resolvedThreadId)).toBe(
-      "telegram:group:-1001234567890:topic:1",
+    expect(getChatSpy).toHaveBeenCalledWith(chatId);
+    expect(route.route.sessionKey).toContain(`telegram:group:${chatId}:topic:1`);
+    expect(buildTelegramGroupFrom(chatId, resolvedThreadId)).toBe(
+      `telegram:group:${chatId}:topic:1`,
     );
     expect(buildTypingThreadParams(resolvedThreadId)).toEqual({ message_thread_id: 1 });
   });
@@ -5002,6 +5061,7 @@ describe("createTelegramBot", () => {
   });
 
   it("threads native command replies inside topics", async () => {
+    const chatId = nextForumCacheChatId();
     commandSpy.mockClear();
     sendMessageSpy.mockClear();
     replySpy.mockResolvedValue({ text: "response" });
@@ -5025,12 +5085,12 @@ describe("createTelegramBot", () => {
     ) => Promise<void>;
 
     await handler({
-      ...makeForumGroupMessageCtx({ threadId: 99, text: "/status" }),
+      ...makeForumGroupMessageCtx({ chatId, threadId: 99, text: "/status" }),
       match: "",
     });
 
     const statusCall = requireValue(sendMessageSpy.mock.calls.at(0), "status reply call");
-    expect(statusCall[0]).toBe("-1001234567890");
+    expect(statusCall[0]).toBe(String(chatId));
     expect(statusCall[1]).toBeTypeOf("string");
     expectRecordFields(
       statusCall[2],
@@ -5052,7 +5112,7 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "agent-a" }, { id: "agent-b" }],
+        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
       },
       bindings: [
         {

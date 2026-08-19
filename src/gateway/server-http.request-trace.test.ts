@@ -106,70 +106,74 @@ describe("gateway HTTP request trace scope", () => {
 });
 
 describe("gateway HTTP request error cleanup", () => {
-  it.each([
-    {
-      label: "partially written",
-      writeResponse: (res: ServerResponse) => res.write("partial"),
-      expectedBody: "partial",
-    },
-    {
-      label: "already completed",
-      writeResponse: (res: ServerResponse) => res.end("complete"),
-      expectedBody: "complete",
-    },
-    {
-      label: "fully written fixed-length",
-      writeResponse: (res: ServerResponse) => {
-        res.setHeader("Content-Length", "7");
-        res.write("partial");
+  it("preserves a response the route already completed before throwing", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async (_req, res) => {
+        res.end("complete");
+        throw new Error("route failed after completing a response");
       },
-      expectedBody: "partial",
-    },
-    {
-      label: "fully written writeHead fixed-length",
-      writeResponse: (res: ServerResponse) => {
-        res.writeHead(200, { "Content-Length": "7" });
-        res.write("partial");
-      },
-      expectedBody: "partial",
-    },
-  ])(
-    "finishes a $label response after its route throws",
-    async ({ writeResponse, expectedBody }) => {
-      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-      const server = createGatewayHttpServer({
-        clients: new Set(),
-        controlUiEnabled: false,
-        controlUiBasePath: "",
-        openAiChatCompletionsEnabled: false,
-        openResponsesEnabled: false,
-        handleHooksRequest: async (_req, res) => {
-          writeResponse(res);
-          throw new Error("route failed after writing a response");
-        },
-        resolvedAuth,
-        getRuntimeConfig: () => ({}),
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/hooks/test`, {
+        signal: AbortSignal.timeout(1_000),
       });
-      const port = await listen(server);
 
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/hooks/test`, {
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("complete");
+      expect(errorLog).toHaveBeenCalledWith(
+        "[gateway-http] unhandled error in request handler:",
+        expect.any(Error),
+      );
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+      errorLog.mockRestore();
+    }
+  });
+
+  it("aborts an incomplete unframed response after its route throws", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async (_req, res) => {
+        res.write("partial");
+        throw new Error("route failed after writing a partial response");
+      },
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
+
+    try {
+      await expect(
+        fetch(`http://127.0.0.1:${port}/hooks/test`, {
           signal: AbortSignal.timeout(1_000),
-        });
-
-        expect(response.status).toBe(200);
-        expect(await response.text()).toBe(expectedBody);
-        expect(errorLog).toHaveBeenCalledWith(
-          "[gateway-http] unhandled error in request handler:",
-          expect.any(Error),
-        );
-      } finally {
-        server.closeAllConnections();
-        await closeServer(server);
-        errorLog.mockRestore();
-      }
-    },
-  );
+        }).then(async (response) => await response.text()),
+      ).rejects.toMatchObject({ name: "TypeError" });
+      expect(errorLog).toHaveBeenCalledWith(
+        "[gateway-http] unhandled error in request handler:",
+        expect.any(Error),
+      );
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+      errorLog.mockRestore();
+    }
+  });
 
   it.each([
     {
@@ -232,6 +236,41 @@ describe("gateway HTTP request error cleanup", () => {
 
       expect(response.status).toBe(500);
       expect(await response.text()).toBe("Internal Server Error");
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+      errorLog.mockRestore();
+    }
+  });
+
+  it("preserves plugin route ownership when plugin dispatch fails", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handlePluginRequest = vi.fn(async () => {
+      throw new Error("plugin route dispatch failed");
+    });
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => false,
+      handlePluginRequest,
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/plugin-failure`);
+
+      expect(response.status).toBe(500);
+      expect(await response.text()).toBe("Internal Server Error");
+      expect(handlePluginRequest).toHaveBeenCalledOnce();
+      expect(errorLog).toHaveBeenCalledWith(
+        "[gateway-http] unhandled error in request handler:",
+        expect.objectContaining({ message: "plugin route dispatch failed" }),
+      );
     } finally {
       server.closeAllConnections();
       await closeServer(server);

@@ -1,6 +1,7 @@
 // Slack tests cover auth.test token handling during provider boot.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { WebClient } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -17,7 +18,7 @@ import {
   resetSlackTestState,
   startSlackMonitor as startSlackMonitorUntracked,
   stopSlackMonitor,
-  useRealSlackStartupAuthClientOnce,
+  useSlackStartupAuthClientOnce,
 } from "../monitor.test-helpers.js";
 import { getSlackRuntime } from "../runtime.js";
 
@@ -60,6 +61,26 @@ const PROXY_ENV_KEYS = [
   "NO_PROXY",
   "no_proxy",
 ] as const;
+const SLACK_TEST_STARTUP_AUTH_TIMEOUT_MS = 100;
+
+function useShortSlackStartupAuthClientOnce(): void {
+  useSlackStartupAuthClientOnce(
+    (token, options) =>
+      new WebClient(token, {
+        ...options,
+        // Production timeout and retry policy are pinned in client owner tests. This provider
+        // regression keeps the real SDK/transport while shortening only its test-owned clock.
+        retryConfig: {
+          retries: 2,
+          factor: 1,
+          minTimeout: 1,
+          maxTimeout: 1,
+          randomize: false,
+        },
+        timeout: SLACK_TEST_STARTUP_AUTH_TIMEOUT_MS,
+      }),
+  );
+}
 
 async function startStalledSlackApiServer(events: string[]) {
   let requestCount = 0;
@@ -266,7 +287,7 @@ describe("auth.test boot call", () => {
     }
     const server = await startStalledSlackApiServer(events);
     vi.stubEnv("SLACK_API_URL", server.apiUrl);
-    useRealSlackStartupAuthClientOnce();
+    useShortSlackStartupAuthClientOnce();
 
     const runtimeLog = vi.fn((...args: unknown[]) => {
       const message = args[0];
@@ -282,7 +303,7 @@ describe("auth.test boot call", () => {
       runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
     });
     try {
-      await vi.waitFor(() => expect(appStartMock).toHaveBeenCalledTimes(1), { timeout: 35_000 });
+      await vi.waitFor(() => expect(appStartMock).toHaveBeenCalledTimes(1), { timeout: 2_000 });
       await vi.waitFor(() => expect(events).toContain("socket-closed"), { timeout: 1_000 });
 
       expect(server.requestCount).toBe(3);
@@ -297,7 +318,7 @@ describe("auth.test boot call", () => {
       await monitor.run;
       await server.close();
     }
-  }, 40_000);
+  }, 5_000);
 
   it("preserves workspace startup when auth.test omits app_id", async () => {
     getSlackClient().auth.test.mockResolvedValueOnce({
@@ -321,7 +342,9 @@ describe("auth.test boot call", () => {
           dmPolicy: "disabled",
           groupPolicy: "open",
           slashCommand: { enabled: true, name: "openclaw" },
-          channels: { C12345678: { allow: true, requireMention: true } },
+          channels: {
+            "team:TWORKSPACE:channel:C12345678": { allow: true, requireMention: true },
+          },
         },
       },
     });
@@ -886,7 +909,9 @@ describe("connected identity health", () => {
         slack: {
           dmPolicy: "disabled",
           groupPolicy: "open",
-          channels: { C12345678: { allow: true, requireMention: true } },
+          channels: {
+            "team:TWORKSPACE:channel:C12345678": { allow: true, requireMention: true },
+          },
         },
       },
     });

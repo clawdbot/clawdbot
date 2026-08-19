@@ -53,7 +53,11 @@ describe("handleControlUiHttpRequest prepared root lifecycle", () => {
       await fs.link(sourceIndex, indexPath);
       const { res, end } = makeMockHttpResponse();
       const handled = await handleControlUiHttpRequest(
-        { url: "/dashboard", method: "GET" } as IncomingMessage,
+        {
+          url: "/dashboard",
+          method: "GET",
+          headers: { host: "gateway.example.test" },
+        } as IncomingMessage,
         res,
         { root: { kind: "bundled", path: tmp, realPath: await fs.realpath(tmp) } },
       );

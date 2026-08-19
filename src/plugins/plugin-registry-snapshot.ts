@@ -2,12 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import {
+  appendPluginControlPlaneWorkspaceDiagnostic,
+  resolvePluginControlPlaneWorkspace,
+} from "./control-plane-workspace.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
@@ -15,15 +18,15 @@ import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.j
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
-  inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
   refreshPersistedInstalledPluginIndex,
-  type InstalledPluginIndexStoreInspection,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
 import {
+  diffInstalledPluginIndexInvalidationReasons,
   extractPluginInstallRecordsFromInstalledPluginIndex,
   getInstalledPluginRecord,
+  hasInstalledPluginIndexWorkspaceScopeMismatch,
   hasMissingConfigPathActivationMetadata,
   isInstalledPluginEnabled,
   loadInstalledPluginIndexWithDiscovery,
@@ -120,7 +123,6 @@ function resolvePluginRegistryContent(
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
-type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
 export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 type PluginRegistrySnapshotDiagnosticCode =
   | "persisted-registry-missing"
@@ -152,6 +154,26 @@ type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
 
+function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(params: T): T {
+  if (!params.config) {
+    return params;
+  }
+  const workspace = resolvePluginControlPlaneWorkspace({
+    config: params.config,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+  });
+  const diagnostics = appendPluginControlPlaneWorkspaceDiagnostic(
+    params.diagnostics ?? [],
+    workspace,
+  );
+  return {
+    ...params,
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
+  };
+}
+
 function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
   return (
     params.allowCurrent !== false &&
@@ -176,7 +198,7 @@ function loadCurrentPluginRegistrySnapshotResult(
   const current = getCurrentPluginMetadataSnapshot({
     config: params.config,
     env: params.env ?? process.env,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
   if (!current) {
     return undefined;
@@ -400,6 +422,7 @@ function requiresDerivedRegistryValidation(
   hasStalePluginFiles: () => boolean,
 ): boolean {
   return (
+    hasInstalledPluginIndexWorkspaceScopeMismatch(index, params.workspaceDir) ||
     params.candidates !== undefined ||
     params.discovery !== undefined ||
     params.diagnostics !== undefined ||
@@ -614,21 +637,48 @@ export function isPluginEnabled(params: GetPluginRecordParams): boolean {
   return isInstalledPluginEnabled(resolveSnapshot(params), params.pluginId, params.config);
 }
 
-export function inspectPluginRegistry(
+export async function inspectPluginRegistry(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
-): Promise<PluginRegistryInspection> {
-  return inspectPersistedInstalledPluginIndex(params);
+) {
+  const inspectionParams = resolveControlPlaneRegistryParams(params);
+  const persisted = readPersistedInstalledPluginIndexSync(inspectionParams);
+  // Inspection and runtime selection share one verdict so runtime cannot reject "fresh".
+  const result = loadPluginRegistrySnapshotWithMetadata({
+    ...inspectionParams,
+    allowCurrent: false,
+  });
+  if (!persisted) {
+    return {
+      state: "missing" as const,
+      refreshReasons: ["missing"],
+      persisted: null,
+      current: result.snapshot,
+    };
+  }
+  const fresh = result.source === "persisted";
+  const refreshReasons = fresh
+    ? []
+    : [...diffInstalledPluginIndexInvalidationReasons(persisted, result.snapshot)];
+  if (!fresh && refreshReasons.length === 0) {
+    refreshReasons.push(
+      result.diagnostics.some((diagnostic) => diagnostic.code === "persisted-registry-stale-policy")
+        ? "policy-changed"
+        : "source-changed",
+    );
+  }
+  return {
+    state: fresh ? ("fresh" as const) : ("stale" as const),
+    refreshReasons,
+    persisted,
+    current: result.snapshot,
+  };
 }
 
 export function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<PluginRegistrySnapshot> {
-  const workspaceDir =
-    params.workspaceDir ??
-    (params.config
-      ? resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), params.env)
-      : undefined);
-  return refreshPersistedInstalledPluginIndex(
-    workspaceDir === undefined ? params : { ...params, workspaceDir },
-  );
+  if (!params.config) {
+    return refreshPersistedInstalledPluginIndex(params);
+  }
+  return refreshPersistedInstalledPluginIndex(resolveControlPlaneRegistryParams(params));
 }

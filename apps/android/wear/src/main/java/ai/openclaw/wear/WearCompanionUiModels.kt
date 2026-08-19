@@ -58,6 +58,10 @@ internal data class WearConversationSnapshot(
   val selectedModelRef: String? = null,
   val failure: WearConversationFailure? = null,
   val realtimeTalk: WearRealtimeTalkSnapshot = WearRealtimeTalkSnapshot(),
+  val agentPulseSupported: Boolean = false,
+  val agentPulse: WearAgentPulseSnapshot? = null,
+  val agentPulseLoading: Boolean = false,
+  val agentPulseFailure: WearConversationFailure? = null,
 )
 
 internal enum class WearConversationFailure {
@@ -81,6 +85,9 @@ internal enum class WearInteractionState {
 
 internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
   if (phoneNodeId == null) return null
+  val pulseSupported =
+    connected &&
+      WearProxyCapability.AgentPulse in proxyCapabilities
   return WearConversationSnapshot(
     gatewayState = if (connected) WearGatewayState.CONNECTED else WearGatewayState.DISCONNECTED,
     activeAgentId = activeAgentId,
@@ -120,5 +127,9 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
     selectedModelRef = selectedModelRef,
     failure = failure,
     realtimeTalk = realtimeTalk,
+    agentPulseSupported = pulseSupported,
+    agentPulse = agentPulse.takeIf { pulseSupported },
+    agentPulseLoading = pulseSupported && agentPulseLoading,
+    agentPulseFailure = agentPulseFailure.takeIf { pulseSupported },
   )
 }

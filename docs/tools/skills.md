@@ -155,22 +155,24 @@ reference more than one skill:
 Use $github and $release_notes to summarize this change for the release.
 ```
 
-OpenClaw resolves these references against the current agent's eligible,
-user-invocable, model-visible skills and tells the model to read each referenced `SKILL.md`
-before acting. A single message can reference up to eight distinct skills;
-OpenClaw returns a visible error instead of ignoring extra references. The `$`
-form is composable prompt text; `/release_notes ...`
-remains the standalone command form and may use direct tool dispatch when the
-skill declares `command-dispatch: tool`. Common uppercase shell variables such
-as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase
-`$home`, `$path`, or `$editor` to reference skills with those names.
+OpenClaw resolves explicit references from authorized senders on every channel
+and on generic Gateway, CLI, and webhook agent turns. It matches the current
+agent's eligible, user-invocable skills and tells the model to read each
+referenced `SKILL.md` before acting. A single message can reference up to eight
+distinct skills; OpenClaw returns a visible error instead of ignoring extra or
+allowlist-hidden references. The `$` form is composable prompt text. On channel
+messages, `/release_notes ...` remains the standalone command form and may use
+direct tool dispatch when the skill declares `command-dispatch: tool`; generic
+agent turns expand the same leading skill command as model instructions without
+running the channel command dispatcher. Common uppercase shell variables such
+as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase `$home`,
+`$path`, or `$editor` to reference skills with those names. Escape a reference
+as `\$name` when it should stay literal.
 
-Skills with `disable-model-invocation: true` stay out of the `$` picker because
-their instructions are intentionally absent from the model's prompt. Invoke
-those explicitly with their standalone slash command instead.
-
-`$` references are interpreted on WebChat/Control UI turns. Other messaging
-channels keep `$name` as ordinary text; use the skill's slash command there.
+Skills with `disable-model-invocation: true` stay out of the `$` picker and the
+model's normal prompt, so the model cannot select them on its own. An authorized
+explicit `$skill-name` reference still invokes them; the flag only hides the
+skill from model-initiated selection.
 
 ## Skill Workshop
 
@@ -358,7 +360,9 @@ metadata:
 ```
 
 <ParamField path="always" type="boolean">
-  When `true`, always include the skill and skip all other gates.
+  When `true`, include the skill whenever its `os` requirement is compatible,
+  bypassing `requires.bins`, `requires.anyBins`, `requires.env`, and
+  `requires.config`.
 </ParamField>
 
 <ParamField path="emoji" type="string">
@@ -370,7 +374,9 @@ metadata:
 </ParamField>
 
 <ParamField path="os" type='("darwin" | "linux" | "win32")[]'>
-  Platform filter. When set, the skill is only eligible on a listed OS.
+  Hard platform filter. When set, the skill is only eligible when the local
+  host or a connected remote runtime matches a listed OS. `always` does not
+  override this filter.
 </ParamField>
 
 <ParamField path="requires.bins" type="string[]">

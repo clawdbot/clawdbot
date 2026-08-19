@@ -5,6 +5,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 /** Persists explicit yield intent before the requester run is aborted. */
 export function markRequesterTurnYieldedInRuns(params: {
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterTurnRunId: string;
   runs: Map<string, SubagentRunRecord>;
   persistOrThrow(...runIds: string[]): void;
@@ -17,6 +18,7 @@ export function markRequesterTurnYieldedInRuns(params: {
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
+      (!params.requesterAgentId || entry.requesterAgentId === params.requesterAgentId) &&
       entry.requesterTurnRunId === requesterTurnRunId &&
       entry.expectsCompletionMessage === true,
   );
@@ -40,6 +42,7 @@ export function markRequesterTurnYieldedInRuns(params: {
 
 export function settleRequesterTurnAfterSessionSpawns(params: {
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterTurnRunId: string;
   requesterYielded: boolean;
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
@@ -61,6 +64,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
+      (!params.requesterAgentId || entry.requesterAgentId === params.requesterAgentId) &&
       entry.requesterTurnRunId === requesterTurnRunId &&
       entry.expectsCompletionMessage === true,
   );

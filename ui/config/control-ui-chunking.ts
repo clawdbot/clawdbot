@@ -59,11 +59,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "config-runtime";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "@noble/ed25519") ||
-    moduleIdIncludesPackage(id, "@noble/hashes") ||
-    moduleIdIncludesPackage(id, "ipaddr.js")
-  ) {
+  // @noble/hashes stays out of this startup chunk deliberately: it is only
+  // dynamically imported as the insecure-context fallback digest provider.
+  if (moduleIdIncludesPackage(id, "@noble/ed25519") || moduleIdIncludesPackage(id, "ipaddr.js")) {
     return "gateway-runtime";
   }
 

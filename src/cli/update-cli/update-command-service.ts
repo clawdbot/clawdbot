@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -15,11 +16,7 @@ import { doctorCommand } from "../../commands/doctor.js";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  GATEWAY_SERVICE_KIND,
-  GATEWAY_SERVICE_MARKER,
-  GATEWAY_SERVICE_RUNTIME_PID_ENV,
-} from "../../daemon/constants.js";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV, isGatewayServiceEnv } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
@@ -30,7 +27,6 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
@@ -485,14 +481,15 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
 
   // A loaded LaunchAgent can be between KeepAlive respawns. Other supervisors
   // need the handoff marker to distinguish that transition from operator-stopped state.
+  const serviceLoaded = serviceState.loadState.status === "loaded";
   const launchAgentMayRespawn =
     process.platform === "darwin" &&
-    serviceState.loaded &&
+    serviceLoaded &&
     (await service.isEnabled?.({ env: serviceState.env })) === true;
   const handoffSupervisorMayRespawn =
     process.platform !== "darwin" && process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1";
   const supervisorMayRespawn =
-    serviceState.loaded && (launchAgentMayRespawn || handoffSupervisorMayRespawn);
+    serviceLoaded && (launchAgentMayRespawn || handoffSupervisorMayRespawn);
   if (!serviceState.running && !supervisorMayRespawn) {
     const windowsTaskAutoStartRecovery = await maybeSuspendWindowsTaskAutoStartForPackageUpdate({
       updateInstallKind: params.updateInstallKind,
@@ -601,11 +598,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
 function isRunningInsideGatewayService(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  if (env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER) {
-    return false;
-  }
-  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
-  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+  return isGatewayServiceEnv(env);
 }
 
 export function shouldBlockMutableUpdateFromGatewayServiceEnv(params: {

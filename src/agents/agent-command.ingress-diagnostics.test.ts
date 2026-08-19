@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
+import { emitIngressModelUsageDiagnostic as emitIngressModelUsageDiagnosticBase } from "./command/ingress-diagnostics.js";
 
 const mocks = vi.hoisted(() => ({
   emitTrustedDiagnosticEvent: vi.fn(),
@@ -97,12 +97,20 @@ function makeOpts(overrides?: Record<string, unknown>) {
   };
 }
 
+function emitIngressModelUsageDiagnostic(
+  result: Parameters<typeof emitIngressModelUsageDiagnosticBase>[0],
+  opts: Parameters<typeof emitIngressModelUsageDiagnosticBase>[1],
+  agentDir = "/state/agents/main/agent",
+) {
+  emitIngressModelUsageDiagnosticBase(result, opts, agentDir);
+}
+
 describe("emitIngressModelUsageDiagnostic", () => {
   it("emits model.usage when diagnostics are enabled and result has usage", () => {
     const result = makeResult();
     const opts = makeOpts();
 
-    emitIngressModelUsageDiagnostic(result, opts);
+    emitIngressModelUsageDiagnostic(result, opts, "/state/agents/main/agent");
 
     expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
     const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
@@ -139,7 +147,14 @@ describe("emitIngressModelUsageDiagnostic", () => {
       },
     });
 
-    emitIngressModelUsageDiagnostic(result, makeOpts());
+    emitIngressModelUsageDiagnostic(result, makeOpts(), "/state/agents/marie/agent");
+
+    expect(mocks.resolveModelCostConfig).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.5",
+      config: {},
+      agentDir: "/state/agents/marie/agent",
+    });
 
     expect(mocks.estimateUsageCost).toHaveBeenCalledWith({
       usage: {
@@ -247,6 +262,7 @@ describe("emitIngressModelUsageDiagnostic", () => {
       provider: "openai",
       model: "gpt-5.5",
       config: expect.any(Object) as unknown,
+      agentDir: "/state/agents/main/agent",
     });
     expect(mocks.estimateUsageCost).toHaveBeenCalled();
     expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);

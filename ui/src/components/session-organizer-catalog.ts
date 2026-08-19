@@ -97,15 +97,19 @@ export async function deleteSessionGroup(
   // follows the access check so nobody is asked about a delete that cannot run.
   const confirmed = await showConfirmDialog({
     title: t("sessionsView.deleteGroupTitle", { group }),
-    message: t("sessionsView.deleteGroupConfirm", { group }),
+    message: t("sessionsView.deleteGroupConfirm"),
     confirmLabel: t("common.delete"),
     danger: true,
+    signal: scope.signal,
   });
-  if (!confirmed) {
-    return false;
-  }
+  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
+  // too, so without this order the operator's lost intent would look like an
+  // ordinary cancel instead of the reconnect that actually dropped it.
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     showToast({ message: t("sessionsView.deleteGroupStale", { group }) });
+    return false;
+  }
+  if (!confirmed) {
     return false;
   }
   try {
@@ -114,6 +118,37 @@ export async function deleteSessionGroup(
   } catch (error) {
     host.sessionData.publishSessionMutationError(scope, error);
     return false;
+  }
+}
+
+export async function updateSessionGroupDefaults(
+  host: SessionOrganizerControllerHost,
+  group: string,
+  defaults: { cwd: string | null; worktree: boolean },
+  scope: SidebarSessionMutationScope,
+): Promise<SidebarSessionMutationResult> {
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return "stale";
+  }
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.groups.update",
+      requiredScope: "operator.write",
+    })
+  ) {
+    return "failed";
+  }
+  try {
+    const outcome = await scope.sessions.groupsUpdate(group, defaults);
+    return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)
+      ? "completed"
+      : "stale";
+  } catch (error) {
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return "stale";
+    }
+    host.sessionData.publishSessionMutationError(scope, error);
+    return "failed";
   }
 }
 

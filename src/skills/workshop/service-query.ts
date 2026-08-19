@@ -13,6 +13,7 @@ import { dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   readProposalSupportFiles,
+  SkillProposalDraftMissingError,
   readSkillProposal,
   readSkillProposalManifest,
   readSkillProposalRecord,
@@ -49,17 +50,35 @@ export async function listSkillProposals(
   const store = storeOptions(options.env);
   const scope = proposalScope(options);
   const manifest = await readSkillProposalManifest(store, scope);
-  await Promise.all(
-    manifest.proposals
-      .filter((proposal) => proposal.kind === "create" && proposal.status === "pending")
-      .map(async (proposal) => {
-        const read = await readSkillProposal(proposal.id, store, scope);
-        if (read) {
-          await reconcilePendingCreateProposal(read, options);
-        }
-      }),
-  );
-  return await readSkillProposalManifest(store, scope);
+  const missingDrafts = new Set<string>();
+  // Every reconciliation takes the same collection lease. Serialize them so a
+  // large manifest cannot make its own waiters exhaust the bounded lease wait.
+  for (const proposal of manifest.proposals) {
+    if (proposal.kind !== "create" || proposal.status !== "pending") {
+      continue;
+    }
+    let read: SkillProposalReadResult | null;
+    try {
+      read = await readSkillProposal(proposal.id, store, scope);
+    } catch (error) {
+      if (!(error instanceof SkillProposalDraftMissingError)) {
+        throw error;
+      }
+      missingDrafts.add(error.proposalId);
+      continue;
+    }
+    if (read) {
+      await reconcilePendingCreateProposal(read, options);
+    }
+  }
+  const reconciled = await readSkillProposalManifest(store, scope);
+  // Freshly read manifest rows are locally owned; mark degraded entries in place.
+  for (const proposal of reconciled.proposals) {
+    if (missingDrafts.has(proposal.id)) {
+      proposal.degradedState = "draft-missing";
+    }
+  }
+  return reconciled;
 }
 
 export async function getSkillProposalRunProgress(

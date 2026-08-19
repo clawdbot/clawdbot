@@ -15,8 +15,8 @@ import { resolveUserPath } from "../utils.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import {
   resolveAgentConfig,
+  resolveSessionAgentId,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
@@ -72,27 +72,16 @@ function resolveRunAgentId(params: {
     typeof params.agentId === "string" && params.agentId.trim()
       ? normalizeAgentId(params.agentId)
       : undefined;
-  if (explicit) {
-    return { agentId: explicit, agentIdSource: "explicit" };
-  }
-
-  if (shape === "missing" || shape === "legacy_or_alias") {
-    return {
-      agentId: resolveDefaultAgentId(params.config),
-      agentIdSource: "default",
-    };
-  }
-
   const parsed = parseAgentSessionKey(rawSessionKey);
-  if (parsed?.agentId) {
-    return {
-      agentId: normalizeAgentId(parsed.agentId),
-      agentIdSource: "session_key",
-    };
-  }
-
-  // Defensive fallback, should be unreachable for non-malformed shapes.
-  throw new Error("Session key does not resolve to a configured agent.");
+  const agentId = resolveSessionAgentId({
+    sessionKey: rawSessionKey || undefined,
+    agentId: explicit,
+    config: params.config,
+  });
+  return {
+    agentId,
+    agentIdSource: explicit ? "explicit" : parsed?.agentId ? "session_key" : "default",
+  };
 }
 
 /** Redacts a run/session identifier for logs and prompts. */

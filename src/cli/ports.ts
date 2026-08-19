@@ -1,13 +1,16 @@
 // Port inspection and force-free helpers used by gateway run/install flows.
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
+import {
+  parseStrictPositiveInteger,
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { parseWindowsNetstatListeners } from "../infra/ports-netstat.js";
 import { probePortUsage } from "../infra/ports-probe.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
-import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 
 type PortProcess = { pid: number; command?: string };

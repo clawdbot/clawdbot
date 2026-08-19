@@ -56,7 +56,9 @@ import {
   authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
@@ -464,7 +466,11 @@ export async function handleOpenResponsesHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isUnknownGatewayAgentError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -610,7 +616,12 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -698,9 +709,12 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (meta?.error || meta?.stopReason === "error") {
+        throw new Error("agent run failed");
+      }
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // A `required`/pinned `tool_choice` must reject a text-only turn instead
@@ -1157,6 +1171,9 @@ export async function handleOpenResponsesHttpRequest(
         abortSignal: abortController.signal,
       });
 
+      if (closed) {
+        return;
+      }
       finalUsage = extractUsageFromResult(result);
 
       if (unrepresentableAssistantReplacement) {

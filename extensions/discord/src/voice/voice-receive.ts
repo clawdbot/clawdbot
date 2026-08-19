@@ -48,6 +48,7 @@ export class DiscordVoiceReceive {
 
   constructor(
     private readonly params: {
+      accountId: string;
       admissionAllowFrom?: string[];
       botUserId: () => string | undefined;
       cfg: OpenClawConfig;
@@ -273,6 +274,7 @@ export class DiscordVoiceReceive {
   }): Promise<void> {
     await processDiscordVoiceSegment({
       ...params,
+      accountId: this.params.accountId,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       admissionAllowFrom: this.params.admissionAllowFrom,
@@ -438,6 +440,7 @@ export class DiscordVoiceReceive {
     );
     const turn = await runDiscordVoiceAgentTurn({
       entry,
+      accountId: this.params.accountId,
       userId,
       message,
       cfg: this.params.cfg,

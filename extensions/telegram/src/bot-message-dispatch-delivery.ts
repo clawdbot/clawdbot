@@ -16,11 +16,8 @@ import {
   rotateAnswerLaneAfterToolProgress,
 } from "./bot-message-dispatch-draft.js";
 import {
-  applyCollapseSummary,
   markFinalDelivered,
   markFinalStarted,
-  resetAnswerLaneAfterCollapse,
-  resolveCollapseSummaryLine,
   teardownProgressWindow,
 } from "./bot-message-dispatch-progress.js";
 import {
@@ -119,6 +116,7 @@ async function recordPromptContextMessage(
     turn.telegramDeps.recordOutboundMessageForPromptContext ?? recordOutboundMessageForPromptContext
   )({
     cfg: turn.cfg,
+    ownerAgentId: turn.opts.ownerAgentId,
     account: {
       accountId: context.route.accountId,
       ...(turn.telegramCfg.name !== undefined ? { name: turn.telegramCfg.name } : {}),
@@ -167,6 +165,7 @@ function createDeliveryBaseOptions(turn: Turn) {
   const { context } = turn;
   return {
     cfg: turn.cfg,
+    ownerAgentId: turn.opts.ownerAgentId,
     chatId: String(context.chatId),
     accountId: context.route.accountId,
     sessionKeyForInternalHooks: context.ctxPayload.SessionKey,
@@ -391,22 +390,6 @@ async function materializeAnswerLaneBeforeRotation(turn: Turn): Promise<void> {
   await emitPreviewFinalizedHook(turn, result);
 }
 
-async function postTelegramCosmeticSummaryBar(turn: Turn, line: string): Promise<void> {
-  try {
-    await sendPayload(turn, { text: line }, { durable: true, mirrorTranscript: false });
-  } catch (err) {
-    logVerbose(`telegram: collapse summary bar send failed: ${formatErrorMessage(err)}`);
-  }
-}
-
-export async function deliverProgressCollapseSummary(turn: Turn): Promise<void> {
-  const line = resolveCollapseSummaryLine(turn);
-  turn.summaryDelivered = true;
-  if (line) {
-    await postTelegramCosmeticSummaryBar(turn, line);
-  }
-}
-
 async function deliverTelegramProgressModeFinalAnswer(
   turn: Turn,
   payload: ReplyPayload,
@@ -417,7 +400,6 @@ async function deliverTelegramProgressModeFinalAnswer(
 ): Promise<LaneDeliveryResult> {
   const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget?.() === true;
   if (payload.isError === true) {
-    turn.summaryDelivered = true;
     await teardownProgressWindow(turn);
     const delivered = await sendPayload(turn, applyTextToPayload(payload, text), {
       afterAcceptedDraft,
@@ -433,8 +415,6 @@ async function deliverTelegramProgressModeFinalAnswer(
     markFinalDelivered(turn);
     return { kind: "sent" };
   }
-  const barLine = resolveCollapseSummaryLine(turn);
-  turn.summaryDelivered = true;
   const delivered = await sendPayload(turn, applyTextToPayload(payload, text), {
     afterAcceptedDraft,
     durable: true,
@@ -442,16 +422,9 @@ async function deliverTelegramProgressModeFinalAnswer(
     onPlatformSendDispatch,
     bindPendingFinalDelivery,
   });
-  // The final must dispatch before collapse mutates the preview. Collapse then
-  // retires the activity window before the answer lane can accept follow-ups.
-  if (barLine) {
-    await applyCollapseSummary(turn, barLine, async (line) => {
-      await postTelegramCosmeticSummaryBar(turn, line);
-    });
-    resetAnswerLaneAfterCollapse(turn);
-  } else {
-    await teardownProgressWindow(turn);
-  }
+  // The final must dispatch before the activity window retires, so the answer
+  // lane cannot accept follow-ups against a stale preview message.
+  await teardownProgressWindow(turn);
   if (!delivered) {
     return { kind: "skipped" };
   }

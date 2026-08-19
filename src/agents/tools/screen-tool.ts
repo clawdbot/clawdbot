@@ -34,6 +34,7 @@ const ScreenToolSchema = Type.Object(
 
 type ScreenToolOptions = {
   agentSessionKey?: string;
+  agentId?: string;
   callGateway?: InProcessGatewayCaller;
 };
 
@@ -45,7 +46,7 @@ function resolveSessionKey(
   if (!sessionKey) {
     throw new ToolInputError("sessionKey required");
   }
-  return sessionKey;
+  return sessionKey === "current" && agentSessionKey?.trim() ? agentSessionKey.trim() : sessionKey;
 }
 
 function readDock(params: Record<string, unknown>): "bottom" | "right" | undefined {
@@ -111,6 +112,7 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
       const payload: UiCommandParams = {
         command: commandForAction(action, params, opts.agentSessionKey),
         ...(opts.agentSessionKey ? { sessionKey: opts.agentSessionKey } : {}),
+        ...(opts.agentId ? { agentId: opts.agentId } : {}),
       };
       return jsonResult(await gatewayCall("ui.command", payload));
     },

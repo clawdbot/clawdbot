@@ -2,6 +2,34 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 
+/** Closed, server-authored origin of an account-scoped scheduled tool cap. */
+export type CronScheduledToolCallerOrigin =
+  | { kind: "external"; channel: string }
+  | { kind: "local" }
+  | { kind: "unknown" };
+
+/** Invalid, legacy, or incomplete origin facts stay explicitly unknown. */
+export function normalizeCronScheduledToolCallerOrigin(
+  value: unknown,
+): CronScheduledToolCallerOrigin {
+  if (!isRecord(value) || typeof value.kind !== "string") {
+    return { kind: "unknown" };
+  }
+  const keys = Object.keys(value);
+  if (value.kind === "local" && keys.every((key) => key === "kind")) {
+    return { kind: "local" };
+  }
+  if (value.kind === "unknown" && keys.every((key) => key === "kind")) {
+    return { kind: "unknown" };
+  }
+  const channel = normalizeOptionalString(
+    value.kind === "external" && typeof value.channel === "string" ? value.channel : undefined,
+  )?.toLowerCase();
+  return channel && keys.every((key) => key === "kind" || key === "channel")
+    ? { kind: "external", channel }
+    : { kind: "unknown" };
+}
+
 /** Server-authored provenance for a persisted scheduled tool-cap authority envelope. */
 export type CronScheduledToolPolicy =
   | {

@@ -17,6 +17,7 @@ import {
 } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
+  loadSessionEntryReadOnly: vi.fn(),
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
@@ -28,12 +29,14 @@ vi.mock("../session-utils.js", () => ({
   loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly,
   patchSessionEntryCore: hoisted.patchSessionEntryCore,
 }));
 
@@ -50,6 +53,7 @@ function initRepo(root: string): void {
 
 function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): void {
   hoisted.loadSessionEntry.mockReturnValue({
+    agentId: "main",
     cfg: {},
     entry: { sessionId: "s1", spawnedCwd, ...entry },
     storePath: "/tmp/sessions.json",
@@ -117,6 +121,7 @@ describe("loadSessionDiff", () => {
 
   it("reports unknown sessions without touching a workspace", async () => {
     hoisted.loadSessionEntry.mockReturnValue({
+      agentId: "main",
       cfg: {},
       entry: undefined,
       storePath: undefined,
@@ -131,6 +136,97 @@ describe("loadSessionDiff", () => {
     mockSession(repoRoot);
     const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
     expect(result.unavailableReason).toBe("not_git");
+  });
+
+  it("shows the full diff without mutating a pending baseline claim", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "pending.txt"), "pending first turn\n");
+    mockSession(repoRoot, {
+      sessionDiffBaselineCapture: {
+        version: 1,
+        captureId: "pending-capture",
+        status: "pending",
+      },
+    });
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => file.path)).toEqual(["pending.txt"]);
+    expect(hoisted.patchSessionEntryCore).not.toHaveBeenCalled();
+  });
+
+  it("uses the persisted fixed-store owner for a bare session checkout", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "owned.txt"), "ops\n");
+    const cfg = {
+      session: { store: "/tmp/shared.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as const;
+    hoisted.loadSessionEntry.mockReturnValue({
+      agentId: "ops",
+      cfg,
+      entry: { sessionId: "sess-owned-global" },
+      storePath: cfg.session.store,
+      canonicalKey: "global",
+    });
+    hoisted.resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, agentId: string) =>
+      agentId === "ops" ? repoRoot : "/wrong/research",
+    );
+    const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+
+    await sessionsDiffHandlers["sessions.diff"]?.({
+      req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: {} },
+      params: { sessionKey: "global" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: (ok, payload, error) => calls.push({ ok, payload, error }),
+      context: { getRuntimeConfig: () => cfg } as never,
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        ok: true,
+        payload: expect.objectContaining({ root: repoRoot }),
+      }),
+    ]);
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(hoisted.resolveAgentWorkspaceDir).toHaveBeenCalledWith(cfg, "ops");
+  });
+
+  it("rejects a foreign agent before loading a bare fixed-store checkout", async () => {
+    const cfg = {
+      session: { store: "/tmp/shared.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as const;
+    const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+
+    await sessionsDiffHandlers["sessions.diff"]?.({
+      req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: {} },
+      params: { sessionKey: "global", agentId: "research" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: (ok, payload, error) => calls.push({ ok, payload, error }),
+      context: { getRuntimeConfig: () => cfg } as never,
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: 'agent "research" does not match session key agent "ops"',
+        }),
+      }),
+    ]);
+    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
   });
 
   it("diffs a feature branch against the local default branch", async () => {
@@ -481,6 +577,7 @@ describe("ensureSessionDiffBaseline", () => {
       sessionId: "existing-session",
       updatedAt: Date.now(),
     };
+    hoisted.loadSessionEntryReadOnly.mockReturnValue(entry);
 
     const result = await ensureSessionDiffBaseline({
       cwd: "/unused",

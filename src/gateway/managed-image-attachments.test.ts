@@ -27,6 +27,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   attachManagedImageRecordToMessage,
   insertManagedImageRecord,
+  listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
@@ -381,12 +382,6 @@ async function requestManagedImage(params: {
     });
   }
 }
-
-describe("resolveManagedImageAttachmentLimits", () => {
-  it("keeps the existing public limit shape", () => {
-    expect(resolveManagedImageAttachmentLimits()).toEqual(DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS);
-  });
-});
 
 describe("handleManagedOutgoingImageHttpRequest", () => {
   let stateDir: string;
@@ -912,6 +907,34 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a managed audio filename stable in artifact downloads", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "meeting-note.mp3",
+      contentType: "audio/mpeg",
+      body: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+    });
+    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "sessions.sqlite"),
+      entry: { sessionId: "sess-1" },
+    });
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        role: "assistant",
+        content: [{ type: "audio", url: canonicalPath, openUrl: canonicalPath }],
+        __openclaw: { id: "msg-1" },
+      },
+    ]);
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download?.title).toBe("meeting-note.mp3");
+  });
+
   it("serves a bounded thumbnail through the full-image artifact ticket", async () => {
     const source = createSolidPngBuffer(640, 320, { r: 24, g: 64, b: 128 });
     const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
@@ -949,6 +972,22 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
     expect(readImageProbeFromHeader(result.body)).toMatchObject({ width: 300, height: 150 });
     expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a managed global artifact owned by another agent", async () => {
+    const { attachmentId } = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "ops",
+    });
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey: "global",
+      agentId: "research",
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download).toBeNull();
   });
 
   it("keeps serving and deleting an original after the configured media root changes", async () => {
@@ -1352,6 +1391,28 @@ describe("createManagedOutgoingImageBlocks", () => {
       mimeType: "audio/x-caf",
       playback: "transcode",
     });
+  });
+
+  it("does not publish a record when playback inspection fails", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "voice.mp3");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    resolvePlaybackModeForSourceMock.mockRejectedValueOnce(
+      new Error("synthetic playback inspection failure"),
+    );
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+      continueOnPrepareError: true,
+    });
+
+    expect(blocks).toEqual([]);
+    expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
+    await expectPathMissing(path.join(stateDir, "media", "outgoing", "originals"));
   });
 
   it.each(["audio", "video"] as const)("caps managed %s data URLs by media kind", async (kind) => {
@@ -2493,6 +2554,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   });
 
   it("retains other selected-agent global records during scoped cleanup", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+      session: { store: path.join(stateDir, "sessions.sqlite") },
+    });
     await replaceTestSessionEntry(
       {
         agentId: "main",
@@ -2531,12 +2596,24 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expectPathMissing(deletedFixture.originalPath);
   });
 
-  it("uses the recorded owner for unscoped session keys", async () => {
-    const fixture = await createFixture(stateDir, {
-      agentId: "work",
+  it.each([
+    {
+      label: "uses the recorded owner for unscoped session keys",
       sessionKey: "legacy-session",
+      recordAgentId: "work",
+    },
+    {
+      label: "uses an agent-scoped session key owner when the record omits agentId",
+      sessionKey: "agent:work:main",
+      recordAgentId: undefined,
+    },
+  ])("$label", async ({ sessionKey, recordAgentId }) => {
+    const fixture = await createFixture(stateDir, {
+      sessionKey,
+      ...(recordAgentId ? { agentId: recordAgentId } : {}),
     });
     getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
       session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
     });
     prepareAgentSessionStore(stateDir, "work");
@@ -2544,7 +2621,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       {
         agentId: "work",
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        sessionKey: "legacy-session",
+        sessionKey,
       },
       { sessionId: "sess-work", updatedAt: Date.now() },
     );
@@ -2627,6 +2704,27 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.retainedCount).toBe(1);
     await expectPathMissing(deletedFixture.originalPath);
     await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+  });
+
+  it("retains ownerless global records when no compatibility owner exists", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+    });
+    const fixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      attachmentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      sessionKey: "global",
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   it("does not retain selected-agent global records during full cleanup", async () => {

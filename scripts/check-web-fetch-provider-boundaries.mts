@@ -31,11 +31,6 @@ const suspiciousPatterns = [
   /id:\s*"firecrawl"/,
 ];
 
-type ScriptIo = {
-  stdout: { write(chunk: string): unknown };
-  stderr: { write(chunk: string): unknown };
-};
-
 async function scanWebFetchProviderBoundaryViolations() {
   const violations = [];
   const files = await collectSourceFileContents({
@@ -92,40 +87,18 @@ async function collectWebFetchProviderBoundaryViolations() {
   return await webFetchProviderViolationsPromise;
 }
 
-/**
- * Runs the web-fetch provider boundary check.
- */
-export async function main(argv?: string[], io?: ScriptIo) {
-  const args = argv ?? process.argv.slice(2);
-  const json = args.includes("--json");
+/** Runs the web-fetch provider boundary check. */
+async function main() {
   const violations = await collectWebFetchProviderBoundaryViolations();
-  const writeStdout = (chunk: string) => {
-    if (io?.stdout?.write) {
-      io.stdout.write(chunk);
-      return;
-    }
-    process.stdout.write(chunk);
-  };
-  const writeStderr = (chunk: string) => {
-    if (io?.stderr?.write) {
-      io.stderr.write(chunk);
-      return;
-    }
-    process.stderr.write(chunk);
-  };
-  if (json) {
-    writeStdout(`${JSON.stringify(violations, null, 2)}\n`);
-  } else if (violations.length > 0) {
-    for (const violation of violations) {
-      writeStderr(`${violation.file}:${violation.line} ${violation.reason}\n`);
-    }
+  for (const violation of violations) {
+    process.stderr.write(`${violation.file}:${violation.line} ${violation.reason}\n`);
   }
   return violations.length === 0 ? 0 : 1;
 }
 
-runAsScript(import.meta.url, async (argv?: string[], io?: ScriptIo) => {
-  const exitCode = await main(argv, io);
-  if (!io && exitCode !== 0) {
+runAsScript(import.meta.url, async () => {
+  const exitCode = await main();
+  if (exitCode !== 0) {
     process.exit(exitCode);
   }
   return exitCode;

@@ -630,12 +630,22 @@ describe("GatewayClient", () => {
     client.updateNodeManifest({
       caps: ["canvas", "system"],
       commands: ["canvas.present", "system.run"],
+      workerRuns: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.12",
+        protocolFeatures: ["worker-heartbeat-v1"],
+      },
     });
 
     expect(close).toHaveBeenCalledWith(1012, "node manifest changed");
     expect((client as unknown as { opts: Record<string, unknown> }).opts).toMatchObject({
       caps: ["canvas", "system"],
       commands: ["canvas.present", "system.run"],
+      workerRuns: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.12",
+        protocolFeatures: ["worker-heartbeat-v1"],
+      },
     });
   });
 
@@ -1095,7 +1105,7 @@ r1USnb+wUdA7Zoj/mQ==
       client = new GatewayClient({
         url: `wss://127.0.0.1:${port}`,
         connectChallengeTimeoutMs: 0,
-        tlsFingerprint: "deadbeef",
+        tlsFingerprint: "ab".repeat(32),
         onConnectError: (err) => {
           clearTimeout(timeout);
           client?.stop();

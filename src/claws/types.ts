@@ -241,6 +241,7 @@ export type ClawReadResult =
       clawMarkdownBody?: Buffer;
       packageBootstrap?: ClawWorkspaceSourceSnapshot;
       openClawProfile?: ClawOpenClawProfile;
+      legacyOpenClawProfile?: ClawOpenClawProfile;
       source: ClawSourceIdentity;
       snapshot: ClawSourceSnapshot;
       diagnostics: ClawDiagnostic[];

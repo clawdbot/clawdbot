@@ -6,14 +6,15 @@
  */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   readResponseTextPrefix,
   readResponseWithLimit,
   type ReadResponseTextPrefixOptions,
 } from "../infra/http-body.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
+export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 
@@ -21,6 +22,69 @@ const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const SHORT_BEARER_TOKEN_PATTERN =
+  /\b(Bearer)\s+[-A-Za-z0-9._~+/=]{1,17}(?![-A-Za-z0-9._~+/=…])/giu;
+
+type ProviderErrorTextRedactionContext = {
+  truncated?: boolean;
+};
+
+function extractHeaderCredential(headers: Headers, headerName: string, prefix = ""): string {
+  const value = headers.get(headerName) ?? "";
+  return prefix && value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+function extractAuthorizationPayload(headers: Headers): string {
+  const value = headers.get("Authorization") ?? "";
+  const separator = value.search(/\s/u);
+  return separator === -1 ? value : value.slice(separator).trimStart();
+}
+
+/** Builds a redactor for response text that may reflect the request's active credential. */
+export function createProviderErrorTextRedactor(params: {
+  headers: Headers;
+  request?: ModelProviderRequestTransportOverrides;
+  defaultAuthHeader: string;
+  defaultAuthPrefix?: string;
+}): (text: string, context?: ProviderErrorTextRedactionContext) => string {
+  const auth = params.request?.auth;
+  const credentials = [
+    extractHeaderCredential(params.headers, params.defaultAuthHeader, params.defaultAuthPrefix),
+    auth?.mode === "header"
+      ? extractHeaderCredential(params.headers, auth.headerName, auth.prefix ?? "")
+      : auth?.mode === "authorization-bearer"
+        ? extractHeaderCredential(params.headers, "Authorization", "Bearer ")
+        : "",
+    extractAuthorizationPayload(params.headers),
+  ]
+    .filter(Boolean)
+    .toSorted((left, right) => right.length - left.length);
+
+  return (text, context) => {
+    let withoutActiveCredential = credentials.reduce(
+      (redacted, credential) => redacted.split(credential).join("***"),
+      text,
+    );
+    if (context?.truncated) {
+      const partialCredentialLength = credentials.reduce((longest, credential) => {
+        const maxLength = Math.min(credential.length - 1, withoutActiveCredential.length);
+        for (let length = maxLength; length > longest; length -= 1) {
+          if (withoutActiveCredential.endsWith(credential.slice(0, length))) {
+            return length;
+          }
+        }
+        return longest;
+      }, 0);
+      if (partialCredentialLength > 0) {
+        withoutActiveCredential = `${withoutActiveCredential.slice(0, -partialCredentialLength)}***`;
+      }
+    }
+    return redactToolPayloadText(withoutActiveCredential).replace(
+      SHORT_BEARER_TOKEN_PATTERN,
+      "$1 ***",
+    );
+  };
+}
 
 /** Shared timeout and byte-limit options for provider response consumption. */
 type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {

@@ -30,15 +30,16 @@ explicitly:
 example `ollama-5080`), as long as that entry sets `api` to `"ollama"` or
 another provider id with a memory embedding adapter.
 
-For local embeddings with no API key, install the official llama.cpp provider
-plugin and set `provider: "local"`:
+For local embeddings with no API key, install and configure the official
+llama.cpp provider, then set `provider: "local"`:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
 ```
 
-Source checkouts still need native build approval: `pnpm approve-builds`, then
-`pnpm rebuild node-llama-cpp`.
+Choose llama.cpp once in interactive setup. OpenClaw installs a verified
+`llama-server`, downloads the embedding GGUF, and writes its managed service
+configuration.
 
 Some OpenAI-compatible embedding endpoints require asymmetric `input_type`
 labels, such as `"query"` for searches and `"document"`/`"passage"` for indexed
@@ -53,7 +54,7 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | DeepInfra         | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`       |
 | Gemini            | `gemini`            | Yes           | Supports image/audio indexing     |
 | GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
-| Local             | `local`             | No            | GGUF model, ~0.6 GB auto-download |
+| Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
 | LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
 | Mistral           | `mistral`           | Yes           |                                   |
 | Ollama            | `ollama`            | No            | Local/self-hosted server          |
@@ -182,12 +183,12 @@ conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
 
 Session hits obey `tools.sessions.visibility`: the default `"tree"` exposes the
-current session, sessions it spawned, and same-agent group sessions watched
-through ambient group awareness. With `session.dmScope: "main"`, a multi-user
-DM setup shares that main session, so users routed there can recall content
-from its watched groups. Use a per-peer `dmScope` for DM isolation, or set
-visibility to `"self"` to opt out of ambient watched-session reads. Other
-unrelated same-agent sessions still require `"agent"` visibility.
+current session and sessions it spawned. When the caller is the canonical main
+session, `tree` covers every same-agent session. With `session.dmScope: "main"`,
+a multi-user DM setup shares that main session and its recall scope. Use a
+per-peer `dmScope` for DM isolation, or set visibility to `"self"` for strict
+current-session recall. Non-main callers still need `"agent"` visibility for
+unrelated same-agent sessions.
 
 ## Troubleshooting
 
@@ -198,8 +199,8 @@ unrelated same-agent sessions still require `"agent"` visibility.
 `openclaw memory status --deep`.
 
 **Local embeddings time out?** `ollama`, `lmstudio`, and `local` use longer
-provider-owned batch deadlines. Check provider health and rerun
-`openclaw memory index --force`.
+provider-owned batch deadlines. Run `openclaw memory status --deep` to inspect
+the managed server endpoints before rebuilding the index.
 
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.

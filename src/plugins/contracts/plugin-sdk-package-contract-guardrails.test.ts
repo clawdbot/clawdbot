@@ -6,13 +6,13 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
+  packagedPrivatePluginSdkRuntimeEntrypoints,
   privateLocalOnlyPluginSdkEntrypoints,
   pluginSdkEntrypoints,
   publicPluginOwnedSdkEntrypoints,
   publicPluginSdkEntrypoints,
-  reservedBundledPluginSdkEntrypoints,
   supportedBundledFacadeSdkEntrypoints,
-} from "../../plugin-sdk/entrypoints.js";
+} from "../../../scripts/lib/plugin-sdk-entries.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -49,28 +49,6 @@ const DEPRECATED_TEST_ALIAS_SPECIFIERS = new Set(["openclaw/plugin-sdk/test-util
 const DEPRECATED_TEST_ALIAS_ALLOWED_REFERENCE_FILES = new Set([
   "src/plugins/compat/registry.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
-]);
-const LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES = new Set([
-  "extensions/amazon-bedrock/register.sync.runtime.ts",
-  "extensions/github-copilot/index.ts",
-  "extensions/google/index.ts",
-  "extensions/lmstudio/index.ts",
-  "extensions/memory-core/src/memory/provider-adapters.ts",
-  "extensions/mistral/index.ts",
-  "extensions/ollama/index.ts",
-  "extensions/openai/index.ts",
-  "extensions/voyage/index.ts",
-]);
-const LEGACY_MEMORY_EMBEDDING_PROVIDER_MANIFEST_FILES = new Set([
-  "extensions/amazon-bedrock/openclaw.plugin.json",
-  "extensions/github-copilot/openclaw.plugin.json",
-  "extensions/google/openclaw.plugin.json",
-  "extensions/lmstudio/openclaw.plugin.json",
-  "extensions/memory-core/openclaw.plugin.json",
-  "extensions/mistral/openclaw.plugin.json",
-  "extensions/ollama/openclaw.plugin.json",
-  "extensions/openai/openclaw.plugin.json",
-  "extensions/voyage/openclaw.plugin.json",
 ]);
 const MATRIX_RUNTIME_DEPS = [
   "@matrix-org/matrix-sdk-crypto-wasm",
@@ -225,12 +203,6 @@ function collectPluginOwnedSdkEntrypoints(): string[] {
       ),
     )
     .toSorted();
-}
-
-function resolvePluginOwnerFromEntrypoint(entrypoint: string): string | undefined {
-  return collectBundledPluginIds().find(
-    (pluginId) => entrypoint === pluginId || entrypoint.startsWith(`${pluginId}-`),
-  );
 }
 
 function collectClassificationOverlaps(classifications: Record<string, readonly string[]>) {
@@ -444,45 +416,6 @@ function collectDeprecatedExtensionSdkImports(): Array<{ file: string; specifier
   return leaks;
 }
 
-function collectNewDeprecatedMemoryEmbeddingProviderApiFiles(): string[] {
-  const files: string[] = [];
-  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
-    const repoRelativePath = toRepoRelativePath(file);
-    if (isExtensionTestOrSupportPath(repoRelativePath)) {
-      continue;
-    }
-    const source = fs.readFileSync(file, "utf8");
-    if (
-      /\b(?:[A-Za-z_$][\w$]*\.)?registerMemoryEmbeddingProvider\s*\(/u.test(source) &&
-      !LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES.has(repoRelativePath)
-    ) {
-      files.push(repoRelativePath);
-    }
-  }
-  return files.toSorted();
-}
-
-function collectNewDeprecatedMemoryEmbeddingProviderManifestFiles(): string[] {
-  const files: string[] = [];
-  const manifestFiles = listGitTrackedFiles({
-    repoRoot: REPO_ROOT,
-    pathspecs: "extensions/**/openclaw.plugin.json",
-  });
-  if (!manifestFiles) {
-    throw new Error("unable to list plugin manifests for the deprecated manifest guard");
-  }
-  for (const repoRelativePath of manifestFiles) {
-    const source = fs.readFileSync(resolve(REPO_ROOT, repoRelativePath), "utf8");
-    if (
-      /"memoryEmbeddingProviders"\s*:/u.test(source) &&
-      !LEGACY_MEMORY_EMBEDDING_PROVIDER_MANIFEST_FILES.has(repoRelativePath)
-    ) {
-      files.push(repoRelativePath);
-    }
-  }
-  return files.toSorted();
-}
-
 function collectCodeFiles(dir: string): string[] {
   const trackedFiles = listTrackedCodeFiles(dir);
   if (trackedFiles) {
@@ -549,65 +482,6 @@ function collectWorkspaceCodeFiles(): string[] {
   return files;
 }
 
-function collectCrossOwnerReservedSdkImports(): Array<{
-  file: string;
-  specifier: string;
-  owner?: string;
-}> {
-  const leaks: Array<{ file: string; specifier: string; owner?: string }> = [];
-  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
-  const importPattern =
-    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g;
-
-  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
-    const repoRelativePath = toRepoRelativePath(file);
-    const pluginId = repoRelativePath.split("/")[1];
-    const source = fs.readFileSync(file, "utf8");
-    for (const match of source.matchAll(importPattern)) {
-      const subpath = match[1];
-      if (!subpath || !reserved.has(subpath)) {
-        continue;
-      }
-      const owner = resolvePluginOwnerFromEntrypoint(subpath);
-      if (owner === pluginId) {
-        continue;
-      }
-      leaks.push({
-        file: repoRelativePath,
-        specifier: `openclaw/plugin-sdk/${subpath}`,
-        owner,
-      });
-    }
-  }
-  return leaks;
-}
-
-function collectReservedSdkSubpathImports(): string[] {
-  const imports = new Set<string>();
-  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
-  const importPatterns = [
-    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
-    /\bimport\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']\s*\)/g,
-    /\bvi\.(?:mock|doMock)\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
-  ];
-
-  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
-    for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
-      const source = fs.readFileSync(file, "utf8");
-      for (const importPattern of importPatterns) {
-        for (const match of source.matchAll(importPattern)) {
-          const subpath = match[1];
-          if (subpath && reserved.has(subpath)) {
-            imports.add(subpath);
-          }
-        }
-      }
-    }
-  }
-
-  return [...imports].toSorted();
-}
-
 function hasWildcardReexport(entrypoint: string): boolean {
   const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`), "utf8");
   return /^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
@@ -642,14 +516,9 @@ function collectExtensionProductionSdkSubpathImports(subpaths: ReadonlySet<strin
 
 describe("plugin-sdk package contract guardrails", () => {
   let deprecatedTestAliasImports: string[] = [];
-  let unusedReservedSdkSubpaths: string[] = [];
 
   beforeAll(() => {
     deprecatedTestAliasImports = collectDeprecatedTestAliasImports();
-    const usedReserved = new Set(collectReservedSdkSubpathImports());
-    unusedReservedSdkSubpaths = reservedBundledPluginSdkEntrypoints.filter(
-      (entrypoint) => !usedReserved.has(entrypoint),
-    );
   });
 
   it("lists package guardrail scan inputs from git without walking roots", () => {
@@ -678,15 +547,13 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
-    const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
     const packageExports = collectPluginSdkPackageExports();
+    const typedPackageExports = collectTypedPluginSdkPackageExports();
 
-    expect(packageExports.filter((entrypoint) => !localOnly.has(entrypoint))).toEqual(
-      [...publicPluginSdkEntrypoints].toSorted(),
+    expect(packageExports).toEqual(
+      [...publicPluginSdkEntrypoints, ...packagedPrivatePluginSdkRuntimeEntrypoints].toSorted(),
     );
-    expect(
-      publicPluginSdkEntrypoints.filter((entrypoint) => !packageExports.includes(entrypoint)),
-    ).toEqual([]);
+    expect([...typedPackageExports].toSorted()).toEqual([...publicPluginSdkEntrypoints].toSorted());
   });
 
   it("keeps Vitest-backed SDK test helpers local-only", () => {
@@ -715,50 +582,43 @@ describe("plugin-sdk package contract guardrails", () => {
 
   it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
-    const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
     const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
     const localOnly = new Set<string>(privateLocalOnlyPluginSdkEntrypoints);
-    const unknownReserved = [...reserved].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unknownSupported = [...supported].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unknownLocalOnly = [...localOnly].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unclassifiedBundledFacades = collectBundledFacadeSdkEntrypoints().filter(
-      (entrypoint) =>
-        !reserved.has(entrypoint) && !supported.has(entrypoint) && !localOnly.has(entrypoint),
+      (entrypoint) => !supported.has(entrypoint) && !localOnly.has(entrypoint),
     );
-    const unreservedPrivateSurfaces = collectPrivateBundledSdkSurfaceEntrypoints().filter(
-      (entrypoint) => !reserved.has(entrypoint) && !localOnly.has(entrypoint),
+    const unclassifiedPrivateSurfaces = collectPrivateBundledSdkSurfaceEntrypoints().filter(
+      (entrypoint) => !localOnly.has(entrypoint),
     );
 
     expect({
-      unknownReserved,
       unknownSupported,
       unknownLocalOnly,
       unclassifiedBundledFacades,
-      unreservedPrivateSurfaces,
+      unclassifiedPrivateSurfaces,
     }).toEqual({
-      unknownReserved: [],
       unknownSupported: [],
       unknownLocalOnly: [],
       unclassifiedBundledFacades: [],
-      unreservedPrivateSurfaces: [],
+      unclassifiedPrivateSurfaces: [],
     });
   });
 
   it("keeps plugin-owned SDK subpaths explicitly classified and documented", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
-    const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
     const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
     const publicOwned = new Set<string>(publicPluginOwnedSdkEntrypoints);
     const localOnly = new Set<string>(privateLocalOnlyPluginSdkEntrypoints);
     const documented = collectDocumentedSdkSubpaths();
     const pluginOwnedEntrypoints = collectPluginOwnedSdkEntrypoints();
-    const classified = new Set([...reserved, ...supported, ...publicOwned, ...localOnly]);
+    const classified = new Set([...supported, ...publicOwned, ...localOnly]);
 
     const unknownPublicOwned = [...publicOwned].filter(
       (entrypoint) => !entrypoints.has(entrypoint),
     );
     const classificationOverlaps = collectClassificationOverlaps({
-      reserved: reservedBundledPluginSdkEntrypoints,
       supported: supportedBundledFacadeSdkEntrypoints,
       publicOwned: publicPluginOwnedSdkEntrypoints,
       localOnly: privateLocalOnlyPluginSdkEntrypoints,
@@ -884,26 +744,8 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(collectDeprecatedExtensionSdkImports()).toStrictEqual([]);
   });
 
-  it("keeps new bundled plugins off deprecated memory embedding provider registration", () => {
-    expect({
-      apiFiles: collectNewDeprecatedMemoryEmbeddingProviderApiFiles(),
-      manifestFiles: collectNewDeprecatedMemoryEmbeddingProviderManifestFiles(),
-    }).toStrictEqual({
-      apiFiles: [],
-      manifestFiles: [],
-    });
-  });
-
   it("keeps real tests off the deprecated plugin-sdk test-utils alias", () => {
     expect(deprecatedTestAliasImports).toStrictEqual([]);
-  });
-
-  it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
-    expect(collectCrossOwnerReservedSdkImports()).toStrictEqual([]);
-  });
-
-  it("keeps reserved SDK compatibility subpaths actively used", () => {
-    expect(unusedReservedSdkSubpaths).toStrictEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {

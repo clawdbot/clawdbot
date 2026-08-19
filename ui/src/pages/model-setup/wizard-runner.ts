@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupAuthStartResult, WizardNextResult } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
@@ -19,6 +20,7 @@ export type ModelSetupWizardCompletion = {
 
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
+  getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
@@ -54,9 +56,14 @@ export class ModelSetupWizardRunner {
     this.startMethod = startMethod;
     this.setState({ phase: "starting", authChoice });
     try {
+      const agentId = this.options.getAgentId();
       const started = await client.request<SystemAgentSetupAuthStartResult>(
         startMethod,
-        { sessionId, authChoice },
+        {
+          sessionId,
+          authChoice,
+          ...(agentId ? { agentId } : {}),
+        },
         { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS, signal: abortController.signal },
       );
       if (generation !== this.generation) {
@@ -203,9 +210,7 @@ export class ModelSetupWizardRunner {
     }
     const message = sessionExpired
       ? this.options.sessionExpiredMessage()
-      : error instanceof Error && error.message.trim()
-        ? error.message
-        : this.options.requestFailedMessage();
+      : formatUiError(error, this.options.requestFailedMessage());
     this.setState({ phase: "error", message });
   }
 

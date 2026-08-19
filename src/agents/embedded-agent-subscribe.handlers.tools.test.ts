@@ -20,6 +20,7 @@ import {
   buildAdjustedParamsKey,
   recordToolExecutionTracked,
 } from "./agent-tools.before-tool-call.state.js";
+import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
@@ -236,26 +237,26 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
-describe("update_plan progress events", () => {
-  it("emits the typed full plan snapshot after a successful result", async () => {
+describe("progress_card compatibility plan events", () => {
+  it("emits the typed full plan snapshot after a successful write", async () => {
     const { ctx, onAgentEvent } = createTestContext();
     const emitted: CapturedAgentEvent[] = [];
     const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
     try {
-      await endTool(ctx, {
-        toolName: "update_plan",
+      await executeTool(ctx, {
+        toolName: "progress_card",
         toolCallId: "plan-1",
+        args: {
+          markdown: "Implementation underway",
+          plan: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        },
         isError: false,
         result: {
-          content: [],
-          details: {
-            status: "updated",
-            explanation: "Implementation underway",
-            plan: [
-              { step: "Inspect", status: "completed" },
-              { step: "Patch", status: "in_progress" },
-            ],
-          },
+          content: [{ type: "text", text: "Progress card updated (rev 2, 1/2 done)" }],
+          details: { revision: 2, steps: { completed: 1, total: 2 } },
         },
       });
       await Promise.resolve();
@@ -266,7 +267,6 @@ describe("update_plan progress events", () => {
           phase: "update",
           title: "Plan updated",
           source: "openclaw",
-          explanation: "Implementation underway",
           steps: [
             { step: "Inspect", status: "completed" },
             { step: "Patch", status: "in_progress" },
@@ -278,6 +278,31 @@ describe("update_plan progress events", () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  it("emits an empty snapshot when a successful write clears the plan", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "progress_card",
+      toolCallId: "plan-clear",
+      args: { markdown: "Narrative only" },
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Progress card updated (rev 3)" }],
+        details: { revision: 3, steps: null },
+      },
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        steps: [],
+      },
+    });
   });
 });
 
@@ -2018,6 +2043,27 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
+  it("binds failed side effects to the canonical plugin tool owner", async () => {
+    const { ctx } = createTestContext();
+    const ownerKey = '["memory-lancedb","memory_store"]';
+    ctx.params.sideEffectToolOwners = new Map([["memory_store", ownerKey]]);
+
+    await executeTool(ctx, {
+      toolName: "memory_store",
+      toolCallId: "tool-memory-store-failed",
+      args: { text: "The user prefers metric units." },
+      isError: true,
+      result: { details: { status: "error", error: "429 insufficient_quota" } },
+    });
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "memory_store",
+      ownerKey,
+      mutatingAction: true,
+      actionFingerprint: expect.stringContaining(`owner=${ownerKey}|args=`),
+    });
+  });
+
   it("keeps successful mutating retries replay-invalid after an earlier tool failure", async () => {
     const { ctx } = createTestContext();
 
@@ -3515,6 +3561,15 @@ describe("messaging tool media URL tracking", () => {
   it("commits internal-ui source replies from successful message sends", async () => {
     const { ctx } = createTestContext();
     ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
+      },
+    });
 
     const startEvt: ToolExecutionStartEvent = {
       toolName: "message",
@@ -3552,6 +3607,89 @@ describe("messaging tool media URL tracking", () => {
         sourceReplyFinal: true,
       },
     ]);
+  });
+
+  it("commits projected payload-only delivery after middleware replaces details", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    const messageDelivery = projectEmbeddedMessageDeliveryFact({
+      kind: "broadcast",
+      channel: "googlechat",
+      action: "broadcast",
+      handledBy: "core",
+      payload: {
+        results: [
+          {
+            channel: "googlechat",
+            to: "spaces/AAA",
+            ok: true,
+            payload: { ok: true, messageId: "plugin-message-1" },
+          },
+        ],
+      },
+      dryRun: false,
+    });
+    expect(messageDelivery).toEqual({
+      status: "settled",
+      primaryPlatformMessageId: "plugin-message-1",
+      partialDelivery: false,
+      createdThreadIds: [],
+    });
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        messageDelivery,
+      },
+    });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-private-broadcast-delivery",
+      args: { action: "send", message: "visible after redaction" },
+      isError: false,
+      result: { details: { redacted: true } },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["visible after redaction"]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+  });
+
+  it("commits partial broadcast delivery after middleware replaces details", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    const messageDelivery = projectEmbeddedMessageDeliveryFact({
+      kind: "broadcast",
+      channel: "googlechat",
+      action: "broadcast",
+      handledBy: "core",
+      payload: {
+        results: [
+          {
+            channel: "googlechat",
+            to: "spaces/AAA",
+            ok: false,
+            sentBeforeError: true,
+          },
+        ],
+      },
+      dryRun: false,
+    });
+    expect(messageDelivery).toEqual({
+      status: "settled",
+      partialDelivery: true,
+      createdThreadIds: [],
+    });
+    ctx.consumeToolSendReceipt = () => ({ details: { messageDelivery } });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-private-partial-broadcast-delivery",
+      args: { action: "send", message: "visible before failure" },
+      isError: true,
+      result: { details: { redacted: true } },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["visible before failure"]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
   });
 
   it("does not commit dry-run or external message sends as internal-ui source replies", async () => {

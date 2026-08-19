@@ -15,15 +15,20 @@ import {
   jsonResult,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import {
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { readRegularFile, wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
+import {
+  readRegularFile,
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+} from "openclaw/plugin-sdk/security-runtime";
+import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
+import { validateNativeA2UIJsonl } from "./a2ui-jsonl.js";
 import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
 
@@ -40,6 +45,12 @@ type CanvasImageSanitizationLimits = {
 export const CANVAS_JSONL_MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
 const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
+const CANVAS_GATEWAY_PAYLOAD_BYTES = 25 * 1024 * 1024;
+// The base64 field sits inside payloadJSON and the node.invoke response frame.
+const CANVAS_GATEWAY_ENVELOPE_BYTES = 64 * 1024;
+const CANVAS_MAX_BASE64_BYTES = CANVAS_GATEWAY_PAYLOAD_BYTES - CANVAS_GATEWAY_ENVELOPE_BYTES;
+const CANVAS_SNAPSHOT_MAX_BYTES = Math.floor(CANVAS_MAX_BASE64_BYTES / 4) * 3;
+const CANVAS_EVAL_TRUNCATION_MARKER = "\n[truncated — refine the Canvas eval expression]";
 
 function readGatewayCallOptions(params: Record<string, unknown>) {
   return {
@@ -57,13 +68,58 @@ async function resolveNodeId(
   return resolveNodeIdFromList(await listNodes(opts), query, allowDefault);
 }
 
-async function writeBase64ToTempFile(params: { base64: string; ext: string }): Promise<string> {
-  const dir = resolvePreferredOpenClawTmpDir();
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const ext = `.${normalizeCanvasSnapshotFileExtension(params.ext)}`;
-  const filePath = path.join(dir, `openclaw-canvas-snapshot-${randomUUID()}${ext}`);
-  await fs.writeFile(filePath, Buffer.from(params.base64, "base64"));
-  return filePath;
+function neutralizeCanvasMediaDirectives(value: string): string {
+  return value.replace(/^([^\S\n]*)(MEDIA:)/gim, "$1[neutralized] $2");
+}
+
+async function removeCanvasSnapshotFile(filePath: string): Promise<void> {
+  try {
+    await fs.unlink(filePath);
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
+}
+
+function serializeCanvasEvalResult(result: unknown, maxChars: number): string {
+  const json =
+    typeof result === "string"
+      ? neutralizeCanvasMediaDirectives(result)
+      : JSON.stringify(result, (_key, value) =>
+          typeof value === "string" ? neutralizeCanvasMediaDirectives(value) : value,
+        );
+  const serialized = json ?? neutralizeCanvasMediaDirectives(String(result));
+  const bounded = truncateSanitizedExternalContent(serialized, maxChars);
+  if (!bounded.truncated) {
+    return bounded.text;
+  }
+  const marked = truncateSanitizedExternalContent(
+    serialized,
+    Math.max(0, maxChars - CANVAS_EVAL_TRUNCATION_MARKER.length),
+  );
+  return `${marked.text}${CANVAS_EVAL_TRUNCATION_MARKER}`;
+}
+
+function wrapCanvasEvalResult(result: unknown): string {
+  const wrap = (value: string) =>
+    wrapExternalContent(value, { source: "browser", includeWarning: false });
+  const wrapperOverhead = wrap("").length;
+  let maxInnerChars = Math.max(0, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS - wrapperOverhead);
+  let serialized = serializeCanvasEvalResult(result, maxInnerChars);
+  if (!serialized) {
+    return "";
+  }
+  let wrappedText = wrap(serialized);
+  if (wrappedText.length > DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS) {
+    maxInnerChars = Math.max(
+      0,
+      maxInnerChars - (wrappedText.length - DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS),
+    );
+    serialized = serializeCanvasEvalResult(result, maxInnerChars);
+    wrappedText = wrap(serialized);
+  }
+  return wrappedText;
 }
 
 function isPathInsideRoot(root: string, candidate: string): boolean {
@@ -127,7 +183,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
         // Preserve the node lookup budget while letting Gateway outlive node execution.
         const transportTimeoutMs =
           addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs;
-        return await callGatewayTool(
+        const result = await callGatewayTool(
           "node.invoke",
           { ...gatewayOpts, timeoutMs: transportTimeoutMs },
           {
@@ -139,6 +195,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
           },
         );
+        return { node: nodeId, result };
       };
 
       switch (action) {
@@ -164,41 +221,35 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           ) {
             invokeParams.placement = placement;
           }
-          await invoke("canvas.present", invokeParams);
-          return jsonResult({ ok: true });
+          const { node } = await invoke("canvas.present", invokeParams);
+          return jsonResult({ ok: true, node, ...(presentTarget ? { url: presentTarget } : {}) });
         }
-        case "hide":
-          await invoke("canvas.hide", undefined);
-          return jsonResult({ ok: true });
+        case "hide": {
+          const { node } = await invoke("canvas.hide", undefined);
+          return jsonResult({ ok: true, node });
+        }
         case "navigate": {
           const url =
             readStringParam(params, "url", { trim: true }) ??
             readStringParam(params, "target", { required: true, trim: true, label: "url" });
-          await invoke("canvas.navigate", { url });
-          return jsonResult({ ok: true });
+          const { node } = await invoke("canvas.navigate", { url });
+          return jsonResult({ ok: true, node, url });
         }
         case "eval": {
           const javaScript = readStringParam(params, "javaScript", {
             required: true,
           });
-          const raw = (await invoke("canvas.eval", { javaScript })) as {
-            payload?: { result?: string };
+          const { node, result: raw } = (await invoke("canvas.eval", { javaScript })) as {
+            node: string;
+            result?: { payload?: { result?: unknown } };
           };
           const result = raw?.payload?.result;
-          if (typeof result === "string") {
-            // Remote Canvas pages must not forge prompt boundaries or outbound attachments.
-            const text = result
-              ? wrapExternalContent(
-                  result.replace(/^([^\S\n]*)(MEDIA:)/gim, "$1[neutralized] $2"),
-                  { source: "browser", includeWarning: false },
-                )
-              : result;
-            return {
-              content: [{ type: "text", text }],
-              details: { result },
-            };
-          }
-          return jsonResult({ ok: true });
+          // Remote Canvas pages must not forge prompt boundaries or outbound attachments.
+          const text = wrapCanvasEvalResult(result);
+          return {
+            content: [{ type: "text", text }],
+            details: { ok: true, node, result },
+          };
         }
         case "snapshot": {
           const formatRaw =
@@ -211,23 +262,35 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             min: 0,
             max: 1,
           });
-          const raw = (await invoke("canvas.snapshot", {
+          const { node, result: raw } = (await invoke("canvas.snapshot", {
             format,
             maxWidth,
             quality,
-          })) as { payload?: unknown };
+          })) as { node: string; result?: { payload?: unknown } };
           const payload = parseCanvasSnapshotPayload(raw?.payload);
-          const filePath = await writeBase64ToTempFile({
-            base64: payload.base64,
-            ext: payload.format === "jpeg" ? "jpg" : payload.format,
-          });
-          return await imageResultFromFile({
-            label: "canvas:snapshot",
-            path: filePath,
-            // Rendered pages are model observations, never automatic outbound attachments.
-            details: { format: payload.format, media: { outbound: false } },
-            imageSanitization,
-          });
+          const buffer = Buffer.from(payload.base64, "base64");
+          const saved = await saveMediaBuffer(
+            buffer,
+            normalizeCanvasSnapshotFileExtension(payload.format) === "png"
+              ? "image/png"
+              : "image/jpeg",
+            "canvas",
+            CANVAS_SNAPSHOT_MAX_BYTES,
+          );
+          const details = { node, format: payload.format, media: { outbound: false } };
+          try {
+            const result = await imageResultFromFile({
+              label: "canvas:snapshot",
+              path: saved.path,
+              // Rendered pages are model observations, never automatic outbound attachments.
+              details,
+              imageSanitization,
+            });
+            return { ...result, details };
+          } finally {
+            // The model-visible image is hydrated above; the staging path is not returned.
+            await removeCanvasSnapshotFile(saved.path);
+          }
         }
         case "a2ui_push": {
           const jsonl =
@@ -239,13 +302,14 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");
           }
-          validateSupportedA2UIJsonl(jsonl);
-          await invoke("canvas.a2ui.pushJSONL", { jsonl });
-          return jsonResult({ ok: true });
+          validateNativeA2UIJsonl(jsonl);
+          const { node } = await invoke("canvas.a2ui.pushJSONL", { jsonl });
+          return jsonResult({ ok: true, node });
         }
-        case "a2ui_reset":
-          await invoke("canvas.a2ui.reset", undefined);
-          return jsonResult({ ok: true });
+        case "a2ui_reset": {
+          const { node } = await invoke("canvas.a2ui.reset", undefined);
+          return jsonResult({ ok: true, node });
+        }
         default:
           throw new Error(`Unknown action: ${action}`);
       }

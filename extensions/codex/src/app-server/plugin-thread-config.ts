@@ -221,6 +221,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       deferAppInventoryRefresh: true,
       targetAppIds: record.ownedAppIds,
@@ -313,13 +314,27 @@ export async function buildCodexPluginThreadConfig(
     accountApps: accountAppsResult.apps,
   });
   const unresolvedDisabledPluginOwnership = policy.allowAllPlugins
-    ? policy.pluginPolicies.find(
-        (pluginPolicy) =>
-          !pluginPolicy.enabled &&
-          !inventory.records.some(
-            (record) => record.policy.configKey === pluginPolicy.configKey && record.detail,
-          ),
-      )
+    ? policy.pluginPolicies.find((pluginPolicy) => {
+        const record = inventory.records.find(
+          (candidate) => candidate.policy.configKey === pluginPolicy.configKey,
+        );
+        const disabledByMarketplacePolicy =
+          record?.summary.availability === "DISABLED_BY_ADMIN" ||
+          record?.summary.installPolicy === "NOT_AVAILABLE";
+        const unresolvedPluginIdentity =
+          !record &&
+          inventory.diagnostics.some(
+            (diagnostic) =>
+              diagnostic.plugin?.configKey === pluginPolicy.configKey &&
+              (diagnostic.code === "plugin_disabled" ||
+                diagnostic.code === "plugin_missing" ||
+                diagnostic.code === "marketplace_missing"),
+          );
+        return (
+          (!pluginPolicy.enabled || disabledByMarketplacePolicy || unresolvedPluginIdentity) &&
+          !record?.detail
+        );
+      })
     : undefined;
   if (unresolvedDisabledPluginOwnership) {
     // Codex omits disabled plugin ownership from app/read display names. A

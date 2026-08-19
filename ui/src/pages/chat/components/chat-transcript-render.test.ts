@@ -12,9 +12,83 @@ import {
   threadProps,
 } from "./chat-transcript.test-support.ts";
 
+function requireElement(container: ParentNode, selector: string): HTMLElement {
+  const element = container.querySelector<HTMLElement>(selector);
+  if (!element) {
+    throw new Error(`expected ${selector}`);
+  }
+  return element;
+}
+
+function requireClosest(element: Element, selector: string): HTMLElement {
+  const closest = element.closest<HTMLElement>(selector);
+  if (!closest) {
+    throw new Error(`expected closest ${selector}`);
+  }
+  return closest;
+}
+
+function touchPointerUp(element: Element): void {
+  const event = new Event("pointerup", { bubbles: true });
+  Object.defineProperty(event, "pointerType", { value: "touch" });
+  element.dispatchEvent(event);
+}
+
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("reveals touched metadata across stored and live groups within one transcript", async () => {
+    const firstTranscript = createTestTranscript();
+    const secondTranscript = createTestTranscript();
+    const firstContainer = document.body.appendChild(document.createElement("div"));
+    const secondContainer = document.body.appendChild(document.createElement("div"));
+    const firstProps = {
+      ...threadProps("pane-touch-first", "agent:main:first", [
+        { role: "user", content: "Stored message", timestamp: 1_000 },
+      ]),
+      stream: "Live reply",
+      streamStartedAt: 2_000,
+    };
+    const secondProps = threadProps("pane-touch-second", "agent:main:second", [
+      { role: "assistant", content: "Other transcript", timestamp: 3_000 },
+    ]);
+    render(renderChatThread(firstProps, firstTranscript), firstContainer);
+    render(renderChatThread(secondProps, secondTranscript), secondContainer);
+    firstTranscript.hostConnected();
+    secondTranscript.hostConnected();
+    firstTranscript.hostUpdated();
+    secondTranscript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const storedGroup = requireElement(firstContainer, ".chat-group.user");
+    const storedBubble = requireElement(storedGroup, ".chat-bubble");
+    const streamBubble = requireElement(firstContainer, ".chat-bubble.streaming");
+    const streamGroup = requireClosest(streamBubble, ".chat-group--with-footer");
+    const secondGroup = requireElement(secondContainer, ".chat-group.assistant");
+
+    storedBubble.dispatchEvent(new Event("pointerup", { bubbles: true }));
+    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
+
+    touchPointerUp(storedBubble);
+    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(streamBubble);
+    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
+    expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
+    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+    expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(requireElement(secondGroup, ".chat-copy-btn"));
+    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
+    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
+    firstTranscript.hostDisconnected();
+    secondTranscript.hostDisconnected();
+  });
 
   it("resolves persisted replies to their source and highlights it on click", async () => {
     const transcript = createTestTranscript();
@@ -266,6 +340,126 @@ describe("chat transcript rendering", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/chat.ts", line: 17 });
     expect(onHistoryIntent).not.toHaveBeenCalled();
+    transcript.hostDisconnected();
+  });
+
+  it.each(["click", "Ctrl+click", "Enter", " "])(
+    "handles transcript session links with %j",
+    async (action) => {
+      const transcript = createTestTranscript();
+      const onOpenSessionLink = vi.fn();
+      const onHistoryIntent = vi.fn();
+      const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+      const container = document.body.appendChild(document.createElement("div"));
+      const props = {
+        ...threadProps("pane-session-link", "agent:main:main", [
+          { role: "assistant", content: `Open \`${sessionKey}\``, timestamp: 1_000 },
+        ]),
+        onOpenSessionLink,
+        onHistoryIntent,
+      };
+      render(renderChatThread(props, transcript), container);
+      transcript.hostConnected();
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
+
+      const link = container.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      if (action === "click" || action === "Ctrl+click") {
+        link?.setAttribute("href", "/chat/roboclaw/2139bddb");
+        const modified = action === "Ctrl+click";
+        const event = new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+          cancelable: true,
+          ctrlKey: modified,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(!modified);
+        if (modified) {
+          expect(onOpenSessionLink).not.toHaveBeenCalled();
+          transcript.hostDisconnected();
+          return;
+        }
+      } else {
+        link?.focus();
+        const event = new KeyboardEvent("keydown", {
+          key: action,
+          bubbles: true,
+          cancelable: true,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+        expect(onHistoryIntent).not.toHaveBeenCalled();
+      }
+
+      expect(onOpenSessionLink).toHaveBeenCalledWith({ sessionKey, agentId: "roboclaw" });
+      transcript.hostDisconnected();
+    },
+  );
+
+  it.each(["click", "Enter"])("SPA-routes transcript session hrefs with %s", async (action) => {
+    const transcript = createTestTranscript();
+    const onOpenSessionLink = vi.fn();
+    const onHistoryIntent = vi.fn();
+    const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
+    const href = `/control/chat/main/~key/${literalUuid}?view=full#latest`;
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-session-href", "agent:main:main", [
+        { role: "assistant", content: `[Open session](${href})`, timestamp: 1_000 },
+      ]),
+      basePath: "/control",
+      onOpenSessionLink,
+      onHistoryIntent,
+    };
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const link = container.querySelector<HTMLAnchorElement>(`a[href^="/control/chat/"]`);
+    const event =
+      action === "click"
+        ? new MouseEvent("click", { bubbles: true, button: 0, cancelable: true })
+        : new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    link?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onOpenSessionLink).toHaveBeenCalledWith({
+      namespace: "chat",
+      pathname: `/control/chat/main/~key/${literalUuid}`,
+      search: "?view=full",
+      hash: "#latest",
+    });
+    expect(onHistoryIntent).not.toHaveBeenCalled();
+    transcript.hostDisconnected();
+  });
+
+  it("leaves external transcript hrefs to the browser", async () => {
+    const transcript = createTestTranscript();
+    const onOpenSessionLink = vi.fn();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-external-href", "agent:main:main", [
+        {
+          role: "assistant",
+          content: "[External session](https://example.com/chat/main/~key/12345678)",
+          timestamp: 1_000,
+        },
+      ]),
+      onOpenSessionLink,
+    };
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const link = container.querySelector<HTMLAnchorElement>('a[href^="https://example.com/"]');
+    const event = new MouseEvent("click", { bubbles: true, button: 0, cancelable: true });
+    link?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onOpenSessionLink).not.toHaveBeenCalled();
     transcript.hostDisconnected();
   });
 });

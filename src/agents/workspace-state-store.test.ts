@@ -62,6 +62,19 @@ function insertPersistedAttestationHash(filename: string, sha256: string): void 
 }
 
 describe("workspace state store", () => {
+  it("does not create shared state for a read-only snapshot", () => {
+    const statePath = resolveOpenClawStateSqlitePath(testState!.env);
+    expect(fs.existsSync(statePath)).toBe(false);
+
+    expect(
+      readWorkspaceStateSnapshot(workspaceDir(), {
+        env: testState!.env,
+        readOnly: true,
+      }),
+    ).toMatchObject({ setupExists: false, setup: { version: 1 } });
+    expect(fs.existsSync(statePath)).toBe(false);
+  });
+
   it("round-trips setup and attestation state after a database restart", () => {
     const dir = workspaceDir();
     mergeWorkspaceSetupState(dir, {

@@ -1,5 +1,6 @@
 /** Browser-safe identity and replay rules shared by Gateway conversation clients. */
 
+import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-event.js";
 
 export type SessionMessageEnvelope = {
@@ -119,12 +120,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "transportGap" }
     | { type: "reconnected" }
   );
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function readNonemptyString(value: unknown): string | null {
   return typeof value === "string" ? value.trim() || null : null;
@@ -298,6 +293,21 @@ function entryMatches(
   allowSnapshotPromotion = false,
 ): boolean {
   if (sameTranscriptIdentity(left.identity, right.identity)) {
+    return true;
+  }
+  const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
+  const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
+  if (
+    durableEntry?.live &&
+    provisionalEntry?.live &&
+    durableEntry.identity?.role === "assistant" &&
+    provisionalEntry.identity?.role === "assistant" &&
+    !durableEntry.identity.isImported &&
+    !provisionalEntry.identity.isImported &&
+    !provisionalEntry.identity.id &&
+    durableEntry.identity.runId &&
+    durableEntry.identity.runId === provisionalEntry.identity.runId
+  ) {
     return true;
   }
   const persisted = left.identity;

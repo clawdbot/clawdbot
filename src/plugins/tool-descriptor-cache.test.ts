@@ -13,6 +13,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/runtime-snapshot.js", () => ({
+  registerRuntimeConfigSnapshotPreparer: vi.fn(),
   resolveRuntimeConfigCacheKey: hoisted.resolveRuntimeConfigCacheKey,
 }));
 

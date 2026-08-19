@@ -83,7 +83,7 @@ function createCleanupTestContext(): QaSuiteResolvedRunContext {
     fastMode: true,
     channelDriver: "live",
     enabledPluginIds: [],
-    gatewayConfigPatch: undefined,
+    gatewayConfigPatches: [],
     gatewayRuntimeOptions: undefined,
     concurrency: 1,
     progressEnabled: false,

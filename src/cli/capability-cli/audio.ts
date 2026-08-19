@@ -16,6 +16,7 @@ import {
   providerHasGenericConfig,
   providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
 
@@ -80,10 +81,12 @@ export function registerAudioCapabilityCommands(capability: Command): void {
   audio
     .command("providers")
     .description("List audio transcription providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
+        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
         const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
@@ -91,6 +94,7 @@ export function registerAudioCapabilityCommands(capability: Command): void {
             configured: providerHasGenericConfig({
               cfg,
               providerId: provider.id,
+              agentId,
               envVars: getProviderEnvVars(provider.id, {
                 config: cfg,
                 includeUntrustedWorkspacePlugins: false,

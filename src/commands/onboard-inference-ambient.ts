@@ -1,3 +1,11 @@
+import os from "node:os";
+import {
+  readClaudeCliCredentialsCached,
+  readCodexCliCredentialsCached,
+  resolveCodexCliHomePath,
+} from "../agents/cli-credentials.js";
+import { resolveOsHomeDir } from "../infra/home-dir.js";
+
 export const OPENAI_API_DEFAULT_MODEL_REF = "openai/gpt-5.6-sol";
 export const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-5";
 export const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-5";
@@ -47,6 +55,40 @@ export function detectAmbientInferenceBackends(
       detail: "ANTHROPIC_API_KEY set",
       credentials: true,
     });
+  }
+  // An injected environment is authoritative; isolated detection must not
+  // fall through to another process user's home or prompt a keychain.
+  const homedir = env === process.env ? os.homedir : () => "";
+  const homeDir = resolveOsHomeDir(env, homedir);
+  const claudeCredential = homeDir
+    ? readClaudeCliCredentialsCached({ homeDir, allowKeychainPrompt: false, ttlMs: 0 })
+    : null;
+  if (claudeCredential && claudeCredential.type !== "api_key_helper") {
+    candidates.push({
+      kind: "claude-cli",
+      modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
+      label: "Claude Code",
+      detail: "credential file found",
+      credentials: true,
+    });
+  }
+  try {
+    const codexHome =
+      homeDir || env.CODEX_HOME?.trim() ? resolveCodexCliHomePath(undefined, env) : undefined;
+    if (
+      codexHome &&
+      readCodexCliCredentialsCached({ codexHome, allowKeychainPrompt: false, ttlMs: 0 })
+    ) {
+      candidates.push({
+        kind: "codex-cli",
+        modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
+        label: "Codex",
+        detail: "credential file found",
+        credentials: true,
+      });
+    }
+  } catch {
+    // No usable OS home means there is no prompt-free file credential to report.
   }
   return candidates;
 }

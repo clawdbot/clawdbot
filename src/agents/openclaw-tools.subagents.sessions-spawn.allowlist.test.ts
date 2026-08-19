@@ -65,7 +65,7 @@ async function spawn(params: {
       ...(params.sandbox ? { sandbox: params.sandbox } : {}),
     },
     {
-      agentSessionKey: params.requesterSessionKey ?? "main",
+      agentSessionKey: params.requesterSessionKey ?? "agent:main:main",
       agentChannel: params.requesterChannel ?? "mobilechat",
     },
   );

@@ -148,6 +148,19 @@ describe("agent-runner-utils", () => {
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
       taskSuggestionDeliveryMode: "gateway",
+      trustedInternalHandoff: {
+        kind: "subagent-completion",
+        sourceSessionKey: "agent:child",
+        targetSessionKey: "agent:parent",
+        targetSessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_complete"],
+      },
     });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
@@ -172,6 +185,9 @@ describe("agent-runner-utils", () => {
     expect(resolved.config).toBe(run.config);
     expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
     expect(resolved.ownerNumbers).toBe(run.ownerNumbers);
+    expect(resolved.trustedInternalHandoff).toBe(run.trustedInternalHandoff);
+    expect(resolved.scheduledToolPolicy).toBe(run.scheduledToolPolicy);
+    expect(resolved.runtimePluginToolGrant).toBe(run.runtimePluginToolGrant);
     expect(resolved.enforceFinalTag).toBe(true);
     expect(resolved.provider).toBe("openai");
     expect(resolved.model).toBe("gpt-4.1-mini");
@@ -427,6 +443,39 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.agentAccountId).toBe("work");
     expect(resolved.embeddedContext.chatType).toBe("direct");
     expect(resolved.embeddedContext.replyToMode).toBe("off");
+  });
+
+  it("carries a prepared direct-message reply mode into generic message tools", () => {
+    const run = makeRun();
+    const replyRoute = {
+      originatingChannel: "reef",
+      originatingTo: "reef:remote-agent",
+      originatingReplyToMode: "all",
+    } satisfies Pick<
+      FollowupRun,
+      "originatingChannel" | "originatingTo" | "originatingReplyToMode"
+    >;
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      replyRoute,
+      sessionCtx: {
+        Provider: "reef",
+        To: "reef:local-agent",
+        MessageSid: "message-1",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.embeddedContext).toMatchObject({
+      currentChannelId: "reef:remote-agent",
+      currentChannelProvider: "reef",
+      currentMessageId: "message-1",
+      replyToMode: "all",
+    });
   });
 
   it("carries inbound audio context into embedded message tools", () => {

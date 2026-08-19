@@ -2,7 +2,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTelegramAccount } from "./accounts.js";
-import { createTelegramPluginBase, telegramConfigAdapter } from "./shared.js";
+import { telegramConfigAdapter } from "./config-adapter.js";
+import { createTelegramPluginBase } from "./shared.js";
 
 const telegramPluginBase = createTelegramPluginBase({
   setupWizard: {} as never,

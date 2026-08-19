@@ -245,6 +245,20 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     });
   });
 
+  it("preserves gateway account text in JSON output", async () => {
+    const name = "Primary\u001B]0;channels-status-json\u0007🦞\r\nAccount";
+    const payload = {
+      channelAccounts: { discord: [{ accountId: "default", name }] },
+      channels: { discord: { name } },
+    };
+    mocks.callGateway.mockResolvedValue(payload);
+    const { runtime, logs } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
+
+    expect(JSON.parse(logs.at(-1) ?? "{}")).toStrictEqual(payload);
+  });
+
   it("rejects malformed timeouts before gateway status requests", async () => {
     const { runtime } = createCapturingTestRuntime();
 
@@ -305,6 +319,37 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(joined).toContain("Gateway auth unavailable; showing config-only status.");
     expect(joined).not.toContain("Gateway not reachable; showing config-only status.");
     expect(joined).toContain("configured, secret unavailable in this command path");
+  });
+
+  it("renders missing gateway credentials canonically before config-only status", async () => {
+    const error = Object.assign(
+      new Error(
+        [
+          "gateway channels.status requires credentials before opening a websocket",
+          "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+          "Config: /tmp/openclaw.json",
+        ].join("\n"),
+      ),
+      {
+        name: "GatewayCredentialsRequiredError",
+        method: "channels.status",
+        configPath: "/tmp/openclaw.json",
+      },
+    );
+    mocks.callGateway.mockRejectedValue(error);
+    mocks.requireValidConfig.mockResolvedValue({ channels: {} });
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: { channels: {} },
+      effectiveConfig: { channels: {} },
+      diagnostics: [],
+    });
+    const { runtime, logs, errors } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ probe: false }, runtime as never);
+
+    expect(errors).toEqual([error.message]);
+    expect(errors.join("\n")).not.toContain("Gateway not reachable:");
+    expect(logs.join("\n")).toContain("Gateway auth unavailable; showing config-only status.");
   });
 
   it("prefers resolved snapshots when command-local SecretRef resolution succeeds", async () => {
@@ -419,6 +464,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(announceRequest?.config?.secretResolved).toBe(true);
     expect(announceRequest?.activationSourceConfig?.secretResolved).toBe(false);
     const payload = JSON.parse(logs.at(-1) ?? "{}");
+    expect(errors).toEqual([]);
     expect(errors.join("\n")).not.toContain("user:pass");
     expect(errors.join("\n")).not.toContain("secret-token");
     expect(errors.join("\n")).not.toContain("fallback-user:fallback-pass");

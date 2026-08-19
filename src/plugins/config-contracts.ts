@@ -100,13 +100,13 @@ export function resolvePluginConfigContractsById(params: {
     });
   }
 
-  if (!params.manifestRegistry && (params.fallbackToBundledMetadata ?? true)) {
+  if (params.fallbackToBundledMetadata ?? true) {
     for (const pluginId of pluginIds) {
       const existing = matches.get(pluginId);
       const shouldHydrateBundledMatch =
         existing &&
         ((params.fallbackToBundledMetadataForResolvedBundled && existing.origin === "bundled") ||
-          fallbackBundledPluginIds.has(pluginId));
+          (!params.manifestRegistry && fallbackBundledPluginIds.has(pluginId)));
       if (shouldHydrateBundledMatch) {
         const bundledConfigContracts = findBundledConfigContracts(pluginId);
         if (bundledConfigContracts) {
@@ -134,6 +134,12 @@ export function resolvePluginConfigContractsById(params: {
         !(params.fallbackToBundledMetadataForResolvedBundled && resolvedOrigin === "bundled") &&
         !fallbackBundledPluginIds.has(pluginId)
       ) {
+        continue;
+      }
+      if (params.manifestRegistry && resolvedOrigin && resolvedOrigin !== "bundled") {
+        continue;
+      }
+      if (params.manifestRegistry && !fallbackBundledPluginIds.has(pluginId)) {
         continue;
       }
       const bundledConfigContracts = findBundledConfigContracts(pluginId);

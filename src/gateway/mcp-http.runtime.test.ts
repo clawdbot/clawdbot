@@ -201,6 +201,47 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
+  it("does not share cache rows across different runtime policy agents", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "worker" }));
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not share loopback tools across prepared vision capabilities", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, modelHasVision: true }));
+    cache.resolve(scopeParams({ cfg, modelHasVision: false }));
+    cache.resolve(scopeParams({ cfg, modelHasVision: true }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
+      modelHasVision: true,
+    });
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
+      modelHasVision: false,
+    });
+  });
+
+  it("does not share loopback message tools across prepared reply modes", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
+    cache.resolve(scopeParams({ cfg, replyToMode: "off" }));
+    cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({ replyToMode: "all" });
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ replyToMode: "off" });
+  });
+
   it("evicts only the revoked grant's cached tool closures", () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;

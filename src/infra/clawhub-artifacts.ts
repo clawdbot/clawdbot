@@ -1,6 +1,7 @@
 // ClawHub package, skill, resolver URL, and GitHub archive downloads.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -13,7 +14,6 @@ import {
   type ClawHubFetch,
 } from "./clawhub-client.js";
 import { sha256Base64, sha256Hex } from "./crypto-digest.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { createTempDownloadTarget } from "./temp-download.js";
 
 const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";

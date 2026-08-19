@@ -174,6 +174,8 @@ export type BoundVerifySetupInferenceResult =
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
+  /** Configured agent that owns the route being tested and persisted. */
+  agentId?: string;
   /** Exact explicit model to probe and persist instead of the route's starter model. */
   modelRef?: string;
   /** Manual step only: provider-auth choice returned by detection. */
@@ -248,6 +250,7 @@ export type ActivateSetupInferenceDeps = {
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
+  refreshPreparedModelRuntimeSnapshots?: typeof import("../agents/prepared-model-runtime.js").refreshPreparedModelRuntimeSnapshots;
   ensurePluginRegistryLoaded?: typeof import("../plugins/runtime/runtime-registry-loader.js").ensurePluginRegistryLoaded;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;

@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
@@ -11,6 +15,29 @@ import {
 } from "./config-test-harness.ts";
 
 describe("config write coordinator", () => {
+  it("surfaces an operator.admin reason when config mutations are out of scope", async () => {
+    const server = createConfigServerMock();
+    const { runtimeConfig, publish } = createConfigCapabilityHarness(
+      server.request as GatewayBrowserClient["request"],
+    );
+    await runtimeConfig.ensureLoaded();
+    publish(true, undefined, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+      features: { methods: ["config.get", "config.set", "config.patch"] },
+    } as GatewayHelloOk);
+
+    await expect(
+      runtimeConfig.patch({ raw: { count: 2 }, note: "out-of-scope patch" }),
+    ).resolves.toBe(false);
+    expect(runtimeConfig.state.lastError).toBe(
+      "Configuration changes require operator.admin access.",
+    );
+    expect(server.submissions).toHaveLength(0);
+    runtimeConfig.dispose();
+  });
+
   it("debounces form edits into one config.set and marks needsApply", async () => {
     vi.useFakeTimers();
     const server = createConfigServerMock();
@@ -565,7 +592,7 @@ describe("config write coordinator", () => {
     expect(result).toEqual({
       ok: true,
       value: { ok: true },
-      refresh: { ok: false, error: "Error: refresh unavailable" },
+      refresh: { ok: false, error: "refresh unavailable" },
     });
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
     runtimeConfig.dispose();

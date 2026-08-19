@@ -36,6 +36,12 @@ export const stateCheckpointOptions = {
   requireStateMigrationCheckpoint: true,
 } as const;
 
+export const startupCheckpointOptions = {
+  migrateLegacyConfig: false,
+  invalidConfigNote: false,
+  requireStartupMigrationCheckpoint: true,
+} as const;
+
 export function makeStartupConvergenceResult(
   overrides: Partial<StartupConvergenceResult> = {},
 ): StartupConvergenceResult {

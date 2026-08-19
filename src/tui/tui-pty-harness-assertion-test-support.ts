@@ -428,7 +428,7 @@ function hasStatusFrame(
   );
 }
 
-async function exerciseSelectorOutputSafety(
+export async function exerciseSelectorOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -555,7 +555,7 @@ export async function exerciseNarrowTerminalRendering(
   }
 }
 
-async function exerciseGatewayOutputSafety(
+export async function exerciseGatewayOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -591,6 +591,13 @@ async function exerciseGatewayOutputSafety(
     expect(hasStatusFrame(fixture.run.output(), idlePayload.markers, /\| idle/u, fixture.run)).toBe(
       true,
     );
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) =>
+        rows.some((row) => row.includes("gateway reconnected after transport loss")) &&
+        rows.some((row) => row.includes("local ready | idle")),
+      startupTimeoutMs,
+    );
 
     const helpOffset = fixture.run.visibleOutput().length;
     await fixture.run.write("/help\r", { delay: false });
@@ -604,7 +611,7 @@ async function exerciseGatewayOutputSafety(
   }
 }
 
-async function exerciseMarkdownAndAutocompleteOutputSafety(
+export async function exerciseMarkdownAndAutocompleteOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -660,7 +667,7 @@ async function exerciseMarkdownAndAutocompleteOutputSafety(
   }
 }
 
-async function exerciseInteractiveOutputSafety(
+export async function exerciseInteractiveOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -696,18 +703,6 @@ async function exerciseInteractiveOutputSafety(
   } finally {
     await fixture.cleanup();
   }
-}
-
-export async function exerciseTerminalOutputSafety(
-  startFixture: StartTuiPtyFixture,
-  startupTimeoutMs: number,
-) {
-  await Promise.all([
-    exerciseGatewayOutputSafety(startFixture, startupTimeoutMs),
-    exerciseInteractiveOutputSafety(startFixture, startupTimeoutMs),
-    exerciseMarkdownAndAutocompleteOutputSafety(startFixture, startupTimeoutMs),
-    exerciseSelectorOutputSafety(startFixture, startupTimeoutMs),
-  ]);
 }
 
 /** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */

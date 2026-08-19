@@ -17,7 +17,7 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
 import {

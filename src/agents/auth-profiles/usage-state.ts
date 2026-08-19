@@ -4,7 +4,7 @@
  * predicates used by rotation and failure handling.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 /** Returns true for providers whose auth-profile cooldowns are provider-managed. */
@@ -226,6 +226,7 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     if (cooldownExpired) {
       stats.cooldownUntil = undefined;
       stats.cooldownReason = undefined;
+      stats.cooldownClassification = undefined;
       stats.cooldownModel = undefined;
       profileMutated = true;
     }

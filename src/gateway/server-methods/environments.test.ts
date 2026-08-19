@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
+import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
+import {
+  collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
+  collectNodeWorkerCapacityByNodeId,
+  isNodeRunnerSessionHost,
+} from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
@@ -18,6 +26,13 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
   listNodePairing: vi.fn(),
 }));
 
+vi.mock("../node-registry-private.js", () => ({
+  collectNodeRunnerIssuesByNodeId: vi.fn(() => new Map()),
+  collectNodeWorkerBundleStatusByNodeId: vi.fn(() => new Map()),
+  collectNodeWorkerCapacityByNodeId: vi.fn(() => new Map()),
+  isNodeRunnerSessionHost: vi.fn(() => false),
+}));
+
 const NOW = 10_000;
 
 type TestWorkerRecord = WorkerEnvironmentRecord &
@@ -29,6 +44,11 @@ type TestWorkerRecord = WorkerEnvironmentRecord &
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
   get: (environmentId: string) => TestWorkerRecord | undefined;
+  listMachineOptions: (
+    profileId: string,
+  ) => Promise<
+    Array<{ id: string; label: string; description?: string; default?: boolean }> | undefined
+  >;
   create: (profileId: string, idempotencyKey: string) => Promise<TestWorkerRecord>;
   destroy: (environmentId: string) => Promise<TestWorkerRecord>;
   destroyUnattached: (environmentId: string) => Promise<TestWorkerRecord>;
@@ -52,25 +72,34 @@ function mockContext(
     environmentId: string,
     onCleanupError?: (error: unknown) => void,
   ) => Promise<TestWorkerRecord> = vi.fn(async () => workerRecord({ state: "destroyed" })),
+  connectedNodes: unknown[] = [
+    {
+      nodeId: "node-live",
+      connId: "conn-live",
+      displayName: "Live Node",
+      platform: "ios",
+      caps: ["camera"],
+      commands: ["system.run"],
+      connectedAtMs: 123,
+    },
+  ],
 ) {
   return {
     logGateway: {
       warn: vi.fn(),
     },
     nodeRegistry: {
-      listConnectedForPairingStates: () => [
-        {
-          nodeId: "node-live",
-          connId: "conn-live",
-          displayName: "Live Node",
-          platform: "ios",
-          caps: ["camera"],
-          commands: ["system.run"],
-          connectedAtMs: 123,
-        },
-      ],
+      listConnectedForPairingStates: () => connectedNodes,
     },
     workerEnvironmentService,
+    getRuntimeConfig: () => ({
+      cloudWorkers: {
+        profiles: {
+          zeta: { provider: "static-ssh", settings: {} },
+          aws: { provider: "crabbox", settings: {} },
+        },
+      },
+    }),
     ...(workerEnvironmentService
       ? {
           workerPlacementDispatchService: {
@@ -78,14 +107,6 @@ function mockContext(
             forceDestroyEnvironment,
             reconcileActive,
           },
-          getRuntimeConfig: () => ({
-            cloudWorkers: {
-              profiles: {
-                zeta: { provider: "static-ssh", settings: {} },
-                aws: { provider: "crabbox", settings: {} },
-              },
-            },
-          }),
         }
       : {}),
   };
@@ -126,6 +147,7 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
   return {
     list: vi.fn(() => []),
     get: vi.fn(() => undefined),
+    listMachineOptions: vi.fn(async () => undefined),
     create: vi.fn(async () => workerRecord()),
     destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
     destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
@@ -156,13 +178,19 @@ async function callEnvironmentMethod(
       environmentId: string,
       onCleanupError?: (error: unknown) => void,
     ) => Promise<TestWorkerRecord>;
+    connectedNodes?: unknown[];
   } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
-    context: mockContext(options.service, options.reconcileActive, options.forceDestroyEnvironment),
+    context: mockContext(
+      options.service,
+      options.reconcileActive,
+      options.forceDestroyEnvironment,
+      options.connectedNodes,
+    ),
   } as never);
   const call = respond.mock.calls.at(0);
   if (call === undefined) {
@@ -182,6 +210,10 @@ class FakeWorkerServiceError extends Error {
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
+  vi.mocked(isNodeRunnerSessionHost).mockReturnValue(false);
+  vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(new Map());
+  vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(new Map());
+  vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(new Map());
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({
     paired: [
@@ -198,7 +230,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
-  it("keeps the existing gateway and node projection unchanged without a worker service", async () => {
+  it("projects live node session-host capability without a worker service", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockImplementation(({ nodeId }) => nodeId === "node-live");
     const [ok, payload] = await callEnvironmentMethod("environments.list", {});
 
     expect(ok).toBe(true);
@@ -220,7 +253,10 @@ describe("environment gateway methods", () => {
           label: "Live Node",
           status: "available",
           platform: "ios",
-          sessionHost: false,
+          sessionHost: true,
+          lastConnectedAtMs: 123,
+          lastSeenAtMs: 123,
+          lastSeenReason: "connect",
           trust: "persistent",
           capabilities: ["camera", "system.run"],
         },
@@ -235,6 +271,148 @@ describe("environment gateway methods", () => {
         },
       ],
     });
+  });
+
+  it("preserves never-connected and clean-disconnect history for offline nodes", async () => {
+    vi.mocked(listNodePairing).mockResolvedValue({
+      paired: [
+        {
+          nodeId: "node-never",
+          displayName: "Never Node",
+          commands: ["system.run"],
+          lastSeenAtMs: 2_000,
+          lastSeenReason: "device-token-auth",
+        },
+        {
+          nodeId: "node-lost",
+          displayName: "Lost Node",
+          commands: ["system.run"],
+          lastConnectedAtMs: 1_000,
+          lastDisconnectedAtMs: 4_000,
+          lastSeenAtMs: 3_000,
+          lastSeenReason: "silent_push",
+        },
+      ],
+    } as never);
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.list",
+      {},
+      { connectedNodes: [] },
+    );
+
+    expect(ok).toBe(true);
+    const environments = (payload as { environments: Array<Record<string, unknown>> }).environments;
+    expect(environments.find((entry) => entry.id === "node:node-never")).toMatchObject({
+      status: "unavailable",
+      lastSeenAtMs: 2_000,
+      lastSeenReason: "device-token-auth",
+    });
+    expect(environments.find((entry) => entry.id === "node:node-never")).not.toHaveProperty(
+      "lastConnectedAtMs",
+    );
+    expect(environments.find((entry) => entry.id === "node:node-lost")).toMatchObject({
+      status: "unavailable",
+      lastConnectedAtMs: 1_000,
+      lastDisconnectedAtMs: 4_000,
+      lastSeenAtMs: 3_000,
+      lastSeenReason: "silent_push",
+    });
+  });
+
+  it("projects the same exact slots and redacted bundle status through list and status", async () => {
+    vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(
+      new Map([["node-live", { total: 2, available: 1 }]]),
+    );
+    vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(
+      new Map([["node-live", { status: "installed", version: "2026.8.9" }]]),
+    );
+
+    const [, listPayload] = await callEnvironmentMethod("environments.list", {});
+    const [, statusPayload] = await callEnvironmentMethod("environments.status", {
+      environmentId: "node:node-live",
+    });
+    const listed = (
+      listPayload as { environments: Array<{ id: string; workerBundle?: unknown }> }
+    ).environments.find((environment) => environment.id === "node:node-live");
+
+    expect(listed).toMatchObject({
+      workerSlots: { total: 2, available: 1 },
+      workerBundle: { status: "installed", version: "2026.8.9" },
+    });
+    expect(statusPayload).toMatchObject({
+      workerSlots: { total: 2, available: 1 },
+      workerBundle: { status: "installed", version: "2026.8.9" },
+    });
+    expect(JSON.stringify({ listed, statusPayload })).not.toContain("bundleHash");
+  });
+
+  it("projects the same current-node update issue through list and status", async () => {
+    vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(
+      new Map([["node-live", [NODE_RUNNER_UPDATE_REQUIRED_ISSUE]]]),
+    );
+
+    const [, listPayload] = await callEnvironmentMethod("environments.list", {});
+    const [, statusPayload] = await callEnvironmentMethod("environments.status", {
+      environmentId: "node:node-live",
+    });
+    const listed = (
+      listPayload as { environments: Array<{ id: string; issues?: unknown[] }> }
+    ).environments.find((environment) => environment.id === "node:node-live");
+
+    expect(listed?.issues).toEqual([NODE_RUNNER_UPDATE_REQUIRED_ISSUE]);
+    expect(statusPayload).toMatchObject({ issues: [NODE_RUNNER_UPDATE_REQUIRED_ISSUE] });
+    expect(
+      (
+        listPayload as { environments: Array<{ id: string; issues?: unknown[] }> }
+      ).environments.find((environment) => environment.id === "gateway"),
+    ).not.toHaveProperty("issues");
+  });
+
+  it("marks only connected, advertised, and explicitly allowed nodes as desktop sources", async () => {
+    const context = mockContext();
+    context.getRuntimeConfig = () =>
+      ({
+        gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
+      }) as never;
+    context.nodeRegistry.listConnectedForPairingStates = () =>
+      [
+        {
+          nodeId: "node-desktop",
+          connId: "conn-desktop",
+          displayName: "Desktop Node",
+          platform: "linux",
+          deviceFamily: "Linux",
+          caps: [],
+          commands: [NODE_DESKTOP_STREAM_COMMAND],
+          connectedAtMs: 123,
+        },
+        {
+          nodeId: "node-without-command",
+          connId: "conn-plain",
+          displayName: "Plain Node",
+          platform: "linux",
+          deviceFamily: "Linux",
+          caps: [],
+          commands: [],
+          connectedAtMs: 123,
+        },
+      ] as never;
+    const respond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: {},
+      respond,
+      context,
+    } as never);
+    const environments = respond.mock.calls[0]?.[1].environments as Array<{
+      id: string;
+      desktop?: boolean;
+    }>;
+    expect(environments.find((entry) => entry.id === "node:node-desktop")?.desktop).toBe(true);
+    expect(
+      environments.find((entry) => entry.id === "node:node-without-command")?.desktop,
+    ).toBeUndefined();
+    expect(environments.find((entry) => entry.id === "node:node-offline")?.desktop).toBeUndefined();
   });
 
   it("appends worker metadata with stable sessions and elapsed times", async () => {
@@ -282,6 +460,48 @@ describe("environment gateway methods", () => {
     expect(worker).not.toHaveProperty("sshEndpoint");
     expect(worker?.worker).not.toHaveProperty("sshEndpoint");
     expect(worker?.worker).not.toHaveProperty("keyRef");
+  });
+
+  it("adds provider machine options to configured profile summaries", async () => {
+    const listMachineOptions = vi.fn(async (profileId: string) =>
+      profileId === "aws"
+        ? [
+            {
+              id: "standard",
+              label: "Standard",
+              cpu: 32,
+              memoryGb: 64,
+              default: true,
+            },
+          ]
+        : undefined,
+    );
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.list",
+      {},
+      { service: workerService({ listMachineOptions }) },
+    );
+
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({
+      profiles: [
+        {
+          id: "aws",
+          providerId: "crabbox",
+          machines: [
+            {
+              id: "standard",
+              label: "Standard",
+              cpu: 32,
+              memoryGb: 64,
+              default: true,
+            },
+          ],
+        },
+        { id: "zeta", providerId: "static-ssh" },
+      ],
+    });
+    expect(listMachineOptions.mock.calls).toEqual([["aws"], ["zeta"]]);
   });
 
   it.each([
@@ -336,6 +556,7 @@ describe("environment gateway methods", () => {
   });
 
   it("returns status for one node environment", async () => {
+    vi.mocked(isNodeRunnerSessionHost).mockReturnValue(true);
     const [ok, payload] = await callEnvironmentMethod("environments.status", {
       environmentId: "node:node-live",
     });
@@ -347,13 +568,16 @@ describe("environment gateway methods", () => {
       label: "Live Node",
       status: "available",
       platform: "ios",
-      sessionHost: false,
+      sessionHost: true,
+      lastConnectedAtMs: 123,
+      lastSeenAtMs: 123,
+      lastSeenReason: "connect",
       trust: "persistent",
       capabilities: ["camera", "system.run"],
     });
   });
 
-  it("returns status for one worker without listing providers", async () => {
+  it("returns status for one worker", async () => {
     const get = vi.fn(() => workerRecord({ state: "attached" }));
     const service = workerService({ get });
     const [ok, payload] = await callEnvironmentMethod(
@@ -370,7 +594,6 @@ describe("environment gateway methods", () => {
       worker: { state: "attached", ageMs: 9_000 },
     });
     expect(get).toHaveBeenCalledWith("worker-1");
-    expect(service.list).not.toHaveBeenCalled();
   });
 
   it("rejects unknown environment ids", async () => {

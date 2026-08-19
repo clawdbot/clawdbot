@@ -19,6 +19,7 @@ import {
 } from "./run-attempt-test-harness.js";
 
 const activeRunRegistrationMocks = vi.hoisted(() => ({
+  cancelPendingAgentQuestionForSession: vi.fn(),
   clearActiveEmbeddedRun: vi.fn(),
   setActiveEmbeddedRun: vi.fn(),
   questionWaiters: new Map<string, (value: unknown) => void>(),
@@ -32,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
     cancelPendingAgentQuestionForSession: async (
       ...args: Parameters<typeof actual.cancelPendingAgentQuestionForSession>
     ) => {
+      activeRunRegistrationMocks.cancelPendingAgentQuestionForSession(...args);
       const error = activeRunRegistrationMocks.cancelQuestionError;
       activeRunRegistrationMocks.cancelQuestionError = undefined;
       if (error) {
@@ -90,6 +92,7 @@ function createSteeringParams() {
   params.sessionId = sessionId;
   params.sessionKey = `agent:main:${sessionId}`;
   params.runId = `run-${sessionId}`;
+  params.toolAuthorityFingerprint = `authority-${sessionId}`;
   return params;
 }
 
@@ -142,6 +145,31 @@ describe("runCodexAppServerAttempt steering", () => {
     });
   });
 
+  it("exposes pending-question cancellation for queued image fallback", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createSteeringParams();
+    activeRunRegistrationMocks.cancelPendingAgentQuestionForSession.mockClear();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    let handle: { cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean> } | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle?.cancelPendingUserInput).toBeTypeOf("function");
+    }, fastWait);
+
+    await expect(handle?.cancelPendingUserInput?.("image-reply")).resolves.toBe(false);
+    expect(activeRunRegistrationMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledWith({
+      sessionKey: params.sessionKey,
+      resolvedBy: "image-reply",
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
@@ -166,6 +194,7 @@ describe("runCodexAppServerAttempt steering", () => {
     await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
       debounceMs: 0,
       isInboundUserMessage: true,
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       taskSuggestionDeliveryMode: "gateway",
       waitForTranscriptCommit: true,
       onQueueAccepted,
@@ -599,6 +628,7 @@ describe("runCodexAppServerAttempt steering", () => {
     await waitAndQueueActiveRunMessage(params.sessionId, "2", {
       isInboundUserMessage: true,
       onQueueAccepted: onQuestionAccepted,
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     });
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },

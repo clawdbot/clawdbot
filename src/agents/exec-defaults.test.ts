@@ -338,6 +338,18 @@ describe("resolveExecDefaults", () => {
     ).toEqual({ canExec: false, node: "build-mac" });
   });
 
+  it("uses an explicitly loaded approval snapshot for read-only callers", () => {
+    const load = vi.mocked(execApprovals.loadExecApprovals);
+
+    expect(
+      resolveNodeExecEligibility({
+        cfg: withDefaultAgent({ tools: { exec: { host: "node", mode: "full" } } }),
+        execApprovals: { version: 1, defaults: { security: "deny" }, agents: {} },
+      }),
+    ).toEqual({ canExec: false });
+    expect(load).not.toHaveBeenCalled();
+  });
+
   it("blocks node skill eligibility when the gateway denies system.run", () => {
     expect(
       resolveNodeExecEligibility({

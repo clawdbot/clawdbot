@@ -1,14 +1,13 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
-import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   replyMessageInjectionTargetOperation,
-  type ReplyMessageInjectionTarget,
   type ReplyOperation,
   type ReplyOperationPhase,
   type ReplyRunRegistry,
@@ -108,23 +107,18 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return replyRunState.activeRunsByKey.has(normalizedSessionKey);
   },
-  resolveMessageInjectionTarget({ sessionKey, originatingLeafEntryId, expectedRunId }) {
+  resolveCurrentMessageInjectionTarget(sessionKey) {
     const operation = this.get(sessionKey);
     const resolved = resolveReplyMessageInjectionRejection({
       operation,
-      originatingLeafEntryId,
-      expectedRunId,
     });
-    if (!("injection" in resolved)) {
+    if (!operation || !("injection" in resolved)) {
       return undefined;
     }
-    const target: ReplyMessageInjectionTarget = {
-      [replyMessageInjectionTargetOperation]: operation!,
-      identity: normalizeOptionalString(expectedRunId) ? "run" : "leaf",
+    return {
+      [replyMessageInjectionTargetOperation]: operation,
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
-      originatingLeafEntryId,
     };
-    return target;
   },
   abort(sessionKey) {
     const operation = this.get(sessionKey);

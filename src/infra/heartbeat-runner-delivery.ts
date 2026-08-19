@@ -12,7 +12,6 @@ import { formatErrorMessage } from "./errors.js";
 import {
   normalizeHeartbeatReply,
   normalizeHeartbeatToolNotification,
-  stripTrailingHeartbeatNotifyFalse,
 } from "./heartbeat-delivery-normalization.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { handleHeartbeatFailureNotice } from "./heartbeat-failure-notice.js";
@@ -94,6 +93,7 @@ export function classifyHeartbeatAgentOutcome(params: {
   ) {
     return { kind: "ack", eventStatus: "ok-empty" } as const;
   }
+  const mode = params.hasRelayableExecCompletion ? "message" : "heartbeat";
   const normalized = shouldSuppressSourceReply
     ? {
         shouldSkip: true,
@@ -102,37 +102,17 @@ export function classifyHeartbeatAgentOutcome(params: {
         isInternalPlaceholderOnly: false,
       }
     : hasExplicitFailure && replyPayload
-      ? normalizeHeartbeatReply(replyPayload, params.responsePrefix, params.ackMaxChars)
+      ? normalizeHeartbeatReply(replyPayload, params.responsePrefix, params.ackMaxChars, mode)
       : heartbeatToolResponse
         ? normalizeHeartbeatToolNotification(heartbeatToolResponse, params.responsePrefix)
         : replyPayload
-          ? normalizeHeartbeatReply(replyPayload, params.responsePrefix, params.ackMaxChars)
+          ? normalizeHeartbeatReply(replyPayload, params.responsePrefix, params.ackMaxChars, mode)
           : {
               shouldSkip: true,
               text: "",
               hasMedia: false,
               isInternalPlaceholderOnly: false,
             };
-  // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
-  // The model should be responding with exec results, not ack tokens.
-  // Also, if normalized.text is empty due to token stripping but we have exec completion,
-  // fall back to the original reply text.
-  const execFallbackText =
-    !heartbeatToolResponse &&
-    params.hasRelayableExecCompletion &&
-    !normalized.text.trim() &&
-    !normalized.isInternalPlaceholderOnly &&
-    replyPayload?.text?.trim()
-      ? replyPayload.text.trim()
-      : null;
-  if (execFallbackText) {
-    const execNotifyFalse = stripTrailingHeartbeatNotifyFalse(execFallbackText);
-    normalized.text = execNotifyFalse.text;
-    normalized.shouldSkip = !normalized.hasMedia && !normalized.text.trim();
-    if (execNotifyFalse.silent) {
-      normalized.silent = true;
-    }
-  }
   if (agentRunFailed) {
     const replacement = replaceGenericExternalRunFailureText(normalized.text);
     if (replacement.replaced) {
@@ -153,8 +133,7 @@ export function classifyHeartbeatAgentOutcome(params: {
   const shouldSkipMain =
     normalized.shouldSkip &&
     !normalized.hasMedia &&
-    (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly) &&
-    (!params.hasRelayableExecCompletion || normalized.isInternalPlaceholderOnly);
+    (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly);
   if (hasExplicitFailure) {
     return {
       kind: "failure",

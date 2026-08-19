@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
@@ -14,11 +14,13 @@ import {
   verifyControlUiGeneratedCatalogs,
   verifyRuntimeLocaleConfig,
 } from "./control-ui-i18n-verify.ts";
+import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
 import {
   hashControlUiTranslationText,
+  loadControlUiSourceCatalog,
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
-  mergeControlUiTranslationMaps,
+  readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
@@ -279,38 +281,12 @@ function tmPath(entry: LocaleEntry): string {
   return path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
 }
 
-async function importLocaleModule<T>(filePath: string): Promise<T> {
-  const stats = await stat(filePath);
-  const href = `${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`;
-  return (await import(href)) as T;
-}
-
-async function loadLocaleMap(filePath: string, exportName: string): Promise<TranslationMap | null> {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  const mod = await importLocaleModule<Record<string, TranslationMap>>(filePath);
-  return mod[exportName] ?? null;
-}
-
 async function loadSourceLocaleMap(): Promise<TranslationMap> {
-  const source = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
-  const activitySource = (
-    await importLocaleModule<{
-      registerActivityEnglish: { catalog: TranslationMap };
-    }>(ACTIVITY_SOURCE_LOCALE_PATH)
-  ).registerActivityEnglish.catalog;
-  if (!source || !activitySource) {
-    throw new Error("Control UI English source catalogs are incomplete");
-  }
-  return mergeControlUiTranslationMaps(source, activitySource);
+  return await loadControlUiSourceCatalog(SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH);
 }
 
 async function readSourceLocaleRaw(): Promise<string> {
-  const sources = await Promise.all(
-    [SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH].map((filePath) => readFile(filePath, "utf8")),
-  );
-  return sources.join("\n");
+  return await readControlUiSourceCatalog(SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH);
 }
 
 type PlaceholderMismatch = {
@@ -487,8 +463,7 @@ export function isProviderAuthError(error: Error): boolean {
 }
 
 function isProviderAuthOptional(): boolean {
-  const raw = process.env[ENV_AUTH_OPTIONAL]?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes";
+  return isStrictAffirmativeValue(process.env[ENV_AUTH_OPTIONAL]);
 }
 
 function resolvePromptTimeoutMs(): number {
@@ -866,8 +841,10 @@ class TranslationClient {
   private closed = false;
   private sequence: Promise<unknown> = Promise.resolve();
   private readonly model: Model;
+  private readonly systemPrompt: string;
 
-  private constructor(private readonly systemPrompt: string) {
+  private constructor(systemPrompt: string) {
+    this.systemPrompt = systemPrompt;
     this.model = resolveTranslationModel();
   }
 

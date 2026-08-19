@@ -366,7 +366,7 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
-  it("suppresses ambient-only package env blockers for dev gateway startup", () => {
+  it("suppresses ambient-only package env blockers for gateway startup", () => {
     mockManifestPlugins([
       plugin("discord", {
         packageChannel: createPackageChannelEnv("discord", ["DISCORD_FAKE_TEST_TRIGGER"]),

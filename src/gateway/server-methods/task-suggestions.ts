@@ -12,12 +12,12 @@ import {
   validateTaskSuggestionsDismissParams,
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   abandonTaskSuggestionAcceptance,
@@ -30,7 +30,6 @@ import {
 } from "../task-suggestion-registry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { listWorkerProfiles } from "./environments.js";
-import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
@@ -178,14 +177,14 @@ function failSuggestedTaskDelivery(params: {
   return { ok: false, error: params.error };
 }
 
-function resolveSuggestionAgentId(
+function resolveSuggestionOwner(
   suggestion: TaskSuggestion,
   options: GatewayRequestHandlerOptions,
-): string {
-  return normalizeAgentId(
-    suggestion.agentId ??
-      parseAgentSessionKey(suggestion.sessionKey)?.agentId ??
-      resolveDefaultAgentId(options.context.getRuntimeConfig()),
+): ReturnType<typeof resolveRequestedSessionAgentId> {
+  return resolveRequestedSessionAgentId(
+    options.context.getRuntimeConfig(),
+    suggestion.sessionKey,
+    suggestion.agentId,
   );
 }
 
@@ -196,7 +195,6 @@ async function sendSuggestedTaskPrompt(params: {
   sessionKey: string;
   agentId: string;
   sessionId?: string;
-  activeRunId?: string;
 }): Promise<Parameters<RespondFn> | undefined> {
   let response: Parameters<RespondFn> | undefined;
   const chatParams = {
@@ -204,9 +202,7 @@ async function sendSuggestedTaskPrompt(params: {
     agentId: params.agentId,
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     message: params.suggestion.prompt,
-    ...(params.activeRunId
-      ? { queueMode: "steer" as const, expectedRunId: params.activeRunId }
-      : {}),
+    queueMode: "steer" as const,
     idempotencyKey: `task-suggestion:${params.taskId}`,
   };
   await handleChatSend({
@@ -228,7 +224,11 @@ async function createSuggestedTaskSession(params: {
   cloudProfileId?: string;
 }): Promise<TaskSuggestionAcceptanceResult> {
   let sessionResponse: Parameters<RespondFn> | undefined;
-  const agentId = resolveSuggestionAgentId(params.suggestion, params.options);
+  const sourceOwner = resolveSuggestionOwner(params.suggestion, params.options);
+  if (!sourceOwner.ok) {
+    return { ok: false, error: sourceOwner.error };
+  }
+  const agentId = normalizeAgentId(sourceOwner.agentId);
   const sessionKey = buildDashboardSessionKey(agentId);
   const fail = (key: string, error: NonNullable<Parameters<RespondFn>[2]>) =>
     failSuggestedTaskSession({
@@ -355,7 +355,11 @@ async function deliverSuggestedTaskToSourceSession(params: {
   suggestion: TaskSuggestion;
   options: GatewayRequestHandlerOptions;
 }): Promise<TaskSuggestionAcceptanceResult> {
-  const agentId = resolveSuggestionAgentId(params.suggestion, params.options);
+  const sourceOwner = resolveSuggestionOwner(params.suggestion, params.options);
+  if (!sourceOwner.ok) {
+    return { ok: false, error: sourceOwner.error };
+  }
+  const agentId = normalizeAgentId(sourceOwner.agentId);
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     failSuggestedTaskDelivery({ taskId: params.taskId, options: params.options, error });
   let source: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
@@ -376,33 +380,6 @@ async function deliverSuggestedTaskToSourceSession(params: {
   if (lifecycleError) {
     return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
   }
-  let activeRunState: ReturnType<typeof resolveVisibleActiveSessionRunState>;
-  try {
-    activeRunState = resolveVisibleActiveSessionRunState({
-      context: params.options.context,
-      requestedKey: params.suggestion.sessionKey,
-      canonicalKey: source.canonicalKey,
-      sessionId: source.entry.sessionId,
-      agentId,
-    });
-  } catch (error) {
-    return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-  }
-  if (activeRunState.active && activeRunState.runIds.length !== 1) {
-    const message =
-      activeRunState.runIds.length === 0
-        ? "active session run has no exact dispatch identity; refresh and retry"
-        : "session has multiple active runs; choose the target run before accepting the task suggestion";
-    return fail(
-      errorShape(ErrorCodes.INVALID_REQUEST, message, {
-        retryable: false,
-        details: {
-          code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
-          sessionKey: params.suggestion.sessionKey,
-        },
-      }),
-    );
-  }
   let sendResponse: Parameters<RespondFn> | undefined;
   try {
     sendResponse = await sendSuggestedTaskPrompt({
@@ -412,7 +389,6 @@ async function deliverSuggestedTaskToSourceSession(params: {
       sessionKey: params.suggestion.sessionKey,
       agentId,
       sessionId: source.entry.sessionId,
-      activeRunId: activeRunState.runIds[0],
     });
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
@@ -434,7 +410,7 @@ async function deliverSuggestedTaskToSourceSession(params: {
 }
 
 export const taskSuggestionsHandlers: GatewayRequestHandlers = {
-  "taskSuggestions.list": ({ params, respond }) => {
+  "taskSuggestions.list": ({ params, respond, context }) => {
     if (!validateTaskSuggestionsListParams(params)) {
       respond(
         false,
@@ -443,7 +419,28 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    respond(true, { suggestions: listTaskSuggestions(params) }, undefined);
+    const requestedSessionKey = params.sessionKey;
+    const sessionOwner = requestedSessionKey
+      ? resolveRequestedSessionAgentId(
+          context.getRuntimeConfig(),
+          requestedSessionKey,
+          params.agentId,
+        )
+      : undefined;
+    if (sessionOwner && !sessionOwner.ok) {
+      respond(false, undefined, sessionOwner.error);
+      return;
+    }
+    respond(
+      true,
+      {
+        suggestions: listTaskSuggestions({
+          ...params,
+          ...(sessionOwner ? { agentId: sessionOwner.agentId } : {}),
+        }),
+      },
+      undefined,
+    );
   },
   "taskSuggestions.create": ({ params, respond, context }) => {
     if (!validateTaskSuggestionsCreateParams(params)) {
@@ -470,26 +467,17 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const sessionAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-    if (
-      requestedAgentId &&
-      sessionAgentId &&
-      requestedAgentId !== normalizeAgentId(sessionAgentId)
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "task suggestion agentId must match its source session",
-        ),
-      );
+    const sourceOwner = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      params.sessionKey,
+      requestedAgentId,
+    );
+    if (!sourceOwner.ok) {
+      respond(false, undefined, sourceOwner.error);
       return;
     }
-    const agentId = normalizeAgentId(
-      requestedAgentId ?? sessionAgentId ?? resolveDefaultAgentId(context.getRuntimeConfig()),
-    );
+    const agentId = normalizeAgentId(sourceOwner.agentId);
     const created = createTaskSuggestion({ ...params, agentId });
     if (created.status === "full") {
       respond(

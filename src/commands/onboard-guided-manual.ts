@@ -14,7 +14,10 @@ import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 type ActivateSetupInference =
   typeof import("../system-agent/setup-inference.js").activateSetupInference;
 
-type LadderFailure = { label: string; status: SetupInferenceFailureStatus };
+export type SetupCandidateFailure = {
+  label: string;
+  result: Extract<ActivateSetupInferenceResult, { ok: false }>;
+};
 
 type CandidateAttempt =
   | { kind: "success"; result: Extract<ActivateSetupInferenceResult, { ok: true }> }
@@ -30,8 +33,16 @@ const SETUP_FAILURE_REASON_KEYS: Record<SetupInferenceFailureStatus, string> = {
   unknown: "wizard.guided.failureUnknown",
 };
 
-export function setupFailureReason(status: SetupInferenceFailureStatus): string {
+function setupFailureReason(status: SetupInferenceFailureStatus): string {
   return t(SETUP_FAILURE_REASON_KEYS[status]);
+}
+
+export function formatSetupCandidateFailure(failure: SetupCandidateFailure): string {
+  return t("wizard.guided.testFailure", {
+    label: failure.label,
+    reason: setupFailureReason(failure.result.status),
+    detail: failure.result.error,
+  });
 }
 
 async function noteActivationFailure(params: {
@@ -40,11 +51,7 @@ async function noteActivationFailure(params: {
   result: Extract<ActivateSetupInferenceResult, { ok: false }>;
 }): Promise<void> {
   await params.prompter.note(
-    t("wizard.guided.testFailure", {
-      label: params.label,
-      reason: setupFailureReason(params.result.status),
-      detail: params.result.error,
-    }),
+    formatSetupCandidateFailure({ label: params.label, result: params.result }),
     t("wizard.guided.aiAccessTitle"),
   );
 }
@@ -56,7 +63,7 @@ export async function tryCandidate(params: {
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
   /** Auto-ladder failures collect into one quiet summary; manual retries stay loud. */
-  collectFailure?: (failure: LadderFailure) => void;
+  collectFailure?: (failure: SetupCandidateFailure) => void;
 }): Promise<CandidateAttempt> {
   const progress = params.prompter.progress(
     t("wizard.guided.testingCandidate", {
@@ -78,7 +85,7 @@ export async function tryCandidate(params: {
     return { kind: "success", result };
   }
   if (params.collectFailure) {
-    params.collectFailure({ label: params.candidate.label, status: result.status });
+    params.collectFailure({ label: params.candidate.label, result });
   } else {
     await noteActivationFailure({
       prompter: params.prompter,

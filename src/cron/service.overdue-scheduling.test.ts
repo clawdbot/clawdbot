@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.js";
 import { reserveQueuedCronRun } from "./service/run-admission.js";
+import type { CronRunReceiptHandle } from "./store/run-receipt-store.js";
 import type { CronJob } from "./types.js";
 
 function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {}): CronJob {
@@ -19,6 +20,19 @@ function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {})
     updatedAtMs: now,
     ...jobOverrides,
     state: state ? { ...state } : {},
+  };
+}
+
+function testReceipt(jobId: string, startedAtMs: number): CronRunReceiptHandle {
+  return {
+    receiptId: `test:${jobId}`,
+    storeKey: "test",
+    jobId,
+    configRevision: "test",
+    agentId: "main",
+    ownerPid: process.pid,
+    ownerStartTime: 1,
+    startedAtMs,
   };
 }
 
@@ -205,7 +219,9 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
         },
       });
       const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-      reserveQueuedCronRun(state, job.id, futureMarker);
+      reserveQueuedCronRun(state, job.id, futureMarker, {
+        runReceipt: testReceipt(job.id, futureMarker),
+      });
 
       recomputeNextRunsForMaintenance(state);
 

@@ -86,6 +86,30 @@ Approval note:
 - For direct shell/runtime file executions, OpenClaw also best-effort binds one concrete local file operand and denies the run if that file changes before execution.
 - If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command, approval-backed execution is denied instead of pretending full runtime coverage. Use sandboxing, separate hosts, or an explicit trusted allowlist/full workflow for broader interpreter semantics.
 
+### Gateway deployments that cannot host nodes
+
+A Gateway can remain healthy for browser users while node hosting is unavailable. Run `openclaw doctor` on the Gateway before onboarding nodes, and check these preconditions:
+
+- **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
+- **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
+- **Node onboarding plugin:** Join codes and `openclaw connect` require the bundled `device-pair` plugin. If it is disabled or excluded by plugin policy, set `plugins.entries.device-pair.enabled: true`, make sure `device-pair` is allowed, and restart the Gateway.
+- **Device session runtime:** Paired-device runners host only the embedded OpenClaw runtime. Give at least one selected agent/model route `agentRuntime.id: "openclaw"`; Codex and ACPX routes cannot dispatch to a paired device. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [runtime policy](/gateway/config-agents#runtime-policy).
+- **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
+
+For a Cloudflare Access-fronted Gateway:
+
+1. In Cloudflare Zero Trust, create an Access service token. Copy its Client ID and Client Secret when Cloudflare displays them.
+2. Add a **Service Auth** policy that accepts the token on the Access application protecting the Gateway. If `/j/*` and `/__openclaw__/worker` are separate Access applications, add the same policy to both.
+3. On the node, provide the conventional environment fallback and connect:
+
+   ```bash
+   export CF_ACCESS_CLIENT_ID="<client-id>"
+   export CF_ACCESS_CLIENT_SECRET="<client-secret>"
+   openclaw connect https://gateway.example/j/<code> --service
+   ```
+
+The canonical node connection keys are `gateway.cloudflareAccess.clientId` and `gateway.cloudflareAccess.clientSecret`; both accept SecretInput values. The environment fallback above persists those keys as env SecretRefs, not copied plaintext. For installed nodes, OpenClaw stores the environment values in the managed service environment file rather than inline in launchd, systemd, or Task Scheduler definitions. Resolved values are bound to the configured Gateway origin and are not followed across redirects. OpenClaw rejects the pair before resolution on plaintext `http://` or `ws://` routes; credential-free loopback and private-network plaintext behavior is unchanged.
+
 ### Start a node host (foreground)
 
 On the node machine:
@@ -204,6 +228,12 @@ node host is updated. Adding, removing, or filtering servers after that does not
 require re-pairing because the approved command family is unchanged. Restart
 `openclaw node run` or `openclaw node restart` to apply node MCP config changes;
 the node host does not watch this config.
+
+Server-advertised tool-list changes apply live and replace the published node
+catalog. If an MCP transport closes or a stateful Streamable HTTP session
+expires, the node withdraws that server's stale tools and reconnects with
+bounded backoff. The failed call that detects an expired session is not replayed;
+a later call can use the replacement connection after its tools are republished.
 
 Gateway operators can ignore all agent-visible tools published by paired nodes,
 including node-hosted MCP tools, with
@@ -371,12 +401,24 @@ byte-offset cursors and bounded backward file reads, so selecting a large
 session or loading an older page does not read the whole JSONL history into one
 Gateway response.
 
-The list and read commands are read-only. They expose catalog metadata and transcript
-content only through the generic `sessions.catalog.list` and
-`sessions.catalog.read` methods to an authenticated operator connection with
-`operator.write`. A Gateway-local Claude CLI row can be adopted from the normal
-Chat composer: OpenClaw imports bounded visible history, resumes with
-`--fork-session` on the first turn, and leaves the source transcript untouched.
+Catalog RPCs keep their normal method scopes: `sessions.catalog.list` and
+`sessions.catalog.read` require `operator.read`; `sessions.catalog.continue` and
+`sessions.catalog.archive` require `operator.write`.
+
+Catalog visibility also follows the authenticated caller. An `operator.admin`
+connection sees every discovered row. When the Gateway has durable profiles for
+fewer than two people, catalog visibility is unchanged and rows remain unfiltered.
+On a multi-user Gateway, a non-admin connection sees and can read, continue, or
+archive only rows whose recorded `createdActor.id` matches the caller's Gateway
+profile. Unattributed host CLI or desktop sessions are hidden from those callers.
+This is a privacy and coordination boundary inside one trusted Gateway domain,
+not hostile-user isolation; use separate agents or Gateway/host trust boundaries
+when people must not share access to files, credentials, or tools. See
+[Multi-user mode](/concepts/multi-user).
+
+A Gateway-local Claude CLI row can be adopted from the normal Chat composer:
+OpenClaw imports bounded visible history, resumes with `--fork-session` on the
+first turn, and leaves the source transcript untouched.
 
 A headless node host can opt into the same continuation flow:
 
@@ -405,6 +447,60 @@ Gateway loopback MCP config or Gateway skills plugin, cannot reseed from a
 Gateway transcript, and reject attachments and images. Claude Desktop rows and
 nodes that do not advertise the run command remain view-only. The macOS app
 node does not advertise this command yet, so its rows remain view-only.
+
+### Host OpenClaw sessions
+
+A headless node host can separately opt into full OpenClaw session hosting:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: { enabled: true },
+  },
+}
+```
+
+Restart the node host after enabling this setting. On the first session dispatch
+for a Gateway build, the node downloads one sealed worker artifact from that
+paired Gateway, verifies its exact content hash, and publishes it atomically
+under the Gateway-namespaced node-host bundle root. The artifact already
+contains its complete JavaScript dependency closure; the node does not install
+packages or execute lifecycle scripts. Later turns reuse the immutable artifact
+while its receipt still matches the Gateway's current build.
+
+The Devices page shows the validated Gateway-owned worker version in the node's
+metadata. If the retained artifact is missing or fails validation, Devices shows
+a **worker missing** warning; start a new session on that device to reinstall the
+current bundle. This status is observational and reconnect-scoped: launch still
+requires the exact durable receipt and current node authority.
+
+Node hosts must support the current private worker-supervisor dialect before
+they can host sessions. An older connected host remains visible but disabled in
+the session picker. Update OpenClaw on that device and reconnect it; for a
+headless node, run `openclaw update` followed by `openclaw node restart`. The
+Gateway does not fall back to the node's local OpenClaw package or an older
+supervisor dialect.
+
+This setting enables supervised session turns on the paired device, including
+Gateway-owned workspace transfer and result reconciliation. Each node runs at
+most two worker processes by default. A third launch waits up to 10 seconds for
+a durable slot; while both slots are occupied, the node remains available for
+status and cancellation but is not selected for a new session turn.
+
+If the device is offline before a turn is dispatched, the Gateway waits up to
+10 seconds and then returns a visible retry/reconnect error while keeping the
+session placement available for a later attempt. Gateway restart likewise
+preserves an idle device placement and reconnects its tunnel lazily on the next
+turn. A paired node remains dormant for 14 days after its exact recorded
+disconnect; at that boundary its old worker environment is treated as gone and
+the session placement reconciles normally. Pairing itself remains, so a later
+reconnect can provision a fresh environment. Legacy pairings without exact node
+disconnect history are retained fail-safe rather than expired from unrelated
+device activity. Removing the device pairing, silently pruning a superseded
+pairing, or removing only its node role invalidates clients first, then runs
+targeted environment and placement reconciliation; explicit removal waits for
+the credential fence before returning success, and the periodic sweep retries
+failed provider or placement cleanup.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
@@ -484,7 +580,7 @@ These rows describe the Gateway policy ceiling, not the commands implemented by 
 
 Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `mcp.tools.call.v1`, and `screen.snapshot` on macOS/Windows/Linux) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
-Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [HealthKit summaries](/platforms/ios-healthkit) for the iPhone consent gate and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop input.
+Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `desktop.stream`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [Paired node desktops](/gateway/configuration-reference#paired-node-desktops), [HealthKit summaries](/platforms/ios-healthkit), and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop access.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.commands.allow` opt-in.
 
@@ -511,9 +607,9 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
       pluginTools: {
         enabled: true,
       },
-      // Persistently enable dangerous/privacy-heavy node commands (camera.snap, etc.).
+      // Persistently enable dangerous/privacy-heavy node commands.
       commands: {
-        allow: ["camera.snap", "screen.record"],
+        allow: ["camera.snap", "desktop.stream", "screen.record"],
         // Block exact command names even if defaults or commands.allow include them.
         deny: ["camera.clip"],
       },

@@ -155,6 +155,25 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
+  it("assigns a session created from a custom group", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "start grouped work",
+        worktree: true,
+        cwd: "/repos/client",
+        workspace: "/workspace",
+        category: " Client work ",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "start grouped work",
+      category: "Client work",
+      cwd: "/repos/client",
+      worktree: true,
+    });
+  });
+
   it("sends a custom Gateway folder without requiring a worktree", () => {
     expect(
       buildDraftSessionCreateParams({

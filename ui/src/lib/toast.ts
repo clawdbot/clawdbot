@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { formatUiExternalText } from "./format-error.ts";
 
 type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
@@ -84,7 +85,11 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     }
     return html`
       <div class="app-toast" role="status" aria-live="polite" aria-atomic="true">
-        <span class="app-toast__message">${toast.message}</span>
+        <span class="app-toast__message"
+          >${typeof toast.message === "string"
+            ? formatUiExternalText(toast.message)
+            : toast.message}</span
+        >
         ${toast.actionLabel && toast.onAction
           ? html`
               <button
@@ -113,6 +118,9 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
 }
 
 export function showToast(options: ToastOptions): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
   const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
   if (!host) {
     queuedToast = options;
@@ -136,7 +144,8 @@ export function showToast(options: ToastOptions): boolean {
   return true;
 }
 
-if (!customElements.get("openclaw-toast-host")) {
+// Guarded so DOM-free (node) consumers of send-failure surfacing can load this module.
+if (typeof customElements !== "undefined" && !customElements.get("openclaw-toast-host")) {
   customElements.define("openclaw-toast-host", OpenClawToastHost);
 }
 

@@ -1,5 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { requireTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import type { NodeHostConfig, NodeHostGatewayConfig } from "../../node-host/config.js";
+import {
+  nodeHostCloudflareAccessConfigFromEnv,
+  nodeHostGatewaysShareOrigin,
+} from "../../node-host/gateway-cloudflare-access.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
 import { parsePort } from "../daemon-cli/shared.js";
 
@@ -21,6 +26,8 @@ type NodePairGatewayOptions = {
   candidates: NodeHostGatewayConfig[];
 };
 
+type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
+
 function gatewayConfigFromUrl(url: string, tlsFingerprint?: string): NodeHostGatewayConfig {
   const parsed = new URL(url);
   const tls = parsed.protocol === "wss:";
@@ -34,7 +41,13 @@ function gatewayConfigFromUrl(url: string, tlsFingerprint?: string): NodeHostGat
 }
 
 export function resolveNodePairGatewayOptions(input: string): NodePairGatewayOptions {
-  const payload = decodePairingSetupCode(input);
+  return resolveNodePairGatewayPayload(decodePairingSetupCode(input));
+}
+
+/** Project a validated pairing payload into the canonical node-host candidate list. */
+export function resolveNodePairGatewayPayload(
+  payload: PairingSetupPayload,
+): NodePairGatewayOptions {
   const candidates = (payload.urls ?? [payload.url]).map((url) =>
     gatewayConfigFromUrl(url, url === payload.url ? payload.tlsFingerprint : undefined),
   );
@@ -54,6 +67,7 @@ export function resolveNodeGatewayOptions(
   options: NodeGatewayOptions,
   config: NodeHostConfig | null,
   pair?: NodePairGatewayOptions,
+  env: NodeJS.ProcessEnv = process.env,
 ) {
   const baselineHost = pair?.host ?? config?.gateway?.host ?? "127.0.0.1";
   const baselinePort = pair?.port ?? config?.gateway?.port ?? 18789;
@@ -61,12 +75,18 @@ export function resolveNodeGatewayOptions(
   const port = options.port === undefined ? baselinePort : parsePort(options.port);
   const endpointChanged = host !== baselineHost || (port !== null && port !== baselinePort);
   const baselineTlsFingerprint = pair?.tlsFingerprint ?? config?.gateway?.tlsFingerprint;
-  const baselineTls = pair?.tls ?? config?.gateway?.tls;
-  const tlsFingerprint =
+  const selectedTlsFingerprint =
     options.tls === false
       ? undefined
-      : (normalizeOptionalString(options.tlsFingerprint) ??
-        (endpointChanged ? undefined : baselineTlsFingerprint));
+      : options.tlsFingerprint !== undefined
+        ? options.tlsFingerprint
+        : endpointChanged
+          ? undefined
+          : baselineTlsFingerprint;
+  const baselineTls = pair?.tls ?? config?.gateway?.tls;
+  const tlsFingerprint = selectedTlsFingerprint
+    ? requireTlsFingerprint(selectedTlsFingerprint)
+    : undefined;
   const tls =
     typeof options.tls === "boolean"
       ? options.tls
@@ -82,6 +102,20 @@ export function resolveNodeGatewayOptions(
     options.contextPath !== undefined ||
     options.tls !== undefined ||
     options.tlsFingerprint !== undefined;
+  const savedGatewayMatchesBaseline =
+    !pair ||
+    (config?.gateway !== undefined &&
+      nodeHostGatewaysShareOrigin(config.gateway, pair.candidates[0]!));
+  const cloudflareAccess =
+    (!endpointChanged && savedGatewayMatchesBaseline
+      ? config?.gateway?.cloudflareAccess
+      : undefined) ?? nodeHostCloudflareAccessConfigFromEnv(env);
+  const gatewayCandidates =
+    pair && !hasExplicitEndpoint
+      ? pair.candidates.map((candidate, index) =>
+          index === 0 && cloudflareAccess ? { ...candidate, cloudflareAccess } : candidate,
+        )
+      : undefined;
 
   return {
     host,
@@ -89,6 +123,7 @@ export function resolveNodeGatewayOptions(
     contextPath,
     tls,
     tlsFingerprint,
-    gatewayCandidates: pair && !hasExplicitEndpoint ? pair.candidates : undefined,
+    cloudflareAccess,
+    gatewayCandidates,
   };
 }

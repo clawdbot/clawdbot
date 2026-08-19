@@ -8,7 +8,7 @@ import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js"
 
 type SlackAuthorizedSystemEventContext = {
   channelLabel: string;
-  sessionKey: string;
+  route: { agentId: string; sessionKey: string };
 };
 
 export async function authorizeAndResolveSlackSystemEventContext(params: {
@@ -26,6 +26,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
     channelId,
     channelType,
     eventScope: params.eventScope,
+    retryNameLookup: eventKind.startsWith("member-"),
   });
   if (!auth.allowed) {
     logVerbose(
@@ -38,7 +39,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
     channelId,
     channelName: auth.channelName,
   });
-  const sessionKey = ctx.resolveSlackSystemEventSessionKey({
+  const route = ctx.resolveSlackSystemEventRoute({
     channelId,
     channelType: auth.channelType,
     senderId,
@@ -46,7 +47,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   });
   return {
     channelLabel,
-    sessionKey,
+    route,
   };
 }
 

@@ -59,6 +59,25 @@ const SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS = new Map<string, readonly string[
   ["canvas", ["show_widget"]],
 ]);
 
+const SHIPPED_CORE_POLICY_RENAMES = new Map<string, string>([
+  // Mirror the shipped plugin-family mapping above without renaming runtime events:
+  // old update_plan allow/deny entries now govern the replacement progress_card tool.
+  ["update_plan", "progress_card"],
+]);
+
+/** Maps retired shipped policy names to their current core tool ids. */
+export function expandShippedCoreToolPolicyNames(list: string[] | undefined): string[] | undefined {
+  if (!list) {
+    return undefined;
+  }
+  return uniqueStrings(
+    list.map((entry) => {
+      const normalized = normalizeToolPolicyName(entry);
+      return SHIPPED_CORE_POLICY_RENAMES.get(normalized) ?? normalized;
+    }),
+  );
+}
+
 /** Returns true when an allow policy is narrower than all/default plugin tools. */
 export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
   if (!Array.isArray(policy?.allow)) {
@@ -187,11 +206,12 @@ function expandPluginGroups(
   list: string[] | undefined,
   groups: PluginToolGroups,
 ): string[] | undefined {
-  if (!list || list.length === 0) {
-    return list;
+  const renamed = expandShippedCoreToolPolicyNames(list);
+  if (!renamed || renamed.length === 0) {
+    return renamed;
   }
   const expanded: string[] = [];
-  for (const entry of list) {
+  for (const entry of renamed) {
     const normalized = normalizeToolPolicyName(entry);
     if (normalized === "group:plugins") {
       if (groups.all.length > 0) {
@@ -283,7 +303,7 @@ export function analyzeAllowlistByToolType(
   if (!policy?.allow || policy.allow.length === 0) {
     return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
   }
-  const normalized = normalizeToolList(policy.allow);
+  const normalized = normalizeToolList(expandShippedCoreToolPolicyNames(policy.allow));
   if (normalized.length === 0) {
     return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
   }

@@ -188,6 +188,21 @@ describe("session transcript projection", () => {
     ]);
   });
 
+  it("adopts a durable assistant identity from the same live run", () => {
+    const synthetic = createMessage("assistant", "streamed final");
+    const persisted = createMessage("assistant", "persisted final", {
+      id: "assistant-final",
+      seq: 2,
+    });
+    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), synthetic, {
+      runId: "final-run",
+    });
+
+    state = projectLiveSessionMessage(state, persisted, { runId: "final-run" });
+
+    expect(state.messages).toEqual([persisted]);
+  });
+
   it("does not adopt an ambiguous synthetic final across distinct same-run assistants", () => {
     const synthetic = createMessage("assistant", "delta-only final", {
       idempotencyKey: "final-run",

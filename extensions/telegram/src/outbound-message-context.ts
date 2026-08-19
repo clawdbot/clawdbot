@@ -1,9 +1,9 @@
 // Telegram plugin module implements outbound message context behavior.
 import type { Message } from "grammy/types";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import { buildTelegramSelfSenderName } from "./group-history-window.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
@@ -139,6 +139,8 @@ export async function recordOutboundMessageForPromptContext(params: {
   successfulSendThread?: TelegramThreadSpec;
   promptContextTimestampMs?: number;
   promptContextProjection?: TelegramPromptContextProjection;
+  /** Pre-resolved account owner from the active Telegram runtime. */
+  ownerAgentId?: string;
   /** Edits refresh an existing cache entry without inserting another self-history turn. */
   recordGroupHistory?: boolean;
 }): Promise<boolean> {
@@ -155,7 +157,12 @@ export async function recordOutboundMessageForPromptContext(params: {
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(
         resolveStorePath(params.cfg.session?.store, {
-          agentId: params.cfg.agents ? resolveDefaultAgentId(params.cfg) : "main",
+          agentId:
+            params.ownerAgentId?.trim() ||
+            resolveTelegramAccountOwnerAgentId({
+              cfg: params.cfg,
+              accountId: params.account.accountId,
+            }),
         }),
       ),
     });

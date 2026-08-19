@@ -3,7 +3,11 @@
  * Converts malformed file-tool arguments into retryable errors and fixes the
  * specific XML suffix and Office-extension corruption seen in path arguments.
  */
+import { asOptionalObjectRecord as getToolParamsRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+
+/** Return a record view of model-supplied tool params when possible. */
+export { getToolParamsRecord };
 
 export type RequiredParamGroup = {
   keys: readonly string[];
@@ -105,11 +109,6 @@ export const REQUIRED_PARAM_GROUPS = {
     { keys: ["edits"], label: "edits", validator: hasValidEditReplacements },
   ],
 } as const;
-
-/** Return a record view of model-supplied tool params when possible. */
-export function getToolParamsRecord(params: unknown): Record<string, unknown> | undefined {
-  return params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-}
 
 /** Strip extra closing markers sometimes produced in XML arg_value path params. */
 function stripMalformedXmlArgValueSuffix(value: string): string {

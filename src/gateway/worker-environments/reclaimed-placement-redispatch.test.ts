@@ -25,7 +25,7 @@ describe("createReclaimedPlacementRedispatch", () => {
           ({
             profileId: "development",
             providerId: "fake",
-            profileSnapshot: { settings: { region: "parent" } },
+            profileSnapshot: { machineClass: "large", settings: { region: "parent" } },
           }) as never,
       },
       dispatch,
@@ -39,7 +39,7 @@ describe("createReclaimedPlacementRedispatch", () => {
       profileId: "development",
       inheritedProfile: {
         providerId: "fake",
-        profileSnapshot: { settings: { region: "parent" } },
+        profileSnapshot: { machineClass: "large", settings: { region: "parent" } },
       },
     });
   });

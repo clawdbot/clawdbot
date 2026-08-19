@@ -7,19 +7,10 @@ const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 
 const channelTestRoots = ["src/channels", ...splitChannelExtensionTestRoots];
 
-const splitChannelExtensionTestRootSet = new Set(splitChannelExtensionTestRoots);
-
-const extensionChannelTestRoots = channelTestRoots.filter(
-  (root) =>
-    root.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) && !splitChannelExtensionTestRootSet.has(root),
-);
 const coreChannelTestRoots = channelTestRoots.filter(
   (root) => !root.startsWith(BUNDLED_PLUGIN_PATH_PREFIX),
 );
 const channelTestPrefixes = channelTestRoots.map((root) => `${root}/`);
-export const extensionChannelTestInclude = extensionChannelTestRoots.map(
-  (root) => `${root}/**/*.test.ts`,
-);
 export const coreChannelTestInclude = coreChannelTestRoots.map((root) => `${root}/**/*.test.ts`);
 
 export const extensionExcludedChannelTestGlobs = channelTestRoots

@@ -46,7 +46,6 @@ export {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
   getPluginStateCapacity,
-  isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   pluginStateEntriesInKeyRange,
   resolveMaxPluginStateEntriesPerPlugin,

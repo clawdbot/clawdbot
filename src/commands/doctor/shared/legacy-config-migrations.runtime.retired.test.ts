@@ -209,14 +209,14 @@ describe("retired runtime config migrations", () => {
 
   it.each([
     [
-      "uses a dedicated, actionable migration for the retired device-auth bypass",
+      "removes the retired device-auth bypass when it was enabled",
       true,
-      "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
+      "Removed retired gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
     ],
     [
-      "removes a disabled retired device-auth bypass without requiring pairing",
+      "removes a disabled retired device-auth bypass",
       false,
-      "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
+      "Removed retired gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
     ],
   ] as const)("%s", (_name, bypassEnabled, expectedChange) => {
     const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
@@ -234,7 +234,7 @@ describe("retired runtime config migrations", () => {
     expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
     expect(changes).toEqual([expectedChange]);
     if (bypassEnabled) {
-      expect(migration?.legacyRules?.[0]?.message).toContain("reopen the Control UI over HTTPS");
+      expect(migration?.legacyRules?.[0]?.message).toContain("retired and ignored");
     }
   });
 
@@ -428,6 +428,35 @@ describe("retired runtime config migrations", () => {
   ] as const)("strips retired tuning knob %s", (path) => {
     const result = applyAll(configWithPath(path));
     expect(getPath(result.raw, path)).toBeUndefined();
+    expect(result.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
+  });
+
+  it("strips retired channel progress render keys and prunes emptied parents", () => {
+    const result = applyAll({
+      channels: {
+        slack: {
+          streaming: { progress: { render: "rich", maxLines: 4 } },
+        },
+        discord: {
+          accounts: {
+            main: { streaming: { progress: { render: "text" } } },
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toEqual({
+      channels: {
+        slack: {
+          streaming: { progress: { maxLines: 4 } },
+        },
+        discord: {
+          accounts: { main: {} },
+        },
+      },
+    });
     expect(result.changes).toContain(
       "Removed retired runtime tuning knobs; built-in defaults now apply.",
     );

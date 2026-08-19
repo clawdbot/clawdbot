@@ -1,5 +1,10 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
+import type {
+  FsListDirResult,
+  WorktreeRepositoryStatus,
+  WorktreesBranchesResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -19,17 +24,17 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
+import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarAttention,
   renderAppSidebarBrand,
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
+  renderAppSidebarOnline,
   renderAppSidebarPagesHead,
-  renderAppSidebarPinnedHead,
   renderAppSidebarPluginTabEntry,
   renderAppSidebarZoneEntry,
-  renderAppSidebarZoneGroup,
 } from "./app-sidebar-render.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
@@ -77,6 +82,54 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
 
+  sessionGroupDefaults(name: string) {
+    if (this.context?.sessions.groupsStatus() !== "ready") {
+      return null;
+    }
+    const group = this.context?.sessions.state.groupSettings.find((entry) => entry.name === name);
+    return group ? { cwd: group.cwd ?? "", worktree: group.worktree === true } : null;
+  }
+
+  async listSessionGroupFolders(path?: string): Promise<FsListDirResult> {
+    const sessions = this.context?.sessions;
+    const scope = sessions?.captureConnectionScope();
+    if (!sessions || !scope) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    const result = await scope.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
+    if (this.context?.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    return result;
+  }
+
+  async inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus> {
+    const requestedPath = path?.trim();
+    const agent = this.activeChipAgent().agent;
+    if (!requestedPath) {
+      return agent?.workspaceGit === true
+        ? "git"
+        : agent?.workspaceGit === false
+          ? "not_git"
+          : "unavailable";
+    }
+    const sessions = this.context?.sessions;
+    const scope = sessions?.captureConnectionScope();
+    if (!sessions || !scope) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    const result = await scope.client.request<WorktreesBranchesResult>("worktrees.branches", {
+      repoRoot: requestedPath,
+      includeRepositoryStatus: true,
+    });
+    if (this.context?.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
+      ? result.repositoryStatus
+      : "unavailable";
+  }
+
   // Lazy: the controller pulls core token-suppression modules that must stay
   // out of the startup chunk (QA smoke startup-JS budget). It loads on the
   // first update with the preference enabled; earlier events are safely
@@ -87,6 +140,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
   private readonly nativeGatewaysChanged = () => this.requestUpdate();
+  private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   };
@@ -109,7 +163,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   );
 
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
-  @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
 
   constructor() {
     super();
@@ -336,8 +389,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionOrganizer.handleSessionListDrop(event);
   }
 
-  openNewSession(): void {
-    this.requestOpenNewSession(this.expandedAgentId());
+  openNewSession(target?: NewSessionTarget): void {
+    this.requestOpenNewSession(this.expandedAgentId(), target);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
@@ -415,12 +468,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     const expandedAgentId = this.expandedAgentId();
     const liveRows = [
       ...(this.sessionData.sessionsResult?.sessions ?? []),
-      ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
+      ...Object.values(this.sessionData.sessionResultsByAgent).flatMap((result) => result.sessions),
     ];
     const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
-    const catalogs = this.sessionData.sessionCatalogs.filter(
-      (catalog) => !this.hiddenSessionCatalogIds.has(catalog.id),
-    );
+    const catalogs = this.visibleSessionCatalogs();
     const visibleCatalogIds = new Set(catalogs.map((catalog) => catalog.id));
     const sections = allSections.filter(
       (section) => !section.id.startsWith("catalog:") || visibleCatalogIds.has(section.id.slice(8)),
@@ -448,7 +499,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
         toSidebarSession: navigationState.toSidebarSession,
-        creatorId: this.activeSessionCreatorId,
+        ownerId: this.activeSessionOwnerId,
         catalogOpenTarget: this.catalogOpenTarget,
         terminalAvailable: this.terminalAvailable,
       },
@@ -457,10 +508,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
-    // Pinned sessions keep their slot in the canonical entry order but render as
-    // their own group, so navigation entries stay a contiguous Pages list.
-    const pinnedEntries = sidebarZone.entries.filter((entry) => entry.type === "session");
-    const navEntries = sidebarZone.entries.filter((entry) => entry.type !== "session");
+    const occupiedPluginPlacements = new Set(
+      sidebarZone.entries.flatMap((entry) =>
+        entry.type === "route" ? [`route:${entry.route}`] : [],
+      ),
+    );
     return html`
       <aside
         class="sidebar"
@@ -481,39 +533,29 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           >
             <nav class="sidebar-nav" @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}>
               ${renderAppSidebarPagesHead(this)}
-              ${renderAppSidebarZoneGroup(
-                this,
-                html`
-                  ${renderAppSidebarHomeRow(this)}
-                  ${navEntries.map((entry) =>
-                    renderAppSidebarZoneEntry(
-                      this,
-                      entry,
-                      sidebarZone.sessionRows,
-                      sidebarZone.workboardRows,
-                    ),
-                  )}
-                  ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
-                    (tab) => renderAppSidebarPluginTabEntry(this, tab),
-                  )}
-                `,
-              )}
-              ${pinnedEntries.length > 0
-                ? html`${renderAppSidebarPinnedHead()}
-                  ${renderAppSidebarZoneGroup(
+              <div
+                class="nav-section__items"
+                @dragover=${(event: DragEvent) =>
+                  this.sessionOrganizer.handleSidebarZoneDragOver(event)}
+                @dragleave=${(event: DragEvent) =>
+                  this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
+                @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
+              >
+                ${renderAppSidebarHomeRow(this)}
+                ${sidebarZone.entries.map((entry) =>
+                  renderAppSidebarZoneEntry(
                     this,
-                    pinnedEntries.map((entry) =>
-                      renderAppSidebarZoneEntry(
-                        this,
-                        entry,
-                        sidebarZone.sessionRows,
-                        sidebarZone.workboardRows,
-                      ),
-                    ),
-                  )}`
-                : nothing}
+                    entry,
+                    sidebarZone.sessionRows,
+                    sidebarZone.workboardRows,
+                  ),
+                )}
+                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs)
+                  .filter((tab) => !tab.placement || !occupiedPluginPlacements.has(tab.placement))
+                  .map((tab) => renderAppSidebarPluginTabEntry(this, tab))}
+              </div>
             </nav>
-            ${this.renderSessions()}
+            ${renderAppSidebarOnline(this)} ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
             ${renderAppSidebarAttention(this)}
@@ -530,6 +572,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .refreshRequired=${this.refreshRequired}
               .onRefresh=${this.onRefresh}
               .onHoldUpdate=${this.onHoldUpdate}
+              .onReviewUpdate=${this.onReviewUpdate}
             ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
@@ -541,6 +584,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .visitsEnabled=${this.lobsterPetVisits}
               .soundsEnabled=${this.lobsterPetSounds}
               .gatewayVersion=${this.gatewayVersion}
+              .onVisitsDisabled=${this.refreshAppearanceSettings}
             ></openclaw-lobster-pet>
             ${this.devGitBranch
               ? html`<openclaw-tooltip .content=${this.devGitBranch}>

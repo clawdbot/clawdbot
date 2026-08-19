@@ -129,23 +129,6 @@ describe("moonshot provider plugin", () => {
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
   });
 
-  it("preserves responses-family replay behavior", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    const policy = provider.buildReplayPolicy?.({
-      provider: "moonshot",
-      modelApi: "openai-responses",
-      modelId: "kimi-k2.6",
-    } as never);
-
-    expect(policy).toEqual({
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-      allowSyntheticToolResults: true,
-    });
-  });
-
   it("wires moonshot-thinking stream hooks", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const capturedStream = createCapturedThinkingConfigStream();

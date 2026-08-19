@@ -72,6 +72,7 @@ type LifecycleCopy = readonly [
 ];
 
 const lifecycleCopy = {
+  queued: ["sessionsView.statusQueued", "sessionsView.waitingForConcurrency", "idle"],
   running: ["workboard.lifecycleRunning", "workboard.lifecycleRunningDetail", "live"],
   succeeded: ["workboard.lifecycleDone", "workboard.lifecycleDoneDetail", "done"],
   failed: ["workboard.lifecycleNeedsReview", "workboard.lifecycleNeedsReviewDetail", "blocked"],

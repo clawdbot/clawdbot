@@ -96,6 +96,7 @@ export async function probeGatewayStatus(opts: {
         const { probeGateway } = await loadProbeGatewayModule();
         const probeOpts = {
           url: opts.url,
+          ...(opts.config ? { config: opts.config } : {}),
           auth: {
             token: opts.token,
             password: opts.password,
@@ -123,6 +124,7 @@ export async function probeGatewayStatus(opts: {
             ...(allowRpcConfigCredentials && opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
+            sharedStateMode: "read-only",
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
           statusRuntimeVersion = readRuntimeVersionFromStatusPayload(statusPayload);

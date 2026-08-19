@@ -1,5 +1,6 @@
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
@@ -35,6 +36,7 @@ import { parseRef } from "./setup-inference-plan-helpers.js";
 function resolveConfiguredCandidateKind(
   config: Parameters<typeof resolveModelRuntimePolicy>[0]["config"],
   modelRef: string | undefined,
+  agentId?: string,
 ): SetupInferenceCandidate["kind"] | undefined {
   if (!modelRef) {
     return undefined;
@@ -45,7 +47,7 @@ function resolveConfiguredCandidateKind(
       config,
       provider: ref.provider,
       modelId: ref.model,
-      agentId: resolveDefaultAgentId(config ?? {}),
+      agentId: resolveSystemAgentTargetAgentId(config ?? {}, agentId),
     }).policy?.id,
   );
   if (runtime === "codex") {
@@ -64,6 +66,7 @@ function resolveConfiguredCandidateKind(
  */
 export async function listManualSetupInferenceOptions(
   deps: DetectSetupInferenceDeps = {},
+  agentId?: string,
 ): Promise<
   Pick<
     SetupInferenceDetection,
@@ -76,6 +79,7 @@ export async function listManualSetupInferenceOptions(
     throw new Error(invalidSetupConfigError(snapshot));
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
+  const targetAgentId = resolveSystemAgentTargetAgentId(cfg, agentId);
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
@@ -97,12 +101,13 @@ export async function listManualSetupInferenceOptions(
     workspace,
     // Derived from config only (no probing): a pre-existing default model must
     // keep classifying the install as configured even when scanning declined.
-    setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, resolveDefaultAgentId(cfg))),
+    setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, targetAgentId)),
   };
 }
 
 export async function detectSetupInference(
   deps: DetectSetupInferenceDeps = {},
+  agentId?: string,
 ): Promise<SetupInferenceDetection> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
@@ -110,7 +115,11 @@ export async function detectSetupInference(
     throw new Error(invalidSetupConfigError(snapshot));
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
-  const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({ config: cfg });
+  const targetAgentId = resolveSystemAgentTargetAgentId(cfg, agentId);
+  const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({
+    config: cfg,
+    agentId: targetAgentId,
+  });
   const unavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const deferredUnavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const probe = deps.probeLocalCommand ?? probeLocalCommand;
@@ -136,7 +145,11 @@ export async function detectSetupInference(
   const configuredModel = detected.find(
     (candidate) => candidate.kind === "existing-model",
   )?.modelRef;
-  const configuredCandidateKind = resolveConfiguredCandidateKind(cfg, configuredModel);
+  const configuredCandidateKind = resolveConfiguredCandidateKind(
+    cfg,
+    configuredModel,
+    targetAgentId,
+  );
   const raw = detected.filter(
     (candidate) =>
       candidate.kind !== "gemini-cli" &&

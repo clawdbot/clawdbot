@@ -14,7 +14,6 @@ import {
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
-import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
 
 // Startup progress (dynamic imports, gateway subscribe, router start) is not a
 // performance assertion, so these waits must not inherit vi.waitFor's 1s default:
@@ -28,51 +27,6 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
-
-describe("createSkillWorkshopRevisionHandoff", () => {
-  it("survives session selection but not a same-client reconnect", () => {
-    const owner = {};
-    const replacementConnection = {};
-    const handoff = {
-      sessionKey: "agent:main:revision",
-      instructions: "Revise the skill.",
-      owner,
-      proposalId: "proposal-1",
-      proposalAgentId: "main",
-    };
-    const revisions = createSkillWorkshopRevisionHandoff();
-
-    revisions.prepare(handoff);
-
-    expect(revisions.consume(handoff.sessionKey, owner)).toEqual(handoff);
-    revisions.prepare(handoff);
-    expect(revisions.consume(handoff.sessionKey, replacementConnection)).toBeNull();
-  });
-
-  it("clears only the handoff that became stale", () => {
-    const owner = {};
-    const stale = {
-      sessionKey: "agent:main:stale",
-      instructions: "Stale revision.",
-      owner,
-      proposalId: "proposal-stale",
-      proposalAgentId: "main",
-    };
-    const current = {
-      ...stale,
-      sessionKey: "agent:main:current",
-      instructions: "Current revision.",
-      proposalId: "proposal-current",
-    };
-    const revisions = createSkillWorkshopRevisionHandoff();
-
-    revisions.prepare(stale);
-    revisions.prepare(current);
-    revisions.clear(stale);
-
-    expect(revisions.consume(current.sessionKey, owner)).toEqual(current);
-  });
-});
 
 describe("normalizeInitialApplicationLocation", () => {
   it("routes an opaque persisted key without aborting bootstrap", () => {
@@ -408,6 +362,10 @@ describe("normalizeInitialApplicationLocation", () => {
     };
     const context = {
       gateway,
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -610,6 +568,40 @@ describe("normalizeInitialApplicationLocation", () => {
       expect(pushState).toHaveBeenCalledWith({}, "", "/new");
     } finally {
       pushState.mockRestore();
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+    }
+  });
+
+  it("replaces instead of pushing when re-navigating to the active location", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    window.history.replaceState({}, "", "/");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const pushState = vi.spyOn(window.history, "pushState");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+
+    try {
+      await runtime.start();
+      await runtime.context.navigateAndWait("about");
+      expect(pushState).toHaveBeenCalledWith({}, "", "/settings/about");
+      pushState.mockClear();
+      replaceState.mockClear();
+
+      // Re-clicking the active nav item: no new history entry, Back stays live.
+      await runtime.context.navigateAndWait("about");
+
+      expect(pushState).not.toHaveBeenCalled();
+      expect(replaceState).toHaveBeenCalledWith({}, "", "/settings/about");
+    } finally {
+      pushState.mockRestore();
+      replaceState.mockRestore();
       runtime.stop();
       saveSettings(previousSettings);
       window.history.replaceState({}, "", previousUrl);

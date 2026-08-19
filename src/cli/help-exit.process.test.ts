@@ -1,5 +1,5 @@
 // Process coverage for CLI help exits and route-first fallback validation.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -111,8 +111,12 @@ async function runCliProcess(params: {
   stateEnv?: (stateDir: string) => Record<string, string>;
   timeoutMs?: number;
   expectedExitCode?: number;
+  pristineHome?: boolean;
 }) {
-  const fixture = await createHelpProcessFixture(params.config);
+  const fixture = await createHelpProcessFixture(params.pristineHome ? undefined : params.config);
+  if (params.pristineHome) {
+    await fs.rm(fixture.stateDir, { force: true, recursive: true });
+  }
   if (params.stateEnv) {
     const lines = Object.entries(params.stateEnv(fixture.stateDir)).map(
       ([key, value]) => `${key}=${value}`,
@@ -151,9 +155,9 @@ async function runCliProcess(params: {
         NODE_ENV: undefined,
         NODE_OPTIONS: undefined,
         NODE_USE_SYSTEM_CA: "1",
-        OPENCLAW_CONFIG_PATH: fixture.configPath,
+        OPENCLAW_CONFIG_PATH: params.pristineHome ? undefined : fixture.configPath,
         OPENCLAW_NO_RESPAWN: params.allowRespawn ? undefined : "1",
-        OPENCLAW_STATE_DIR: fixture.stateDir,
+        OPENCLAW_STATE_DIR: params.pristineHome ? undefined : fixture.stateDir,
         VITEST: undefined,
         ...params.env,
       },
@@ -219,7 +223,7 @@ async function runCliProcess(params: {
       }),
     );
   }
-  return { stderr, stdout };
+  return { root: fixture.root, stderr, stdout };
 }
 
 function parseJsonLines(stdout: string): Array<Record<string, unknown>> {
@@ -367,6 +371,94 @@ describe("CLI help process exit", () => {
     expect(stderr).toBe("");
     expect(stdout.split(/\r?\n/u).find((line) => line.startsWith("Usage:"))).toBe(usage);
     expect(actionStarted).toBe(false);
+  });
+});
+
+describe("rejected CLI process state isolation", () => {
+  it("does not scaffold a selected profile before option validation", async () => {
+    const profile = "rejected-profile";
+    const result = await runCliProcess({
+      args: [
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--gateway-port",
+        "99999",
+        "--profile",
+        profile,
+      ],
+      expectedExitCode: 1,
+      pristineHome: true,
+    });
+
+    expect(result.stderr).toContain("--gateway-port must be an integer between 1 and 65535.");
+    await expect(fs.access(path.join(result.root, `.openclaw-${profile}`))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
+describe("message broadcast process exit", () => {
+  it("exits nonzero after a structured target failure", async () => {
+    const root = tempDirs.make("openclaw-message-broadcast-exit-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const entryPath = path.join(root, "run-message-broadcast.mjs");
+    await fs.writeFile(
+      entryPath,
+      `import { registerHooks } from "node:module";
+const messageModule = "data:text/javascript," + encodeURIComponent(\`export async function messageCommand() {
+  return ${JSON.stringify({
+    kind: "broadcast",
+    channel: "fixture",
+    action: "broadcast",
+    handledBy: "core",
+    payload: {
+      results: [
+        { channel: "fixture", to: "ok-target", ok: true },
+        { channel: "fixture", to: "failed-target", ok: false, error: "delivery failed" },
+      ],
+    },
+    dryRun: false,
+  })};
+}\`);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    return specifier === "../../../commands/message.js"
+      ? { shortCircuit: true, url: messageModule }
+      : nextResolve(specifier, context);
+  },
+});
+const { createMessageCliHelpers } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/program/message/helpers.ts")).href)});
+const { runMessageAction } = createMessageCliHelpers({}, "fixture");
+await runMessageAction("broadcast", {
+  channel: "fixture",
+  targets: ["ok-target", "failed-target"],
+  message: "hello",
+});
+`,
+    );
+
+    const child = spawnSync(process.execPath, ["--import", "tsx", entryPath], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: root,
+        NODE_ENV: undefined,
+        NODE_OPTIONS: undefined,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+        VITEST: undefined,
+      },
+      timeout: DEFAULT_CHILD_PROCESS_TIMEOUT_MS,
+    });
+
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.status, child.stderr).toBe(1);
   });
 });
 

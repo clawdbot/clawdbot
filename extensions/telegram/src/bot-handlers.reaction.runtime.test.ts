@@ -55,6 +55,7 @@ function registerHandler(cfg: OpenClawConfig): ReactionHandler {
   const handlers = new Map<string, ReactionHandler>();
   const params: RegisterTelegramHandlerParams = {
     accountId: "default",
+    ownerAgentId: "main",
     bot: {
       on: (name: string, handler: ReactionHandler) => {
         handlers.set(name, handler);

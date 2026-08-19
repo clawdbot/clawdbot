@@ -42,7 +42,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 });
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => messageQueueMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
@@ -358,6 +362,18 @@ describe("registerSlackMessageEvents", () => {
 
   it.each([
     {
+      name: "message with bot identity",
+      event: {
+        type: "message",
+        bot_id: "B_OTHER",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U_OTHER",
+        text: "<@U_BOT> hello",
+        ts: "123.456",
+      },
+    },
+    {
       name: "file_share with bot_id",
       event: {
         type: "message",
@@ -381,20 +397,29 @@ describe("registerSlackMessageEvents", () => {
         ts: "123.456",
       },
     },
-  ])("drops enterprise bot-authored $name events before dispatch", async ({ event }) => {
+  ])("passes enterprise bot-authored $name to policy-aware dispatch", async ({ event }) => {
     const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+    const client = {};
     await handler({
       event,
       body: { api_app_id: "A_TEST" },
       context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
-      client: {},
+      client,
     });
 
-    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      event,
+      expect.objectContaining({
+        source: "message",
+        awaitDispatch: true,
+        eventScope: expect.objectContaining({ teamId: "T111", client }),
+      }),
+    );
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
-  it("drops bot-authored enterprise app_mention events before dispatch", async () => {
+  it("drops bot-authored enterprise app_mention events in favor of the message event", async () => {
     const { handler, handleSlackMessage } = createEnterpriseHandlers("app_mention");
     await handler({
       event: { ...makeAppMentionEvent(), bot_id: "B_OTHER" },
@@ -407,16 +432,59 @@ describe("registerSlackMessageEvents", () => {
     expect(inboundLogLines()).toEqual([]);
   });
 
-  it("drops unsupported enterprise message subtypes before system events or dispatch", async () => {
-    const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
-    await handler({
+  it.each([
+    {
+      name: "message_changed",
       event: makeChangedEvent({ channel: "C123", user: "U123" }),
+      expectedText: "Slack message edited in #direct.",
+      expectedContextKey: "slack:message:changed:C123:123.456:Ev-enterprise-subtype",
+    },
+    {
+      name: "message_deleted",
+      event: makeDeletedEvent({ channel: "C123", user: "U123" }),
+      expectedText: "Slack message deleted in #direct.",
+      expectedContextKey: "slack:message:deleted:C123:123.456:Ev-enterprise-subtype",
+    },
+  ])(
+    "routes enterprise $name through the authorized system-event path",
+    async ({ event, expectedText, expectedContextKey }) => {
+      const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+      await handler({
+        event,
+        body: { api_app_id: "A_TEST", event_id: "Ev-enterprise-subtype" },
+        context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
+        client: {},
+      });
+
+      expect(handleSlackMessage).not.toHaveBeenCalled();
+      expect(messageQueueMock).toHaveBeenCalledOnce();
+      expect(messageQueueMock).toHaveBeenCalledWith(expectedText, {
+        contextKey: expectedContextKey,
+        sessionKey: "agent:main:main",
+      });
+    },
+  );
+
+  it("passes enterprise thread_broadcast through listener-scoped dispatch", async () => {
+    const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+    const event = makeThreadBroadcastEvent({ channel: "C123", user: "U123" });
+    const client = {};
+    await handler({
+      event,
       body: { api_app_id: "A_TEST" },
       context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
-      client: {},
+      client,
     });
 
-    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      event,
+      expect.objectContaining({
+        source: "message",
+        awaitDispatch: true,
+        eventScope: expect.objectContaining({ teamId: "T111", client }),
+      }),
+    );
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 

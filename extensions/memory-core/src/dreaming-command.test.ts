@@ -56,6 +56,7 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
 
 function createCommandContext(
   args?: string,
+  config: OpenClawConfig = {},
   overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
 ): PluginCommandContext {
   return {
@@ -63,7 +64,7 @@ function createCommandContext(
     isAuthorizedSender: true,
     commandBody: args ? `/dreaming ${args}` : "/dreaming",
     args,
-    config: {},
+    config,
     gatewayClientScopes: overrides?.gatewayClientScopes,
     senderIsOwner: overrides?.senderIsOwner,
     requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
@@ -77,7 +78,10 @@ async function runDreamingCommand(
   args?: string,
   overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
 ) {
-  return await handleDreamingCommand(harness.api, createCommandContext(args, overrides));
+  return await handleDreamingCommand(
+    harness.api,
+    createCommandContext(args, harness.getRuntimeConfig(), overrides),
+  );
 }
 
 describe("memory-core /dreaming command", () => {

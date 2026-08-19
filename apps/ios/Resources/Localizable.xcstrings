@@ -8035,20 +8035,20 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<已隐藏的密钥>"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<已遮蔽的密鑰>"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<segredo ocultado>"
           }
         },
         "de": {
@@ -8059,104 +8059,104 @@
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<secreto redactado>"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<編集済みのシークレット>"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<가려진 비밀 값>"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<secret masqué>"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<गोपनीय जानकारी हटाई गई>"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<سر محجوب>"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<segreto oscurato>"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<gizli bilgi çıkarıldı>"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<прихований секрет>"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<rahasia disunting>"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<sekret ukryty>"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<ข้อมูลลับถูกปกปิด>"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<bí mật đã được ẩn>"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<geheim geredigeerd>"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<رمز محرمانه حذف‌شده>"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<секрет скрыт>"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<dold hemlighet>"
           }
         }
       }
@@ -41753,6 +41753,142 @@
         }
       }
     },
+    "Connect to your gateway to view an observable machine.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to your gateway to view an observable machine."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接到你的 Gateway 以查看可观察的机器。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "連線至您的 gateway 以檢視可觀察的機器。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conecte-se ao seu gateway para ver uma máquina observável."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinden Sie sich mit Ihrem Gateway, um eine beobachtbare Maschine anzuzeigen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conéctate a tu gateway para ver una máquina observable."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "観測可能なマシンを表示するには gateway に接続してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "관찰 가능한 머신을 보려면 Gateway에 연결하세요."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectez-vous à votre gateway pour afficher une machine observable."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "एक observable मशीन देखने के लिए अपने gateway से कनेक्ट करें।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اتصل بـ Gateway لعرض جهاز قابل للمراقبة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connettiti al tuo gateway per visualizzare una macchina osservabile."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gözlemlenebilir bir makineyi görüntülemek için gateway'inize bağlanın."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Підключіться до свого gateway, щоб переглянути спостережувану машину."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hubungkan ke gateway Anda untuk melihat mesin yang dapat diamati."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Połącz się z gateway, aby wyświetlić obserwowalną maszynę."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เชื่อมต่อกับ Gateway ของคุณเพื่อดูเครื่องที่สังเกตได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối với gateway của bạn để xem một máy có thể quan sát."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maak verbinding met je gateway om een observeerbare machine te bekijken."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "برای مشاهده یک ماشین قابل‌رصد به Gateway خود متصل شوید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключитесь к своему gateway, чтобы увидеть наблюдаемую машину."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anslut till din gateway för att visa en observerbar maskin."
+          }
+        }
+      }
+    },
     "Connected": {
       "localizations": {
         "en": {
@@ -48957,6 +49093,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Det gick inte att glömma %@."
+          }
+        }
+      }
+    },
+    "Could not install skill": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not install skill"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法安装 Skill"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法安裝 Skill"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível instalar a skill"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skill konnte nicht installiert werden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo instalar la skill"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スキルをインストールできませんでした"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skill을 설치할 수 없습니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'installer la compétence"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "स्किल इंस्टॉल नहीं हो सका"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذّر تثبيت المهارة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile installare la skill"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beceri yüklenemedi"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося встановити навичку"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak dapat menginstal skill"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nie można zainstalować umiejętności"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถติดตั้ง Skill ได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể cài đặt kỹ năng"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kan skill niet installeren"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "نصب مهارت ممکن نشد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось установить навык"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Det gick inte att installera skill"
           }
         }
       }
@@ -57665,6 +57937,278 @@
         }
       }
     },
+    "Desktop": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Área de trabalho"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Desktop"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escritorio"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デスクトップ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "데스크톱"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bureau"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "डेस्कटॉप"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سطح المكتب"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Desktop"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masaüstü"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Робочий стіл"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Desktop"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pulpit"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เดสก์ท็อป"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Máy tính để bàn"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bureaublad"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "دسکتاپ"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рабочий стол"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skrivbord"
+          }
+        }
+      }
+    },
+    "Desktop needs a connected gateway": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop needs a connected gateway"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面需要已连接的 Gateway"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面需要已連線的 gateway"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Desktop precisa de um gateway conectado"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop benötigt ein verbundenes Gateway"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El escritorio necesita un gateway conectado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デスクトップには接続された gateway が必要です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "데스크톱을 사용하려면 Gateway 연결이 필요합니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le bureau nécessite un gateway connecté"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "डेस्कटॉप के लिए एक कनेक्टेड gateway आवश्यक है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يحتاج سطح المكتب إلى Gateway متصل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il desktop richiede un gateway connesso"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masaüstü için bağlı bir gateway gerekir"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для робочого стола потрібен підключений gateway"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop memerlukan gateway yang terhubung"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pulpit wymaga połączonego gateway"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เดสก์ท็อปต้องมี Gateway ที่เชื่อมต่อ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Máy tính để bàn cần một gateway đã kết nối"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bureaublad heeft een verbonden gateway nodig"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "دسکتاپ به یک Gateway متصل نیاز دارد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для рабочего стола нужен подключённый gateway"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skrivbordet behöver en ansluten gateway"
+          }
+        }
+      }
+    },
     "Details": {
       "localizations": {
         "en": {
@@ -62477,8 +63021,8 @@
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Docs"
+            "state": "translated",
+            "value": "Documentation"
           }
         },
         "hi": {
@@ -74253,6 +74797,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Förgrena härifrån"
+          }
+        }
+      }
+    },
+    "Fork from last completed message": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fork from last completed message"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从上一条已完成的消息分叉"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "從最後完成的訊息分支"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bifurcar a partir da última mensagem concluída"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ab letzter abgeschlossener Nachricht verzweigen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bifurcar desde el último mensaje completado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最後に完了したメッセージから分岐"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마지막으로 완료된 메시지에서 분기"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dériver à partir du dernier message terminé"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अंतिम पूर्ण संदेश से फ़ोर्क करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "التفريع من آخر رسالة مكتملة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ramifica dall'ultimo messaggio completato"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Son tamamlanan mesajdan çatalla"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відгалузити від останнього завершеного повідомлення"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fork dari pesan terakhir yang selesai"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rozgałęź od ostatniej ukończonej wiadomości"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "แยกจากข้อความที่เสร็จสมบูรณ์ล่าสุด"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rẽ nhánh từ tin nhắn hoàn tất gần nhất"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vertakken vanaf laatst voltooide bericht"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "انشعاب از آخرین پیام تکمیل‌شده"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответвить от последнего завершённого сообщения"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Förgrena från senast slutförda meddelande"
           }
         }
       }
@@ -118185,6 +118865,142 @@
         }
       }
     },
+    "Not scanned by ClawHub": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not scanned by ClawHub"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未经过 ClawHub 扫描"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未經 ClawHub 掃描"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não verificado pelo ClawHub"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht von ClawHub gescannt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No analizado por ClawHub"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ClawHub によるスキャン未実施"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ClawHub에서 검사하지 않음"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non analysé par ClawHub"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ClawHub द्वारा स्कैन नहीं किया गया"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "غير مفحوص بواسطة ClawHub"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non analizzato da ClawHub"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ClawHub tarafından taranmadı"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не перевірено ClawHub"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak dipindai oleh ClawHub"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nieprzeskanowane przez ClawHub"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ยังไม่ได้สแกนโดย ClawHub"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chưa được ClawHub quét"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niet gescand door ClawHub"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "توسط ClawHub اسکن نشده است"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не проверено ClawHub"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inte skannad av ClawHub"
+          }
+        }
+      }
+    },
     "Not selected": {
       "localizations": {
         "en": {
@@ -121581,6 +122397,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Öppna chatt"
+          }
+        }
+      }
+    },
+    "Open Desktop": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Desktop"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开桌面"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開啟桌面"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir Desktop"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop öffnen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir escritorio"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デスクトップを開く"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "데스크톱 열기"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir le bureau"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "डेस्कटॉप खोलें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "فتح سطح المكتب"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri Desktop"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masaüstünü Aç"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відкрити робочий стіл"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buka Desktop"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otwórz pulpit"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เปิดเดสก์ท็อป"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mở máy tính để bàn"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bureaublad openen"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "باز کردن دسکتاپ"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть рабочий стол"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öppna skrivbord"
           }
         }
       }
@@ -218019,8 +218971,8 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT License。"
           }
         },
         "zh-TW": {
@@ -218037,8 +218989,8 @@
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT-Lizenz."
           }
         },
         "es": {
@@ -218055,8 +219007,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT 라이선스."
           }
         },
         "fr": {
@@ -218127,8 +219079,8 @@
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — مجوز MIT."
           }
         },
         "ru": {

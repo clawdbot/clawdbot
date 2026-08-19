@@ -18,7 +18,7 @@ type WorkerSessionPlacementTransition = {
 };
 
 const WORKER_SESSION_PLACEMENT_TRANSITIONS = {
-  local: ["requested"],
+  local: ["requested", "failed"],
   requested: ["provisioning", "failed"],
   provisioning: ["syncing", "failed"],
   syncing: ["starting", "failed"],
@@ -27,7 +27,7 @@ const WORKER_SESSION_PLACEMENT_TRANSITIONS = {
   draining: ["reconciling"],
   reconciling: ["local", "reclaimed", "failed"],
   reclaimed: ["requested"],
-  failed: ["requested"],
+  failed: ["local", "requested"],
 } as const satisfies WorkerSessionPlacementTransition;
 
 export function parseWorkerSessionPlacementState(value: string): WorkerSessionPlacementState {

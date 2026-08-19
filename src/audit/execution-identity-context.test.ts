@@ -1005,6 +1005,12 @@ describe("execution identity context storage", () => {
     ).toMatchObject({
       decisions: [{ decision: { reasonCode: "operator_approval_denied_by_reviewer" } }],
     });
+    expect(
+      inspectExecutionIdentityRun(
+        { runId: "run-denied-receipt", decisionCursor: "1", decisionLimit: 1 },
+        { ...database, now: 300 },
+      ).decisions,
+    ).toMatchObject([{ decision: { reasonCode: "operator_approval_denied_by_reviewer" } }]);
   });
 
   it("keeps a corrupt approval unknown before its decision page is returned", () => {

@@ -60,7 +60,7 @@ let resetPluginToolDescriptorCacheForTest: typeof import("./tools.test-fixtures.
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
-let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-state.js").clearCurrentPluginMetadataSnapshot;
+let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
@@ -550,7 +550,7 @@ describe("resolvePluginTools optional tools", () => {
       await import("./runtime.js"));
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("./runtime/gateway-request-scope.js"));
-    ({ clearCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-state.js"));
+    ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
     ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
     ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
   });
@@ -574,13 +574,13 @@ describe("resolvePluginTools optional tools", () => {
       return loadContextMocks.actualResolve(...(args as [never]));
     });
     resetPluginRuntimeStateForTest?.();
-    clearCurrentPluginMetadataSnapshot?.();
+    clearPluginMetadataLifecycleCaches?.();
     resetPluginToolDescriptorCacheForTest?.();
   });
 
   afterEach(() => {
     resetPluginRuntimeStateForTest?.();
-    clearCurrentPluginMetadataSnapshot?.();
+    clearPluginMetadataLifecycleCaches?.();
     resetPluginToolDescriptorCacheForTest?.();
     setLoggerOverride(null);
     loggingState.rawConsole = null;
@@ -1035,11 +1035,12 @@ describe("resolvePluginTools optional tools", () => {
     const context = createContext();
     const config = context.config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
+    const preparedConfig = structuredClone(config);
     const metadataSnapshot = installToolManifestSnapshots({
       config,
       plugins: [
         createToolManifest("optional-demo", ["optional_tool"], {
-          toolMetadata: { optional_tool: { optional: true } },
+          toolMetadata: { optional_tool: { optional: true, sideEffecting: true } },
         }),
       ],
     });
@@ -1048,11 +1049,11 @@ describe("resolvePluginTools optional tools", () => {
       ...createResolveToolsParams({ context, toolAllowlist: ["optional_tool"] }),
       preparedRuntime: {
         loadContext: {
-          rawConfig: config,
-          config,
-          activationSourceConfig: config,
+          rawConfig: preparedConfig,
+          config: preparedConfig,
+          activationSourceConfig: preparedConfig,
           autoEnabledReasons: {},
-          workspaceDir: "/tmp",
+          workspaceDir: "/gateway/plugin-runtime",
           env: process.env,
           logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           manifestRegistry: metadataSnapshot.manifestRegistry as never,
@@ -1065,6 +1066,10 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(getPluginToolMeta(expectDefined(tools[0], "tools[0] test invariant"))).toMatchObject({
+      pluginId: "optional-demo",
+      sideEffecting: true,
+    });
     expect(loadContextMocks.resolve).not.toHaveBeenCalled();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });

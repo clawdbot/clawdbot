@@ -575,16 +575,6 @@ export type ChannelMessagingAdapter = {
     threadId?: string | null;
   }) => string | undefined;
   /**
-   * @deprecated Use `targetResolver` for target id normalization and
-   * `resolveOutboundSessionRoute` for session/thread identity. This remains for
-   * compatibility with older route parsing helpers.
-   */
-  parseExplicitTarget?: (params: { raw: string }) => {
-    to: string;
-    threadId?: string | number;
-    chatType?: ChatType;
-  } | null;
-  /**
    * Lightweight chat-type inference used before directory lookup so plugins can
    * steer peer-vs-group resolution without reimplementing host search flow.
    */
@@ -757,6 +747,8 @@ export type ChannelMessageActionAdapter = {
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
+  /** Delegate conversation-read authorization to this adapter for bundled registrations only. */
+  providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {

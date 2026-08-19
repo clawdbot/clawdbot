@@ -129,7 +129,9 @@ describe("pw-tools-core", () => {
         timeout: 120_000,
       });
       await vi.waitFor(() => {
-        expect(fileChooser.setFiles).toHaveBeenCalledWith([canonicalUploadPath]);
+        expect(fileChooser.setFiles).toHaveBeenCalledWith([canonicalUploadPath], {
+          timeout: 120_000,
+        });
       });
     } finally {
       await fs.rm(uploadPath, { force: true });

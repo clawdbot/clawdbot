@@ -102,6 +102,37 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
   </Step>
 </Steps>
 
+### Headless bootstrap
+
+For an unattended container host, put provider, Gateway, and channel credentials in the Compose `.env` file so both the one-shot bootstrap container and the long-running Gateway receive the same values:
+
+```bash
+OPENAI_API_KEY=<provider-key>
+OPENCLAW_GATEWAY_TOKEN=<gateway-token>
+TELEGRAM_BOT_TOKEN=<bot-token>
+```
+
+Run onboarding and channel provisioning without a pseudo-TTY, then start the Gateway:
+
+```bash
+docker compose run -T --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js onboard --non-interactive --accept-risk --skip-health \
+  --mode local \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --gateway-auth token \
+  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
+  --skip-channels \
+  --no-install-daemon
+docker compose run -T --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js channels add --channel telegram --use-env
+docker compose up -d openclaw-gateway
+```
+
+The channel command fails before changing config if a plugin-declared environment variable is missing. Keep `TELEGRAM_BOT_TOKEN` in `.env` after bootstrap: `--use-env` leaves credential lookup to the environment without copying the token into `openclaw.json`, and the running Gateway needs the same variable. When channel config changes after startup, the Gateway's config watcher hot-reloads the affected channel automatically.
+
+See [`openclaw channels`](/cli/channels) for credential-flag alternatives and other channel plugins.
+
 ### Manual flow
 
 ```bash
@@ -149,6 +180,13 @@ After doctor finishes, restart the gateway container with its default command.
 In Kubernetes, run the same command in a one-off Job or debug pod mounted to the
 same PVC, then restart the Deployment or StatefulSet.
 
+After the container is running again, run the read-only deployment preflight
+against the same mounted state:
+
+```bash
+docker compose run --rm openclaw-cli doctor --json
+```
+
 ### Environment variables
 
 Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway container, by `docker-compose.yml` directly):
@@ -169,7 +207,7 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | `OPENCLAW_SANDBOX`                              | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                                                            |
 | `OPENCLAW_SKIP_ONBOARDING`                      | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`)                                                   |
 | `OPENCLAW_DOCKER_SOCKET`                        | Override the Docker socket path                                                                                   |
-| `OPENCLAW_DISABLE_BONJOUR`                      | Force Bonjour/mDNS advertising on (`0`) or off (`1`); see [Bonjour / mDNS](#bonjour--mdns)                        |
+| `OPENCLAW_DISABLE_BONJOUR`                      | Force Bonjour/mDNS advertising on (`0`) or off (`1`); see [Bonjour / mDNS](/install/docker#bonjour-%2F-mdns)      |
 | `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS`      | Disable bundled plugin source bind-mount overlays                                                                 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export                                                      |
 | `OTEL_EXPORTER_OTLP_*_ENDPOINT`                 | Signal-specific OTLP endpoints for traces, metrics, or logs                                                       |
@@ -192,10 +230,11 @@ OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUI
 `OPENCLAW_EXTENSIONS` selects plugin manifest ids from the source checkout;
 existing source-directory names are also accepted when they differ. The Docker
 build resolves the selection to source directories once, installs production
-dependencies, and, when a selected plugin is published separately with
-`openclaw.build.bundledDist: false`, compiles its runtime into the root bundled
-dist. This Docker-only packaging does not change the plugin's npm or ClawHub
-artifact contract. Unknown, invalid, or ambiguous ids fail the image build.
+dependencies, and includes the selected plugin runtime in the image. Source
+checkouts also compile first-party plugins published separately with
+`openclaw.build.bundledDist: false`; that marker still preserves the plugin's
+external npm or ClawHub ownership and does not change either artifact contract.
+Unknown, invalid, or ambiguous ids fail the image build.
 Known dependency/source-only ids keep their existing source and dependency
 staging without gaining a compiled root dist entry. A selected plugin with
 unified build entries must compile successfully; unselected external plugin
@@ -483,25 +522,17 @@ If you installed from the older `scripts/shell-helpers/clawdock-helpers.sh` path
   </Accordion>
 
   <Accordion title="Faster rebuilds">
-    Order your Dockerfile so dependency layers are cached, avoiding a `pnpm install` rerun unless lockfiles change:
+    Use the repo-root `Dockerfile` instead of replacing it with a shortened
+    single-stage example. Its `workspace-deps` stage extracts the package
+    manifests required by `pnpm-workspace.yaml`, then the build stage copies
+    those manifests before `pnpm install --frozen-lockfile`. This keeps the
+    dependency layer cacheable without omitting `packages/*`, selected
+    `extensions/*`, or other required workspace metadata.
 
-    ```dockerfile
-    FROM node:24-bookworm
-    RUN curl -fsSL https://bun.sh/install | bash
-    ENV PATH="/root/.bun/bin:${PATH}"
-    RUN corepack enable
-    WORKDIR /app
-    COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-    COPY ui/package.json ./ui/package.json
-    COPY scripts ./scripts
-    RUN pnpm install --frozen-lockfile
-    COPY . .
-    RUN pnpm build
-    RUN pnpm ui:install
-    RUN pnpm ui:build
-    ENV NODE_ENV=production
-    CMD ["node","dist/index.js"]
-    ```
+    The same Dockerfile preserves the production runtime contract: digest-pinned
+    Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and
+    the `/usr/local/bin/openclaw` symlink. Dependabot refreshes the reviewed base
+    digests; do not replace them with floating `FROM node:24-bookworm` tags.
 
   </Accordion>
 
@@ -521,9 +552,21 @@ If you installed from the older `scripts/shell-helpers/clawdock-helpers.sh` path
   </Accordion>
 
   <Accordion title="Base image metadata">
-    The runtime image uses `node:24-bookworm-slim` and runs `tini` as PID 1 so zombie processes are reaped and signals handled correctly in long-running containers. It publishes OCI base-image annotations including `org.opencontainers.image.base.name` and `org.opencontainers.image.source`. Dependabot refreshes the pinned Node base digest; release builds don't run a separate distro upgrade layer. See [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
+    The runtime image uses `node:24-bookworm-slim` and runs `tini` as PID 1 so zombie processes are reaped and signals handled correctly in long-running containers. It publishes OCI base-image annotations including `org.opencontainers.image.base.name` and `org.opencontainers.image.source`. Dependabot refreshes the pinned Node base digest, and each build applies current Debian point-release updates. See [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
   </Accordion>
 </AccordionGroup>
+
+### Image contents and security scanning
+
+Runtime images contain production Node.js dependencies only. Release builds pin the base image by digest and apply current Debian security updates with `apt-get dist-upgrade`; the `-browser` variant installs the Chromium version pinned by its Playwright release.
+
+Scanner totals can include Debian findings that the distribution marks `wont-fix`. To rebuild locally against current base and package metadata, run `docker build --pull -t openclaw:local .`.
+
+### Weekly image refreshes
+
+The `latest*`, `main*`, and `extended-stable*` moving tags are rebuilt weekly from the same tagged release source so they pick up current OS security updates between OpenClaw releases. Stable and extended-stable refreshes remain separate, and beta images are not rebuilt on this schedule.
+
+Each refresh also publishes a dated tag such as `2026.8.1-r20260820` (plus `-slim` and `-browser` variants). Plain version tags and dated `-rYYYYMMDD` tags are immutable; pin either form when you do not want a deployment to follow a moving tag.
 
 ### Running on a VPS?
 

@@ -27,8 +27,6 @@ import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelId,
-} from "./model-ref-shared.js";
-import {
   type ModelManifestNormalizationContext,
   type ModelRef,
   modelKey,

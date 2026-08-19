@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -16,9 +15,11 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
+import { errorShapeFromError } from "../error-shape.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { formatForLog } from "../ws-log.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
 
 type DeliveryPlan = Awaited<ReturnType<typeof resolveAgentDeliveryPlanWithSessionRoute>>;
@@ -56,20 +57,36 @@ export async function resolveAgentDeliveryPhase(params: {
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
   onRunObserved?: (runId: string) => void;
 }): Promise<AgentDeliveryPhaseResult | undefined> {
-  const activeSessionAgentId =
-    params.resolvedSessionKey === "global" && params.resolvedSessionAgentId
-      ? params.resolvedSessionAgentId
-      : params.resolvedSessionKey
-        ? resolveAgentIdFromSessionKey(params.resolvedSessionKey)
-        : (params.agentId ?? resolveDefaultAgentId(params.cfgForAgent ?? params.cfg));
+  const activeSessionAgentId = params.resolvedSessionAgentId
+    ? params.resolvedSessionAgentId
+    : params.resolvedSessionKey
+      ? resolveAgentIdFromSessionKey(params.resolvedSessionKey, params.agentId)
+      : params.agentId;
+  if (!activeSessionAgentId) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required for this session"),
+    );
+    return undefined;
+  }
 
   if (params.onRunObserved) {
     params.onRunObserved(params.runId);
+    const compatibilityOwnerAgentId = params.resolvedSessionKey
+      ? tryResolveSessionCompatibilityOwnerAgentId(
+          params.cfgForAgent ?? params.cfg,
+          params.resolvedSessionKey,
+        )
+      : undefined;
     for (const [activeRunId, active] of params.context.chatAbortControllers) {
       const sameSession = active.sessionKey === params.resolvedSessionKey;
-      const sameSelectedGlobalAgent =
-        params.resolvedSessionKey === "global" ? active.agentId === activeSessionAgentId : true;
-      if (activeRunId !== params.runId && sameSession && sameSelectedGlobalAgent) {
+      const activeOwner = resolveChatRunOwnerAgentId({
+        agentId: active.agentId,
+        sessionKey: active.sessionKey,
+        defaultAgentId: compatibilityOwnerAgentId,
+      });
+      if (activeRunId !== params.runId && sameSession && activeOwner === activeSessionAgentId) {
         params.onRunObserved(activeRunId);
       }
     }
@@ -124,7 +141,7 @@ export async function resolveAgentDeliveryPhase(params: {
           resolvedChannel,
         })
       ) {
-        params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        params.respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
         return undefined;
       }
       deliveryResolutionError = String(err);
@@ -135,7 +152,7 @@ export async function resolveAgentDeliveryPhase(params: {
     params.respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, String(deliveryTargetResolutionError)),
+      errorShapeFromError(ErrorCodes.INVALID_REQUEST, deliveryTargetResolutionError),
     );
     return undefined;
   }
@@ -159,12 +176,12 @@ export async function resolveAgentDeliveryPhase(params: {
       params.respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          deliveryTargetResolutionError
-            ? String(deliveryTargetResolutionError)
-            : `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`,
-        ),
+        deliveryTargetResolutionError
+          ? errorShapeFromError(ErrorCodes.INVALID_REQUEST, deliveryTargetResolutionError)
+          : errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`,
+            ),
       );
       return undefined;
     }

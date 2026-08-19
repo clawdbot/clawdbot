@@ -1,13 +1,14 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { start } from "./service/ops-lifecycle.js";
 import { status } from "./service/ops-read.js";
 import { createCronServiceState } from "./service/state.js";
 import { runMissedJobs } from "./service/timer.js";
 import { onTimer } from "./service/timer.test-support.js";
-import * as cronStoreModule from "./store.js";
 import { loadCronStore, saveCronStore } from "./store.js";
+import { cronStoreKey } from "./store/key.js";
 import type { CronJob } from "./types.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
@@ -180,6 +181,23 @@ describe("CronService startup catch-up repair scoping", () => {
     ]);
     const enqueueSystemEvent = vi.fn((_text: string, context?: { contextKey?: string }) => {
       if (context?.contextKey && deferredAutoDisableReasons.has(context.contextKey)) {
+        if (!order.includes("persist")) {
+          const rows = openOpenClawStateDatabase()
+            .db.prepare(
+              "SELECT job_id AS jobId, state_json AS stateJson FROM cron_jobs WHERE store_key = ? AND job_id IN (?, ?) ORDER BY job_id",
+            )
+            .all(cronStoreKey(store.storePath), "date-limit-1", "date-limit-2") as Array<{
+            jobId: string;
+            stateJson: string;
+          }>;
+          expect(rows).toHaveLength(2);
+          for (const row of rows) {
+            expect(JSON.parse(row.stateJson)).toMatchObject({
+              autoDisabled: { reason: "schedule-errors" },
+            });
+          }
+          order.push("persist");
+        }
         order.push("notify");
       }
     });
@@ -199,24 +217,6 @@ describe("CronService startup catch-up repair scoping", () => {
       maxMissedJobsPerRestart: 1,
       missedJobStaggerMs: 5_000,
     });
-    const save = cronStoreModule.saveCronJobsStore;
-    const saveSpy = vi
-      .spyOn(cronStoreModule, "saveCronJobsStore")
-      .mockImplementation(async (...args) => {
-        if (
-          args[1].jobs.some(
-            (job) => job.id !== "date-limit-0" && job.state.autoDisabled !== undefined,
-          )
-        ) {
-          expect(order).toEqual([]);
-          const result = await save(...args);
-          expect(order).toEqual([]);
-          order.push("persist");
-          return result;
-        }
-        return await save(...args);
-      });
-
     try {
       await runMissedJobs(state);
 
@@ -245,7 +245,6 @@ describe("CronService startup catch-up repair scoping", () => {
         ),
       );
     } finally {
-      saveSpy.mockRestore();
       await store.cleanup();
     }
   });

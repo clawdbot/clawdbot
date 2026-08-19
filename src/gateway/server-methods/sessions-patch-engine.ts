@@ -147,20 +147,27 @@ async function executeSessionPatchMutations(params: {
   const targetDiscoveryCache = new Map();
   const preflightTargets = params.targets.map((input) => {
     const key = input.key.trim();
+    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, input.agentId);
     return {
       input,
       key,
-      resolved: resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key,
-        ...(input.agentId ? { agentId: input.agentId } : {}),
-        exactRead: true,
-        targetDiscoveryCache,
-      }),
+      requestedAgent,
+      resolved: requestedAgent.ok
+        ? resolveGatewaySessionStoreTargetWithStore({
+            cfg,
+            key,
+            agentId: requestedAgent.agentId,
+            exactRead: true,
+            targetDiscoveryCache,
+          })
+        : undefined,
     };
   });
   const logicalTargets = new Set<string>();
   for (const { key, resolved } of preflightTargets) {
+    if (!resolved) {
+      continue;
+    }
     const logicalId = `${resolved.storePath}\0${resolved.canonicalKey ?? key}`;
     if (logicalTargets.has(logicalId)) {
       return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, "Duplicate target.") };
@@ -175,10 +182,16 @@ async function executeSessionPatchMutations(params: {
   const preparedByIndex: Array<PreparedPatchTarget | undefined> = Array.from({
     length: params.targets.length,
   });
-  for (const [index, { input, key, resolved }] of preflightTargets.entries()) {
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, input.agentId);
+  for (const [index, { input, key, requestedAgent, resolved }] of preflightTargets.entries()) {
     if (!requestedAgent.ok) {
       outcomes[index] = requestedAgent;
+      continue;
+    }
+    if (!resolved) {
+      outcomes[index] = {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "Session target could not be resolved."),
+      };
       continue;
     }
     const requestedAgentId = requestedAgent.agentId;
@@ -560,9 +573,7 @@ async function executeSessionPatchMutations(params: {
     });
     emitSessionsChanged(params.context, {
       sessionKey: target.canonicalKey,
-      ...(target.canonicalKey === "global" && target.requestedAgentId
-        ? { agentId: target.requestedAgentId }
-        : {}),
+      ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
       reason: "patch",
     });
     patched = true;
@@ -573,7 +584,11 @@ async function executeSessionPatchMutations(params: {
 
   const category = params.patch.category;
   if (patched && typeof category === "string" && category.trim()) {
-    ensureSessionGroupRegistered(category);
+    // A first-use category is a group-catalog mutation: clients reload the
+    // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
+    if (ensureSessionGroupRegistered(category)) {
+      emitSessionsChanged(params.context, { reason: "groups" });
+    }
   }
   if (callerCanManageCron && archivedSessionKeys.size > 0) {
     try {

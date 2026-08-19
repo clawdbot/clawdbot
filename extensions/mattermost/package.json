@@ -78,7 +78,8 @@
             "cli": {
               "flags": "--use-env",
               "description": "Use Mattermost environment credentials"
-            }
+            },
+            "envVars": ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]
           }
         ]
       }

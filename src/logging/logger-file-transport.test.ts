@@ -3,7 +3,8 @@ import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { appendRegularFile } from "../infra/regular-file.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { getLogger, resetLogger, setLoggerOverride, testApi } from "./logger.js";
+import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
+import { testApi } from "./logger.test-support.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-file-transport-");
 

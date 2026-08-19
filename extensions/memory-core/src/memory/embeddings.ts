@@ -8,6 +8,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { formatErrorMessage } from "../dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
+import {
+  createMissingLocalMemoryEmbeddingProviderError,
+  LOCAL_MEMORY_EMBEDDING_PROVIDER_ID,
+} from "./local-embedding-provider.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
@@ -31,18 +35,6 @@ type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
 };
 
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
-const LOCAL_LLAMA_CPP_PROVIDER_ID = "local";
-
-function createMissingLlamaCppProviderError(): Error {
-  return new Error(
-    [
-      "Unknown memory embedding provider: local.",
-      "Local GGUF embeddings are provided by the official llama.cpp provider plugin.",
-      "Install it with: openclaw plugins install @openclaw/llama-cpp-provider",
-      "Then restart OpenClaw and retry: openclaw memory status --deep",
-    ].join("\n"),
-  );
-}
 
 function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unknown): string {
   return adapter.formatSetupError?.(err) ?? formatErrorMessage(err);
@@ -56,8 +48,8 @@ function getAdapter(
   if (adapter) {
     return adapter;
   }
-  if (id === LOCAL_LLAMA_CPP_PROVIDER_ID) {
-    throw createMissingLlamaCppProviderError();
+  if (id === LOCAL_MEMORY_EMBEDDING_PROVIDER_ID) {
+    throw createMissingLocalMemoryEmbeddingProviderError();
   }
   throw new Error(`Unknown memory embedding provider: ${id}`);
 }

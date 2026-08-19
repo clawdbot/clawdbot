@@ -60,6 +60,11 @@
   color: var(--accent);
   font-size: 11px;
   font-weight: 650;
+  flex: 0 1 auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .provider-usage-grid {
@@ -98,14 +103,6 @@
 .provider-usage-summary {
   color: var(--muted);
   font-size: 11px;
-}
-
-.provider-usage-plan {
-  flex: 0 1 auto;
-  max-width: 55%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .provider-usage-windows,
@@ -253,6 +250,8 @@
   position: relative;
   overflow: visible;
   z-index: 2;
+  display: grid;
+  gap: 16px;
 }
 
 .usage-header.pinned {
@@ -260,11 +259,6 @@
   top: 16px;
   z-index: 4;
   box-shadow: var(--shadow-md);
-}
-
-.usage-header {
-  display: grid;
-  gap: 16px;
 }
 
 .usage-header-row {
@@ -366,12 +360,6 @@
 .chart-toggle .toggle-btn:hover:not(.active) {
   background: var(--bg-hover);
   color: var(--text);
-}
-
-.chart-toggle .toggle-btn.active {
-  background: var(--accent-subtle);
-  border: none;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .usage-date-range {
@@ -1937,7 +1925,7 @@
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .usage-page {
     gap: 14px;
   }

@@ -16,6 +16,7 @@ const STDERR_LIMIT = 4_096;
 type WorkerSshProcessExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
+  stderrTail?: string;
 };
 
 export type WorkerSshProcess = {
@@ -30,8 +31,13 @@ export type WorkerSshRunner = {
 };
 
 export function workerSshProcessError(stderr: string): Error {
-  const detail = redactSensitiveText(stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim();
+  const detail = workerSshStderrTail(stderr);
   return new Error(detail ? `Worker SSH tunnel failed: ${detail}` : "Worker SSH tunnel failed");
+}
+
+function workerSshStderrTail(stderr: string): string | undefined {
+  const redacted = redactSensitiveText(stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim();
+  return redacted ? sliceUtf16Safe(redacted, -STDERR_LIMIT) : undefined;
 }
 
 /** Production runner that treats the remote post-forward marker as connection readiness. */
@@ -79,7 +85,8 @@ export function createWorkerSshRunner(): WorkerSshRunner {
           return;
         }
         exitedSettled = true;
-        resolveExited(exit);
+        const stderrTail = workerSshStderrTail(stderr);
+        resolveExited({ ...exit, ...(stderrTail ? { stderrTail } : {}) });
       };
       child.stdout.setEncoding("utf8");
       child.stdout.on("error", () => {});
@@ -114,13 +121,15 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       let exitEventResult: WorkerSshProcessExit | undefined;
       child.once("exit", (code, signal) => {
         exitEventResult = { code, signal };
-        settleReadyError();
-        settleExited(exitEventResult);
-        // Release our pipe ends so a descendant holding the other side cannot pin local
-        // descriptors across retries; this also lets "close" fire promptly.
         child.stdin.destroy();
-        child.stdout.destroy();
-        child.stderr.destroy();
+        // Give queued output one I/O turn to reach the diagnostic buffers without waiting
+        // for "close", which a descendant holding the pipe can delay indefinitely.
+        setImmediate(() => {
+          settleReadyError();
+          settleExited(exitEventResult!);
+          child.stdout.destroy();
+          child.stderr.destroy();
+        });
       });
       child.once("close", (code, signal) => {
         closed = true;

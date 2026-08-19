@@ -999,10 +999,6 @@ surfaces:
         id: plugin-sdk-exports-sync
         command: pnpm plugin-sdk:check-exports
         purpose: Verify generated public SDK exports still match the checked-in entrypoint inventory.
-      - name: Plugin SDK API baseline
-        id: plugin-sdk-api-baseline
-        command: pnpm plugin-sdk:api:check
-        purpose: Detect public API drift in the packaged Plugin SDK surface.
       - name: Plugin SDK surface budget
         id: plugin-sdk-surface-budget
         command: pnpm plugin-sdk:surface:check

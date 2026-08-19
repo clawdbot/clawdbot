@@ -300,6 +300,31 @@ async function runProof(options: ProducerOptions): Promise<string> {
       "pre-restart decision inspection",
     );
     const receipt = requireDeniedApproval(before);
+    const firstPage = parseJson<AuditRunInspectResult>(
+      await gateway.runCli(["audit", "--run", runId, "--explain", "--limit", "1", "--json"]),
+      "first decision page",
+    );
+    if (firstPage.nextDecisionCursor?.startsWith("a:") !== true) {
+      throw new Error("first decision page omitted its opaque approval cursor");
+    }
+    const legacyResume = parseJson<AuditRunInspectResult>(
+      await gateway.runCli(["audit", "--run", runId, "--explain", "--cursor", "001", "--json"]),
+      "legacy numeric decision continuation",
+    );
+    requireDeniedApproval(legacyResume);
+    const opaqueResume = parseJson<AuditRunInspectResult>(
+      await gateway.runCli([
+        "audit",
+        "--run",
+        runId,
+        "--explain",
+        "--cursor",
+        firstPage.nextDecisionCursor,
+        "--json",
+      ]),
+      "opaque decision continuation",
+    );
+    requireDeniedApproval(opaqueResume);
     const serialized = JSON.stringify(before);
     const toolCallRef = readApprovalToolCallRef(gateway, approvalId);
     if (serialized.includes(commandSentinel) || serialized.includes(toolCallRef)) {
@@ -336,6 +361,8 @@ async function runProof(options: ProducerOptions): Promise<string> {
           firstAnswerPreserved: true,
           agentCompletionObserved: true,
           genericDuplicateAbsent: true,
+          numericDecisionContinuation: true,
+          opaqueDecisionContinuation: true,
           byteEquivalentAfterRestart: true,
           redaction: { command: true, toolCall: true },
           resultSha256: sha256(serialized),

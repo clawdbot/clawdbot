@@ -3,6 +3,7 @@
  * Verifies snapshots are cloned and isolated across agent-specific stores.
  */
 
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -17,13 +18,14 @@ import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreCredentialsRevision,
+  listRuntimeAuthProfileStoreSnapshots,
   noteRuntimeAuthProfileStorePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { testing } from "./runtime-snapshots.test-support.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 function createStore(access: string): AuthProfileStore {
   return {
@@ -66,6 +68,29 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
+  it("carries the canonical database identity through snapshot enumeration", () => {
+    const databasePath = "/tmp/openclaw-auth-runtime-enumeration/custom.sqlite";
+    const store = createStore("enumerated");
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        databasePath,
+        agentDir: "/tmp/projected-agent-dir-must-not-own-identity",
+        store,
+      },
+    ]);
+    try {
+      expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+        {
+          databasePath,
+          agentDir: path.dirname(databasePath),
+          store,
+        },
+      ]);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
   it("marks default-owner materializations as inherited mutations", () => {
     const listener = vi.fn();
     const unregister = registerRuntimeAuthMaterializationMutationListener(listener);
@@ -209,6 +234,36 @@ describe("runtime auth profile snapshots", () => {
       expect(listener).toHaveBeenCalledWith({
         affectsInheritedStores: true,
       });
+    } finally {
+      unregister();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("notifies when identical external credentials change from CLI to plugin ownership", () => {
+    const agentDir = "/tmp/openclaw-auth-runtime-external-owner";
+    const store: RuntimeAuthProfileStore = {
+      ...createStore("same-credential"),
+      runtimeExternalProfileIds: ["openai:default"],
+      runtimeExternalCliProfileIds: ["openai:default"],
+    };
+    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      const pluginOwned: RuntimeAuthProfileStore = {
+        ...store,
+        runtimeExternalCliProfileIds: undefined,
+      };
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: pluginOwned,
+        },
+      ]);
+
+      expect(listener).toHaveBeenCalledOnce();
+      expect(listener).toHaveBeenCalledWith({ affectsInheritedStores: true });
     } finally {
       unregister();
       clearRuntimeAuthProfileStoreSnapshots();

@@ -74,7 +74,6 @@ vi.mock("./setup.gateway-config.js", () => ({
       authMode: "token",
       gatewayToken: "test-token",
       tailscaleMode: "off",
-      tailscaleResetOnExit: false,
     },
   }),
 }));
@@ -156,6 +155,7 @@ describe("runSetupWizard default-agent ownership", () => {
       valid: true,
       config,
       sourceConfig: config,
+      sourceConfigBeforeMigrations: config,
       issues: [],
     });
     mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => nextConfig);

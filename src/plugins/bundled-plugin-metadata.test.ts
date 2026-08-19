@@ -79,6 +79,7 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "opencode",
   "talk-voice",
   "teams-meetings",
+  "xai",
   "zoom-meetings",
 ] as const;
 
@@ -427,6 +428,15 @@ describe("bundled plugin metadata", () => {
     const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
     expectArtifactPresence(slack?.publicSurfaceArtifacts, {
       contains: ["doctor-contract-api.js"],
+    });
+  });
+
+  it("keeps Memory Core's health checks on a narrow public surface", () => {
+    const memoryCore = listRepoBundledPluginMetadata().find(
+      (entry) => entry.dirName === "memory-core",
+    );
+    expectArtifactPresence(memoryCore?.publicSurfaceArtifacts, {
+      contains: ["doctor-health-api.js"],
     });
   });
 

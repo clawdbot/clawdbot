@@ -10,7 +10,9 @@ import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
+  CronCompletionStatus,
   CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -40,6 +42,7 @@ export type CronEvent = {
   runAtMs?: number;
   durationMs?: number;
   status?: CronRunStatus;
+  completionStatus?: CronCompletionStatus;
   error?: string;
   summary?: string;
   diagnostics?: CronRunDiagnostics;
@@ -94,7 +97,8 @@ export type CronServiceDeps = {
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
   /** Resolve the current default when runtime config can change after startup. */
-  resolveDefaultAgentId?: () => string;
+  resolveDefaultAgentId?: () => string | undefined;
+  legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
   /** Revalidate agent ownership inside the cron mutation lock. */
@@ -261,6 +265,7 @@ type CronRunAdmission = {
 type QueuedCronRunReservation = {
   identity: object;
   markerAtMs: number;
+  runReceipt: CronRunReceiptHandle;
   preserveWhenDisabled: boolean;
   activationPreviousLastError?: { value: string | undefined };
 };
@@ -277,7 +282,6 @@ export type CronServiceState = {
   stopped: boolean;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
-  restartRecoveryPending: boolean;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
@@ -292,6 +296,8 @@ export type CronServiceState = {
    * until the runtime can quarantine and sanitize the active store.
    */
   warnedInvalidPersistedJobKeys: Set<string>;
+  /** Availability is rechecked every tick; this set only bounds skip diagnostics. */
+  reportedUnavailableReaperAgentIds: Set<string>;
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
@@ -312,7 +318,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     stopped: false,
     schedulingPaused: false,
     schedulerStarted: false,
-    restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
@@ -320,6 +325,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
+    reportedUnavailableReaperAgentIds: new Set<string>(),
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
@@ -335,8 +341,12 @@ export function emit(state: CronServiceState, evt: CronEvent) {
   }
 }
 
-/** Direct-run mode: respect due time or force execution. */
-export type CronRunMode = "due" | "force";
+/** Direct-run mode: respect due time, force execution, or run immediately while enabled. */
+export type CronRunMode = "due" | "force" | "if-enabled";
+
+export function isImmediateCronRunMode(mode: CronRunMode | undefined): boolean {
+  return mode === "force" || mode === "if-enabled";
+}
 
 /** Main-session wake strategy used after enqueuing cron text. */
 export type CronWakeMode = "now" | "next-heartbeat";
@@ -358,9 +368,9 @@ export type CronStatusSummary = {
 export type CronRunResult =
   | { ok: true; ran: true }
   | { ok: true; enqueued: true; runId: string }
+  | { ok: true; ran: false; reason: "disabled" }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
-  | { ok: true; ran: false; reason: "restart-recovery-pending" }
   | { ok: true; ran: false; reason: "invalid-spec" }
   | { ok: true; ran: false; reason: "stopped" }
   | { ok: false };
@@ -386,7 +396,7 @@ export type CronAddInput = CronJobCreate;
 export type CronAddOptions = {
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
-  /** Gateway-owned system payloads (heartbeat monitors) require this opt-in. */
+  /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */
   systemOwned?: boolean;
   /** Authenticated caller provenance stamped by the service, never public input. */
   scheduledToolPolicy?: CronScheduledToolPolicy;

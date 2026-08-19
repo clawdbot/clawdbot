@@ -28,8 +28,8 @@ import {
 } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
+import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
@@ -209,10 +209,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     markInboundDedupeReplayUnsafe();
                     // Buffered commentary preceded this tool; land it before the summary.
                     await flushPendingCommentaryProgress();
-                    // When the operator opts into messages.suppressToolErrors, never
-                    // surface tool-error tool-result payloads as channel progress,
-                    // regardless of source delivery mode. payloads.ts already drops
-                    // the warning text; this drops the visible progress delivery too.
+                    // Tool-error suppression covers visible progress as well as warning text,
+                    // regardless of source delivery mode.
                     if (
                       payload.isError === true &&
                       replyConfig.messages?.suppressToolErrors === true
@@ -332,15 +330,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (shouldRouteToOriginating) {
                       await sendPayloadAsync(deliveryPayload, undefined, false);
                     } else {
-                      markInboundDedupeReplayUnsafe();
-                      const delivered = state.turnLedger.sendQueued("tool", deliveryPayload).queued;
-                      if (delivered && hasAskUserPayload(deliveryPayload)) {
-                        // ask_user blocks until this callback resolves; drain its prompt now
-                        // or the answerable UI can remain queued behind the blocked agent run.
-                        await waitForReplyDispatcherIdle(
+                      const delivery = state.turnLedger.sendQueued("tool", deliveryPayload);
+                      if (hasAskUserPayload(deliveryPayload)) {
+                        await requireQueuedReplyDelivery({
+                          delivery,
                           dispatcher,
-                          getDispatchAbortOperation()?.abortSignal,
-                        );
+                          abortSignal: getDispatchAbortOperation()?.abortSignal,
+                        });
                       }
                     }
                   };

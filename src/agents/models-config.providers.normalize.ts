@@ -32,10 +32,12 @@ function getProviderModelId(model: ProviderModelConfig): string | undefined {
 }
 
 function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModelConfig {
-  const cost = model.cost as unknown as Record<string, number | undefined>;
+  const cost = model.cost;
   if (
     !cost ||
-    ["input", "output", "cacheRead", "cacheWrite"].every((key) => cost[key] !== undefined)
+    (["input", "output", "cacheRead", "cacheWrite"] as const).every(
+      (key) => cost[key] !== undefined,
+    )
   ) {
     return model;
   }

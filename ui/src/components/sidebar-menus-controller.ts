@@ -35,7 +35,7 @@ import type {
   SessionOrganizerController,
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
-import type { SessionCreatorOption } from "./session-owner-chip.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -67,7 +67,7 @@ type SidebarMenusRenderer = {
   renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
 };
 
-export interface SidebarMenusControllerHost
+interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
   readonly activeWorkboardBoardId: string;
@@ -91,14 +91,25 @@ export interface SidebarMenusControllerHost
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      "approvalBadgeSnapshot" | "presenceInstanceId" | "presencePayload" | "sessionsLoading"
+      | "approvalBadgeSnapshot"
+      | "presenceInstanceId"
+      | "presencePayload"
+      | "sessionResultsByAgent"
+      | "sessionsLoading"
+      | "sessionsResult"
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
-  readonly sessionCreatorFilterActive: boolean;
-  sessionCreatorFilterId: string | null;
-  readonly sessionCreatorOptions: readonly SessionCreatorOption[];
+  readonly sessionOwnerFilterActive: boolean;
+  sessionOwnerFilterId: string | null;
+  sessionInvolvingMeFilterActive: boolean;
+  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
+  readSessionMutationAccess(request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  }): import("../lib/session-method-access.ts").SessionMethodAccess;
   readonly sidebarEntries: readonly string[];
   readonly catalogProjectGrouping: CatalogProjectGrouping;
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;

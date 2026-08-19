@@ -45,6 +45,7 @@ export {
   upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow,
 } from "./auth-profiles/profiles.js";
+export { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
 export {
   repairOAuthProfileIdMismatch,
   suggestOAuthProfileIdForLegacyDefault,

@@ -76,6 +76,9 @@ describe("command resolveSession provider-owned daily reset", () => {
         updatedAt: startedAt,
         sessionStartedAt: startedAt,
         lastInteractionAt: startedAt,
+        pendingTranscriptRepair: [
+          { id: "predecessor-repair", text: "old reply", createdAt: startedAt },
+        ],
       },
     };
 
@@ -87,6 +90,7 @@ describe("command resolveSession provider-owned daily reset", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("old-session-id");
+    expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
   });
 
   it("keeps a model-locked session across the daily boundary", () => {

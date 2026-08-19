@@ -6,6 +6,7 @@ import {
   type SessionsCatalogStartTerminalParams,
   validateSessionsCatalogStartTerminalParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -140,6 +141,7 @@ export function catalogStartHandler(
       failureHint: "check the selected CLI, host, and terminal configuration, then retry",
       resolveCatalogPlan: async () => {
         const plan = await startTerminalSession.call(provider, {
+          allowProcessHomeFallback: allowsProcessHomeSessionScan(),
           agentId: request.agentId,
           cwd: request.cwd,
           ...(request.initialMessage !== undefined

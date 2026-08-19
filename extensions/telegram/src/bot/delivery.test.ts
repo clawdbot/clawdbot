@@ -67,6 +67,7 @@ vi.mock("../sent-message-cache.js", async (importOriginal) => {
 vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
 const { sendTelegramText } = await import("./delivery.send.js");
+const { PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime");
 
 vi.mock("grammy", () => ({
   API_CONSTANTS: {
@@ -83,6 +84,8 @@ vi.mock("grammy", () => ({
     description = "";
   },
 }));
+
+const { TelegramRequestNotStartedError } = await import("../network-errors.js");
 
 function createRuntime(withLog = true): RuntimeStub {
   return {
@@ -285,10 +288,13 @@ function createWrappedConnectTimeoutHttpError(operation = "sendMessage") {
   });
 }
 
-function createPlainHttpError(operation = "sendMessage") {
+function createPlainHttpError(
+  operation = "sendMessage",
+  error: unknown = new TypeError("fetch failed"),
+) {
   return Object.assign(new Error(`Network request for '${operation}' failed!`), {
     name: "HttpError",
-    error: new TypeError("fetch failed"),
+    error,
   });
 }
 
@@ -1649,6 +1655,33 @@ describe("deliverReplies", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps an exhausted request-not-started marker to streaming no-dispatch custody", async () => {
+    const runtime = createRuntime();
+    const terminal = createPlainHttpError("sendMessage", new TelegramRequestNotStartedError());
+    const sendMessage = vi.fn().mockRejectedValue(terminal);
+
+    let observed: unknown;
+    try {
+      await sendTelegramText(createBot({ sendMessage }), "123", "hello", runtime);
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(observed).toHaveProperty("cause", terminal);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps broad 421-shaped streaming send errors ambiguous", async () => {
+    const edgeError = Object.assign(new Error("421 Misdirected Request"), { status: 421 });
+    const sendMessage = vi.fn().mockRejectedValue(edgeError);
+
+    await expect(
+      sendTelegramText(createBot({ sendMessage }), "123", "hello", createRuntime()),
+    ).rejects.toBe(edgeError);
+    expect(sendMessage).toHaveBeenCalledOnce();
   });
 
   it("does not retry DM topic media sends without the topic id", async () => {

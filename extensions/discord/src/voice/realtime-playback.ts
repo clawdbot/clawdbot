@@ -1,14 +1,16 @@
 import { PassThrough, pipeline } from "node:stream";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  RealtimeVoiceActivationNameTranscriptResult,
-  RealtimeVoiceBridgeEvent,
-  RealtimeVoiceBridgeSession,
-  RealtimeVoiceSessionHarness,
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  realtimeVoiceAudioDurationMs,
+  resolveRealtimeVoiceBargeIn,
+  type RealtimeVoiceActivationNameTranscriptResult,
+  type RealtimeVoiceBridgeEvent,
+  type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createDiscordOpusEncodeStream,
   convertRealtimePcm24kMonoToDiscordPcm48kStereo,
@@ -18,14 +20,12 @@ import type { DiscordVoiceMode, VoiceSessionEntry } from "./session.js";
 import { logVoiceVerbose } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
-const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const DISCORD_REALTIME_CONTROL_SPEECH_DEDUPE_MS = 5_000;
 const DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS = 1_500;
 const DISCORD_REALTIME_MAX_RETAINED_EXACT_SPEECH_MESSAGES = 32;
 const DISCORD_REALTIME_MAX_RETAINED_EXACT_SPEECH_BYTES = 32 * 1024;
 const DISCORD_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
 const DISCORD_REALTIME_WAKE_ACKS = ["Yeah.", "Mm-hmm.", "Got it.", "One sec."];
-const REALTIME_PCM16_BYTES_PER_SAMPLE = 2;
 const DISCORD_RAW_PCM_FRAME_BYTES = 3_840;
 const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
 
@@ -41,40 +41,6 @@ type RealtimeExactSpeechState =
   | { status: "idle" }
   | { status: "active"; message: string; audioStarted: boolean };
 
-function readProviderConfigBoolean(
-  config: Record<string, unknown> | undefined,
-  key: string,
-): boolean | undefined {
-  return asBoolean(config?.[key]);
-}
-
-function resolveDiscordRealtimeInterruptResponseOnInputAudio(params: {
-  realtimeConfig: DiscordRealtimeVoiceConfig;
-  providerId: string;
-}): boolean {
-  const providerConfig = params.realtimeConfig?.providers?.[params.providerId];
-  return readProviderConfigBoolean(providerConfig, "interruptResponseOnInputAudio") ?? true;
-}
-
-export function resolveDiscordRealtimeBargeIn(params: {
-  realtimeConfig: DiscordRealtimeVoiceConfig;
-  providerId: string;
-}): boolean {
-  const configured = params.realtimeConfig?.bargeIn;
-  if (typeof configured === "boolean") {
-    return configured;
-  }
-  return resolveDiscordRealtimeInterruptResponseOnInputAudio(params);
-}
-
-export function resolveDiscordRealtimeMinBargeInAudioEndMs(
-  realtimeConfig: DiscordRealtimeVoiceConfig,
-): number {
-  return typeof realtimeConfig?.minBargeInAudioEndMs === "number"
-    ? realtimeConfig.minBargeInAudioEndMs
-    : DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS;
-}
-
 function isRealtimeResponseCancellationRace(event: RealtimeVoiceBridgeEvent): boolean {
   return (
     event.direction === "server" &&
@@ -87,14 +53,6 @@ function normalizeControlSpeechText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function pcm16MonoDurationMs(audio: Buffer, sampleRate: number): number {
-  if (audio.length === 0 || sampleRate <= 0) {
-    return 0;
-  }
-  const samples = audio.length / REALTIME_PCM16_BYTES_PER_SAMPLE;
-  return (samples * 1000) / sampleRate;
-}
-
 export type DiscordRealtimePlaybackPort = Pick<
   DiscordRealtimePlayback<unknown>,
   | "enqueueExactSpeechMessage"
@@ -103,6 +61,7 @@ export type DiscordRealtimePlaybackPort = Pick<
   | "isBargeInEnabled"
   | "isOutputAudioActive"
   | "outputAudioMs"
+  | "retainedExactSpeechTexts"
   | "sendWakeNameAck"
   | "speakControlResult"
 >;
@@ -186,9 +145,11 @@ export class DiscordRealtimePlayback<TState> {
     }
     const providerId =
       this.params.providerId() ?? this.params.realtimeConfig()?.provider ?? "openai";
-    return resolveDiscordRealtimeBargeIn({
-      realtimeConfig: this.params.realtimeConfig(),
-      providerId,
+    const realtimeConfig = this.params.realtimeConfig();
+    return resolveRealtimeVoiceBargeIn({
+      configuredBargeIn: realtimeConfig?.bargeIn,
+      interruptResponseOnInputAudio:
+        realtimeConfig?.providers?.[providerId]?.interruptResponseOnInputAudio,
     });
   }
 
@@ -219,7 +180,10 @@ export class DiscordRealtimePlayback<TState> {
       this.exactSpeechState = { ...this.exactSpeechState, audioStarted: true };
     }
     this.params.harness.recordOutputAudio(realtimePcm24kMono, {
-      audioMs: pcm16MonoDurationMs(realtimePcm24kMono, 24_000),
+      audioMs: realtimeVoiceAudioDurationMs(
+        REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        realtimePcm24kMono.byteLength,
+      ),
       sourceAudioBytes: realtimePcm24kMono.length,
       sinkAudioBytes: discordPcm.length,
     });
@@ -337,6 +301,13 @@ export class DiscordRealtimePlayback<TState> {
       return;
     }
     this.sendExactSpeechMessage(text);
+  }
+
+  retainedExactSpeechTexts(): string[] {
+    return [
+      ...(this.exactSpeechState.status === "active" ? [this.exactSpeechState.message] : []),
+      ...this.queuedExactSpeechMessages,
+    ];
   }
 
   drainQueuedExactSpeechMessages(reason: string): void {

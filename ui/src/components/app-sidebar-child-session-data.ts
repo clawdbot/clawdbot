@@ -110,7 +110,7 @@ export function preserveActiveSessionLineageRows(
     if (!parent) {
       break;
     }
-    preserved[parent[0]] = parent[1];
+    preserved[parent[0]] = parent[1].filter((row) => areUiSessionKeysEquivalent(row.key, childKey));
     childKey = parent[0];
   }
   return preserved;
@@ -205,6 +205,14 @@ export function evictArchivedSessionLineage(
         row != null && areUiSessionKeysEquivalent(row.key, sessionKey),
     );
   if (selectedRow?.archived === true) {
+    // Navigation has ended the archived row's temporary presentation lease.
+    // Remove it from the child cache before the next canonical list refresh.
+    owner.childSessionRowsByParent = Object.fromEntries(
+      Object.entries(owner.childSessionRowsByParent).map(([parentKey, rows]) => [
+        parentKey,
+        rows.filter((row) => !areUiSessionKeysEquivalent(row.key, sessionKey)),
+      ]),
+    );
     owner.context?.sessions.reconcile(selectedRow, owner.sessionsResult?.defaults, {
       archivedFilter: "active",
     });

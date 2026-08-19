@@ -41,12 +41,11 @@ import { renderChatResizableDivider } from "./components/chat-resizable-divider.
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
-  detachPanelToColumn,
   fitSidebarLayout,
   openSlot,
-  resizeColumn,
+  resizeSidebarPanel,
+  sidebarDock,
   type SidebarLayout,
-  type SidebarSide,
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
@@ -62,55 +61,28 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     state.updateSidebarLayout(fitted);
   }
 
-  protected commitSidebarPanelMove(
-    layout: SidebarLayout,
-    panelId: string,
-    targetSide: SidebarSide,
-    board: ResolvedBoardView,
-  ): void {
-    const panel = layout.columns
-      .flatMap((column) => column.panels)
-      .find((candidate) => candidate.id === panelId);
-    if (panel?.slot !== "chat" || board.dock === targetSide) {
-      this.commitSidebarLayout(layout);
-      this.commitSidebarMovedPanelActive(panelId);
-      return;
-    }
-    if (!board.provider.canMutate) {
-      return;
-    }
-    this.commitSidebarLayout(layout);
-    this.commitSidebarMovedPanelActive(panelId);
-    this.handleBoardDockChange(targetSide);
-  }
-
-  // A move activates the panel in its destination column, but the collapsed layout
-  // reads a separate persisted selection. Without this the narrow view foregrounds
-  // a stale panel after a drag, and the stale choice survives reload.
-  private commitSidebarMovedPanelActive(panelId: string): void {
-    this.state?.updateSidebarActivePanel(panelId);
-  }
-
-  protected commitSidebarColumnResize(
+  protected commitSidebarPanelResize(
     renderedLayout: SidebarLayout,
     columnId: string,
-    width: number,
+    size: number,
   ): void {
     const state = this.state;
     if (!state) {
       return;
     }
-    const resizedProjection = resizeColumn(renderedLayout, columnId, width);
+    const resizedProjection = resizeSidebarPanel(renderedLayout, columnId, size);
     const fittedProjection =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(resizedProjection, this.paneWidth) ?? resizedProjection)
         : resizedProjection;
-    const fittedWidth = fittedProjection.columns.find((column) => column.id === columnId)?.width;
+    const fittedColumn = fittedProjection.columns.find((column) => column.id === columnId);
+    const fittedSize =
+      sidebarDock(fittedProjection) === "bottom" ? fittedColumn?.height : fittedColumn?.width;
     if (
-      fittedWidth !== undefined &&
+      fittedSize !== undefined &&
       state.sidebarLayout.columns.some((column) => column.id === columnId)
     ) {
-      state.updateSidebarLayout(resizeColumn(state.sidebarLayout, columnId, fittedWidth));
+      state.updateSidebarLayout(resizeSidebarPanel(state.sidebarLayout, columnId, fittedSize));
       return;
     }
     this.commitSidebarLayout(fittedProjection);
@@ -125,28 +97,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return true;
     }
     const beforeOpen = state.sidebarLayout;
-    let layout = openSlot(beforeOpen, "chat", dock);
-    const chatColumn = layout.columns.find((column) =>
-      column.panels.some((panel) => panel.slot === "chat"),
-    );
-    if (chatColumn && chatColumn.side !== dock) {
-      const panel = chatColumn.panels.find((candidate) => candidate.slot === "chat");
-      if (panel) {
-        layout = detachPanelToColumn(layout, panel.id, dock, 0);
-      }
-    }
+    let layout = openSlot(beforeOpen, "chat");
     const chatPanel = layout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === "chat");
     if (chatPanel) {
       layout = activatePanel(layout, chatPanel.id);
     }
-    const newColumn = layout.columns.find(
-      (column) => !beforeOpen.columns.some((current) => current.id === column.id),
-    );
     const fitted =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(layout, this.paneWidth, newColumn?.id) ?? layout)
+        ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
         : layout;
     state.updateSidebarLayout(fitted);
     if (chatPanel) {
@@ -156,10 +116,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected resolveBoardProvider(): BoardProvider {
-    const sessionKey = resolveSessionKey(
-      this.state?.sessionKey ?? this.sessionKey,
-      this.context?.gateway.snapshot.hello,
-    );
+    const sessionKey = this.resolveBoardSessionKey();
     if (this.boardProvider) {
       this.releaseBoardProviderLease();
       return this.boardProvider;
@@ -480,9 +437,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const reopenDock = dock === "hidden" ? board.reopenDock : dock;
     this.lastVisibleBoardDock.set(`${sessionKey}:${board.activeTabId}`, reopenDock);
     this.persistBoardReopenDock(board, reopenDock);
+    const owner = this.headerOutcomeOwner;
     void board.provider
       .applyOps([{ kind: "tab_update", tabId: board.activeTabId, chatDock: dock }])
-      .catch((error: unknown) => this.publishHeaderError(error));
+      .catch((error: unknown) => this.publishHeaderError(error, owner));
   }
 
   protected renderBoardDivider(dock: BoardVisibleChatDock) {

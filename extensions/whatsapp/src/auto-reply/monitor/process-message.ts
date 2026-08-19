@@ -5,6 +5,7 @@ import {
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  type buildChannelInboundEventContext,
   formatMediaPlaceholderText,
   runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -39,7 +40,6 @@ import { whatsappInboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { formatWhatsAppAudioTranscriptForAgent } from "./audio-transcript.js";
-import type { EchoTracker } from "./echo.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
@@ -200,10 +200,6 @@ export async function processMessage(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<typeof getChildLogger>;
   backgroundTasks: Set<Promise<unknown>>;
-  rememberSentText: EchoTracker["rememberText"];
-  echoHas: EchoTracker["has"];
-  echoForget: EchoTracker["forget"];
-  buildCombinedEchoKey: (p: { sessionKey: string; combinedBody: string }) => string;
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   groupHistoryLimit?: number;
@@ -217,6 +213,7 @@ export async function processMessage(params: {
    * - null    → preflight was attempted but failed / returned nothing; skip internal STT
    * - undefined (omitted) → caller did not attempt preflight; run internal STT as normal */
   preflightAudioTranscript?: string | null;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const admission = requireWhatsAppInboundAdmission(params.msg);
   if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
@@ -365,17 +362,6 @@ export async function processMessage(params: {
     shouldClearGroupHistory = !(params.suppressGroupHistoryClear ?? false);
   }
 
-  // Echo detection uses combined body so we don't respond twice.
-  const combinedEchoKey = params.buildCombinedEchoKey({
-    sessionKey: params.route.sessionKey,
-    combinedBody,
-  });
-  if (params.echoHas(combinedEchoKey)) {
-    logVerbose("Skipping auto-reply: detected echo for combined message");
-    params.echoForget(combinedEchoKey);
-    return false;
-  }
-
   // When statusReactions.enabled, a StatusReactionController takes over lifecycle
   // signaling (queued → thinking → tool → done/error). The plain ackReaction is
   // skipped so the same message slot isn't used for two competing systems.
@@ -502,6 +488,7 @@ export async function processMessage(params: {
     msg: params.msg,
     rawBody: commandBody,
     route: params.route,
+    buildContext: params.buildContext,
     sender: {
       id: getPrimaryIdentityId(sender) ?? undefined,
       name: sender.name ?? undefined,
@@ -580,7 +567,6 @@ export async function processMessage(params: {
           maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
           inbound,
           onModelSelected,
-          rememberSentText: params.rememberSentText,
           replyLogger: params.replyLogger,
           replyPipeline: {
             ...replyPipeline,

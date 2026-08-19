@@ -36,6 +36,7 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
@@ -94,10 +95,12 @@ const WORKER_LOOP_REPLAY = {
 };
 const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
 const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
+const WORKER_INFERENCE_START_TIMEOUT_MS = 90_000;
 
 type InferencePlan =
   | "text"
   | "tool"
+  | "safe-tool"
   | "background-tool"
   | "session-tool"
   | "hold"
@@ -164,6 +167,7 @@ class FakeWorkerGateway {
   private sentLiveResync = 0;
   private unavailable = false;
   private ignoredAdmission = false;
+  private readonly inferenceStarted = createDeferred();
 
   socketPath = "";
   connectionCount = 0;
@@ -174,6 +178,14 @@ class FakeWorkerGateway {
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
   readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
   readonly applicationOrder: string[] = [];
+
+  waitForInferenceStart(): Promise<void> {
+    return withTestTimeout(
+      this.inferenceStarted.promise,
+      WORKER_INFERENCE_START_TIMEOUT_MS,
+      "worker inference start did not reach the fake Gateway",
+    );
+  }
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
     this.httpServer = createServer();
@@ -467,6 +479,7 @@ class FakeWorkerGateway {
   private handleInference(socket: WebSocket, frame: WorkerInferenceStartRequestFrame): void {
     this.methods.push(frame.method);
     this.inferenceRequests.push(structuredClone(frame.params));
+    this.inferenceStarted.resolve();
     if (this.options.silenceFirstInference && !this.droppedInference) {
       this.droppedInference = true;
       return;
@@ -494,8 +507,11 @@ class FakeWorkerGateway {
       });
       return;
     }
-    if (plan === "tool" || plan === "background-tool") {
-      this.sendToolTurn(socket, frame.params, plan === "background-tool");
+    if (plan === "tool" || plan === "safe-tool" || plan === "background-tool") {
+      this.sendToolTurn(socket, frame.params, {
+        background: plan === "background-tool",
+        safe: plan === "safe-tool",
+      });
       return;
     }
     if (plan === "session-tool") {
@@ -674,10 +690,10 @@ class FakeWorkerGateway {
   private sendToolTurn(
     socket: WebSocket,
     identity: WorkerInferenceStartParams,
-    background = false,
+    options: { background: boolean; safe: boolean },
   ): void {
     const toolCallId = "local-exec-call";
-    const args = background
+    const args = options.background
       ? {
           // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
           command:
@@ -688,7 +704,9 @@ class FakeWorkerGateway {
               : "exec sleep 60",
           background: true,
         }
-      : { command: "printf worker-local > local-proof.txt" };
+      : {
+          command: options.safe ? "wc -c" : "printf worker-local > local-proof.txt",
+        };
     this.sendToolCallTurn(socket, identity, {
       args,
       toolCallId,
@@ -808,8 +826,8 @@ class FakeWorkerGateway {
 
 function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescriptor {
   return {
-    version: 2,
-    socketPath,
+    version: 4,
+    connectionEndpoint: { kind: "unix", socketPath },
     admission: {
       environmentId: "worker-environment",
       credential: CREDENTIAL,
@@ -1026,7 +1044,7 @@ describe("worker runtime", () => {
       silenceSessionSpawnResponses: 2,
     });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1162,7 +1180,7 @@ describe("worker runtime", () => {
     const { gateway, launch } = await setup({ inferencePlans: ["hold"] });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await gateway.waitForInferenceStart();
 
     controller.abort(new Error("operator stopped worker"));
 
@@ -1181,7 +1199,7 @@ describe("worker runtime", () => {
     });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await gateway.waitForInferenceStart();
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -1363,6 +1381,110 @@ describe("worker runtime", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      mode: "read-only" as const,
+      omittedTools: ["write", "edit", "apply_patch"],
+      denial: /host=gateway security=deny/u,
+    },
+    {
+      mode: "guarded" as const,
+      omittedTools: [],
+      denial:
+        /approval_required.*worker guarded permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+    },
+    {
+      mode: "workspace" as const,
+      omittedTools: [],
+      denial:
+        /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+    },
+    { mode: "full" as const, omittedTools: [], denial: null },
+  ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.permissionMode = mode;
+    launch.assignment.workerContainmentRoot = workspaceDir;
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
+    for (const toolName of omittedTools) {
+      expect(toolNames).not.toContain(toolName);
+    }
+    const toolResult = JSON.stringify(
+      gateway.inferenceRequests[1]?.context.messages.find(
+        (message) => message.role === "toolResult",
+      ),
+    );
+    if (denial) {
+      expect(toolResult).toMatch(denial);
+      await expect(
+        readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
+        "worker-local",
+      );
+    }
+  });
+
+  it.each(["guarded", "workspace"] as const)(
+    "keeps the %s worker allowlist fast path",
+    async (mode) => {
+      const { gateway, workspaceDir, launch } = await setup({
+        inferencePlans: ["safe-tool", "text"],
+      });
+      launch.assignment.permissionMode = mode;
+      launch.assignment.workerContainmentRoot = workspaceDir;
+
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+      const toolResult = JSON.stringify(
+        gateway.inferenceRequests[1]?.context.messages.find(
+          (message) => message.role === "toolResult",
+        ),
+      );
+      expect(toolResult).not.toContain("approval_required");
+      expect(toolResult).toMatch(/\b0\b/u);
+    },
+  );
+
+  it("canonicalizes an in-root worker workspace before enforcing containment", async () => {
+    const { workspaceDir, launch } = await setup();
+    const nested = path.join(workspaceDir, "nested");
+    await mkdir(nested);
+    launch.assignment.workspaceDir = path.join(nested, "..", "nested");
+    launch.assignment.permissionMode = "workspace";
+    launch.assignment.workerContainmentRoot = workspaceDir;
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("rejects a worker workspace outside its canonical containment root", async () => {
+    const { workspaceDir, launch } = await setup();
+    const narrowerRoot = path.join(workspaceDir, "contained");
+    await mkdir(narrowerRoot);
+    launch.assignment.permissionMode = "workspace";
+    launch.assignment.workerContainmentRoot = narrowerRoot;
+
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+      "worker workspace path escapes its assigned containment root",
+    );
+  });
+
+  it("rejects a dot-dot workspace escape before worker connection", async () => {
+    const { workspaceDir, launch } = await setup();
+    const outside = await mkdtemp(path.join(tmpdir(), "openclaw-worker-outside-"));
+    tempDirs.push(outside);
+    launch.assignment.workspaceDir = path.join(workspaceDir, "..", path.basename(outside));
+    launch.assignment.permissionMode = "workspace";
+    launch.assignment.workerContainmentRoot = workspaceDir;
+
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+      "worker workspace path escapes its assigned containment root",
+    );
+  });
+
   it("keeps a pinned replay anchor through repeated local tool-loop inference", async () => {
     const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
     launch.assignment.initialMessages = Array.from(
@@ -1451,7 +1573,7 @@ describe("worker reconnect clients", () => {
   it("isolates ready listener failures while admitting the worker and starting heartbeats", async () => {
     const { gateway, launch } = await setup({ heartbeatIntervalMs: 1 });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
     });
     let healthyReadyCalls = 0;
@@ -1474,7 +1596,7 @@ describe("worker reconnect clients", () => {
   it("fails closed when the overall admission deadline expires", async () => {
     const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       admissionTimeoutMs: 25,
       admissionDeadlineMs: 250,
@@ -1499,7 +1621,7 @@ describe("worker reconnect clients", () => {
   it("times out a silent admission attempt and admits on reconnect", async () => {
     const { gateway, launch } = await setup({ ignoreFirstAdmission: true });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       admissionTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1518,7 +1640,7 @@ describe("worker reconnect clients", () => {
       heartbeatIntervalMs: 1,
     });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1538,7 +1660,7 @@ describe("worker reconnect clients", () => {
       silenceFirstInference: true,
     });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 40,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1559,9 +1681,14 @@ describe("worker reconnect clients", () => {
           timestamp: 1,
         },
       ]);
-      await live.emit(RUN_ID, {
+      live.enqueuePreview(RUN_ID, {
         kind: "assistant",
         payload: { text: "silent live event", delta: "silent live event" },
+      });
+      await waitForFast(() => expect(gateway.liveEventRequests).toHaveLength(2));
+      await live.emitTerminal(RUN_ID, {
+        kind: "lifecycle",
+        payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
       });
       await inference.start({
         runEpoch: OWNER_EPOCH,
@@ -1575,7 +1702,7 @@ describe("worker reconnect clients", () => {
 
       expect(gateway.transcriptRequests).toHaveLength(2);
       expect(gateway.transcriptRequests[1]).toEqual(gateway.transcriptRequests[0]);
-      expect(gateway.liveEventRequests).toHaveLength(2);
+      expect(gateway.liveEventRequests).toHaveLength(3);
       expect(gateway.liveEventRequests[1]).toEqual(gateway.liveEventRequests[0]);
       expect(gateway.inferenceRequests).toHaveLength(2);
       expect(gateway.inferenceRequests[1]).toEqual(gateway.inferenceRequests[0]);
@@ -1590,7 +1717,7 @@ describe("worker reconnect clients", () => {
   it("settles an in-flight commit and a later live emit after stop", async () => {
     const { gateway, launch } = await setup({ silenceFirstTranscript: true });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 5_000,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1623,10 +1750,14 @@ describe("worker reconnect clients", () => {
       await expect(commit).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
 
       live = new WorkerLiveEventClient(connection, { runEpoch: OWNER_EPOCH });
+      live.enqueuePreview(RUN_ID, {
+        kind: "assistant",
+        payload: { text: "late live event", delta: "late live event" },
+      });
       await expect(
-        live.emit(RUN_ID, {
-          kind: "assistant",
-          payload: { text: "late live event", delta: "late live event" },
+        live.emitTerminal(RUN_ID, {
+          kind: "lifecycle",
+          payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
         }),
       ).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
       expect(waitForReady.mock.calls.length).toBeLessThanOrEqual(2);

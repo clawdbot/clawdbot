@@ -35,6 +35,7 @@ const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() => vi.fn());
 const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
+const resolveConfigWidePluginManifestRegistry = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
@@ -66,6 +67,10 @@ vi.mock("./plugin-registry-contributions.js", async (importOriginal) => {
     loadPluginManifestRegistryForPluginRegistry,
   };
 });
+
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry,
+}));
 
 import {
   hasConfiguredChannelsForReadOnlyScope,
@@ -136,14 +141,14 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         realtimeVoiceProviders: ["openai"],
         imageGenerationProviders: ["openai"],
         videoGenerationProviders: ["openai"],
-        memoryEmbeddingProviders: ["openai"],
+        embeddingProviders: ["openai"],
       },
     },
     {
       id: "ollama",
       enabledByDefault: true,
       providers: ["ollama"],
-      contracts: { memoryEmbeddingProviders: ["ollama"] },
+      contracts: { embeddingProviders: ["ollama"] },
     },
     {
       id: "generic-embedding",
@@ -393,6 +398,7 @@ function useManifestRegistryFixture(
     .mockReset()
     .mockImplementation(() => loadPluginManifestRegistryCore());
   loadPluginRegistrySnapshot.mockReset().mockReturnValue(index);
+  resolveConfigWidePluginManifestRegistry.mockReset().mockReturnValue(registry);
   return { registry, index };
 }
 
@@ -511,7 +517,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       .mockImplementation((config: OpenClawConfig) => {
         return listPotentialConfiguredChannelIds(config).map((channelId: string) => ({
           channelId,
-          source: "config",
+          source: "env",
         }));
       });
     useManifestRegistryFixture();
@@ -1473,6 +1479,45 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads enabled plugin tool owners before turns can enter the Gateway", () => {
+    useManifestRegistryFixture({
+      diagnostics: [],
+      plugins: [
+        withManifestLoadPaths({
+          id: "bundled-tool-owner",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["bundled_tool"] },
+        }),
+        withManifestLoadPaths({
+          id: "external-tool-owner",
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["external_tool"] },
+        }),
+      ],
+    });
+
+    expectStartupPluginIds({
+      config: createStartupConfig({ noConfiguredChannels: true, memorySlot: "none" }),
+      expected: ["bundled-tool-owner"],
+    });
+    expectStartupPluginIds({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-tool-owner"],
+        allowPluginIds: ["external-tool-owner"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-tool-owner"],
     });
   });
 
@@ -2483,6 +2528,16 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         _env: NodeJS.ProcessEnv,
         options?: { includePersistedAuthState?: boolean },
       ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
+    );
+    listPotentialConfiguredChannelPresenceSignals.mockImplementation(
+      (
+        _configForTest: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { includePersistedAuthState?: boolean },
+      ) =>
+        options?.includePersistedAuthState === false
+          ? []
+          : [{ channelId: "demo-channel", source: "persisted-auth" }],
     );
 
     expectStartupPluginIds({

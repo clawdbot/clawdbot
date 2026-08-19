@@ -220,10 +220,37 @@ describe("plugin npm runtime build planning", () => {
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
   });
 
+  it("plans the Zalo public setup API with its lazy package surface", () => {
+    const packageDir = path.join(repoRoot, "extensions", "zalo");
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir,
+      }),
+    );
+    expect(plan.entry["setup-api"]).toBe(path.join(packageDir, "setup-api.ts"));
+    expect(plan.entry["setup-surface"]).toBe(path.join(packageDir, "setup-surface.ts"));
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-surface.js");
+    expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
+    expect(plan.packageFiles).toContain("dist/**");
+  });
+
   it("keeps published Codex runtime imports resolvable from the host package", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
       packageDir: "extensions/codex",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
+
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
+
+  it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/llama-cpp",
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);

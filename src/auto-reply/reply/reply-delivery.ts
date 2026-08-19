@@ -6,7 +6,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
-import { mergeReactionDirectiveChannelData, parseReplyDirectives } from "./reply-directives.js";
+import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -51,10 +51,6 @@ export function normalizeReplyPayloadDirectives(params: {
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
   const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrls?.[0] ?? mediaUrls?.[0];
 
-  const channelData = mergeReactionDirectiveChannelData(
-    params.payload.channelData,
-    parsed?.reaction,
-  );
   return {
     payload: copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
@@ -65,7 +61,6 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
       audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
-      ...(channelData ? { channelData } : {}),
     }),
     isSilent: parsed?.isSilent ?? false,
   };

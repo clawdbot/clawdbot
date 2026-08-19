@@ -66,6 +66,7 @@ function buildTelegramTextSendReceipt(params: {
 
 export function createTelegramTextSender(config: {
   cfg: OpenClawConfig;
+  ownerAgentId: string;
   account: ResolvedTelegramAccount;
   api: TelegramApi;
   chatId: string;
@@ -97,6 +98,7 @@ export function createTelegramTextSender(config: {
 }) {
   const {
     cfg,
+    ownerAgentId,
     account,
     api,
     chatId,
@@ -226,7 +228,10 @@ export function createTelegramTextSender(config: {
         await beforeFirstAccepted?.();
       }
       sentChunkCount += 1;
-      recordSentMessage(chatId, messageId, cfg);
+      recordSentMessage(chatId, messageId, cfg, {
+        accountId: account.accountId,
+        agentId: ownerAgentId,
+      });
       await reportDelivery(
         messageId,
         params.result?.chat?.id ?? chatId,

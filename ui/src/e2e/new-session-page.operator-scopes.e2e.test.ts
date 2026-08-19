@@ -111,8 +111,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
-      await page.locator("#new-session-place-trigger").click();
-      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await page.locator("#new-session-project-trigger").click();
+      const place = page.locator("wa-popover.new-session-page__project-popover");
       await place.getByRole("searchbox").fill("openclaw");
       await gateway.waitForRequest("projects.searchRemote");
 
@@ -163,7 +163,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       const browse = page.getByRole("button", { name: "Browse folders" });
       await expect.poll(() => browse.isEnabled()).toBe(true);
@@ -180,6 +180,58 @@ suite.define(() => {
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { cwd: contained, message: "work in the package" },
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("explains when browsing outside the workspace requires admin scope", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const workspace = "/home/peter/openclaw";
+    const gateway = await installMockGateway(page, {
+      workspace,
+      workspaceGit: true,
+      featureMethods: ["chat.metadata", "chat.startup", "fs.listDir", "worktrees.branches"],
+      operatorScopes: ["operator.read", "operator.write"],
+      methodResponses: {
+        "fs.listDir": { path: workspace, home: "/home/peter", entries: [] },
+        "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator("#new-session-project-trigger").click();
+      await page.getByRole("button", { name: "Browse folders" }).click();
+      await expect(gateway.waitForRequest("fs.listDir")).resolves.toMatchObject({
+        params: { path: workspace },
+      });
+
+      const pathInput = page.locator("input.new-session-page__browser-path");
+      await expect.poll(() => pathInput.inputValue()).toBe(workspace);
+      await gateway.deferNext("fs.listDir", { path: "/tmp" });
+      await pathInput.fill("/tmp");
+      await pathInput.press("Enter");
+      await expect.poll(async () => (await gateway.getRequests("fs.listDir")).length).toBe(2);
+      expect((await gateway.getRequests("fs.listDir"))[1]?.params).toEqual({ path: "/tmp" });
+      await gateway.rejectDeferred("fs.listDir", {
+        code: "FORBIDDEN",
+        message: "Folder access was denied.",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
+
+      await expect.poll(async () => (await gateway.getRequests("fs.listDir")).length).toBe(3);
+      expect((await gateway.getRequests("fs.listDir"))[2]?.params).toEqual({});
+      await expect.poll(() => pathInput.inputValue()).toBe(workspace);
+      await pollLocatorText(
+        page.locator(".new-session-page__browser .new-session-page__error"),
+      ).toContain(
+        "To browse outside agent workspaces, request admin in the access banner, then approve in Devices.",
+      );
     } finally {
       await context.close();
     }
@@ -230,7 +282,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-project-trigger").click();
       await page.getByRole("button", { name: "Browse folders" }).click();
       await page.getByRole("button", { name: "packages" }).click();
       const useFolder = page.getByRole("button", { name: "Use this folder" });
@@ -277,7 +329,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-project-trigger").click();
       await page.getByRole("button", { name: "Browse folders" }).click();
       const pathInput = page.locator("input.new-session-page__browser-path");
       await expect.poll(() => pathInput.inputValue()).toBe(workspace);

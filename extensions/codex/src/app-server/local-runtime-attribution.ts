@@ -3,6 +3,7 @@
  * backed by OpenAI auth but should still report Codex Responses semantics.
  */
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeLowercaseStringOrEmpty as normalizeRuntimeId } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type CodexLocalRuntimeAttributionParams = Pick<
   AgentHarnessAttemptParamsV2,
@@ -18,10 +19,6 @@ type CodexLocalRuntimeAttribution = {
   provider: string;
   api?: string;
 };
-
-function normalizeRuntimeId(value: string | undefined): string {
-  return value?.trim().toLowerCase() ?? "";
-}
 
 /** Maps local Codex runtime plans onto the provider/api pair exposed to event projection. */
 export function resolveCodexLocalRuntimeAttribution(

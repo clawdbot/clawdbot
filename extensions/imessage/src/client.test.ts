@@ -113,6 +113,48 @@ describe("IMessageRpcClient child stream error handling", () => {
     await client.stop();
   });
 
+  it("preserves structured JSON-RPC error data for send callers", async () => {
+    const { IMessageRpcClient, IMessageRpcRequestError } = await import("./client.js");
+    const client = new IMessageRpcClient({ cliPath: "imsg" });
+    await client.start();
+    const data = {
+      retry_safe: true,
+      disposition: "not_started",
+      transport: "bridge_v2",
+      operation: "send-message",
+    };
+
+    const pending = client.request("send", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          error: {
+            code: -32603,
+            message: "Delivery failed before dispatch",
+            data,
+          },
+        })}\n`,
+      ),
+    );
+
+    const error = await pending.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(IMessageRpcRequestError);
+    expect(error).toMatchObject({
+      name: "IMessageRpcRequestError",
+      code: -32603,
+      data,
+      message:
+        'Delivery failed before dispatch: code=-32603 {\n  "retry_safe": true,\n  "disposition": "not_started",\n  "transport": "bridge_v2",\n  "operation": "send-message"\n}',
+    });
+
+    child.emit("close", 0, null);
+    await client.stop();
+  });
+
   it("finishes graceful shutdown without scheduling escalation after synchronous close", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const { IMessageRpcClient } = await import("./client.js");

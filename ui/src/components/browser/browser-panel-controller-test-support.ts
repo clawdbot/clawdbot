@@ -151,8 +151,22 @@ class TestBrowserImage extends EventTarget {
   }
 }
 
+class TestBrowserFileReader extends EventTarget {
+  result: string | ArrayBuffer | null = null;
+  error: DOMException | null = null;
+
+  readAsDataURL(blob: Blob): void {
+    void blob.arrayBuffer().then((buffer) => {
+      const binary = String.fromCharCode(...new Uint8Array(buffer));
+      this.result = `data:${blob.type};base64,${btoa(binary)}`;
+      this.dispatchEvent(new Event("load"));
+    });
+  }
+}
+
 export function stubScreenshotMedia(): void {
   vi.stubGlobal("Image", TestBrowserImage);
+  vi.stubGlobal("FileReader", TestBrowserFileReader);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request) => {

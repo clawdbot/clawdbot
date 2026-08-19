@@ -181,6 +181,29 @@ describe("config form array integrity", () => {
     expectElement(findAddButton(draftHost), "unique array draft commit").click();
     expect(onPatch).toHaveBeenCalledWith(["codes"], ["first"]);
 
+    // An autosave ack clones the form: identity churn with identical content
+    // must not close an open draft mid-typing.
+    expectElement(findAddButton(container), "reopened unique array add").click();
+    await draftHost.updateComplete;
+    const typedDraft = expectElement(
+      draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
+      "typed unique array draft",
+    );
+    typedDraft.value = "in-progress";
+    typedDraft.dispatchEvent(new Event("input", { bubbles: true }));
+    await draftHost.updateComplete;
+    renderSchema({
+      type: "array",
+      minItems: 2,
+      uniqueItems: true,
+      items: { type: "string" },
+    });
+    await draftHost.updateComplete;
+    const survivingDraft = draftHost.querySelector<HTMLInputElement>(
+      "[data-collection-draft-value]",
+    );
+    expect(survivingDraft?.value).toBe("in-progress");
+
     onPatch.mockClear();
     renderArrayFixture(container, {
       schema: {

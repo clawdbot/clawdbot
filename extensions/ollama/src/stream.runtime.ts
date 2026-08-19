@@ -2,6 +2,10 @@
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  parseJsonObjectPreservingUnsafeIntegers,
+  parseJsonPreservingUnsafeIntegers,
+} from "openclaw/plugin-sdk/json-unsafe-integers";
 import type {
   AssistantMessage,
   StopReason,
@@ -26,10 +30,6 @@ import {
 import { estimateStringChars, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
-import {
-  parseJsonObjectPreservingUnsafeIntegers,
-  parseJsonPreservingUnsafeIntegers,
-} from "./ollama-json.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
@@ -73,6 +73,36 @@ function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error("Request was aborted");
   }
+}
+
+async function runOllamaResponseHook(params: {
+  hook: (() => void | Promise<void>) | undefined;
+  signal: AbortSignal | undefined;
+}): Promise<void> {
+  const { hook, signal } = params;
+  if (!hook) {
+    return;
+  }
+  throwIfOllamaStreamAborted(signal);
+  if (!signal) {
+    await hook();
+    return;
+  }
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(hook),
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(new Error("Request was aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+  throwIfOllamaStreamAborted(signal);
 }
 
 function createOllamaStreamCooperativeScheduler(
@@ -1025,6 +1055,26 @@ function createRawOllamaStreamFn(
         });
 
         try {
+          const responseHook = options?.onResponse;
+          try {
+            await runOllamaResponseHook({
+              hook: responseHook
+                ? () =>
+                    responseHook(
+                      {
+                        status: response.status,
+                        headers: Object.fromEntries(response.headers.entries()),
+                      },
+                      model,
+                    )
+                : undefined,
+              signal: options?.signal,
+            });
+          } catch (error) {
+            // A pending body cancel must not stall release or the terminal error.
+            void response.body?.cancel().catch(() => undefined);
+            throw error;
+          }
           if (!response.ok) {
             const errorText = await readResponseTextLimited(
               response,

@@ -224,14 +224,14 @@ describe("doctorCommand", () => {
     });
   });
 
-  it("rejects conflicting explicit-store selectors before taking maintenance ownership", async () => {
+  it("rejects an explicit store combined with all agents before taking maintenance ownership", async () => {
     await expect(
       doctorCommand(undefined, {
         sessionSqlite: "compact",
-        sessionSqliteAgent: "ops",
+        sessionSqliteAllAgents: true,
         sessionSqliteStore: path.resolve("stores", "{agentId}", "sessions.json"),
       }),
-    ).rejects.toThrow("--store cannot be combined with --agent or --all-agents");
+    ).rejects.toThrow("--store cannot be combined with --all-agents");
 
     expect(mocks.withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
     expect(mocks.runDoctorSessionSqlite).not.toHaveBeenCalled();

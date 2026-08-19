@@ -1,6 +1,7 @@
 // Owns process-local agent run context, ownership, and projection state.
 import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
@@ -559,12 +560,20 @@ export function listAgentRunsForSession(params: {
 export type ProjectedAgentRunIndex = {
   sessionKeys: ReadonlySet<string>;
   sessionIds: ReadonlySet<string>;
+  ownerlessSessionKeys: ReadonlySet<string>;
+  ownerlessSessionIds: ReadonlySet<string>;
 };
+
+function projectedRunIdentity(agentId: string, value: string): string {
+  return `${normalizeAgentId(agentId)}\0${value}`;
+}
 
 export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
   const state = getAgentRunRegistryState();
   const sessionKeys = new Set<string>();
   const sessionIds = new Set<string>();
+  const ownerlessSessionKeys = new Set<string>();
+  const ownerlessSessionIds = new Set<string>();
   for (const context of state.contexts.values()) {
     if (
       context.projectSessionActive !== true ||
@@ -572,25 +581,48 @@ export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
     ) {
       continue;
     }
-    if (context.sessionKey !== undefined) {
-      sessionKeys.add(context.sessionKey);
+    const agentId = context.agentId ?? parseAgentSessionKey(context.sessionKey)?.agentId;
+    if (context.sessionKey !== undefined && agentId) {
+      sessionKeys.add(projectedRunIdentity(agentId, context.sessionKey));
+    } else if (context.sessionKey !== undefined) {
+      ownerlessSessionKeys.add(context.sessionKey);
     }
-    if (context.sessionId !== undefined) {
-      sessionIds.add(context.sessionId);
+    if (context.sessionId !== undefined && agentId) {
+      sessionIds.add(projectedRunIdentity(agentId, context.sessionId));
+    } else if (context.sessionId !== undefined) {
+      ownerlessSessionIds.add(context.sessionId);
     }
   }
-  return { sessionKeys, sessionIds };
+  return { sessionKeys, sessionIds, ownerlessSessionKeys, ownerlessSessionIds };
 }
 
 export function hasProjectedAgentRunForSession(params: {
   sessionKeys: readonly string[];
   sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
   index?: ProjectedAgentRunIndex;
 }): boolean {
   const index = params.index ?? buildProjectedAgentRunIndex();
+  const agentId =
+    params.agentId ??
+    params.sessionKeys.flatMap((key) => parseAgentSessionKey(key)?.agentId ?? [])[0] ??
+    params.defaultAgentId;
+  if (!agentId) {
+    return false;
+  }
+  const mayAdoptOwnerless =
+    params.defaultAgentId !== undefined &&
+    normalizeAgentId(agentId) === normalizeAgentId(params.defaultAgentId);
   return (
-    params.sessionKeys.some((sessionKey) => index.sessionKeys.has(sessionKey)) ||
-    (params.sessionId !== undefined && index.sessionIds.has(params.sessionId))
+    params.sessionKeys.some((sessionKey) =>
+      index.sessionKeys.has(projectedRunIdentity(agentId, sessionKey)),
+    ) ||
+    (mayAdoptOwnerless &&
+      params.sessionKeys.some((sessionKey) => index.ownerlessSessionKeys.has(sessionKey))) ||
+    (params.sessionId !== undefined &&
+      (index.sessionIds.has(projectedRunIdentity(agentId, params.sessionId)) ||
+        (mayAdoptOwnerless && index.ownerlessSessionIds.has(params.sessionId))))
   );
 }
 

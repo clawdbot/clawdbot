@@ -4,7 +4,10 @@ import {
   getActiveDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+} from "./current-plugin-metadata-snapshot.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -13,7 +16,7 @@ import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
@@ -261,6 +264,28 @@ export function listPluginOriginsFromMetadataSnapshot(
   return new Map(snapshot.plugins.map((record) => [record.id, record.origin]));
 }
 
+/** Rebuilds every manifest-derived snapshot fact from one authoritative registry. */
+export function rebasePluginMetadataSnapshotManifestRegistry(
+  snapshot: PluginMetadataSnapshot,
+  manifestRegistry: PluginManifestRegistry,
+): PluginMetadataSnapshot {
+  const plugins = manifestRegistry.plugins;
+  return {
+    ...snapshot,
+    manifestRegistry,
+    plugins,
+    diagnostics: manifestRegistry.diagnostics,
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: snapshot.index
+      ? createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry })
+      : snapshot.normalizePluginId,
+    owners: buildPluginMetadataOwnerMaps(plugins),
+    ...(snapshot.metrics
+      ? { metrics: { ...snapshot.metrics, manifestPluginCount: plugins.length } }
+      : {}),
+  };
+}
+
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
@@ -334,7 +359,7 @@ export function resolvePluginMetadataSnapshot(
     if (!current) {
       return loadPluginMetadataSnapshot(params);
     }
-    if (!params.index) {
+    if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
       return current;
     }
     if (

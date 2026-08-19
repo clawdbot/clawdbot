@@ -1,12 +1,13 @@
 // Telegram plugin module implements state migrations behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fileExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "./account-selection.js";
 import {
   listTelegramLegacyBotInfoCacheEntries,
@@ -71,6 +72,35 @@ function resolveAgentSessionStorePath(params: {
     env: params.env,
     agentId: params.agentId,
   });
+}
+
+function listLegacyAgentSessionStorePaths(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir?: string;
+}): string[] {
+  return uniqueStrings([
+    ...listAgentIds(params.cfg).map((agentId) =>
+      resolveAgentSessionStorePath({ ...params, agentId }),
+    ),
+    resolveAgentSessionStorePath({ ...params, agentId: "main" }),
+    resolveLegacySessionStorePath(params),
+  ]);
+}
+
+function resolveTelegramLegacyStateOwnerAgentId(cfg: OpenClawConfig): string {
+  const configuredAccountIds = listTelegramAccountIds(cfg);
+  const accountIds =
+    configuredAccountIds.length > 0 ? configuredAccountIds : [resolveDefaultTelegramAccountId(cfg)];
+  const ownerAgentIds = uniqueStrings(
+    accountIds.map((accountId) => resolveTelegramAccountOwnerAgentId({ cfg, accountId })),
+  );
+  if (ownerAgentIds.length === 1) {
+    return ownerAgentIds[0]!;
+  }
+  throw new Error(
+    `Legacy Telegram state has multiple routed owners (${ownerAgentIds.join(", ")}); preserve it until one migration owner is configured.`,
+  );
 }
 
 function resolveMigrationStateDir(params: { env: NodeJS.ProcessEnv; stateDir?: string }): string {
@@ -195,23 +225,20 @@ function detectTelegramMessageCacheLegacyStateMigration(params: {
   env: NodeJS.ProcessEnv;
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const storePath = resolveAgentSessionStorePath({
+  const persistedPaths = listLegacyAgentSessionStorePaths(params)
+    .map(resolveTelegramMessageCachePath)
+    .filter(fileExists);
+  if (persistedPaths.length === 0) {
+    return [];
+  }
+  const ownerStorePath = resolveAgentSessionStorePath({
     ...params,
-    agentId: resolveDefaultAgentId(params.cfg),
+    agentId: resolveTelegramLegacyStateOwnerAgentId(params.cfg),
   });
-  const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
-  const runtimePersistedPath = resolveTelegramMessageCachePath(storePath);
-  const legacyStorePath = resolveLegacySessionStorePath(params);
-  const legacyPersistedPath = resolveTelegramMessageCachePath(legacyStorePath);
-  const scopeKey = resolveTelegramMessageCachePersistentScopeKey(runtimePersistedPath);
-  return uniqueStrings([
-    runtimePersistedPath,
-    resolveTelegramMessageCachePath(legacyMainStorePath),
-    legacyPersistedPath,
-  ]).flatMap((persistedPath) => {
-    if (!fileExists(persistedPath)) {
-      return [];
-    }
+  const scopeKey = resolveTelegramMessageCachePersistentScopeKey(
+    resolveTelegramMessageCachePath(ownerStorePath),
+  );
+  return persistedPaths.map((persistedPath) => {
     return {
       kind: "plugin-state-import",
       label: "Telegram prompt-context message cache",
@@ -341,24 +368,22 @@ function detectTelegramSentMessageCacheLegacyStateMigration(params: {
   env: NodeJS.ProcessEnv;
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const storePath = resolveAgentSessionStorePath({ ...params, agentId: defaultAgentId });
-  const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
-  const legacyStorePath = resolveLegacySessionStorePath(params);
-  const sources = uniqueStrings([storePath, legacyMainStorePath, legacyStorePath]).map(
-    (sourceStorePath) => ({
-      targetStorePath: storePath,
-      sourcePath: `${sourceStorePath}.telegram-sent-messages.json`,
-    }),
-  );
-  return sources.flatMap((source) => {
-    if (!fileExists(source.sourcePath)) {
-      return [];
-    }
+  const sourcePaths = listLegacyAgentSessionStorePaths(params)
+    .map((storePath) => `${storePath}.telegram-sent-messages.json`)
+    .filter(fileExists);
+  if (sourcePaths.length === 0) {
+    return [];
+  }
+  const ownerAgentId = resolveTelegramLegacyStateOwnerAgentId(params.cfg);
+  const targetStorePath = resolveAgentSessionStorePath({
+    ...params,
+    agentId: ownerAgentId,
+  });
+  return sourcePaths.map((sourcePath) => {
     return {
       kind: "plugin-state-import",
       label: "Telegram sent-message cache",
-      sourcePath: source.sourcePath,
+      sourcePath,
       targetPath: `plugin state:${TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE}`,
       pluginId: "telegram",
       namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
@@ -366,13 +391,13 @@ function detectTelegramSentMessageCacheLegacyStateMigration(params: {
       scopeKey: "",
       cleanupSource: "rename",
       cleanupWhenEmpty: true,
-      preview: `- Telegram sent-message cache: ${source.sourcePath} → plugin state (${TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE})`,
+      preview: `- Telegram sent-message cache: ${sourcePath} → plugin state (${TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE})`,
       readEntries: () =>
         listTelegramLegacySentMessageCacheEntries({
           cfg: params.cfg,
-          agentId: defaultAgentId,
-          persistedPath: source.sourcePath,
-          targetStorePath: source.targetStorePath,
+          agentId: ownerAgentId,
+          persistedPath: sourcePath,
+          targetStorePath,
         }),
     };
   });
@@ -434,31 +459,48 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
     });
     return topicNameCacheImportSource({ sourceStorePath: storePath });
   });
-  const defaultStorePath = resolveAgentSessionStorePath({
-    ...params,
-    agentId: resolveDefaultAgentId(params.cfg),
-  });
-  const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
-  const defaultAccountStorePath = resolveStorePath(params.cfg.session?.store, {
-    env: params.env,
-    agentId: resolveDefaultTelegramAccountId(params.cfg),
-  });
-  const legacyStorePath = resolveLegacySessionStorePath(params);
-  const sourcesByKey = new Map(
-    [
-      ...accountSources,
-      topicNameCacheImportSource({ sourceStorePath: defaultStorePath }),
-      topicNameCacheImportSource({ sourceStorePath: legacyMainStorePath }),
-      topicNameCacheImportSource({
-        sourceStorePath: legacyStorePath,
-        targetStorePath: defaultAccountStorePath,
-      }),
-    ].map((source) => [`${source.sourcePath}\0${source.namespace}`, source] as const),
+  const agentSources = listAgentIds(params.cfg).map((agentId) =>
+    topicNameCacheImportSource({
+      sourceStorePath: resolveAgentSessionStorePath({ ...params, agentId }),
+    }),
   );
-  return [...sourcesByKey.values()].flatMap((source) => {
-    if (!fileExists(source.sourcePath)) {
-      return [];
-    }
+  const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
+  const legacyStorePath = resolveLegacySessionStorePath(params);
+  const legacySourcePath = resolveTopicNameCachePath(legacyStorePath);
+  const fixedSources = [
+    ...accountSources,
+    ...agentSources,
+    topicNameCacheImportSource({ sourceStorePath: legacyMainStorePath }),
+  ].filter((source) => fileExists(source.sourcePath));
+  if (fixedSources.length === 0 && !fileExists(legacySourcePath)) {
+    return [];
+  }
+  let legacySource: ReturnType<typeof topicNameCacheImportSource> | undefined;
+  if (fileExists(legacySourcePath)) {
+    const ownerStorePath = resolveAgentSessionStorePath({
+      ...params,
+      agentId: resolveTelegramLegacyStateOwnerAgentId(params.cfg),
+    });
+    // Pre-roster Telegram scoped this legacy cache by account id. Once an agent roster exists,
+    // routing owns the migration target just as it owns new Telegram conversations.
+    const legacyTargetStorePath =
+      params.cfg.agents?.entries !== undefined || params.cfg.agents?.list !== undefined
+        ? ownerStorePath
+        : resolveStorePath(params.cfg.session?.store, {
+            env: params.env,
+            agentId: resolveDefaultTelegramAccountId(params.cfg),
+          });
+    legacySource = topicNameCacheImportSource({
+      sourceStorePath: legacyStorePath,
+      targetStorePath: legacyTargetStorePath,
+    });
+  }
+  const sourcesByKey = new Map(
+    [...fixedSources, ...(legacySource ? [legacySource] : [])].map(
+      (source) => [`${source.sourcePath}\0${source.namespace}`, source] as const,
+    ),
+  );
+  return [...sourcesByKey.values()].map((source) => {
     return {
       kind: "plugin-state-import",
       label: "Telegram forum topic-name cache",

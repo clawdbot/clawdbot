@@ -270,7 +270,14 @@ describe("markdownToTelegramRichBlocks", () => {
     const { blocks } = markdownToTelegramRichBlocks("**start https://example.com** end");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
     expect(hasStyle(text, "bold")).toBe(true);
-    expect(collectUrls(text)).toEqual(["https://example.com"]);
+    expect(collectUrls(text)).toEqual([]);
+  });
+
+  it("leaves bare URL query separators to Telegram entity detection", () => {
+    const url = "https://example.com/wp-admin/post.php?post=100&action=edit";
+    const { blocks } = markdownToTelegramRichBlocks(url);
+
+    expect(blocks).toEqual([{ type: "paragraph", text: url }]);
   });
 
   it("emits pre blocks with fence language", () => {

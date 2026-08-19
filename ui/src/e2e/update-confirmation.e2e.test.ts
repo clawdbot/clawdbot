@@ -140,10 +140,10 @@ suite.define(() => {
         await dialog.waitFor();
 
         // The keypress that opened the dialog lands on Cancel, never on the confirm action.
-        const cancelFocused = await page.evaluate(
-          () => document.activeElement?.textContent?.trim() ?? "",
-        );
-        expect(cancelFocused).toBe("Cancel");
+        const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+        await expect
+          .poll(() => cancel.evaluate((element) => document.activeElement === element))
+          .toBe(true);
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await page.screenshot({
           animations: "disabled",

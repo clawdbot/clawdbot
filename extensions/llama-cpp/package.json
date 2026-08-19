@@ -1,14 +1,15 @@
 {
   "name": "@openclaw/llama-cpp-provider",
   "version": "2026.8.1",
-  "description": "OpenClaw llama.cpp text inference and embedding provider plugin",
+  "description": "OpenClaw managed llama.cpp server provider plugin",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
-  "optionalDependencies": {
-    "node-llama-cpp": "3.19.1"
+  "dependencies": {
+    "jszip": "3.10.1",
+    "tar": "7.5.22"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

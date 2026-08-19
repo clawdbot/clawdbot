@@ -1,4 +1,4 @@
-import type { AgentHarness } from "../agents/harness/types.js";
+import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
@@ -9,6 +9,7 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
+import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -72,13 +73,13 @@ import type {
   OpenClawPluginService,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
+  WidgetPresenter,
 } from "./plugin-registration.types.js";
 import type { UnifiedModelCatalogProviderPlugin } from "./provider-catalog.types.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 import type {
   ContextEngineFactory,
   MemoryCorpusSupplement,
-  MemoryEmbeddingProviderAdapter,
   MemoryPluginCapability,
   MemoryPromptSectionBuilder,
   MemoryPromptSectionParams,
@@ -212,6 +213,8 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a plugin-owned resolver for browser-style hosted media URLs. */
   registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;
+  /** Register a plugin-owned destination for presenting hosted widget documents. */
+  registerWidgetPresenter: (presenter: WidgetPresenter) => void;
   /** Bind a declared MCP server's transport to the trusted message requester. */ registerMcpServerConnectionResolver: (
     resolver: import("./types.mcp-connection.js").OpenClawPluginMcpServerConnectionResolver,
   ) => void;
@@ -229,6 +232,8 @@ export type OpenClawPluginApi = {
     handler: GatewayRequestHandler,
     opts?: { scope?: OperatorScope },
   ) => void;
+  /** Register a sandboxed board widget source kind owned by this plugin. */
+  registerBoardWidgetContentKind: (definition: PluginBoardWidgetContentKind) => void;
   /** Register a read-only external-session catalog with optional native adoption actions. */
   registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
@@ -309,7 +314,7 @@ export type OpenClawPluginApi = {
     provider: import("./compaction-provider.js").CompactionProvider,
   ) => void;
   /** Register an agent harness implementation. */
-  registerAgentHarness: (harness: AgentHarness) => void;
+  registerAgentHarness: (harness: AgentHarness, options?: AgentHarnessRegistrationOptions) => void;
   /**
    * Register a Codex app-server extension factory for Codex harness tool-result
    * middleware. Only bundled plugins may use this seam, and
@@ -441,13 +446,6 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
   registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
-  /**
-   * Register a memory embedding provider adapter. Multiple adapters may coexist.
-   * @deprecated New embedding providers should use `registerEmbeddingProvider`
-   * and `contracts.embeddingProviders`. This memory-specific seam is retained
-   * while existing memory providers migrate.
-   */
-  registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
