@@ -1,4 +1,5 @@
 /** Stores plugin host-hook run context, scheduler jobs, and pending event cleanup state. */
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -9,6 +10,7 @@ import {
   type PluginAgentEventSubscriptionRegistration,
   type PluginHostCleanupReason,
   type PluginJsonValue,
+  type PluginRunContextInvocationFailureStatus,
   type PluginRunContextGetParams,
   type PluginRunContextPatch,
   type PluginSessionSchedulerJobHandle,
@@ -18,6 +20,7 @@ import type { PluginRegistry } from "./registry-types.js";
 
 type PluginRunContextNamespaces = Map<string, PluginJsonValue>;
 type PluginRunContextByPlugin = Map<string, PluginRunContextNamespaces>;
+type PluginRunContextTombstones = Map<string, Map<string, Set<string>>>;
 type PluginAgentEventSubscriptionContext = Parameters<
   PluginAgentEventSubscriptionRegistration["handle"]
 >[1];
@@ -32,6 +35,7 @@ type SchedulerJobRecord = {
 
 type PluginHostRuntimeState = {
   runContextByRunId: Map<string, PluginRunContextByPlugin>;
+  consumedRunContextTombstones: PluginRunContextTombstones;
   schedulerJobsByPlugin: Map<string, Map<string, SchedulerJobRecord>>;
   nextSchedulerJobGeneration: number;
   pendingAgentEventHandlersByRunId: Map<string, Set<Promise<void>>>;
@@ -47,6 +51,7 @@ const log = createSubsystemLogger("plugins/host-hooks");
 function getPluginHostRuntimeState(): PluginHostRuntimeState {
   return resolveGlobalSingleton<PluginHostRuntimeState>(PLUGIN_HOST_RUNTIME_STATE_KEY, () => ({
     runContextByRunId: new Map(),
+    consumedRunContextTombstones: new Map(),
     schedulerJobsByPlugin: new Map(),
     nextSchedulerJobGeneration: 1,
     pendingAgentEventHandlersByRunId: new Map(),
@@ -80,7 +85,7 @@ function markPluginRunClosed(runId: string): void {
   rememberBoundedRunId(getPluginHostRuntimeState().closedRunIds, runId);
 }
 
-function isPluginRunClosed(runId: string): boolean {
+export function isPluginRunClosed(runId: string): boolean {
   return getPluginHostRuntimeState().closedRunIds.has(runId);
 }
 
@@ -168,6 +173,85 @@ function getPluginRunContextNamespaces(params: {
   return namespaces;
 }
 
+function getRunContextTombstones(
+  runId: string,
+  pluginId: string,
+  create = false,
+): Set<string> | undefined {
+  const state = getPluginHostRuntimeState();
+  let byPlugin = state.consumedRunContextTombstones.get(runId);
+  if (!byPlugin && create) {
+    byPlugin = new Map();
+    state.consumedRunContextTombstones.set(runId, byPlugin);
+  }
+  if (!byPlugin) {
+    return undefined;
+  }
+  let namespaces = byPlugin.get(pluginId);
+  if (!namespaces && create) {
+    namespaces = new Set();
+    byPlugin.set(pluginId, namespaces);
+  }
+  return namespaces;
+}
+
+function addRunContextTombstone(runId: string, pluginId: string, namespace: string): void {
+  getRunContextTombstones(runId, pluginId, true)?.add(namespace);
+}
+
+function clearRunContextTombstone(runId: string, pluginId: string, namespace: string): void {
+  const namespaces = getRunContextTombstones(runId, pluginId);
+  if (!namespaces) {
+    return;
+  }
+  namespaces.delete(namespace);
+  if (namespaces.size === 0) {
+    getPluginHostRuntimeState().consumedRunContextTombstones.get(runId)?.delete(pluginId);
+    if (getPluginHostRuntimeState().consumedRunContextTombstones.get(runId)?.size === 0) {
+      getPluginHostRuntimeState().consumedRunContextTombstones.delete(runId);
+    }
+  }
+}
+
+function clearRunContextTombstones(params: {
+  pluginId?: string;
+  runId?: string;
+  namespace?: string;
+}): void {
+  const state = getPluginHostRuntimeState();
+  const normalizedNamespace =
+    params.namespace !== undefined ? normalizeNamespace(params.namespace) : undefined;
+  const namespaceFilter =
+    normalizedNamespace !== undefined && normalizedNamespace !== ""
+      ? normalizedNamespace
+      : undefined;
+  const runIds = params.runId ? [params.runId] : [...state.consumedRunContextTombstones.keys()];
+  for (const runId of runIds) {
+    const byPlugin = state.consumedRunContextTombstones.get(runId);
+    if (!byPlugin) {
+      continue;
+    }
+    const pluginIds = params.pluginId ? [params.pluginId] : [...byPlugin.keys()];
+    for (const pluginId of pluginIds) {
+      const namespaces = byPlugin.get(pluginId);
+      if (!namespaces) {
+        continue;
+      }
+      if (namespaceFilter !== undefined) {
+        namespaces.delete(namespaceFilter);
+      } else {
+        namespaces.clear();
+      }
+      if (namespaces.size === 0) {
+        byPlugin.delete(pluginId);
+      }
+    }
+    if (byPlugin.size === 0) {
+      state.consumedRunContextTombstones.delete(runId);
+    }
+  }
+}
+
 /** Stores JSON-compatible plugin run context for one run/plugin/namespace tuple. */
 export function setPluginRunContext(params: {
   pluginId: string;
@@ -205,6 +289,7 @@ export function setPluginRunContext(params: {
     create: true,
   });
   namespaces?.set(namespace, copyJsonValue(params.patch.value));
+  clearRunContextTombstone(runId, params.pluginId, namespace);
   return true;
 }
 
@@ -223,6 +308,48 @@ export function getPluginRunContext(params: {
     pluginId: params.pluginId,
   })?.get(namespace);
   return value === undefined ? undefined : copyJsonValue(value);
+}
+
+/**
+ * Atomically compares and consumes a stored run-context namespace for one
+ * run/plugin tuple.
+ *
+ * The compare, delete, and tombstone write are all synchronous in-process
+ * mutations with no `await` between them, so JavaScript cannot interleave
+ * another invocation into the middle of the operation.
+ */
+export function compareAndConsumePluginRunContext(params: {
+  runId: string;
+  pluginId: string;
+  namespace: string;
+  expected: PluginJsonValue;
+}): { status: "OK"; value: PluginJsonValue } | { status: PluginRunContextInvocationFailureStatus } {
+  const runId = normalizeOptionalString(params.runId);
+  const namespace = normalizeNamespace(params.namespace);
+  if (!runId || !namespace) {
+    return { status: "INVALID" };
+  }
+  if (!isPluginJsonValue(params.expected)) {
+    return { status: "INVALID" };
+  }
+  if (isPluginRunClosed(runId)) {
+    return { status: "CLOSED_RUN" };
+  }
+  const tombstone = getRunContextTombstones(runId, params.pluginId);
+  if (tombstone?.has(namespace)) {
+    return { status: "CONSUMED" };
+  }
+  const namespaces = getPluginRunContextNamespaces({ runId, pluginId: params.pluginId });
+  const value = namespaces?.get(namespace);
+  if (!namespaces || value === undefined) {
+    return { status: "NOT_FOUND" };
+  }
+  if (!isDeepStrictEqual(value, params.expected)) {
+    return { status: "MISMATCH" };
+  }
+  namespaces.delete(namespace);
+  addRunContextTombstone(runId, params.pluginId, namespace);
+  return { status: "OK", value: copyJsonValue(value) };
 }
 
 export function clearPluginRunContext(params: {
@@ -272,6 +399,11 @@ export function clearPluginRunContext(params: {
   if (params.runId && !params.pluginId && namespaceFilter === undefined) {
     state.pendingAgentEventHandlersByRunId.delete(params.runId);
   }
+  clearRunContextTombstones({
+    pluginId: params.pluginId,
+    runId: params.runId,
+    namespace: params.namespace,
+  });
 }
 
 function isTerminalAgentRunEvent(event: AgentEventPayload): boolean {

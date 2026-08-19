@@ -202,6 +202,40 @@ export type PluginRunContextGetParams = {
   namespace: string;
 };
 
+/** Failure statuses returned by the invocation-bound run-context capability. */
+export type PluginRunContextInvocationFailureStatus =
+  | "CLOSED_RUN"
+  | "CONSUMED"
+  | "FORBIDDEN"
+  | "INVALID"
+  | "MISMATCH"
+  | "NOT_FOUND";
+
+/**
+ * Invocation-bound run-context capability handed to plugin hook/tool callbacks
+ * for the duration of a single host invocation.
+ *
+ * Identity is host-owned: the host constructs the capability from the current
+ * run id and owning plugin id, and the public API accepts neither `runId` nor
+ * `pluginId` from plugin code. `compareAndConsume` provides exactly-once,
+ * atomically-compared consumption of a stored namespace.
+ */
+export type PluginRunContextInvocation = {
+  set(
+    namespace: string,
+    value: PluginJsonValue,
+  ): { status: "OK" } | { status: "CLOSED_RUN" | "FORBIDDEN" | "INVALID" };
+  get(
+    namespace: string,
+  ):
+    | { status: "OK"; value: PluginJsonValue }
+    | { status: "CLOSED_RUN" | "FORBIDDEN" | "INVALID" | "NOT_FOUND" };
+  compareAndConsume(
+    namespace: string,
+    expected: PluginJsonValue,
+  ): { status: "OK"; value: PluginJsonValue } | { status: PluginRunContextInvocationFailureStatus };
+};
+
 export type PluginSessionSchedulerJobRegistration = {
   id: string;
   sessionKey: string;

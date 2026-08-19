@@ -42,6 +42,7 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
 } from "./host-hook-turn-types.js";
+import type { PluginRunContextInvocation } from "./host-hooks.js";
 
 export type {
   PluginHookBeforeModelResolveAttachment,
@@ -661,6 +662,11 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  /**
+   * Invocation-bound run-context capability valid only for the duration of the
+   * current hook callback. Identity is host-owned (current run + owning plugin).
+   */
+  runContext?: PluginRunContextInvocation;
   /** Aborts when the owning tool call is cancelled. Hook timeout expiry does not abort this signal. */
   abortSignal?: AbortSignal;
   trace?: DiagnosticTraceContext;
