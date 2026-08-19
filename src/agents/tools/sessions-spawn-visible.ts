@@ -9,7 +9,6 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
@@ -43,13 +42,13 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent sidebar UI session; use for work the user will watch or return to, or when they ask for a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     }),
   ),
   category: Type.Optional(
     Type.String({
       description:
-        "Sidebar category for a visible session. Omit to inherit the parent category; empty string creates an ungrouped session.",
+        "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -232,17 +231,7 @@ export async function maybeSpawnVisibleSession(params: {
     sessionKey: requesterKey,
     agentId: params.options?.requesterAgentIdOverride,
   });
-  const category = categoryProvided
-    ? normalizeOptionalString(requestedCategory)
-    : normalizeOptionalString(
-        loadSessionEntry({
-          agentId: requesterAgentId,
-          sessionKey: requesterKey,
-          storePath: resolveSessionStorePathCore(cfg.session?.store, {
-            agentId: requesterAgentId,
-          }),
-        })?.category,
-      );
+  const category = normalizeOptionalString(requestedCategory);
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??

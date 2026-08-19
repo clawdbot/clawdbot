@@ -28,6 +28,7 @@ describe("sessions tool sidebar settings", () => {
       category: "",
       attention: "clear",
     });
+    await tool.execute("clear-null", { action: "patch", category: null });
 
     expect(callGateway.mock.calls).toEqual([
       [
@@ -55,6 +56,15 @@ describe("sessions tool sidebar settings", () => {
             icon: null,
             category: null,
             attention: null,
+          },
+        },
+      ],
+      [
+        {
+          method: "sessions.patch",
+          params: {
+            key: "agent:main:main",
+            category: null,
           },
         },
       ],

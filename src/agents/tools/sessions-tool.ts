@@ -114,9 +114,9 @@ const SessionsToolSchema = Type.Object(
       }),
     ),
     category: Type.Optional(
-      Type.String({
+      Type.Union([Type.String(), Type.Null()], {
         description:
-          "Sidebar category membership. Empty string clears it. This assigns one session; group_set only replaces the ordered category catalog.",
+          "Sidebar category membership. Null or an empty string clears it. This assigns one session; group_set only replaces the ordered category catalog.",
       }),
     ),
     statusNote: Type.Optional(

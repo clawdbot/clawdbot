@@ -165,7 +165,7 @@ describe("sessions tool", () => {
           ),
         },
         category: {
-          type: "string",
+          anyOf: [{ type: "string" }, { type: "null" }],
           description: expect.stringContaining("This assigns one session"),
         },
         statusNote: { type: "string", maxLength: 120 },
@@ -1022,6 +1022,7 @@ describe("sessions tool", () => {
       tool.execute("patch-other", {
         action: "patch",
         sessionKey: "agent:main:other",
+        category: "Private",
         expectedSessionId: "other-session",
         archived: true,
       }),
