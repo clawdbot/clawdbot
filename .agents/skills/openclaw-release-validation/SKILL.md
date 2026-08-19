@@ -85,8 +85,20 @@ format above, then read its body and use the worksheet between
 `<!-- validation-worksheet:end -->`. Keep its release priorities and template
 unchanged. Those exact bytes are the canonical campaign template for this run.
 
-In **Initialize campaign**, reuse the current issue unchanged when it already
-exists. When it does not exist, generate it:
+In **Initialize campaign**, first ensure the repository has a
+`release-validation` label. Check for the exact label with
+`gh label list --search release-validation --json name`; create it only when
+absent with `gh label create release-validation --color 0E8A16 --description
+"OpenClaw release-validation campaign"`. Do not use `--force` or alter an
+existing label. Apply `release-validation` with `gh issue edit <number>
+--add-label release-validation` to the canonical issue whether it is reused or
+newly created, then verify the label through `gh issue view <number> --json
+labels`. This makes active campaigns discoverable with `gh issue list --state
+open --label release-validation` while the exact hidden marker remains the
+canonical matching rule.
+
+Reuse the current issue's body unchanged when it already exists. When it does
+not exist, generate it:
 
 1. Read the GitHub release notes for the exact tag. If they are empty or
    incomplete, also read that tag's section of `CHANGELOG.md`.
@@ -158,11 +170,11 @@ exists. When it does not exist, generate it:
    priority reflects release change volume, size, impact, upgrade risk, and
    maturity expectations. Remove the campaign-creator comment and ensure no
    template placeholder remains except `{{TEST_ENV}}` inside OCM commands.
-8. Create the issue with the stable marker, a short participation note, and the
-   completed worksheet verbatim between the worksheet markers. Read it back and
-   require the marker contents to equal the rendered worksheet before treating
-   campaign initialization as complete. Re-query open issues for the marker
-   after creation and fail on duplicates.
+8. Create the issue with the stable marker, a short participation note, the
+   `release-validation` label, and the completed worksheet verbatim between the
+   worksheet markers. Read it back and require the marker contents to equal the
+   rendered worksheet before treating campaign initialization as complete.
+   Re-query open issues for the marker after creation and fail on duplicates.
 
 After the current issue exists, find open campaign issues whose marker names a
 release published before the current candidate. Comment on each with the current
