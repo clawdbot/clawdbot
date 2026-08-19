@@ -145,11 +145,18 @@ current in-memory run state:
    rows with the returned `messages` projection.
 3. If `inFlightRun` is present, adopt its `runId`, buffered `text`, and optional
    `plan`. Adopt the run even when `text` is empty.
-4. Read `sessionInfo.hasActiveRun` and `sessionInfo.activeRunIds`. Prefer exact
-   membership in `activeRunIds` when deciding whether a retained run still owns
-   the streaming UI. A true `hasActiveRun` with no listed ID can represent another
-   active runtime projection.
-5. Reconcile subsequent `agent` events by `payload.runId` and `payload.seq`.
+4. Treat `sessionInfo.hasActiveRun` as aggregate direct-session activity.
+   `activeRunIds`, when present, contains known exact active run identities and
+   can be empty while aggregate activity is still true. Omission means the field
+   was not projected and provides no identity information. In incremental merge
+   events, replace the cached list when the field is present; an empty array is
+   the tombstone that clears prior exact identities. Correlate only a run ID the
+   client owns locally or received from a request, history response, or event,
+   and never select the first list entry as an owner.
+5. Show an observer headline or run-inspector link only when the observer digest's
+   exact `runId` is present in `activeRunIds`. Aggregate activity alone does not
+   make a retained digest current.
+6. Reconcile subsequent `agent` events by `payload.runId` and `payload.seq`.
    Maintain the highest accepted sequence independently for each run, ignore an
    already-seen or lower sequence, and treat a forward gap as a reason to reload
    authoritative history.

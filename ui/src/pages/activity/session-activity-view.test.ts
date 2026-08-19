@@ -212,7 +212,11 @@ describe("session activity live status", () => {
       renderSessionActivityView(
         props({
           rows: [
-            row("Active session", owner, now, { hasActiveRun: true, observerDigest }),
+            row("Active session", owner, now, {
+              activeRunIds: ["fake-run"],
+              hasActiveRun: true,
+              observerDigest,
+            }),
             row("Inactive session", owner, now - 1_000, {
               observerDigest,
               status: "running",
@@ -237,7 +241,7 @@ describe("session activity live status", () => {
     expect(inactive?.querySelector(".activity-feed__session-headline")).toBeNull();
   });
 
-  it("links active rows to their recorded run ids", () => {
+  it("shows and links only observer digests with exact active-run membership", () => {
     const now = Date.now();
     const owner = { id: "owner", label: "Owner" };
     const base = props();
@@ -289,10 +293,21 @@ describe("session activity live status", () => {
       [...container.querySelectorAll<HTMLAnchorElement>(".activity-feed__inspect-run")].map(
         (link) => link.getAttribute("href"),
       ),
-    ).toEqual([
-      "/control/activity?view=run&run=digest%20run%3Aa%2Fb",
-      "/control/activity?view=run&run=current-run",
-      "/control/activity?view=run&run=fallback%20run%3Aa%2Fb",
-    ]);
+    ).toEqual(["/control/activity?view=run&run=digest%20run%3Aa%2Fb"]);
+    expect(
+      container
+        .querySelector('[data-activity-session="Digest run"] .activity-feed__session-headline')
+        ?.textContent?.trim(),
+    ).toBe("Running");
+    expect(
+      container.querySelector(
+        '[data-activity-session="Stale digest"] .activity-feed__session-headline',
+      ),
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '[data-activity-session="Active run fallback"] .activity-feed__session-headline',
+      ),
+    ).toBeNull();
   });
 });

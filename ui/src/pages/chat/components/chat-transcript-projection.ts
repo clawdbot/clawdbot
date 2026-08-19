@@ -208,7 +208,7 @@ export function projectChatTranscript(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
+    runId: props.runId ?? null,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,

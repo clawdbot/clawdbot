@@ -250,17 +250,12 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
   const owner = sessionActivityOwner(row);
   const ownerName = presenceViewerLabel(owner);
   const activityAt = sessionActivityTimestamp(row);
-  const headline = row.hasActiveRun === true ? row.observerDigest?.headline.trim() : "";
-  // The observer digest can outlive the run it described (restart/overlap), so its
-  // runId may reference an obsolete audit record; trust it only when it is still an
-  // active run, otherwise fall back to the row's own active-run list.
   const digestRunId = row.observerDigest?.runId;
-  const activeRunId =
-    row.hasActiveRun === true
-      ? digestRunId && row.activeRunIds?.includes(digestRunId)
-        ? digestRunId
-        : row.activeRunIds?.[0]
+  const activeObserverRunId =
+    row.hasActiveRun === true && digestRunId && row.activeRunIds?.includes(digestRunId)
+      ? digestRunId
       : undefined;
+  const headline = activeObserverRunId ? row.observerDigest?.headline.trim() : "";
   const scope = row.channel
     ? t("activityFeed.channelLabel", { value: row.channel })
     : row.agentId
@@ -307,10 +302,10 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
           : nothing}
       </span>
     </a>
-    ${activeRunId
+    ${activeObserverRunId
       ? html`<a
           class="activity-feed__inspect-run"
-          href=${activityRunInspectorHref(activeRunId, context.basePath)}
+          href=${activityRunInspectorHref(activeObserverRunId, context.basePath)}
           >${t("activityFeed.inspectRun")}</a
         >`
       : nothing}
