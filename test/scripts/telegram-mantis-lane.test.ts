@@ -1,0 +1,325 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs";
+import net from "node:net";
+import path from "node:path";
+import { promisify } from "node:util";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const execFileAsync = promisify(execFile);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const laneScript = path.resolve("scripts/e2e/telegram-mantis-lane.ts");
+
+function writeJson(file: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value)}\n`);
+}
+
+async function setupHarness(options: { failEvents?: boolean; userOnlyEvents?: boolean } = {}) {
+  const root = tempDirs.make("telegram-mantis-lane-");
+  const outputRoot = path.join(root, "public");
+  const sessionRoot = path.join(root, "private");
+  const credentialFile = path.join(root, "credential.json");
+  const observerSocket = path.join(root, "observer.sock");
+  fs.mkdirSync(outputRoot);
+  fs.mkdirSync(sessionRoot);
+  writeJson(credentialFile, {
+    groupId: "-100123456789",
+    sutToken: "123456:secret-sut-token",
+    testerUserId: "77",
+  });
+  writeJson(path.join(root, "mock-response.json"), { chunkDelayMs: 0, text: "initial" });
+  writeJson(path.join(sessionRoot, "candidate.active.json"), {
+    attempt: 1,
+    config: { mockResponse: "visible result" },
+    invocations: [{ args: {}, at: "2026-08-19T12:00:00.000Z", command: "start", cursor: 0 }],
+    lane: "candidate",
+    lastCursor: 0,
+    observeSeconds: 0,
+    observerJournal: path.join(root, "events.ndjson"),
+    observerLog: path.join(root, "observer.log"),
+    observerPidFile: path.join(root, "observer.pid.json"),
+    observerSocket,
+    privateDir: path.join(root, "attempt"),
+    recorderSession: path.join(root, "attempt", "recorder.json"),
+    repoRoot: "/prepared/candidate",
+    sendCount: 0,
+    startedAt: new Date().toISOString(),
+    sut: {
+      containerName: "openclaw-telegram-sut-test",
+      gatewayLog: path.join(root, "gateway.log"),
+      mockLog: path.join(root, "mock.log"),
+      mockResponseControl: path.join(root, "mock-response.json"),
+      requestLog: path.join(root, "requests.ndjson"),
+      sutAttestation: { lane: "candidate", sha: "a".repeat(40) },
+      tempRoot: path.join(root, "sut"),
+    },
+  });
+  const requests: Record<string, unknown>[] = [];
+  let cursor = 0;
+  const server = net.createServer((socket) => {
+    let input = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      input += chunk;
+    });
+    socket.on("end", () => {
+      const request = JSON.parse(input) as Record<string, unknown>;
+      requests.push(request);
+      if (request.command === "send") {
+        cursor += 1;
+        socket.end(
+          `${JSON.stringify({ ok: true, cursor, sent: { actor: "user", kind: "message", messageId: "101", text: request.text } })}\n`,
+        );
+      } else if (options.failEvents) {
+        socket.end(`${JSON.stringify({ ok: false, error: "observer failed after send" })}\n`);
+      } else {
+        cursor += 2;
+        socket.end(
+          `${JSON.stringify({
+            ok: true,
+            cursor,
+            events: options.userOnlyEvents
+              ? [{ actor: "user", kind: "message", messageId: "101", seq: cursor, text: "sent" }]
+              : [
+                  {
+                    actor: "bot",
+                    kind: "message",
+                    messageId: "102",
+                    seq: cursor - 1,
+                    text: "draft",
+                  },
+                  { actor: "bot", kind: "edit", messageId: "102", seq: cursor, text: "final" },
+                ],
+          })}\n`,
+        );
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(observerSocket, resolve);
+  });
+  return {
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      }),
+    env: {
+      ...process.env,
+      OPENCLAW_MANTIS_CREDENTIAL_FILE: credentialFile,
+      OPENCLAW_MANTIS_OUTPUT_ROOT: outputRoot,
+      OPENCLAW_MANTIS_SESSION_ROOT: sessionRoot,
+    },
+    outputRoot,
+    requests,
+    sessionRoot,
+  };
+}
+
+async function runLane(env: NodeJS.ProcessEnv, args: string[]) {
+  return await execFileAsync(process.execPath, ["--import", "tsx", laneScript, ...args], {
+    cwd: process.cwd(),
+    env,
+  });
+}
+
+describe("Telegram Mantis free-form lane", () => {
+  it("lets the agent compose sends and continuous event observations", async () => {
+    const harness = await setupHarness();
+    try {
+      const result = await runLane(harness.env, [
+        "turn",
+        "--lane",
+        "candidate",
+        "--text",
+        "show progress",
+        "--observe-seconds",
+        "2",
+      ]);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        observed: {
+          events: [
+            { actor: "bot", kind: "message", text: "draft" },
+            { actor: "bot", kind: "edit", text: "final" },
+          ],
+        },
+        sent: { sent: { actor: "user", messageId: "101" } },
+      });
+      expect(harness.requests).toEqual([
+        { command: "send", text: "show progress" },
+        { command: "events", seconds: 2, since: 1 },
+      ]);
+      const state = JSON.parse(
+        fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
+      );
+      expect(state).toMatchObject({ lastCursor: 3, observeSeconds: 2, sendCount: 1 });
+      expect(state.invocations.map((entry: { command: string }) => entry.command)).toEqual([
+        "start",
+        "send",
+        "observe",
+      ]);
+      expect(result.stdout).not.toContain("secret-sut-token");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("keeps file inputs inside the public scenario directory", async () => {
+    const harness = await setupHarness();
+    const outside = path.join(path.dirname(harness.outputRoot), "outside.txt");
+    fs.writeFileSync(outside, "not allowed");
+    try {
+      await expect(
+        runLane(harness.env, ["send", "--lane", "candidate", "--text-file", outside]),
+      ).rejects.toThrow("--text-file must be inside the Mantis output directory");
+      expect(harness.requests).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("updates provider behavior through a private data file", async () => {
+    const harness = await setupHarness();
+    const responseFile = path.join(harness.outputRoot, "response.txt");
+    fs.writeFileSync(responseFile, "stream this response");
+    try {
+      const result = await runLane(harness.env, [
+        "mock",
+        "--lane",
+        "candidate",
+        "--response-file",
+        responseFile,
+        "--chunk-delay-ms",
+        "250",
+      ]);
+      expect(JSON.parse(result.stdout)).toMatchObject({ bytes: 20, chunkDelayMs: 250 });
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(path.dirname(harness.outputRoot), "mock-response.json"),
+            "utf8",
+          ),
+        ),
+      ).toEqual({
+        chunkDelayMs: 250,
+        text: "stream this response",
+      });
+      expect(harness.requests).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("serializes commands across both lanes on the shared user session", async () => {
+    const harness = await setupHarness();
+    fs.writeFileSync(path.join(harness.sessionRoot, "harness.lock"), `${process.pid}\n`);
+    try {
+      await expect(runLane(harness.env, ["status", "--lane", "candidate"])).rejects.toThrow(
+        "shared Telegram harness already has a command in progress",
+      );
+      expect(harness.requests).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("rejects scenario flags that would otherwise be silently ignored", async () => {
+    const harness = await setupHarness();
+    try {
+      await expect(
+        runLane(harness.env, [
+          "turn",
+          "--lane",
+          "candidate",
+          "--text",
+          "hello",
+          "--observe-second",
+          "2",
+        ]),
+      ).rejects.toThrow("turn does not accept --observe-second");
+      expect(harness.requests).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("refuses to focus stale chat history outside the live proof timeline", async () => {
+    const harness = await setupHarness();
+    try {
+      await expect(
+        runLane(harness.env, ["view", "--lane", "candidate", "--message-id", "999"]),
+      ).rejects.toThrow("Message 999 was not emitted by the SUT bot in this proof session");
+      expect(harness.requests).toEqual([{ command: "events", seconds: 0, since: 0 }]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("does not accept the user's outbound message as SUT evidence", async () => {
+    const harness = await setupHarness({ userOnlyEvents: true });
+    try {
+      await expect(
+        runLane(harness.env, ["view", "--lane", "candidate", "--message-id", "101"]),
+      ).rejects.toThrow("Message 101 was not emitted by the SUT bot in this proof session");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("recovers a startup interrupted before any service launched", async () => {
+    const harness = await setupHarness();
+    const active = path.join(harness.sessionRoot, "candidate.active.json");
+    const starting = path.join(harness.sessionRoot, "candidate.starting.json");
+    fs.rmSync(active);
+    writeJson(starting, {
+      attempt: 1,
+      lane: "candidate",
+      observerPidFile: path.join(harness.sessionRoot, "observer.pid.json"),
+      observerRequested: false,
+      observerSocket: path.join(harness.sessionRoot, "observer.sock"),
+      privateDir: harness.sessionRoot,
+      recorderRequested: false,
+      recorderSession: path.join(harness.sessionRoot, "recorder.json"),
+      repoRoot: "/prepared/candidate",
+      startedAt: new Date().toISOString(),
+    });
+    try {
+      const result = await runLane(harness.env, ["abort", "--lane", "candidate"]);
+      expect(JSON.parse(result.stdout)).toMatchObject({ status: "aborted-startup" });
+      expect(fs.existsSync(starting)).toBe(false);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("records a real turn send even when its observation fails", async () => {
+    const harness = await setupHarness({ failEvents: true });
+    try {
+      await expect(
+        runLane(harness.env, [
+          "turn",
+          "--lane",
+          "candidate",
+          "--text",
+          "persist this send",
+          "--observe-seconds",
+          "1",
+        ]),
+      ).rejects.toThrow("observer failed after send");
+      const state = JSON.parse(
+        fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
+      );
+      expect(state.sendCount).toBe(1);
+      expect(state.invocations.at(-1)).toMatchObject({ command: "send" });
+    } finally {
+      await harness.close();
+    }
+  });
+});

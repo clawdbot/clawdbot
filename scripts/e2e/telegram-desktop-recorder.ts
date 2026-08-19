@@ -26,6 +26,8 @@ import {
 import {
   parseRecorderArgs,
   readRecorderSession,
+  type ArtifactsOptions,
+  type RecoverOptions,
   recorderUsageText,
   TELEGRAM_DESKTOP_AWS_IMAGE,
   TELEGRAM_DESKTOP_DOCKER_IMAGE,
@@ -69,6 +71,31 @@ const confirmedQrSchema = z.object({
     isPasswordPending: z.boolean().nullish(),
   }),
 });
+
+const recorderStartupSchema = z.object({
+  desktopSessionId: z.string().min(1).optional(),
+  leaseId: z.string().min(1).optional(),
+  leaseOwned: z.boolean(),
+  provider: z.enum(["aws", "docker"]),
+  schemaVersion: z.literal(1),
+  userDriver: z.array(z.string()).min(1),
+});
+type RecorderStartup = z.infer<typeof recorderStartupSchema>;
+
+function recorderStartupPath(sessionPath: string): string {
+  return `${sessionPath}.starting`;
+}
+
+function writeRecorderStartup(file: string, startup: RecorderStartup, exclusive = false): void {
+  const parsed = recorderStartupSchema.parse(startup);
+  if (exclusive) {
+    fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    return;
+  }
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+}
 
 export type RecorderOperations = {
   createCroppedMotionPreview: typeof createCroppedMotionPreview;
@@ -416,9 +443,21 @@ export async function startRecorder(
   const outputDir = resolveOutputDir(cwd, opts.outputDir);
   fs.mkdirSync(outputDir, { recursive: true });
   assertOutputDirWritable(outputDir);
+  const sessionPath = path.join(outputDir, "recorder.json");
+  const startupPath = recorderStartupPath(sessionPath);
   let leaseId = opts.leaseId;
   const leaseOwned = !opts.leaseId;
   let desktopSessionId: string | undefined;
+  const startup: RecorderStartup = {
+    leaseId,
+    leaseOwned,
+    provider: opts.provider,
+    schemaVersion: 1,
+    userDriver: opts.userDriver,
+  };
+  // Provisioning crosses process and provider boundaries. Persist each acquired
+  // handle so a later workflow step can reclaim it after cancellation or SIGKILL.
+  writeRecorderStartup(startupPath, startup, true);
   try {
     if (!leaseId) {
       if (opts.provider === "docker") {
@@ -444,6 +483,8 @@ export async function startRecorder(
       if (!leaseId) {
         throw new Error("Crabbox warmup did not print a lease id.");
       }
+      startup.leaseId = leaseId;
+      writeRecorderStartup(startupPath, startup);
     }
     const inspect = await operations.inspectCrabbox({
       crabboxBin,
@@ -471,6 +512,8 @@ export async function startRecorder(
       outputDir,
       userDriver: opts.userDriver,
     });
+    startup.desktopSessionId = desktopSessionId;
+    writeRecorderStartup(startupPath, startup);
     // Always open the target chat before recording: at the recorder's width Telegram shows
     // either the chat list or one conversation, and the list is the QA account's own.
     await operations.sshRun({
@@ -524,31 +567,122 @@ export async function startRecorder(
             imageSource: TELEGRAM_DESKTOP_AWS_IMAGE,
             provider: opts.provider,
           };
-    const sessionPath = path.join(outputDir, "recorder.json");
     writeRecorderSession(sessionPath, session);
+    fs.rmSync(startupPath);
     return { session, sessionPath };
   } catch (error) {
     const cleanupErrors: string[] = [];
     if (desktopSessionId) {
-      await terminateDesktopSession({
-        cwd,
-        desktopSessionId,
-        run: operations.runCommand,
-        userDriver: opts.userDriver,
-      }).catch((cleanupError: unknown) => cleanupErrors.push(coerceErrorMessage(cleanupError)));
+      try {
+        await terminateDesktopSession({
+          cwd,
+          desktopSessionId,
+          run: operations.runCommand,
+          userDriver: opts.userDriver,
+        });
+        startup.desktopSessionId = undefined;
+        writeRecorderStartup(startupPath, startup);
+      } catch (cleanupError) {
+        cleanupErrors.push(coerceErrorMessage(cleanupError));
+      }
     }
     if (leaseId && leaseOwned) {
-      await stopBox({
-        crabboxBin,
-        cwd,
-        leaseId,
-        provider: opts.provider,
-        run: operations.runCommand,
-      }).catch((cleanupError: unknown) => cleanupErrors.push(coerceErrorMessage(cleanupError)));
+      try {
+        await stopBox({
+          crabboxBin,
+          cwd,
+          leaseId,
+          provider: opts.provider,
+          run: operations.runCommand,
+        });
+        startup.leaseId = undefined;
+        writeRecorderStartup(startupPath, startup);
+      } catch (cleanupError) {
+        cleanupErrors.push(coerceErrorMessage(cleanupError));
+      }
+    }
+    if (cleanupErrors.length === 0) {
+      fs.rmSync(startupPath, { force: true });
     }
     const suffix = cleanupErrors.length ? ` Cleanup also failed: ${cleanupErrors.join("; ")}` : "";
     throw new Error(`${coerceErrorMessage(error)}${suffix}`, { cause: error });
   }
+}
+
+export async function recoverRecorderStartup(
+  cwd: string,
+  opts: RecoverOptions,
+  operations: Pick<RecorderOperations, "runCommand"> = defaultOperations,
+): Promise<{ recovered: boolean }> {
+  const startupPath = recorderStartupPath(path.resolve(cwd, opts.sessionPath));
+  if (!fs.existsSync(startupPath)) {
+    return { recovered: false };
+  }
+  const metadata = fs.lstatSync(startupPath);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    throw new Error("Recorder startup state is not a regular file.");
+  }
+  const startup = recorderStartupSchema.parse(JSON.parse(fs.readFileSync(startupPath, "utf8")));
+  const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
+  const errors: string[] = [];
+  if (startup.desktopSessionId) {
+    try {
+      await terminateDesktopSession({
+        cwd,
+        desktopSessionId: startup.desktopSessionId,
+        run: operations.runCommand,
+        userDriver: startup.userDriver,
+      });
+      startup.desktopSessionId = undefined;
+      writeRecorderStartup(startupPath, startup);
+    } catch (error) {
+      errors.push(`terminate Telegram Desktop session: ${coerceErrorMessage(error)}`);
+    }
+  }
+  if (startup.leaseId && startup.leaseOwned) {
+    try {
+      await stopBox({
+        crabboxBin,
+        cwd,
+        leaseId: startup.leaseId,
+        provider: startup.provider,
+        run: operations.runCommand,
+      });
+      startup.leaseId = undefined;
+      writeRecorderStartup(startupPath, startup);
+    } catch (error) {
+      errors.push(`stop Crabbox: ${coerceErrorMessage(error)}`);
+    }
+  }
+  if (errors.length) {
+    throw new Error(`Recorder startup recovery completed with errors:\n${errors.join("\n")}`);
+  }
+  fs.rmSync(startupPath);
+  return { recovered: true };
+}
+
+export function recorderArtifacts(
+  cwd: string,
+  opts: ArtifactsOptions,
+): { artifacts: Record<string, string> } {
+  const sessionPath = path.resolve(cwd, opts.sessionPath);
+  const outputDir = path.dirname(sessionPath);
+  const session = readRecorderSession(sessionPath);
+  const artifacts: Record<string, string> = {};
+  for (const [name, file] of Object.entries(session.artifacts ?? {})) {
+    const resolved = path.resolve(file);
+    const relative = path.relative(outputDir, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`Recorder artifact ${name} is outside its session directory.`);
+    }
+    const metadata = fs.lstatSync(resolved);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`Recorder artifact ${name} is not a regular file.`);
+    }
+    fs.chmodSync(resolved, metadata.mode | 0o040);
+    artifacts[name] = resolved;
+  }
+  return { artifacts };
 }
 
 async function sessionInspect(params: {
@@ -822,6 +956,14 @@ async function main(): Promise<void> {
         ? JSON.stringify(result.session, null, 2)
         : `Recorder started: ${path.relative(cwd, result.sessionPath)}`,
     );
+    return;
+  }
+  if (opts.command === "artifacts") {
+    console.log(JSON.stringify(recorderArtifacts(cwd, opts), null, 2));
+    return;
+  }
+  if (opts.command === "recover") {
+    console.log(JSON.stringify(await recoverRecorderStartup(cwd, opts), null, 2));
     return;
   }
   if (opts.command === "view") {

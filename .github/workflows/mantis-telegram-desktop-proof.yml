@@ -19,6 +19,15 @@ on:
         description: Workflow run id that owns publish_artifact_name; required with publish_artifact_name
         required: false
         type: string
+      allow_fork_candidate:
+        description: Allow this secret-bearing run for the selected fork PR head
+        required: false
+        default: false
+        type: boolean
+      approved_head_sha:
+        description: Exact fork PR head SHA approved for this secret-bearing run
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -27,9 +36,8 @@ permissions:
   pull-requests: write
 
 env:
-  # Crabbox CLI source for the local-container desktop provider. No coordinator
-  # credential reaches this build, so tracking main is the same trust as before.
-  CRABBOX_REF: main
+  # Reviewed local-container recorder dependency. Moving refs make reruns non-reproducible.
+  CRABBOX_REF: 0f0110668bd6ea5757300794662e4266aef023e4
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
@@ -106,6 +114,8 @@ jobs:
       - name: Validate refs are trusted
         id: validate
         env:
+          ALLOW_FORK_CANDIDATE: ${{ inputs.allow_fork_candidate }}
+          APPROVED_HEAD_SHA: ${{ inputs.approved_head_sha }}
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
           CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
           GH_TOKEN: ${{ github.token }}
@@ -152,7 +162,15 @@ jobs:
           fi
           candidate_trust="open-pr-head"
           if [[ "$pr_head_repo" != "$GITHUB_REPOSITORY" ]]; then
-            candidate_trust="fork-pr-head"
+            if [[ "$ALLOW_FORK_CANDIDATE" != "true" ]]; then
+              echo "Fork PR heads require explicit allow_fork_candidate approval for this secret-bearing run." >&2
+              exit 1
+            fi
+            if [[ ! "$APPROVED_HEAD_SHA" =~ ^[0-9a-f]{40}$ || "$APPROVED_HEAD_SHA" != "$candidate_revision" ]]; then
+              echo "Fork approval must name the exact current PR head SHA (${candidate_revision})." >&2
+              exit 1
+            fi
+            candidate_trust="maintainer-approved-fork-pr-head"
           fi
 
           echo "baseline_revision=${baseline_revision}" >> "$GITHUB_OUTPUT"
@@ -211,6 +229,11 @@ jobs:
           # sudo's secure_path. Resolving uv here pins it the same way node and pnpm are
           # pinned, and fails at setup instead of inside the agent 25 minutes later.
           uv_bin="$(command -v uv)"
+          recorder_user="$(id -un)"
+          sudo groupadd --system mantis-proof
+          sudo usermod -aG mantis-proof "$recorder_user"
+          sudo useradd --system --create-home --home-dir /var/lib/mantis-sut \
+            --shell /usr/sbin/nologin --gid mantis-proof mantis-sut
           "$node_bin" "$corepack_bin" pnpm --version >/dev/null
           cat >"${RUNNER_TEMP}/mantis-node" <<EOF
           #!/usr/bin/env bash
@@ -227,23 +250,22 @@ jobs:
           set -euo pipefail
           exec "$uv_bin" "\$@"
           EOF
-          cat >"${RUNNER_TEMP}/openclaw-telegram-mantis-sut" <<EOF
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-sut.ts" "\$@"
-          EOF
-          recorder_user="$(id -un)"
           cat >"${RUNNER_TEMP}/telegram-user-driver" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
-          exec /usr/local/lib/mantis-toolchain/uv run --script "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-driver.py" "\$@"
+          exec env -i \
+            HOME="${HOME}" \
+            PATH=/usr/local/lib/mantis-toolchain:/usr/local/bin:/usr/bin:/bin \
+            TELEGRAM_USER_DRIVER_STATE_DIR="/tmp/openclaw-mantis-telegram-user-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/user-driver" \
+            /usr/local/lib/mantis-toolchain/uv run --script \
+            "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-driver.py" "\$@"
           EOF
           cat >"${RUNNER_TEMP}/openclaw-telegram-user-driver" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
           # The driver chmods its own state dir to 0700, and chmod needs ownership rather
           # than ACL write, so the state has exactly one owner: ${recorder_user}. Both the
-          # agent and the recorder reach the driver through here so neither can create
+          # lane helper and recorder reach the driver through here so neither can create
           # state the other owns.
           if [ "\$(id -un)" = "${recorder_user}" ]; then
             exec /usr/local/lib/mantis-toolchain/telegram-user-driver "\$@"
@@ -253,8 +275,13 @@ jobs:
           cat >"${RUNNER_TEMP}/telegram-desktop-recorder-exec" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
-          export PATH=/usr/local/lib/mantis-toolchain:"\$PATH"
-          exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-desktop-recorder.ts" "\$@"
+          exec env -i \
+            HOME="${HOME}" \
+            OPENCLAW_TELEGRAM_USER_CRABBOX_BIN=/usr/local/bin/crabbox \
+            PATH=/usr/local/lib/mantis-toolchain:/usr/local/bin:/usr/bin:/bin \
+            TELEGRAM_USER_DRIVER_STATE_DIR="/tmp/openclaw-mantis-telegram-user-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/user-driver" \
+            /usr/local/lib/mantis-toolchain/node --import tsx \
+            "${GITHUB_WORKSPACE}/scripts/e2e/telegram-desktop-recorder.ts" "\$@"
           EOF
           cat >"${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" <<EOF
           #!/usr/bin/env bash
@@ -268,8 +295,30 @@ jobs:
           fi
           exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-desktop-recorder "\$@"
           EOF
+          cat >"${RUNNER_TEMP}/telegram-mantis-lane" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec env -i \
+            CODEX_HOME="/tmp/mantis-codex-home-${GITHUB_RUN_ID}" \
+            HOME=/var/lib/mantis-sut \
+            OPENCLAW_BUILD_PRIVATE_QA=1 \
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+            OPENCLAW_MANTIS_CREDENTIAL_FILE="/tmp/openclaw-mantis-sut-credential-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/credential.json" \
+            OPENCLAW_MANTIS_OUTPUT_ROOT="${GITHUB_WORKSPACE}/${MANTIS_OUTPUT_DIR}" \
+            OPENCLAW_MANTIS_SESSION_ROOT="/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD=/usr/local/bin/openclaw-telegram-desktop-recorder \
+            OPENCLAW_TELEGRAM_USER_DRIVER_CMD=/usr/local/bin/openclaw-telegram-user-driver \
+            PATH=/usr/local/lib/mantis-toolchain:/usr/local/bin:/usr/bin:/bin \
+            /usr/local/lib/mantis-toolchain/node --import tsx \
+            "${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-lane.ts" "\$@"
+          EOF
+          cat >"${RUNNER_TEMP}/openclaw-telegram-mantis-lane" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec sudo -n -u mantis-sut /usr/local/lib/mantis-toolchain/telegram-mantis-lane "\$@"
+          EOF
           chmod 0755 "${RUNNER_TEMP}/mantis-node" "${RUNNER_TEMP}/mantis-pnpm" "${RUNNER_TEMP}/mantis-uv"
-          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" "${RUNNER_TEMP}/openclaw-telegram-user-driver" "${RUNNER_TEMP}/telegram-desktop-recorder-exec" "${RUNNER_TEMP}/telegram-user-driver"
+          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-lane" "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" "${RUNNER_TEMP}/openclaw-telegram-user-driver" "${RUNNER_TEMP}/telegram-desktop-recorder-exec" "${RUNNER_TEMP}/telegram-mantis-lane" "${RUNNER_TEMP}/telegram-user-driver"
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           sudo install -d -m 0755 /usr/local/lib/mantis-toolchain
@@ -278,7 +327,8 @@ jobs:
           sudo install -m 0755 "${RUNNER_TEMP}/mantis-uv" /usr/local/lib/mantis-toolchain/uv
           sudo ln -s /usr/bin/ffmpeg /usr/local/lib/mantis-toolchain/ffmpeg
           sudo ln -s /usr/bin/ffprobe /usr/local/lib/mantis-toolchain/ffprobe
-          sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-sut" /usr/local/bin/openclaw-telegram-mantis-sut
+          sudo install -m 0755 "${RUNNER_TEMP}/telegram-mantis-lane" /usr/local/lib/mantis-toolchain/telegram-mantis-lane
+          sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-mantis-lane" /usr/local/bin/openclaw-telegram-mantis-lane
           sudo install -m 0755 "${RUNNER_TEMP}/telegram-desktop-recorder-exec" /usr/local/lib/mantis-toolchain/telegram-desktop-recorder
           sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-desktop-recorder" /usr/local/bin/openclaw-telegram-desktop-recorder
           sudo install -m 0755 "${RUNNER_TEMP}/telegram-user-driver" /usr/local/lib/mantis-toolchain/telegram-user-driver
@@ -298,7 +348,7 @@ jobs:
           /usr/local/lib/mantis-toolchain/uv --version
           /usr/local/lib/mantis-toolchain/ffmpeg -version >/dev/null
           /usr/local/lib/mantis-toolchain/ffprobe -version >/dev/null
-          /usr/local/bin/openclaw-telegram-mantis-sut --help >/dev/null
+          sudo -u mantis-sut /usr/local/lib/mantis-toolchain/telegram-mantis-lane --help >/dev/null
           /usr/local/bin/openclaw-telegram-desktop-recorder --help >/dev/null
 
       - name: Setup Go for Crabbox CLI
@@ -320,6 +370,7 @@ jobs:
           git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
           timeout --signal=TERM --kill-after=10s 120s git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
           git -C "$install_dir/src" checkout --detach FETCH_HEAD
+          test "$(git -C "$install_dir/src" rev-parse HEAD)" = "$CRABBOX_REF"
           go build -C "$install_dir/src" -o "$install_dir/crabbox" ./cmd/crabbox
           sudo install -m 0755 "$install_dir/crabbox" /usr/local/bin/crabbox
           crabbox --version
@@ -369,7 +420,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/mantis-baseline-build.tar
-          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v2-${{ needs.validate_refs.outputs.baseline_revision }}-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}
+          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ needs.validate_refs.outputs.baseline_revision }}-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}
 
       - name: Prepare baseline proof build
         env:
@@ -404,7 +455,7 @@ jobs:
               PATH="$toolchain_dir:/usr/bin:/bin" \
               "$toolchain_dir/pnpm" build
             mkdir -p "$(dirname "$BASELINE_BUILD_ARCHIVE")"
-            tar -cf "$BASELINE_BUILD_ARCHIVE" dist dist-runtime packages/*/dist
+            tar -cf "$BASELINE_BUILD_ARCHIVE" dist dist-runtime packages/*/dist .artifacts/build-all-cache
             find extensions -type f -path '*/src/host/*' \
               \( -name '.bundle.hash' -o -name '*.bundle.js' \) -print0 \
               | tar --append --file="$BASELINE_BUILD_ARCHIVE" --null --files-from=-
@@ -413,6 +464,21 @@ jobs:
           test -f dist/build-info.json
           test -f dist/control-ui/index.html
           test -f dist/index.js -o -f dist/index.mjs
+          build_cache_root="$BASELINE_ROOT/.artifacts/build-all-cache"
+          for phase in tsdown-ai tsdown-packages tsdown-unified; do
+            stamp="$build_cache_root/$phase/stamp.json"
+            outputs="$build_cache_root/$phase/outputs"
+            test -s "$stamp"
+            jq -e '
+              (.version | type) == "number" and
+              (.signature | type) == "string" and (.signature | length) == 64 and
+              (.outputs | type) == "array" and (.outputs | length) > 0
+            ' "$stamp" >/dev/null
+            test -d "$outputs"
+            test -n "$(find "$outputs" -type f -print -quit)"
+          done
+          test -z "$(find "$build_cache_root" -type l -print -quit)"
+          test -z "$(find "$build_cache_root" -type f -links +1 -print -quit)"
 
       - name: Save exact baseline build
         if: steps.baseline_build_cache.outputs.cache-hit != 'true'
@@ -424,6 +490,7 @@ jobs:
 
       - name: Prepare candidate proof build
         env:
+          BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-baseline-build.tar
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
           CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
         shell: bash
@@ -433,6 +500,22 @@ jobs:
           baseline_root="$worktree_root/baseline"
           candidate_root="$worktree_root/candidate"
           candidate_git_link="$(cat "$candidate_root/.git")"
+          if git -C "$baseline_root" diff --quiet "$BASELINE_SHA" "$CANDIDATE_SHA" -- \
+            scripts/build-all.mts \
+            scripts/lib \
+            scripts/pnpm-runner.mts \
+            packages/normalization-core \
+            package.json \
+            pnpm-lock.yaml \
+            pnpm-workspace.yaml \
+            tsconfig.json; then
+            tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE" \
+              .artifacts/build-all-cache
+            test -z "$(find "$candidate_root/.artifacts/build-all-cache" -type l -print -quit)"
+            echo "Seeded candidate build-all cache from the trusted baseline."
+          else
+            echo "Candidate changed the build-cache engine closure; building without the baseline seed."
+          fi
           sudo useradd --system --no-create-home --shell /usr/sbin/nologin mantis-builder
           sudo chown -R mantis-builder:mantis-builder "$candidate_root"
           sudo /usr/local/sbin/openclaw-mantis-sut-container build "$candidate_root"
@@ -443,6 +526,7 @@ jobs:
           test "$(git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Install TDLib and restore Telegram QA user
+        id: telegram_credential
         env:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -480,11 +564,29 @@ jobs:
             sleep 60
           done
           chmod 0700 "$credential_dir" "$credential_dir/user-driver"
+          sut_credential_dir="/tmp/openclaw-mantis-sut-credential-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          session_root="/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo install -d -m 0710 -o root -g mantis-proof "$sut_credential_dir"
+          jq -e '
+            {groupId, sutToken, testerUserId} |
+            select((.groupId | type) == "string" and (.groupId | length) > 0) |
+            select((.sutToken | type) == "string" and (.sutToken | length) > 0) |
+            select(.testerUserId != null)
+          ' "$credential_dir/payload.json" \
+            | sudo install -m 0400 -o mantis-sut -g mantis-proof /dev/stdin \
+                "$sut_credential_dir/credential.json"
+          rm -f "$credential_dir/payload.json"
+          sudo install -d -m 2770 -o mantis-sut -g mantis-proof "$session_root"
+          # New observer sockets inherit mantis-sut rw; the lane's readiness probe
+          # verifies the cross-UID connection before any scenario action can run.
+          sudo setfacl -m "u:$(id -un):rwx,u:mantis-sut:rwx" "$session_root"
+          sudo setfacl -d -m "u:$(id -un):rwx,u:mantis-sut:rwx" "$session_root"
           {
-            echo "OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE=$credential_dir/lease.json"
-            echo "OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD=$credential_dir/payload.json"
-            echo "TELEGRAM_USER_DRIVER_STATE_DIR=$credential_dir/user-driver"
-          } >> "$GITHUB_ENV"
+            echo "lease_file=$credential_dir/lease.json"
+            echo "state_dir=$credential_dir/user-driver"
+            echo "sut_credential_dir=$sut_credential_dir"
+            echo "session_root=$session_root"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Ensure agent key exists
         env:
@@ -505,39 +607,39 @@ jobs:
           {
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
-            printf '%s\n' 'Defaults env_keep += "GH_TOKEN GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
+            printf '%s\n' 'Defaults env_keep += "GH_TOKEN GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
             printf '%s\n' 'Defaults env_keep += "MANTIS_NODE_BIN MANTIS_PNPM_BIN"'
-            printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CREDENTIAL_OWNER_ID"'
-            printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD OPENCLAW_TELEGRAM_MANTIS_SUT_CMD OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD OPENCLAW_TELEGRAM_USER_DRIVER_CMD TELEGRAM_USER_DRIVER_STATE_DIR"'
-            printf '%s\n' 'codex ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container'
-            printf '%s\n' "codex ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-desktop-recorder"
-            printf '%s\n' "codex ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-user-driver"
+            printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_MANTIS_LANE_CMD"'
+            printf '%s\n' 'codex ALL=(mantis-sut) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-mantis-lane'
+            printf '%s\n' 'mantis-sut ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container'
+            printf '%s\n' "mantis-sut ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-desktop-recorder"
+            printf '%s\n' "mantis-sut ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-user-driver"
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
           codex_home="/tmp/mantis-codex-home-${GITHUB_RUN_ID}"
           sudo install -d -m 0770 -o codex -g codex "$codex_home"
-          sudo setfacl -m u:runner:rwx,u:codex:rwx "$codex_home"
-          sudo setfacl -d -m u:runner:rwx,u:codex:rwx "$codex_home"
+          sudo setfacl -m u:runner:rwx,u:codex:rwx,u:mantis-sut:r-x "$codex_home"
+          sudo setfacl -d -m u:runner:rwx,u:codex:rwx,u:mantis-sut:r-X "$codex_home"
           workspace_parent="$(dirname "$GITHUB_WORKSPACE")"
           while [ "$workspace_parent" != "/" ]; do
-            sudo setfacl -m u:codex:--x "$workspace_parent"
+            sudo setfacl -m u:codex:--x,u:mantis-sut:--x "$workspace_parent"
             [ "$workspace_parent" = "/home/runner" ] && break
             workspace_parent="$(dirname "$workspace_parent")"
           done
-          sudo chown -R codex:codex "$GITHUB_WORKSPACE"
-          # Both users write proof output, so it is shared. The credential dir is split
-          # instead: the agent gets traverse plus read on the payload the SUT loads, while
-          # the driver state dir stays single-owner because the driver chmods it to 0700
-          # and chmod needs ownership, not ACL write.
-          credential_dir="$(dirname "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE")"
-          sudo setfacl -m "u:codex:--x" "$credential_dir"
-          sudo setfacl -m "u:codex:r--" "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD"
-          sudo install -d -m 2770 -o codex -g codex "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
-          sudo setfacl -R -m "u:${recorder_user}:rwx,u:codex:rwx" "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
-          sudo setfacl -R -d -m "u:${recorder_user}:rwx,u:codex:rwx" "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
+          sudo install -d -m 2770 -o root -g mantis-proof "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
+          # The checkout stays runner-owned; Codex can read but cannot replace any
+          # executable/imported byte. Avoid recursively rewriting the large dependency tree.
+          unexpected_writable="$(
+            sudo -u codex find "$GITHUB_WORKSPACE" -xdev \
+              -path "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR" -prune -o \
+              -writable -print -quit
+          )"
+          test -z "$unexpected_writable"
+          sudo setfacl -R -m "u:${recorder_user}:rwx,u:codex:rwx,u:mantis-sut:rwx" "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
+          sudo setfacl -R -d -m "u:${recorder_user}:rwx,u:codex:rwx,u:mantis-sut:rwx" "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
           proof_worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo chown -R root:root "$proof_worktree_root"
-          sudo chmod -R a-w "$proof_worktree_root"
+          sudo find "$proof_worktree_root" -xdev ! -type l -perm /222 -exec chmod a-w {} +
           sudo chmod 0700 "$proof_worktree_root"
 
       - name: Run Codex Mantis Telegram agent
@@ -548,7 +650,6 @@ jobs:
           CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
           GH_TOKEN: ${{ github.token }}
-          MANTIS_CANDIDATE_TRUST: ${{ needs.validate_refs.outputs.candidate_trust }}
           MANTIS_BASELINE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/baseline
           MANTIS_CANDIDATE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/candidate
           MANTIS_INSTRUCTIONS: ${{ needs.resolve_request.outputs.instructions }}
@@ -556,14 +657,7 @@ jobs:
           MANTIS_OUTPUT_DIR: ${{ env.MANTIS_OUTPUT_DIR }}
           MANTIS_PNPM_BIN: /usr/local/lib/mantis-toolchain/pnpm
           MANTIS_PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CREDENTIAL_OWNER_ID: mantis-telegram-desktop-${{ github.run_id }}-${{ github.run_attempt }}
-          OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD: /usr/local/bin/openclaw-telegram-desktop-recorder
-          OPENCLAW_TELEGRAM_MANTIS_SUT_CMD: /usr/local/bin/openclaw-telegram-mantis-sut
-          OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD: ${{ env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD }}
-          OPENCLAW_TELEGRAM_USER_DRIVER_CMD: /usr/local/bin/openclaw-telegram-user-driver
-          TELEGRAM_USER_DRIVER_STATE_DIR: ${{ env.TELEGRAM_USER_DRIVER_STATE_DIR }}
+          OPENCLAW_TELEGRAM_MANTIS_LANE_CMD: /usr/local/bin/openclaw-telegram-mantis-lane
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md
@@ -576,6 +670,23 @@ jobs:
           codex-user: codex
           allow-bot-users: github-actions[bot]
 
+      - name: Clean up abandoned Mantis sessions
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          result=0
+          sudo pkill -TERM -u codex 2>/dev/null || true
+          for lane in baseline candidate; do
+            active="${{ steps.telegram_credential.outputs.session_root }}/${lane}.active.json"
+            starting="${{ steps.telegram_credential.outputs.session_root }}/${lane}.starting.json"
+            if sudo test -f "$active" || sudo test -f "$starting"; then
+              sudo -u mantis-sut /usr/local/lib/mantis-toolchain/telegram-mantis-lane \
+                abort --lane "$lane" || result=1
+            fi
+          done
+          exit "$result"
+
       - name: Release Telegram QA user lease
         if: ${{ always() }}
         env:
@@ -584,7 +695,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          lease_file="${OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE:-}"
+          lease_file="${{ steps.telegram_credential.outputs.lease_file }}"
           if [[ -z "$lease_file" ]] || ! sudo test -f "$lease_file"; then
             exit 0
           fi
@@ -595,42 +706,189 @@ jobs:
             "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" release \
             --lease-file "$lease_file"
 
-      - name: Validate root-owned SUT attestations
+      - name: Restore and validate trusted lane evidence
+        id: trusted_evidence
         if: ${{ always() }}
         env:
+          BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+          SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
+          SUT_CREDENTIAL_DIR: ${{ steps.telegram_credential.outputs.sut_credential_dir }}
         shell: bash
         run: |
           set -euo pipefail
           runtime_parent="$(</etc/openclaw-mantis-sut-runtime-root)"
-          manifest="$MANTIS_OUTPUT_DIR/mantis-evidence.json"
-          test -f "$manifest"
+          agent_output="$MANTIS_OUTPUT_DIR"
+          agent_manifest="$agent_output/mantis-evidence.json"
+          test -f "$agent_manifest"
+          trusted_output="$RUNNER_TEMP/mantis-trusted-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          quarantine="$RUNNER_TEMP/mantis-agent-output-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo test ! -e "$trusted_output"
+          sudo test ! -L "$trusted_output"
+          sudo test ! -e "$quarantine"
+          sudo test ! -L "$quarantine"
+          sudo install -d -m 0755 -o root -g root "$trusted_output"
+          manifest="$trusted_output/mantis-evidence.json"
+          judgment="$RUNNER_TEMP/mantis-agent-judgment.json"
+          jq -e '
+            select((.summary | type) == "string" and (.summary | length) <= 4000) |
+            select((.comparison.baseline.expected | type) == "string" and (.comparison.baseline.expected | length) <= 1000) |
+            select((.comparison.candidate.expected | type) == "string" and (.comparison.candidate.expected | length) <= 1000) |
+            select((.comparison.pass | type) == "boolean") |
+            select((.comparison.candidate.fixed | type) == "boolean") |
+            {
+              summary,
+              baselineExpected: .comparison.baseline.expected,
+              candidateExpected: .comparison.candidate.expected,
+              comparisonPass: .comparison.pass,
+              candidateFixed: .comparison.candidate.fixed
+            }
+          ' "$agent_manifest" > "$judgment"
+          baseline_status="$(jq -r '.comparison.baseline.status' "$agent_manifest")"
+          candidate_status="$(jq -r '.comparison.candidate.status' "$agent_manifest")"
+          [[ "$baseline_status" == "pass" || "$baseline_status" == "fail" ]]
+          [[ "$candidate_status" == "pass" || "$candidate_status" == "fail" ]]
           for lane in baseline candidate; do
-            lane_status="$(jq -r --arg lane "$lane" '.comparison[$lane].status' "$manifest")"
+            lane_status="$(jq -r --arg lane "$lane" '.comparison[$lane].status' "$agent_manifest")"
+            [[ "$lane_status" != "skipped" ]]
             if [[ "$lane" == "baseline" ]]; then
               expected_sha="$BASELINE_SHA"
             else
               expected_sha="$CANDIDATE_SHA"
             fi
             jq -e --arg lane "$lane" --arg sha "$expected_sha" \
-              '.comparison[$lane].sha == $sha' "$manifest" >/dev/null
-            if [[ "$lane_status" == "skipped" ]]; then
-              continue
+              '.comparison[$lane].sha == $sha' "$agent_manifest" >/dev/null
+            verdict="$SESSION_ROOT/$lane.json"
+            sudo test -f "$verdict"
+            sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
+              '.schemaVersion == 2 and
+               (.status == "complete" or .status == "blocked" or .status == "aborted" or .status == "infra-error") and
+               .lane == $lane and .sutAttestation.lane == $lane and .sutAttestation.sha == $sha and
+               (.invocations | type == "array") and (.observation.events | type == "array") and
+               (.providerRequests | type == "array") and
+               (if .status == "complete" or .status == "blocked" then (.cleanupErrors | length) == 0 else true end)' \
+              "$verdict" >/dev/null
+            fact_status="$(sudo jq -r '.status' "$verdict")"
+            if [[ "$lane_status" == "pass" ]]; then
+              [[ "$fact_status" == "complete" ]]
+            fi
+            if [[ "$fact_status" == "complete" ]]; then
+              sudo jq -e '
+                .sendCount >= 1 and (.focusMessageId | test("^[0-9]+$")) and
+                .observation.truncated == false and
+                (.focusMessageId as $focus | any(.observation.events[]; .messageId == $focus and .actor == "bot")) and
+                any(.invocations[]; .command == "send") and
+                any(.invocations[]; .command == "finish") and
+                (.artifacts.screenshot.bytes > 10000) and
+                (.artifacts.video.bytes > 10000) and
+                (.artifacts.previewGifCropped.bytes > 10000)
+              ' "$verdict" >/dev/null
             fi
             sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
               '.lane == $lane and .sha == $sha' \
               "$runtime_parent/attestations/$lane.json" >/dev/null
+            sudo mkdir -p "$trusted_output/$lane"
+            sudo install -m 0644 "$SESSION_ROOT/published/$lane/mantis-lane-facts.json" \
+              "$trusted_output/$lane/mantis-lane-facts.json"
+            for attempt_facts in "$SESSION_ROOT/published/$lane"/attempt-*-facts.json; do
+              sudo test -f "$attempt_facts" || continue
+              sudo install -m 0644 "$attempt_facts" \
+                "$trusted_output/$lane/$(basename "$attempt_facts")"
+            done
+            while IFS=$'\t' read -r artifact_name artifact_file artifact_bytes artifact_sha; do
+              [[ "$artifact_file" == "$(basename "$artifact_file")" ]]
+              source="$SESSION_ROOT/published/$lane/$artifact_file"
+              sudo test -f "$source"
+              test "$(sudo stat -c %s "$source")" = "$artifact_bytes"
+              test "$(sudo sha256sum "$source" | cut -d ' ' -f1)" = "$artifact_sha"
+              sudo install -m 0644 "$source" "$trusted_output/$lane/$artifact_file"
+            done < <(sudo jq -r '.artifacts | to_entries[] | [.key, .value.file, (.value.bytes | tostring), .value.sha256] | @tsv' "$verdict")
+            gif_file="$(sudo jq -r '.artifacts.previewGifCropped.file // .artifacts.previewGif.file // empty' "$verdict")"
+            video_file="$(sudo jq -r '.artifacts.trimmedVideoCropped.file // .artifacts.trimmedVideo.file // .artifacts.video.file // empty' "$verdict")"
+            screenshot_file="$(sudo jq -r '.artifacts.screenshot.file // empty' "$verdict")"
+            if [[ -n "$gif_file" ]]; then
+              sudo install -m 0644 "$SESSION_ROOT/published/$lane/$gif_file" \
+                "$trusted_output/$lane/telegram-desktop-proof.gif"
+            fi
+            if [[ -n "$video_file" ]]; then
+              sudo install -m 0644 "$SESSION_ROOT/published/$lane/$video_file" \
+                "$trusted_output/$lane/telegram-desktop-proof.mp4"
+            fi
+            if [[ -n "$screenshot_file" ]]; then
+              sudo install -m 0644 "$SESSION_ROOT/published/$lane/$screenshot_file" \
+                "$trusted_output/$lane/telegram-desktop-proof.png"
+            fi
+            sudo jq --arg root "$trusted_output" --arg lane "$lane" '
+              {
+                artifacts: (.artifacts | with_entries(.value = ($root + "/" + $lane + "/" + .value.file))),
+                status: (if .status == "complete" then "pass" else .status end),
+                sutAttestation
+              }
+            ' "$verdict" | sudo tee "$trusted_output/$lane/telegram-user-crabbox-session-summary.json" >/dev/null
+            sudo install -m 0644 "$trusted_output/$lane/telegram-user-crabbox-session-summary.json" \
+              "$trusted_output/$lane/summary.json"
           done
 
+          sudo env -i PATH=/usr/local/lib/mantis-toolchain:/usr/local/bin:/usr/bin:/bin \
+            /usr/local/lib/mantis-toolchain/node --import tsx \
+            "$GITHUB_WORKSPACE/scripts/mantis/build-telegram-desktop-proof-evidence.mts" \
+            --output-dir "$trusted_output" \
+            --baseline-repo-root "$GITHUB_WORKSPACE" \
+            --baseline-output-dir "$trusted_output/baseline" \
+            --baseline-ref "$BASELINE_REF" --baseline-sha "$BASELINE_SHA" \
+            --baseline-status "$baseline_status" \
+            --candidate-repo-root "$GITHUB_WORKSPACE" \
+            --candidate-output-dir "$trusted_output/candidate" \
+            --candidate-ref "$CANDIDATE_REF" --candidate-sha "$CANDIDATE_SHA" \
+            --candidate-status "$candidate_status" \
+            --scenario-label telegram-desktop-proof
+          trusted_manifest="${manifest}.trusted"
+          sudo jq --slurpfile judgment "$judgment" '
+            .summary = $judgment[0].summary |
+            .comparison.baseline.expected = $judgment[0].baselineExpected |
+            .comparison.candidate.expected = $judgment[0].candidateExpected |
+            .comparison.pass = $judgment[0].comparisonPass |
+            .comparison.candidate.fixed = $judgment[0].candidateFixed
+          ' "$manifest" | sudo tee "$trusted_manifest" >/dev/null
+          sudo mv "$trusted_manifest" "$manifest"
+
+          jq -e '
+            (.comparison.pass == false) or
+            (.comparison.baseline.status == "pass" and .comparison.candidate.status == "pass")
+          ' "$manifest" >/dev/null
+
+          token="$(sudo jq -r '.sutToken' "$SUT_CREDENTIAL_DIR/credential.json")"
+          if sudo grep -RIlF -- "$token" "$trusted_output" >/dev/null; then
+            echo "Public Mantis evidence contains the SUT credential." >&2
+            exit 1
+          fi
+          sudo mv -T "$agent_output" "$quarantine"
+          sudo mv -T "$trusted_output" "$MANTIS_OUTPUT_DIR"
+
       - name: Return proof artifacts to the runner
-        if: ${{ always() }}
+        if: ${{ always() && steps.trusted_evidence.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -d "$MANTIS_OUTPUT_DIR" ]]; then
             sudo chown -R "$(id -u):$(id -g)" "$MANTIS_OUTPUT_DIR"
           fi
+
+      - name: Remove private Mantis runtime state
+        if: ${{ always() }}
+        env:
+          SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
+          SUT_CREDENTIAL_DIR: ${{ steps.telegram_credential.outputs.sut_credential_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for private_root in "$SESSION_ROOT" "$SUT_CREDENTIAL_DIR"; do
+            [[ -n "$private_root" ]] || continue
+            [[ "$private_root" == /tmp/openclaw-mantis-*-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} ]]
+            sudo rm -rf --one-file-system "$private_root"
+          done
 
       - name: Inspect Mantis evidence manifest
         id: inspect
@@ -648,67 +906,9 @@ jobs:
           comparison_status="$(jq -r 'if .comparison.pass then "pass" else "fail" end' "$manifest")"
           echo "comparison_status=${comparison_status}" >> "$GITHUB_OUTPUT"
 
-      - name: Enforce capture evidence for capture-infrastructure changes
-        if: ${{ always() }}
-        env:
-          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          manifest="$MANTIS_OUTPUT_DIR/mantis-evidence.json"
-          if [[ ! -f "$manifest" ]] || ! jq -e '.comparison.pass == true' "$manifest" >/dev/null; then
-            exit 0
-          fi
-
-          changed_files="$(
-            gh api --paginate \
-              -H "Accept: application/vnd.github+json" \
-              "repos/${GITHUB_REPOSITORY}/compare/${BASELINE_SHA}...${CANDIDATE_SHA}?per_page=100" \
-              --jq '.files[]?.filename'
-          )"
-          capture_path_changed=false
-          while IFS= read -r changed_file; do
-            case "$changed_file" in
-              scripts/e2e/telegram-desktop-recorder.ts | \
-                scripts/e2e/telegram-mantis-sut.ts | \
-                scripts/mantis/* | \
-                .github/workflows/mantis-telegram-desktop-proof.yml | \
-                .github/codex/prompts/mantis-telegram-desktop-proof.md)
-                capture_path_changed=true
-                break
-                ;;
-            esac
-          done <<<"$changed_files"
-          if [[ "$capture_path_changed" != "true" ]]; then
-            exit 0
-          fi
-
-          # A listed artifact is the agent's claim, not evidence, and some lane entries are
-          # optional by design - so the bar is one entry that resolves to real bytes on disk.
-          min_capture_bytes=10000
-          while IFS= read -r artifact_path; do
-            [[ -n "$artifact_path" ]] || continue
-            resolved="$MANTIS_OUTPUT_DIR/$artifact_path"
-            if [[ -f "$resolved" ]] && [[ "$(stat -c %s "$resolved")" -gt "$min_capture_bytes" ]]; then
-              exit 0
-            fi
-          done < <(jq -r '.artifacts[]?.path // empty' "$manifest")
-
-          self_check="$MANTIS_OUTPUT_DIR/candidate/recorder-self-check.png"
-          if [[ -f "$self_check" ]] \
-            && [[ "$(stat -c %s "$self_check")" -gt "$min_capture_bytes" ]] \
-            && [[ "$(od -An -tx1 -N8 "$self_check" | tr -d ' \n')" == "89504e470d0a1a0a" ]]; then
-            exit 0
-          fi
-
-          echo "Mantis lane changed the capture path but produced no capture; expected a manifest artifact present on disk, or ${self_check} (PNG, >${min_capture_bytes} bytes)." >&2
-          exit 1
-
       - name: Upload Mantis Telegram desktop artifacts
         id: upload_artifact
-        if: ${{ always() && steps.inspect.outputs.output_dir != '' }}
+        if: ${{ always() && steps.trusted_evidence.outcome == 'success' && steps.inspect.outputs.output_dir != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}
@@ -733,7 +933,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Comment PR with inline QA evidence
-        if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.inspect.outputs.output_dir != '' }}
+        if: ${{ always() && steps.trusted_evidence.outcome == 'success' && needs.resolve_request.outputs.pr_number != '' && steps.inspect.outputs.output_dir != '' }}
         env:
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
           GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}

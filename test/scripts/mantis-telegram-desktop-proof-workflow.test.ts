@@ -1,15 +1,11 @@
 // Mantis Telegram Desktop Proof Workflow tests cover mantis telegram desktop proof workflow script behavior.
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const PROOF_SCRIPT = "scripts/e2e/telegram-user-crabbox-proof.ts";
 const MANTIS_SUT_SCRIPT = "scripts/e2e/telegram-mantis-sut.ts";
+const MANTIS_LANE_SCRIPT = "scripts/e2e/telegram-mantis-lane.ts";
 const DESKTOP_CRABBOX_SCRIPT = "scripts/e2e/telegram-desktop-crabbox.ts";
 const SUT_CONTAINER_WRAPPER = "scripts/mantis/mantis-sut-container.sh";
 const CREDENTIAL_SCRIPT = "scripts/e2e/telegram-user-credential.ts";
@@ -148,14 +144,17 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       (step) => step.name === "Return proof artifacts to the runner",
     );
 
-    expect(codexStep.env?.OPENCLAW_QA_CREDENTIAL_OWNER_ID).toContain(
-      "mantis-telegram-desktop-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(workflowStep("Prepare Codex user").run).toContain("OPENCLAW_QA_CREDENTIAL_OWNER_ID");
+    expect(codexStep.env?.OPENCLAW_QA_CREDENTIAL_OWNER_ID).toBeUndefined();
+    expect(codexStep.env?.OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD).toBeUndefined();
+    expect(workflowStep("Prepare Codex user").run).not.toContain("OPENCLAW_QA_CREDENTIAL_OWNER_ID");
     expect(cleanupIndex).toBeGreaterThan(steps.findIndex((step) => step.name === codexStep.name));
     expect(cleanupIndex).toBeGreaterThanOrEqual(0);
     expect(returnArtifactsIndex).toBeGreaterThan(cleanupIndex);
     expect(inspectIndex).toBeGreaterThan(returnArtifactsIndex);
+    const abandoned = workflowStep("Clean up abandoned Mantis sessions");
+    expect(abandoned.if).toBe("${{ always() }}");
+    expect(abandoned.run).toContain("sudo pkill -TERM -u codex");
+    expect(abandoned.run).toContain('abort --lane "$lane"');
 
     const cleanupStep = workflowStep("Release Telegram QA user lease");
     expect(cleanupStep.if).toBe("${{ always() }}");
@@ -166,12 +165,17 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       "secrets.OPENCLAW_QA_CONVEX_SITE_URL",
     );
     expect(cleanupStep.run).toContain("telegram-user-credential.ts");
-    expect(cleanupStep.run).toContain("OPENCLAW_TELEGRAM_USER_CREDENTIAL_LEASE");
+    expect(cleanupStep.run).toContain("steps.telegram_credential.outputs.lease_file");
     expect(cleanupStep.run).toContain("sudo env");
     expect(cleanupStep.run).toContain("/usr/local/lib/mantis-toolchain/node --import tsx");
+    expect(workflowStep("Clean up abandoned Mantis sessions").run).toContain(
+      "${lane}.starting.json",
+    );
 
     const returnArtifactsStep = workflowStep("Return proof artifacts to the runner");
-    expect(returnArtifactsStep.if).toBe("${{ always() }}");
+    expect(returnArtifactsStep.if).toBe(
+      "${{ always() && steps.trusted_evidence.outcome == 'success' }}",
+    );
     expect(returnArtifactsStep.run).toContain(
       'sudo chown -R "$(id -u):$(id -g)" "$MANTIS_OUTPUT_DIR"',
     );
@@ -185,123 +189,42 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(sutWrapper).toContain("__destroy)");
   });
 
-  it.each([
-    { name: "allows a lane with no evidence manifest", expectedStatus: 0 },
-    { name: "allows a manifest whose comparison failed", comparisonPass: false, expectedStatus: 0 },
-    {
-      name: "allows a passing comparison when capture infrastructure did not change",
-      comparisonPass: true,
-      changedFile: "docs/readme.md",
-      expectedStatus: 0,
-    },
-    {
-      name: "rejects a capture change with no listed artifact or self-check PNG",
-      comparisonPass: true,
-      expectedStatus: 1,
-    },
-    {
-      name: "accepts a capture change with a valid recorder self-check PNG",
-      comparisonPass: true,
-      expectedStatus: 0,
-      selfCheckBytes: 10_001,
-    },
-    {
-      name: "rejects a capture change whose listed artifact is missing",
-      artifactPath: "candidate/listed-capture.png",
-      comparisonPass: true,
-      expectedStatus: 1,
-    },
-    {
-      name: "accepts a capture change whose listed artifact exists with real bytes",
-      artifactBytes: 10_001,
-      artifactPath: "candidate/listed-capture.png",
-      comparisonPass: true,
-      expectedStatus: 0,
-    },
-    {
-      name: "rejects a capture change with an undersized recorder self-check PNG",
-      comparisonPass: true,
-      expectedStatus: 1,
-      selfCheckBytes: 900,
-    },
-  ])(
-    "$name",
-    ({
-      artifactBytes,
-      artifactPath,
-      changedFile,
-      comparisonPass,
-      expectedStatus,
-      selfCheckBytes,
-    }) => {
-      const root = tempDirs.make("openclaw-mantis-capture-gate-");
-      const outputDir = join(root, "output");
-      const binDir = join(root, "bin");
-      const changedFilesFixture = join(root, "changed-files.txt");
-      const gateScript = join(root, "capture-gate.sh");
-      mkdirSync(outputDir);
-      mkdirSync(binDir);
-      writeFileSync(
-        changedFilesFixture,
-        `${changedFile ?? "scripts/e2e/telegram-desktop-recorder.ts"}\n`,
-      );
-      const gh = join(binDir, "gh");
-      writeFileSync(
-        gh,
-        '#!/usr/bin/env bash\nset -euo pipefail\ncat "$MANTIS_CHANGED_FILES_FIXTURE"\n',
-        { mode: 0o755 },
-      );
-      const run = workflowStep("Enforce capture evidence for capture-infrastructure changes").run;
-      if (!run) {
-        throw new Error("Capture evidence enforcement step has no run script");
-      }
-      writeFileSync(gateScript, run);
-      if (comparisonPass !== undefined) {
-        writeFileSync(
-          join(outputDir, "mantis-evidence.json"),
-          JSON.stringify({
-            artifacts: artifactPath ? [{ path: artifactPath }] : [],
-            comparison: { pass: comparisonPass },
-          }),
-        );
-      }
-      if (artifactBytes !== undefined && artifactPath) {
-        const artifact = join(outputDir, artifactPath);
-        mkdirSync(join(artifact, ".."), { recursive: true });
-        writeFileSync(artifact, Buffer.alloc(artifactBytes));
-      }
-      if (selfCheckBytes !== undefined) {
-        const selfCheck = join(outputDir, "candidate/recorder-self-check.png");
-        mkdirSync(join(selfCheck, ".."), { recursive: true });
-        const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-        writeFileSync(
-          selfCheck,
-          Buffer.concat([pngMagic, Buffer.alloc(selfCheckBytes - pngMagic.length)]),
-        );
-      }
+  it("requires trusted activity facts for both proof lanes", () => {
+    const gate = workflowStep("Restore and validate trusted lane evidence").run ?? "";
 
-      const result = spawnSync("bash", [gateScript], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          BASELINE_SHA: "baseline-sha",
-          CANDIDATE_SHA: "candidate-sha",
-          GH_TOKEN: "test-token",
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          MANTIS_CHANGED_FILES_FIXTURE: changedFilesFixture,
-          MANTIS_OUTPUT_DIR: outputDir,
-          PATH: `${binDir}:${process.env.PATH ?? ""}`,
-        },
-      });
-
-      expect(result.status, result.stderr).toBe(expectedStatus);
-    },
-  );
+    expect(gate).toContain('[[ "$lane_status" != "skipped" ]]');
+    expect(gate).toContain(".schemaVersion == 2");
+    expect(gate).toContain('[[ "$fact_status" == "complete" ]]');
+    expect(gate).toContain(".sendCount >= 1");
+    expect(gate).toContain(".observation.truncated == false");
+    expect(gate).toContain('any(.observation.events[]; .messageId == $focus and .actor == "bot")');
+    expect(gate).toContain('any(.invocations[]; .command == "send")');
+    expect(gate).toContain('any(.invocations[]; .command == "finish")');
+    expect(gate).toContain(".observation.events");
+    expect(gate).toContain(".providerRequests");
+    expect(gate).toContain('"$SESSION_ROOT/$lane.json"');
+    expect(gate).toContain("build-telegram-desktop-proof-evidence.mts");
+    expect(gate).toContain('--baseline-status "$baseline_status"');
+    expect(gate).toContain('--candidate-status "$candidate_status"');
+    expect(gate).toContain(".summary = $judgment[0].summary");
+    expect(gate).toContain('sudo mv "$trusted_manifest" "$manifest"');
+    expect(gate.indexOf('"$trusted_output/$lane/summary.json"')).toBeLessThan(
+      gate.indexOf("build-telegram-desktop-proof-evidence.mts"),
+    );
+    expect(gate).toContain('sudo install -d -m 0755 -o root -g root "$trusted_output"');
+    expect(gate).toContain('sudo mv -T "$agent_output" "$quarantine"');
+    expect(gate).toContain('sudo mv -T "$trusted_output" "$MANTIS_OUTPUT_DIR"');
+    expect(gate).not.toMatch(/sudo (?:install|tee)[^\n]*\$MANTIS_OUTPUT_DIR/u);
+    expect(gate).toContain('.comparison.baseline.status == "pass"');
+    expect(gate).toContain('.comparison.candidate.status == "pass"');
+    expect(gate).not.toContain("recorder-self-check.png");
+    expect(gate).not.toContain("capture_path_changed");
+  });
 
   it("cleans partially started proof daemons when local SUT startup fails", () => {
     const proofScript = readFileSync(MANTIS_SUT_SCRIPT, "utf8");
 
-    expect(proofScript).toContain("let gatewayPid: number | undefined;");
+    expect(proofScript).toContain("let stopped = false;");
     expect(proofScript).toContain('runSutContainerAction("stop", containerName, config.tempRoot)');
     expect(proofScript).toContain("Local SUT startup failed and cleanup was incomplete.");
     expect(proofScript).toContain("throw error;");
@@ -312,12 +235,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
 
     expect(workflow.on?.workflow_dispatch).toBeDefined();
+    expect(workflow.on?.workflow_dispatch?.inputs?.approved_head_sha?.required).toBe(false);
     expect(workflowText).not.toContain("issue_comment:");
     expect(workflowText).not.toContain("pull_request_target:");
     expect(workflowText).not.toContain("clear_issue_comment_reaction:");
     expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
     expect(workflowText).not.toContain("allow-bot-users: clawsweeper[bot]");
     expect(workflowText).toContain('setOutput("request_source", "workflow_dispatch")');
+    expect(workflowText).toContain('"$APPROVED_HEAD_SHA" != "$candidate_revision"');
+    expect(workflowStep("Upload Mantis Telegram desktop artifacts").if).toContain(
+      "steps.trusted_evidence.outcome == 'success'",
+    );
+    expect(workflowStep("Comment PR with inline QA evidence").if).toContain(
+      "steps.trusted_evidence.outcome == 'success'",
+    );
   });
 
   it("can publish an existing proof artifact without recapturing", () => {
@@ -411,7 +342,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const crabbox = workflowStep("Install Crabbox CLI");
     expect(crabbox.run).toContain("github.com/openclaw/crabbox.git");
     // Every variable the restored step reads must exist, or `set -u` kills it.
-    expect((parse(workflowText) as Workflow).env?.CRABBOX_REF).toBe("main");
+    expect((parse(workflowText) as Workflow).env?.CRABBOX_REF).toMatch(/^[0-9a-f]{40}$/u);
+    expect(crabbox.run).toContain(
+      'test "$(git -C "$install_dir/src" rev-parse HEAD)" = "$CRABBOX_REF"',
+    );
     // Never pipe into `grep -q` under pipefail: the writer dies of SIGPIPE on the
     // first match and the assertion fails precisely when it should pass.
     expect(crabbox.run).toContain('crabbox_warmup_help="$(crabbox warmup --help 2>&1)"');
@@ -425,10 +359,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(install.run).toContain('corepack_bin="$(command -v corepack)"');
     expect(install.run).toContain("/usr/local/lib/mantis-toolchain/node");
     expect(install.run).toContain("/usr/local/lib/mantis-toolchain/pnpm");
-    expect(install.run).toContain("/usr/local/bin/openclaw-telegram-mantis-sut");
+    expect(install.run).toContain("/usr/local/bin/openclaw-telegram-mantis-lane");
     expect(install.run).toContain("/usr/local/bin/openclaw-telegram-desktop-recorder");
     expect(install.run).toContain(
-      'exec /usr/local/lib/mantis-toolchain/node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-sut.ts" "\\$@"',
+      '"${GITHUB_WORKSPACE}/scripts/e2e/telegram-mantis-lane.ts" "\\$@"',
     );
     expect(install.run).toContain("sudo apt-get update");
     expect(install.run).toContain("sudo apt-get install -y ffmpeg");
@@ -438,7 +372,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(install.run).toContain(
       "sudo ln -s /usr/bin/ffprobe /usr/local/lib/mantis-toolchain/ffprobe",
     );
-    expect(install.run).toContain('export PATH=/usr/local/lib/mantis-toolchain:"\\$PATH"');
+    expect(install.run).toContain(
+      "PATH=/usr/local/lib/mantis-toolchain:/usr/local/bin:/usr/bin:/bin",
+    );
     expect(install.run).not.toContain("dangerouslyAllowAllBuilds");
     expect(install.run).not.toContain("ffmpeg-static");
     expect(install.run).not.toContain("ffprobe-static");
@@ -464,41 +400,33 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(credential.run).toContain("--lease-file");
 
     const agent = workflowStep("Run Codex Mantis Telegram agent");
-    expect(agent.env?.OPENCLAW_TELEGRAM_USER_DRIVER_CMD).toBe(
-      "/usr/local/bin/openclaw-telegram-user-driver",
+    expect(agent.env?.OPENCLAW_TELEGRAM_MANTIS_LANE_CMD).toBe(
+      "/usr/local/bin/openclaw-telegram-mantis-lane",
     );
-    expect(agent.env?.OPENCLAW_TELEGRAM_MANTIS_SUT_CMD).toBe(
-      "/usr/local/bin/openclaw-telegram-mantis-sut",
-    );
-    expect(agent.env?.OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD).toBe(
-      "/usr/local/bin/openclaw-telegram-desktop-recorder",
-    );
+    expect(agent.env?.OPENCLAW_TELEGRAM_USER_DRIVER_CMD).toBeUndefined();
+    expect(agent.env?.OPENCLAW_TELEGRAM_MANTIS_SUT_CMD).toBeUndefined();
+    expect(agent.env?.OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD).toBeUndefined();
     expect(agent.env?.MANTIS_NODE_BIN).toBe("/usr/local/lib/mantis-toolchain/node");
     expect(agent.env?.MANTIS_PNPM_BIN).toBe("/usr/local/lib/mantis-toolchain/pnpm");
     expect(agent.env?.CRABBOX_COORDINATOR).toBeUndefined();
     expect(agent.env?.CRABBOX_COORDINATOR_TOKEN).toBeUndefined();
 
     const prepare = workflowStep("Prepare Codex user");
-    expect(prepare.run).toContain(
-      "OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD OPENCLAW_TELEGRAM_MANTIS_SUT_CMD OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD OPENCLAW_TELEGRAM_USER_DRIVER_CMD TELEGRAM_USER_DRIVER_STATE_DIR",
-    );
-    expect(prepare.run).toContain("MANTIS_CANDIDATE_TRUST");
+    expect(prepare.run).toContain("OPENCLAW_TELEGRAM_MANTIS_LANE_CMD");
+    expect(prepare.run).not.toContain("OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD");
+    expect(prepare.run).not.toContain("TELEGRAM_USER_DRIVER_STATE_DIR");
+    expect(prepare.run).not.toContain("MANTIS_CANDIDATE_TRUST");
     expect(prepare.run).toContain("MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT");
     expect(prepare.run).toContain("MANTIS_NODE_BIN MANTIS_PNPM_BIN");
 
     const prompt = readFileSync(PROMPT, "utf8");
-    expect(prompt).toContain('"$OPENCLAW_TELEGRAM_MANTIS_SUT_CMD" start');
-    expect(prompt).toContain('"$OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD" start');
-    expect(prompt).toContain("--provider docker");
-    expect(prompt).toContain("$OPENCLAW_TELEGRAM_USER_DRIVER_CMD send");
-    expect(prompt).toContain("$OPENCLAW_TELEGRAM_USER_DRIVER_CMD wait");
-    expect(prompt).toContain("--after-message-id");
-    expect(prompt).toContain("--crop telegram-window");
-    expect(prompt).toContain("MCP App Funnel proof is not supported");
-    // This lane is the only thing that exercises the recorder, so a PR that changes
-    // the capture path may not skip straight to a no-visual-proof manifest.
-    expect(prompt).toContain("before running the recorder self-check below");
-    expect(prompt).toContain("recorder-self-check.png");
+    expect(prompt).toContain("$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD");
+    expect(prompt).toContain("Write a Bash or TypeScript scenario program");
+    expect(prompt).toContain("`observe --seconds N [--since cursor]`");
+    expect(prompt).toContain("`requests`");
+    expect(prompt).toContain("`finish --focus-message-id ID`");
+    expect(prompt).toContain("`block --missing-primitive NAME --reason TEXT`");
+    expect(prompt).toContain("This proof has no skipped lane");
     expect(prompt).not.toContain("--sut-container");
     expect(prompt).not.toContain("OPENCLAW_TELEGRAM_USER_PROOF_CMD");
   });
@@ -533,6 +461,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.lockfile_sha256");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.node_version");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.pnpm_version");
+    expect(restore.with?.key).toContain("mantis-baseline-v3");
     expect(restore.with?.path).toBe(".artifacts/mantis-baseline-build.tar");
     expect(baseline.if).toBeUndefined();
     expect(baselineRun).toContain('"$toolchain_dir/pnpm" install --frozen-lockfile');
@@ -540,11 +469,31 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(baselineRun).toContain('tar -xf "$BASELINE_BUILD_ARCHIVE"');
     expect(baselineRun).toContain('"$toolchain_dir/pnpm" build');
     expect(baselineRun).toContain('tar -cf "$BASELINE_BUILD_ARCHIVE"');
+    expect(baselineRun).toContain(".artifacts/build-all-cache");
+    expect(baselineRun).toContain("for phase in tsdown-ai tsdown-packages tsdown-unified");
+    expect(baselineRun).toContain("-type f -links +1");
     expect(save.if).toBe("steps.baseline_build_cache.outputs.cache-hit != 'true'");
     expect(save.uses).toContain("actions/cache/save@");
     expect(save.with?.path).toBe(restore.with?.path);
     expect(candidate.if).toBeUndefined();
     expect(candidateRun).toContain('sudo chown -R mantis-builder:mantis-builder "$candidate_root"');
+    expect(candidateRun).toContain(
+      'git -C "$baseline_root" diff --quiet "$BASELINE_SHA" "$CANDIDATE_SHA"',
+    );
+    expect(candidateRun).toContain("scripts/build-all.mts");
+    expect(candidateRun).toContain("scripts/lib");
+    expect(candidateRun).toContain("scripts/pnpm-runner.mts");
+    expect(candidateRun).toContain("packages/normalization-core");
+    expect(candidateRun).toContain("pnpm-lock.yaml");
+    expect(candidateRun).toContain("pnpm-workspace.yaml");
+    expect(candidateRun).toContain("tsconfig.json");
+    expect(candidateRun).toContain(
+      'tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE"',
+    );
+    expect(candidateRun.indexOf("tar --no-same-owner")).toBeLessThan(
+      candidateRun.indexOf('sudo chown -R mantis-builder:mantis-builder "$candidate_root"'),
+    );
+    expect(candidateRun).not.toContain("cp -al");
     expect(candidateRun).toContain(
       'sudo /usr/local/sbin/openclaw-mantis-sut-container build "$candidate_root"',
     );
@@ -603,24 +552,18 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).not.toContain("candidateMatch");
     expect(workflowText).not.toContain("leaseMatch");
     expect(workflowText).not.toContain("fork-ok");
-    expect(workflowText).not.toContain("allow_fork_candidate");
+    expect(workflowText).toContain("allow_fork_candidate");
+    expect(workflowText).toContain("Fork PR heads require explicit allow_fork_candidate approval");
   });
 
   it("trusts the open PR head and marks fork heads for sandboxed handling", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
     expect(workflowText).toContain("repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}");
-    expect(workflowText).toContain('candidate_trust="fork-pr-head"');
+    expect(workflowText).toContain('candidate_trust="maintainer-approved-fork-pr-head"');
     expect(workflowText).toContain('pr_head_repo" != "$GITHUB_REPOSITORY"');
 
     const agent = workflowStep("Run Codex Mantis Telegram agent");
-    expect(agent.env?.MANTIS_CANDIDATE_TRUST).toBe(
-      "${{ needs.validate_refs.outputs.candidate_trust }}",
-    );
-
-    const prompt = readFileSync(PROMPT, "utf8");
-    expect(prompt).toContain("MANTIS_CANDIDATE_TRUST");
-    expect(prompt).toContain("fork-pr-head");
-    expect(prompt).toContain("untrusted fork code");
+    expect(agent.env?.MANTIS_CANDIDATE_TRUST).toBeUndefined();
   });
 
   it("provisions uv before the step that pins it", () => {
@@ -644,7 +587,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     expect(executables.length).toBeGreaterThan(0);
     for (const [key, value] of executables) {
-      expect(`${key}=${value.split(/\s+/u)[0]}`).toMatch(/=\//u);
+      expect(`${key}=${value.split(/\s+/u)[0]}`).toMatch(/[=]\//u);
     }
   });
 
@@ -728,7 +671,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow).not.toMatch(/usermod[^\n]*docker/);
     expect(workflow).not.toMatch(/groups[^\n]*codex[^\n]*docker/);
     expect(workflow).toContain(
-      "printf '%s\\n' \"codex ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-desktop-recorder\"",
+      "codex ALL=(mantis-sut) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-mantis-lane",
+    );
+    expect(workflow).toContain(
+      "mantis-sut ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-desktop-recorder",
     );
     expect(workflow).toContain(
       "exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-desktop-recorder",
@@ -740,9 +686,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const prepare = workflowStep("Prepare Codex user").run ?? "";
     // The driver chmods its state dir to 0700, and chmod needs ownership rather than ACL
     // write, so sharing that dir between users fails as EPERM - run 32253541261 died there.
-    // The agent reaches the driver through sudo instead, leaving one owner.
+    // The credential-blind lane reaches the driver through sudo, leaving one owner.
     expect(prepare).toContain(
-      "codex ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-user-driver",
+      "mantis-sut ALL=(${recorder_user}) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-user-driver",
     );
     expect(install).toContain(
       'exec sudo -n -u ${recorder_user} /usr/local/lib/mantis-toolchain/telegram-user-driver "\\$@"',
@@ -752,60 +698,78 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
     expect(prepare).not.toMatch(/setfacl[^\n]*TELEGRAM_USER_DRIVER_STATE_DIR/u);
     expect(prepare).not.toMatch(/setfacl[^\n]*"\$credential_dir\/user-driver"/u);
-    // The SUT runs as the agent and reads the payload directly, so that one file stays
-    // reachable; granting it via the containing dir would expose the driver state too.
-    expect(prepare).toContain('sudo setfacl -m "u:codex:--x" "$credential_dir"');
-    expect(prepare).toContain(
-      'sudo setfacl -m "u:codex:r--" "$OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD"',
-    );
+    const credential = workflowStep("Install TDLib and restore Telegram QA user").run ?? "";
+    expect(credential).toContain("sudo install -m 0400 -o mantis-sut -g mantis-proof");
+    expect(credential).toContain('rm -f "$credential_dir/payload.json"');
+    expect(prepare).not.toMatch(/u:codex:[^\n]*credential/u);
+    expect(prepare).toContain('sudo -u codex find "$GITHUB_WORKSPACE" -xdev');
+    expect(prepare).toContain('-path "$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR" -prune');
+    expect(prepare).not.toContain('chown -R codex:codex "$GITHUB_WORKSPACE"');
   });
 
   it("does not pass the full workflow environment into the local Telegram SUT", () => {
-    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+    const sutScript = readFileSync(MANTIS_SUT_SCRIPT, "utf8");
+    const laneScript = readFileSync(MANTIS_LANE_SCRIPT, "utf8");
     const prompt = readFileSync(PROMPT, "utf8");
     const workflow = readFileSync(WORKFLOW, "utf8");
     const wrapper = readFileSync(SUT_CONTAINER_WRAPPER, "utf8");
-    expect(proofScript).toContain("function childProcessBaseEnv()");
-    expect(proofScript).toContain("...childProcessBaseEnv()");
-    expect(proofScript).not.toContain("...process.env,\n    OPENAI_API_KEY");
-    expect(proofScript).not.toContain("...process.env,\n    MOCK_PORT");
-    expect(proofScript).toContain('process.env.MANTIS_CANDIDATE_TRUST === "fork-pr-head"');
+    expect(sutScript).toContain("function childProcessBaseEnv()");
+    expect(sutScript).toContain("...childProcessBaseEnv()");
+    expect(sutScript).not.toContain("...process.env,\n    OPENAI_API_KEY");
+    expect(sutScript).not.toContain("...process.env,\n    MOCK_PORT");
+    expect(laneScript).toContain("function commandEnv()");
+    expect(laneScript).toContain("fs.constants.O_NOFOLLOW");
+    expect(laneScript).toContain("/proc/self/fd/${descriptor}");
+    expect(laneScript).not.toContain("readRecorderSession");
+    expect(laneScript).toContain('"artifacts"');
+    expect(laneScript).toContain('status: status === "complete" ? "pass" : "fail"');
+    expect(laneScript).toContain('requiredEnv("OPENCLAW_MANTIS_CREDENTIAL_FILE")');
     expect(wrapper).toContain("network create --driver bridge");
     expect(wrapper).toContain("--cap-drop ALL");
     expect(wrapper).toContain("--log-driver none");
     expect(wrapper).toContain("--memory 8g");
     expect(wrapper).toContain("--cpus 4");
     expect(wrapper).toContain("--memory 16g");
-    expect(readFileSync(MANTIS_SUT_SCRIPT, "utf8")).toContain("requireCodexProxyPort");
-    expect(proofScript).toContain("preserveLocalSutRuntimeArtifacts");
-    const finishSession = proofScript.slice(proofScript.indexOf("async function finishSession"));
-    expect(finishSession.indexOf("stopLocalSutDaemon(session.localSut)")).toBeLessThan(
-      finishSession.indexOf("preserveLocalSutRuntimeArtifacts(session.localSut"),
+    expect(sutScript).toContain("requireCodexProxyPort");
+    const stopSession = laneScript.slice(laneScript.indexOf("async function stopActiveLane"));
+    expect(stopSession.indexOf("stopMantisSut(state.sut)")).toBeLessThan(
+      stopSession.indexOf("preserveMantisSutRuntimeArtifacts(state.sut"),
     );
-    expect(finishSession.indexOf("preserveLocalSutRuntimeArtifacts(session.localSut")).toBeLessThan(
-      finishSession.indexOf("destroyLocalSutRuntime(session.localSut)"),
+    expect(stopSession.indexOf("preserveMantisSutRuntimeArtifacts(state.sut")).toBeLessThan(
+      stopSession.indexOf("destroyMantisSut(state.sut)"),
     );
-    expect(prompt).toContain("--lane <baseline|candidate>");
-    expect(prompt).toContain("--repo-root <MANTIS_BASELINE_ROOT|MANTIS_CANDIDATE_ROOT>");
-    expect(prompt).toContain("--provider docker");
+    const startSession = laneScript.slice(laneScript.indexOf("async function startLane"));
+    expect(startSession.indexOf("Promise.allSettled")).toBeLessThan(
+      startSession.indexOf('"serve"'),
+    );
+    expect(startSession.indexOf('"serve"')).toBeLessThan(
+      startSession.indexOf("await waitForObserver(observerSocket)"),
+    );
+    expect(prompt).toContain("--lane baseline|candidate");
+    expect(prompt).toContain("start --repo-root <prepared-root>");
+    expect(prompt).toContain("MANTIS_BASELINE_ROOT");
+    expect(prompt).toContain("MANTIS_CANDIDATE_ROOT");
     expect(prompt).not.toContain("--sut-container");
     expect(prompt).toContain('--baseline-repo-root "$GITHUB_WORKSPACE"');
     expect(prompt).toContain('--candidate-repo-root "$GITHUB_WORKSPACE"');
     expect(workflow).toContain(
       "sudo install -m 0755 scripts/mantis/mantis-sut-container.sh /usr/local/sbin/openclaw-mantis-sut-container",
     );
+    expect(workflow).toContain('sudo usermod -aG mantis-proof "$recorder_user"');
     expect(workflow).toContain(
+      "mantis-sut ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container",
+    );
+    expect(workflow).not.toContain(
       "codex ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container",
     );
     expect(workflow).not.toContain("NOPASSWD:SETENV:");
     expect(workflow).toContain("/etc/openclaw-mantis-sut-revisions");
-    expect(workflow).toContain("Validate root-owned SUT attestations");
     expect(workflow).toContain('"$runtime_parent/attestations/$lane.json"');
-    const attestationValidation = workflowStep("Validate root-owned SUT attestations").run ?? "";
+    const attestationValidation =
+      workflowStep("Restore and validate trusted lane evidence").run ?? "";
+    expect(attestationValidation).toContain('[[ "$lane_status" != "skipped" ]]');
+    expect(attestationValidation).not.toContain('if [[ "$lane_status" == "skipped"');
     expect(attestationValidation.indexOf(".comparison[$lane].sha == $sha")).toBeLessThan(
-      attestationValidation.indexOf('if [[ "$lane_status" == "skipped" ]]'),
-    );
-    expect(attestationValidation.indexOf('if [[ "$lane_status" == "skipped" ]]')).toBeLessThan(
       attestationValidation.indexOf('"$runtime_parent/attestations/$lane.json"'),
     );
     expect(workflow).toContain('sudo chmod 0700 "$proof_worktree_root"');
@@ -837,7 +801,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).not.toContain('/bin/cp -a "$isolated_root/." "$candidate_root/"');
     expect(wrapper).toContain('filesystem="$(create_bounded_filesystem "$container_name" 2G)"');
     expect(wrapper).toContain('mv -T "$runtime_source" "$quarantine"');
-    expect(wrapper).toContain("/usr/sbin/runuser -u codex --");
+    expect(wrapper).toContain("/usr/sbin/runuser -u mantis-sut --");
     expect(wrapper).toContain('/bin/cp -a --no-dereference "$quarantine/." "$safe_runtime/"');
     expect(wrapper).not.toContain('/bin/cp -a "$runtime_source/." "$safe_runtime/"');
     expect(wrapper).toContain('create_bounded_filesystem "${container_name}-fs" 10G');
@@ -847,12 +811,12 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain('create_runtime_claim "$container_name" "$runtime_source"');
     expect(wrapper).toContain('cancel_runtime_claim "$1" "$runtime_source"');
     expect(wrapper).toContain("terminate_runtime_claim");
-    expect(wrapper).toContain("Never reread by name here");
+    expect(wrapper).toContain("never reread the claim by name here");
     expect(wrapper).toContain("refusing to destroy an active runtime claim");
     expect(wrapper).toContain("refusing to destroy runtime with pending network cleanup");
     expect(wrapper).toContain('remove_claimed_runtime_input "$runtime_parent/$1-input"');
     expect(wrapper).toContain('*) die "expected build, check, run, stop, or destroy"');
-    expect(wrapper).toContain("install -T -o codex -g codex -m 0600");
+    expect(wrapper).toContain("install -T -o mantis-sut -g mantis-sut -m 0600");
     expect(wrapper).toContain('attested_sha="$(attest_worktree "$repo_root" "$lane")"');
     expect(wrapper).toContain("sut-attestation.json");
     expect(wrapper.match(/run_network_probe "\$network_name"/gu)).toHaveLength(3);

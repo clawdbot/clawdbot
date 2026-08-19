@@ -11,6 +11,8 @@ import {
   parseRecorderArgs,
   parseWindowGeometry,
   readRecorderSession,
+  recoverRecorderStartup,
+  recorderArtifacts,
   type RecorderOperations,
   type RecorderSession,
   renderGoldenImagePreflight,
@@ -115,6 +117,14 @@ describe("Telegram Desktop recorder CLI", () => {
     });
     expect(parseRecorderArgs(["status", "--session", "recorder.json"])).toEqual({
       command: "status",
+      sessionPath: "recorder.json",
+    });
+    expect(parseRecorderArgs(["recover", "--session", "recorder.json"])).toEqual({
+      command: "recover",
+      sessionPath: "recorder.json",
+    });
+    expect(parseRecorderArgs(["artifacts", "--session", "recorder.json"])).toEqual({
+      command: "artifacts",
       sessionPath: "recorder.json",
     });
   });
@@ -676,6 +686,56 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     expect(readRecorderSession(sessionPath)).toEqual(session);
     expect(fs.statSync(sessionPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("publishes only session-owned artifact paths across the recorder user boundary", () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    const screenshot = path.join(root, "screenshot.png");
+    fs.writeFileSync(screenshot, "proof", { mode: 0o600 });
+    writeRecorderSession(sessionPath, {
+      ...testSession(),
+      artifacts: { screenshot },
+    });
+
+    expect(recorderArtifacts(root, { command: "artifacts", sessionPath })).toEqual({
+      artifacts: { screenshot },
+    });
+    expect(fs.statSync(screenshot).mode & 0o040).toBe(0o040);
+  });
+
+  it("recovers a recorder interrupted after provisioning", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    fs.writeFileSync(
+      `${sessionPath}.starting`,
+      `${JSON.stringify({
+        desktopSessionId: "91234",
+        leaseId: "cbx_interrupted",
+        leaseOwned: true,
+        provider: "docker",
+        schemaVersion: 1,
+        userDriver: ["python3", "driver.py"],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const calls: Array<{ args: string[]; command: string }> = [];
+    const runCommand: RunCommand = async (params) => {
+      calls.push({ args: params.args, command: params.command });
+      return { stderr: "", stdout: JSON.stringify({ ok: true }) };
+    };
+
+    await expect(
+      recoverRecorderStartup(root, { command: "recover", sessionPath }, { runCommand }),
+    ).resolves.toEqual({ recovered: true });
+    expect(calls).toContainEqual({
+      args: ["driver.py", "terminate-session", "--session-id", "91234", "--json"],
+      command: "python3",
+    });
+    expect(
+      calls.some((call) => call.args[0] === "stop" && call.args.at(-1) === "cbx_interrupted"),
+    ).toBe(true);
+    expect(fs.existsSync(`${sessionPath}.starting`)).toBe(false);
   });
 
   it("never stops a borrowed --lease-id box, on failure or on stop", async () => {

@@ -88,14 +88,33 @@ export type StatusOptions = {
   sessionPath: string;
 };
 
-type RecorderOptions = ScreenshotOptions | StartOptions | StatusOptions | StopOptions | ViewOptions;
+export type RecoverOptions = {
+  command: "recover";
+  sessionPath: string;
+};
+
+export type ArtifactsOptions = {
+  command: "artifacts";
+  sessionPath: string;
+};
+
+type RecorderOptions =
+  | ArtifactsOptions
+  | RecoverOptions
+  | ScreenshotOptions
+  | StartOptions
+  | StatusOptions
+  | StopOptions
+  | ViewOptions;
 
 export function recorderUsageText(): string {
   return [
     "Usage:",
+    "  pnpm qa:telegram-desktop-recorder artifacts --session <recorder.json>",
     '  pnpm qa:telegram-desktop-recorder start --output-dir <dir> --chat <-100groupId> --user-driver "<space-separated cmd prefix>" [options]',
     "  pnpm qa:telegram-desktop-recorder view --session <recorder.json> --message-id <id>",
     "  pnpm qa:telegram-desktop-recorder screenshot --session <recorder.json> [--output <png>]",
+    "  pnpm qa:telegram-desktop-recorder recover --session <recorder.json>",
     "  pnpm qa:telegram-desktop-recorder stop --session <recorder.json> [--crop telegram-window] [--keep-box]",
     "  pnpm qa:telegram-desktop-recorder status --session <recorder.json>",
     "",
@@ -144,7 +163,7 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     throw new Error(recorderUsageText());
   }
   const parsedCommand = z
-    .enum(["screenshot", "start", "status", "stop", "view"])
+    .enum(["artifacts", "recover", "screenshot", "start", "status", "stop", "view"])
     .safeParse(rawCommand);
   if (!parsedCommand.success) {
     throw new Error(`Unknown command: ${rawCommand}\n\n${recorderUsageText()}`);

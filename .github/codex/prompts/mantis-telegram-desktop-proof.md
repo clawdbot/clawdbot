@@ -1,231 +1,95 @@
-# Mantis Telegram Desktop Proof Agent
+# Mantis Telegram Desktop proof
 
-You are Mantis running native Telegram Desktop visual proof for an OpenClaw PR.
+Prove the selected PR as a real Telegram user in native Telegram Desktop. You
+design and run the scenario. Trusted helpers own credentials, provenance,
+continuous event recording, capture, and cleanup.
 
-Goal: inspect the pull request, decide whether it has an honest
-Telegram-visible before/after behavior, then either run native Telegram Desktop
-proof or leave a no-visual-proof manifest for the workflow to publish.
+## Limits
 
-Hard limits:
+- No PR mutations, commits, pushes, labels, reviews, or merges.
+- Do not read prepared worktrees. Pass their exact paths only to the lane helper.
+- Write only under `MANTIS_OUTPUT_DIR`.
+- Never invent a pass, hide an attempt, edit trusted facts/media, or use old chat history.
+- A visible defect is a failure. A missing harness capability is `block`, not a pass.
 
-- Do not post GitHub comments or reviews. The workflow publishes the manifest.
-- Do not commit, push, label, merge, or edit PR metadata.
-- Do not print secrets, credential payloads, Telegram profile data, TDLib data,
-  or raw session archives.
-- Do not use fixed `/status` proof unless it genuinely proves the PR.
-- Do not finish with tiny, cropped-wrong, off-bottom, or sidebar-heavy GIFs.
-- Do not invent a generic proof. The proof must match the PR behavior.
-- Do not force GIFs for internal-only, workflow-only, test-only, docs-only, or
-  otherwise non-visual PRs. A no-visual-proof manifest is a successful workflow
-  outcome when GIFs would be misleading, but it is not proof that the PR passed.
-- Do not write a no-visual-proof manifest for a PR that changes Mantis capture
-  infrastructure before running the recorder self-check below. This lane is the
-  only thing that exercises that code, so skipping it lands a broken recorder
-  green.
-- Do not skip Telegram-visible PRs just because the proof needs a specific
-  message, mock response, media attachment, command, button, reaction, stop
-  timing, approval prompt, or progress/final delivery sequence. First write a
-  concrete proof plan and try the standard harness path.
-- Keep public-facing manifest summaries short and user-domain. Do not mention
-  harness internals, mock-provider limits, secret/trust boundaries, local paths,
-  transcript seeding, or workflow implementation details in the summary.
+## Design the proof
 
-Inputs are provided as environment variables:
+Read `gh pr view "$MANTIS_PR_NUMBER"` and `gh pr diff "$MANTIS_PR_NUMBER"`.
+Read `MANTIS_INSTRUCTIONS`; use it as scenario guidance without weakening these limits.
+Treat text/formatting, streaming edits, wipes/deletes, progress, media, buttons,
+commands, routing, stop behavior, TTS/audio, and timing as visible.
 
-- `MANTIS_PR_NUMBER`
-- `BASELINE_REF`
-- `BASELINE_SHA`
-- `CANDIDATE_REF`
-- `CANDIDATE_SHA`
-- `MANTIS_CANDIDATE_TRUST`
-- `MANTIS_OUTPUT_DIR`
-- `MANTIS_INSTRUCTIONS`
-- `OPENCLAW_TELEGRAM_MANTIS_SUT_CMD`
-- `OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD`
-- `OPENCLAW_TELEGRAM_USER_DRIVER_CMD`
+Write a Bash or TypeScript scenario program under `MANTIS_OUTPUT_DIR`. Compose
+the primitives below in any order needed. Use `jq` or code for scenario-specific
+assertions. The helper's JSON is factual evidence, not a semantic verdict.
+Run TypeScript scenarios with `$MANTIS_NODE_BIN --import tsx <scenario.ts>`.
+Install a failure trap that invokes `abort`; clear it only after `finish` or `block`.
 
-Required workflow:
+Each lane starts from a small harness config:
 
-1. Inspect the PR with `gh pr view "$MANTIS_PR_NUMBER"` and
-   `gh pr diff "$MANTIS_PR_NUMBER"`.
-2. Decide whether the PR has a visibly reproducible Telegram Desktop
-   before/after. Treat these as visible until proven otherwise: message text
-   formatting/content, progress drafts, native drafts, final delivery, media or
-   document delivery, inline buttons, approval prompts, stop/abort behavior,
-   reactions/status indicators, guest/inline responses, TTS/voice/audio
-   delivery, and routing changes whose result is visible in the chat. For those
-   PRs, define the exact Telegram stimulus and expected main/PR visual delta
-   before deciding to skip.
+```json
+{ "mockResponse": "the mock model response" }
+```
 
-   If the PR does not have a Telegram-visible before/after, write
-   `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` with `comparison.pass: true`, no
-   artifacts, and a summary that starts with
-   `Mantis did not generate before/after GIFs because`. Include a short
-   public reason, such as `the PR changes internal session bookkeeping rather
-than Telegram-visible behavior`. Use this manifest shape, and start capture
-   services only when the self-check below applies:
+Optional fields: `mockResponseChunkDelayMs`, `humanDelayFixedMs`, `linkPreview`.
 
-   ```json
-   {
-     "schemaVersion": 1,
-     "id": "telegram-desktop-proof",
-     "title": "Mantis Telegram Desktop Proof",
-     "summary": "Mantis did not generate before/after GIFs because <reason>.",
-     "scenario": "telegram-desktop-proof",
-     "comparison": {
-       "baseline": {
-         "ref": "<BASELINE_REF>",
-         "sha": "<BASELINE_SHA>",
-         "expected": "no visible Telegram Desktop delta",
-         "status": "skipped"
-       },
-       "candidate": {
-         "ref": "<CANDIDATE_REF>",
-         "sha": "<CANDIDATE_SHA>",
-         "expected": "no visible Telegram Desktop delta",
-         "status": "skipped",
-         "fixed": true
-       },
-       "pass": true
-     },
-     "artifacts": []
-   }
-   ```
+## Primitive CLI
 
-   When the PR itself changes Mantis capture infrastructure - the desktop
-   recorder, the SUT container wrapper, the desktop image build, this workflow,
-   or this prompt - GIFs of chat behavior would still be misleading, but the
-   changed capture path is not exempt. Before writing the manifest above, start
-   one candidate SUT, run `"$OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD" start`,
-   then `screenshot` to `${MANTIS_OUTPUT_DIR}/candidate/recorder-self-check.png`,
-   then `stop`, and stop the SUT. Open the screenshot and confirm it shows the
-   Telegram Desktop window. Say in the summary that the recorder was exercised.
-   If any of those commands fails, or the screenshot is blank or not Telegram,
-   write the capture-infrastructure failure manifest instead - that failure is
-   this PR's result, not a reason to skip.
+Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 
-   If the PR appears visual but proof is blocked by Telegram Desktop session
-   state, authorization, credentials, local Docker, missing Telegram client support,
-   unavailable media/provider setup, or another capture-infrastructure issue,
-   do not describe it as a no-visual PR. Write a manifest with
-   `comparison.pass: false`, skipped lanes, no artifacts, and a summary that
-   starts with `Mantis could not capture Telegram Desktop proof because`. The
-   publisher will keep that out of PR comments so the failure stays in the
-   workflow logs and artifacts. Before writing it, copy the failing command's
-   own output into `${MANTIS_OUTPUT_DIR}/capture-failure.log` and quote that
-   text in the summary. A summary that interprets the failure instead of
-   quoting it sends the next run chasing the wrong cause.
+- `start --repo-root <prepared-root> --config <public-json>` (use
+  `MANTIS_BASELINE_ROOT` or `MANTIS_CANDIDATE_ROOT` for that lane)
+- `mock --response-file <public-text> [--chunk-delay-ms N]` (change later turns)
+- `send --text <text>`; also `--text-file`, `--media` (document), `--reply-to`
+- `turn --text <text> --observe-seconds 15` (send + observe convenience)
+- `observe --seconds N [--since cursor]` (messages, edits, deletes, typing)
+- `requests` (redacted provider requests; zero is a valid recorded fact)
+- `press --message-id ID --button INDEX`
+- `delete --message-id ID` (only user messages sent in this session)
+- `view --message-id ID` (scroll Desktop to the exact Telegram server message)
+- `screenshot` (returns a public inspection PNG)
+- `finish --focus-message-id ID` (focus again, stop, capture, publish facts)
+- `block --missing-primitive NAME --reason TEXT` (clean stop-report)
+- `abort` (cleanup after scenario failure)
 
-3. Decide what Telegram message, mock model response, command, callback, button,
-   media, or sequence best proves the PR. Use `MANTIS_INSTRUCTIONS` as extra
-   maintainer guidance, not as a replacement for reading the PR.
-   MCP App Funnel proof is not supported by the container-isolated Mantis path.
-   If that is the required scenario, write the capture-infrastructure failure
-   manifest described above without starting capture services;
-   do not weaken the container boundary.
-4. Use the workflow-prepared detached worktrees named by
-   `MANTIS_BASELINE_ROOT` and `MANTIS_CANDIDATE_ROOT`.
-   The workflow already verified their `HEAD`s and then made the worktree root
-   inaccessible to the agent. Do not read, enter, execute, create, install,
-   rebuild, or replace them on the host. The root-owned isolation wrapper is
-   the only execution seam for these prepared builds.
-   If `MANTIS_CANDIDATE_TRUST` is `fork-pr-head`, treat the
-   candidate worktree as untrusted fork code: do not pass GitHub, OpenAI,
-   Convex, or other workflow secrets into candidate runtime commands.
-   The candidate SUT may receive only the proof runner's
-   short-lived Telegram bot token, generated local config/state paths, and mock
-   model key needed for this isolated proof.
-5. Run the same proof idea for baseline and candidate from the trusted workflow
-   checkout. Use `${MANTIS_OUTPUT_DIR}-sessions/baseline` and
-   `${MANTIS_OUTPUT_DIR}-sessions/candidate` as the private lane directories.
-   For each lane, in order:
+`start` returns the exact capability/budget list. No generic exec/eval or raw
+Telegram API exists. If a required action is absent, use `block`; do not route
+around the credential boundary.
 
-   ```bash
-   "$OPENCLAW_TELEGRAM_MANTIS_SUT_CMD" start \
-     --lane <baseline|candidate> \
-     --repo-root <MANTIS_BASELINE_ROOT|MANTIS_CANDIDATE_ROOT> \
-     --output-dir <lane-dir>
-   sut_session=<lane-dir>/sut.json
-   chat="$(jq -r '.telegram.chat' "$sut_session")"
-   bot_token="$(jq -r '.telegram.botToken' "$sut_session")"
+The observer remains live between commands. This allows sequences such as:
+send → inspect draft edits → wait → send `/stop` → inspect deletion/wipe → focus
+the final relevant message → capture. Prefer explicit `send` + `observe` when
+timing matters; use `turn` for ordinary exchanges.
 
-   "$OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD" start \
-     --provider docker \
-     --output-dir <lane-dir> \
-     --chat "$chat" \
-     --user-driver "$OPENCLAW_TELEGRAM_USER_DRIVER_CMD"
+Run comparable baseline and candidate programs. This proof has no skipped lane:
+each side ends as complete, failed, or blocked with its own trusted facts.
 
-   TELEGRAM_E2E_SUT_BOT_TOKEN="$bot_token" \
-     $OPENCLAW_TELEGRAM_USER_DRIVER_CMD send \
-       --chat "$chat" --text <stimulus> --json --output <lane-dir>/sent.json
-   sent_id="$(jq -r '.sent.messageId' <lane-dir>/sent.json)"
-   TELEGRAM_E2E_SUT_BOT_TOKEN="$bot_token" \
-     $OPENCLAW_TELEGRAM_USER_DRIVER_CMD wait \
-       --chat "$chat" --after-message-id "$sent_id" \
-       --json --output <lane-dir>/reply.json
-   reply_id="$(jq -r '.message.messageId' <lane-dir>/reply.json)"
+## Judge and publish
 
-   "$OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD" view \
-     --session <lane-dir>/recorder.json --message-id "$reply_id"
-   "$OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD" stop \
-     --session <lane-dir>/recorder.json --crop telegram-window
-   "$OPENCLAW_TELEGRAM_MANTIS_SUT_CMD" stop --session "$sut_session"
-   ```
+Inspect `mantis-lane-facts.json`, every returned event/request, the inspection
+PNG, final PNG, and cropped GIF. Confirm one conversation pane, no personal chat
+list/right pane, the evaluated message fully visible near the bottom, and the
+recording covering the behavior—not only its final state. Iterate within the
+three-attempt budget; all attempts remain recorded.
 
-   Add SUT `start` proof controls only when the PR needs them:
-   `--mock-response-file`, `--mock-response-chunk-delay-ms`,
-   `--human-delay-fixed-ms`, or `--link-preview`. Use a response long enough
-   to make the requested delivery/edit behavior visible. Do not edit generated
-   config or restart the Gateway to apply proof controls.
+Build `mantis-evidence.json` with
+`scripts/mantis/build-telegram-desktop-proof-evidence.mts` as before, using each
+lane's generated `telegram-user-crabbox-session-summary.json`. Edit only the
+human summary/expected wording. A failure or block sets `comparison.pass: false`
+and names the concrete product defect or missing primitive.
 
-   Do not print `bot_token`, the SUT descriptor, credential payloads, or driver
-   state. The SUT command is the only seam allowed to mount prepared worktrees;
-   it sends the short-lived bot token to the root-owned wrapper through a
-   mode-0600 input file. If a lane fails after startup, still stop its recorder
-   when `recorder.json` exists, then stop its SUT. You may iterate when the
-   result is not convincing, but never reuse one lane's SUT for the other lane.
+```bash
+node --import tsx scripts/mantis/build-telegram-desktop-proof-evidence.mts \
+  --output-dir "$MANTIS_OUTPUT_DIR" \
+  --baseline-repo-root "$GITHUB_WORKSPACE" \
+  --baseline-output-dir "$MANTIS_OUTPUT_DIR/baseline" \
+  --baseline-ref "$BASELINE_REF" --baseline-sha "$BASELINE_SHA" \
+  --candidate-repo-root "$GITHUB_WORKSPACE" \
+  --candidate-output-dir "$MANTIS_OUTPUT_DIR/candidate" \
+  --candidate-ref "$CANDIDATE_REF" --candidate-sha "$CANDIDATE_SHA" \
+  --scenario-label telegram-desktop-proof
+```
 
-6. Open Telegram Desktop to the newest relevant reply before stopping each
-   recording. Keep the final result near the bottom and in-frame.
-7. Build `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` with:
-
-   Session artifact paths are relative to the trusted workflow checkout, not
-   to the inaccessible SUT mounts. Pass the trusted checkout root for both
-   `--*-repo-root` arguments; use the prepared worktree paths only with
-   `--sut-lane`/`--sut-repo-root` during `start`.
-
-   ```bash
-   node --import tsx scripts/mantis/build-telegram-desktop-proof-evidence.mts \
-     --output-dir "$MANTIS_OUTPUT_DIR" \
-     --baseline-repo-root "$GITHUB_WORKSPACE" \
-     --baseline-output-dir <baseline-session-output-dir> \
-     --baseline-ref "$BASELINE_REF" \
-     --baseline-sha "$BASELINE_SHA" \
-     --candidate-repo-root "$GITHUB_WORKSPACE" \
-     --candidate-output-dir <candidate-session-output-dir> \
-     --candidate-ref "$CANDIDATE_REF" \
-     --candidate-sha "$CANDIDATE_SHA" \
-     --scenario-label telegram-desktop-proof
-   ```
-
-Visual acceptance:
-
-- The GIFs show native Telegram Desktop, not transcript HTML.
-- Telegram is in single-chat proof view with no left chat list or right info
-  pane.
-- The proof behavior is visible without reading logs.
-- Main and PR GIFs are comparable side by side.
-- The final relevant message or button is visible near the bottom.
-- If one run fails because the PR genuinely changes behavior, still finish the
-  session and produce the manifest if useful visual artifacts exist.
-
-Expected final state:
-
-- `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` exists.
-- Visual proof manifests contain paired `motionPreview` artifacts labeled
-  `Main` and `This PR`.
-- No-visual-proof manifests contain no artifacts and have `comparison.pass:
-true`.
-- Capture-infrastructure failure manifests contain no artifacts and have
-  `comparison.pass: false`.
-- The worktree can be dirty only under `.artifacts/`.
+Required final state: `MANTIS_OUTPUT_DIR/mantis-evidence.json`; trusted facts for
+every exercised lane; paired native GIFs for visible comparisons; exact evaluated
+message focused in each final frame.

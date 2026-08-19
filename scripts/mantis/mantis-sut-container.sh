@@ -367,7 +367,7 @@ remove_claimed_runtime_input() {
   fi
   [[ -e "$input_path" ]] || return 0
   [[ -d "$input_path" ]] || die "claimed runtime input is not a directory"
-  [[ "$(stat -c %u "$input_path")" == "$(id -u codex)" ]] \
+  [[ "$(stat -c %u "$input_path")" == "$(id -u mantis-sut)" ]] \
     || die "claimed runtime input owner mismatch"
   [[ "$(stat -c %d "$input_path")" == "$(stat -c %d "$runtime_parent")" ]] \
     || die "claimed runtime input filesystem mismatch"
@@ -467,7 +467,7 @@ lock_runtime_root() {
   [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
     || die "invalid runtime root"
   [[ -d "$runtime_source" && ! -L "$runtime_source" ]] || die "runtime root is not a directory"
-  [[ "$(stat -c %u "$runtime_source")" == "$(id -u codex)" ]] || die "runtime root owner mismatch"
+  [[ "$(stat -c %u "$runtime_source")" == "$(id -u mantis-sut)" ]] || die "runtime root owner mismatch"
   local runtime_parent
   runtime_parent="$(realpath -e "$(<"$runtime_root_file")")"
   [[ "$(stat -c %u "$runtime_parent")" == "0" ]] || die "runtime parent is not root-owned"
@@ -481,7 +481,7 @@ lock_runtime_root() {
     rm -f "$quarantine"
     die "quarantined runtime is not a directory"
   fi
-  if [[ "$(stat -c %u "$quarantine")" != "$(id -u codex)" ]]; then
+  if [[ "$(stat -c %u "$quarantine")" != "$(id -u mantis-sut)" ]]; then
     rm -rf --one-file-system "$quarantine"
     die "quarantined runtime owner mismatch"
   fi
@@ -492,9 +492,9 @@ lock_runtime_root() {
   fi
   local safe_runtime="${filesystem%%$'\t'*}"
   local image_path="${filesystem#*$'\t'}"
-  chown codex:codex "$safe_runtime"
+  chown mantis-sut:mantis-sut "$safe_runtime"
   chmod 0700 "$safe_runtime"
-  if ! /usr/sbin/runuser -u codex -- \
+  if ! /usr/sbin/runuser -u mantis-sut -- \
     /bin/cp -a --no-dereference "$quarantine/." "$safe_runtime/"; then
     destroy_bounded_filesystem "$safe_runtime" "$image_path"
     rm -rf --one-file-system "$quarantine"
@@ -649,6 +649,8 @@ case "$command" in
       fi
       return "$result"
     }
+    # `set -e` preserves a failed probe/container status through this EXIT trap.
+    # The explicit cleanup below is reached only after the protected command succeeds.
     trap cleanup_build EXIT INT TERM
     create_bounded_filesystem "${container_name}-fs" 10G >/dev/null
     isolated_root="$build_mount/repo"
@@ -670,7 +672,6 @@ case "$command" in
       --env OPENCLAW_BUILD_PRIVATE_QA=1 \
       --env OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
       "$image" sh -c "$build_command"
-    build_result=$?
     remove_container_or_fail "$container_name"
     cleanup_network "$network_name"
     build_size_mb="$(du -sm "$isolated_root" | awk '{print $1}')"
@@ -693,7 +694,6 @@ case "$command" in
     published_root=""
     destroy_bounded_filesystem "$build_mount" "$build_image"
     trap - EXIT INT TERM
-    exit "$build_result"
     ;;
   check)
     [[ $# -eq 1 ]] || die "check expects a proxy port"
@@ -706,10 +706,8 @@ case "$command" in
     }
     trap cleanup_check EXIT INT TERM
     run_network_probe "$network_name" "$1"
-    check_result=$?
     cleanup_network "$network_name"
     trap - EXIT INT TERM
-    exit "$check_result"
     ;;
   run)
     [[ $# -eq 7 ]] \
@@ -738,9 +736,24 @@ case "$command" in
     input_file="$safe_runtime/container-input.json"
     trap 'rm -f "${input_file:-}"' EXIT
     [[ -f "$input_file" && ! -L "$input_file" ]] || die "invalid container input"
-    [[ "$(stat -c %u "$input_file")" == "$(id -u codex)" ]] || die "container input owner mismatch"
+    [[ "$(stat -c %u "$input_file")" == "$(id -u mantis-sut)" ]] || die "container input owner mismatch"
     [[ "$(stat -c %a "$input_file")" == "600" ]] || die "container input mode mismatch"
     [[ "$(stat -c %h "$input_file")" == "1" ]] || die "container input must not be hard-linked"
+    response_control_dir="$safe_runtime/mock-control"
+    [[ -d "$response_control_dir" && ! -L "$response_control_dir" ]] \
+      || die "invalid mock response control directory"
+    [[ "$(stat -c %u "$response_control_dir")" == "$(id -u mantis-sut)" ]] \
+      || die "mock response control directory owner mismatch"
+    [[ "$(stat -c %a "$response_control_dir")" == "700" ]] \
+      || die "mock response control directory mode mismatch"
+    response_control="$response_control_dir/response.json"
+    [[ -f "$response_control" && ! -L "$response_control" ]] || die "invalid mock response control"
+    [[ "$(stat -c %u "$response_control")" == "$(id -u mantis-sut)" ]] \
+      || die "mock response control owner mismatch"
+    [[ "$(stat -c %a "$response_control")" == "600" ]] \
+      || die "mock response control mode mismatch"
+    [[ "$(stat -c %h "$response_control")" == "1" ]] \
+      || die "mock response control must not be hard-linked"
     for name in gateway.log mock-openai.log mock-openai-requests.ndjson sut-attestation.json; do
       [[ ! -e "$safe_runtime/$name" && ! -L "$safe_runtime/$name" ]] \
         || die "runtime output was pre-created"
@@ -760,9 +773,9 @@ case "$command" in
     gateway_log="$runtime_source/gateway.log"
     mock_log="$runtime_source/mock-openai.log"
     request_log="$runtime_source/mock-openai-requests.ndjson"
-    install -T -o codex -g codex -m 0600 /dev/null "$safe_runtime/gateway.log"
-    install -T -o codex -g codex -m 0600 /dev/null "$safe_runtime/mock-openai.log"
-    install -T -o codex -g codex -m 0600 /dev/null "$safe_runtime/mock-openai-requests.ndjson"
+    install -T -o mantis-sut -g mantis-sut -m 0600 /dev/null "$safe_runtime/gateway.log"
+    install -T -o mantis-sut -g mantis-sut -m 0600 /dev/null "$safe_runtime/mock-openai.log"
+    install -T -o mantis-sut -g mantis-sut -m 0600 /dev/null "$safe_runtime/mock-openai-requests.ndjson"
     export CI=1
     export GATEWAY_LOG="$gateway_log"
     export GIT_COMMIT="$attested_sha"
@@ -770,6 +783,7 @@ case "$command" in
     export MOCK_LOG="$mock_log"
     export MOCK_PORT="$mock_port"
     export MOCK_REQUEST_LOG="$request_log"
+    export MOCK_RESPONSE_CONTROL="$runtime_source/mock-control/response.json"
     export NODE_DISABLE_COMPILE_CACHE=1
     export OPENAI_API_KEY=sk-openclaw-e2e-mock
     export OPENCLAW_BUILD_PRIVATE_QA=1
@@ -786,7 +800,7 @@ case "$command" in
     fi
 
     forwarded_env=(
-      CI GATEWAY_LOG GIT_COMMIT HOME MOCK_LOG MOCK_PORT MOCK_REQUEST_LOG NODE_DISABLE_COMPILE_CACHE
+      CI GATEWAY_LOG GIT_COMMIT HOME MOCK_LOG MOCK_PORT MOCK_REQUEST_LOG MOCK_RESPONSE_CONTROL NODE_DISABLE_COMPILE_CACHE
       OPENAI_API_KEY OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_CONFIG_PATH
       OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_GATEWAY_PORT OPENCLAW_STATE_DIR
       SUCCESS_MARKER TELEGRAM_BOT_TOKEN
@@ -815,13 +829,11 @@ case "$command" in
       --mount "type=bind,src=$repo_root,dst=$repo_root,readonly" \
       --mount "type=bind,src=$safe_runtime,dst=$runtime_source" \
       --workdir "$repo_root" \
-      --user "$(id -u codex):$(id -g codex)" \
+      --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       "${docker_env[@]}" \
       "$image" sh -c "$sut_command"
-    run_result=$?
     cleanup_network "$network_name"
     trap - EXIT INT TERM
-    exit "$run_result"
     ;;
   stop)
     run_cleanup_with_deadline stop "$@"

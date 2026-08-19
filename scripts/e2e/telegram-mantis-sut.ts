@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { coerceErrorMessage } from "../lib/error-format.mts";
@@ -44,6 +43,7 @@ type MantisSutRuntime = {
   gatewayPid: number;
   mockLog: string;
   mockPid: number;
+  mockResponseControl: string;
   requestLog: string;
   stateDir: string;
   sutAttestation: { lane: MantisSutLane; sha: string };
@@ -52,63 +52,10 @@ type MantisSutRuntime = {
   funnelBridge?: FunnelBridge;
 };
 
-const credentialPayloadSchema = z.object({
-  groupId: z.string().regex(/^-100\d+$/u),
-  sutToken: z.string().min(1),
-  testerUserId: z.union([z.string(), z.number()]).transform(String),
-});
-
-const sutRuntimeSchema = z.object({
-  configPath: z.string().min(1),
-  containerName: z.string().min(1),
-  gatewayLog: z.string().min(1),
-  gatewayPid: z.number().int().positive(),
-  mockLog: z.string().min(1),
-  mockPid: z.number().int().positive(),
-  requestLog: z.string().min(1),
-  stateDir: z.string().min(1),
-  sutAttestation: z.object({
-    lane: z.enum(["baseline", "candidate"]),
-    sha: z.string().regex(/^[0-9a-f]{40}$/u),
-  }),
-  tempRoot: z.string().min(1),
-  workspace: z.string().min(1),
-});
-
-const sutSessionSchema = z.object({
-  command: z.literal("telegram-mantis-sut-session"),
-  createdAt: z.string(),
-  outputDir: z.string().min(1),
-  runtime: sutRuntimeSchema,
-  schemaVersion: z.literal(1),
-  // No credential belongs here: this file ships inside the public proof artifact, where
-  // the 0600 mode writePrivateJson sets does not survive the upload.
-  telegram: z.object({
-    chat: z.string().regex(/^-100\d+$/u),
-  }),
-});
-
-const recorderArtifactsSchema = z.object({
-  artifacts: z.record(z.string(), z.string()),
-  cleanupErrors: z.array(z.string()).optional(),
-  stoppedAt: z.string(),
-});
-
-type MantisSutSession = z.infer<typeof sutSessionSchema>;
-
-const DEFAULT_GATEWAY_PORT = 19_879;
-const DEFAULT_MOCK_PORT = 19_882;
-const CREDENTIAL_PAYLOAD_ENV = "OPENCLAW_TELEGRAM_USER_CREDENTIAL_PAYLOAD";
-
-function usageText(): string {
-  return [
-    "Usage:",
-    "  node --import tsx scripts/e2e/telegram-mantis-sut.ts start --lane <baseline|candidate> --repo-root <path> --output-dir <dir>",
-    "  node --import tsx scripts/e2e/telegram-mantis-sut.ts stop --session <file>",
-    "",
-    "Start proof controls: --mock-response-file <path> --mock-response-chunk-delay-ms <ms> --human-delay-fixed-ms <ms> --link-preview <true|false>",
-  ].join("\n");
-}
+export type MantisSutRecovery = Pick<
+  MantisSutRuntime,
+  "containerName" | "gatewayLog" | "mockLog" | "mockResponseControl" | "requestLog" | "tempRoot"
+>;
 
 function childProcessBaseEnv(): NodeJS.ProcessEnv {
   const keys = [
@@ -277,7 +224,6 @@ export function writeSutConfig(params: {
           },
         },
         ...(params.linkPreview === undefined ? {} : { linkPreview: params.linkPreview }),
-        replyToMode: "first",
       },
     },
     gateway: params.mcpAppFixture
@@ -603,11 +549,11 @@ export function preserveMantisSutRuntimeArtifacts(
   }
 }
 
-function stopMantisSut(sut: Pick<MantisSutRuntime, "containerName" | "tempRoot">): void {
+export function stopMantisSut(sut: Pick<MantisSutRuntime, "containerName" | "tempRoot">): void {
   runSutContainerAction("stop", sut.containerName, sut.tempRoot);
 }
 
-function destroyMantisSut(sut: Pick<MantisSutRuntime, "containerName" | "tempRoot">): void {
+export function destroyMantisSut(sut: Pick<MantisSutRuntime, "containerName" | "tempRoot">): void {
   runSutContainerAction("destroy", sut.containerName, sut.tempRoot);
 }
 
@@ -631,11 +577,24 @@ export async function startMantisSut(params: {
   sutLane: MantisSutLane;
   sutToken: string;
   testerId: string;
+  onRuntimeCreated?: (runtime: MantisSutRecovery) => void;
+  onRuntimeDisposed?: () => void;
 }): Promise<MantisSutRuntime> {
   const drained = await drainSutUpdates(params.sutToken);
   const config = writeSutConfig(params);
   const requestLog = path.join(config.tempRoot, "mock-openai-requests.ndjson");
   const mockLog = path.join(config.tempRoot, "mock-openai.log");
+  const mockResponseControlDir = path.join(config.tempRoot, "mock-control");
+  fs.mkdirSync(mockResponseControlDir, { mode: 0o700 });
+  const mockResponseControl = path.join(mockResponseControlDir, "response.json");
+  fs.writeFileSync(
+    mockResponseControl,
+    `${JSON.stringify({
+      chunkDelayMs: params.mockResponseChunkDelayMs ?? 0,
+      text: params.mockResponseText,
+    })}\n`,
+    { mode: 0o600 },
+  );
   const gatewayLog = path.join(config.tempRoot, "gateway.log");
   const gatewayEnv = createMantisGatewayEnv({ ...config, sutToken: params.sutToken });
   const containerName = `openclaw-telegram-sut-${randomUUID()}`;
@@ -650,6 +609,14 @@ export async function startMantisSut(params: {
     repoRoot: params.repoRoot,
     runtimeRoot: config.tempRoot,
     sutLane: params.sutLane,
+  });
+  params.onRuntimeCreated?.({
+    containerName,
+    gatewayLog,
+    mockLog,
+    mockResponseControl,
+    requestLog,
+    tempRoot: config.tempRoot,
   });
   try {
     const daemonLogPath = path.join(params.outputDir, "sut-container.log");
@@ -684,6 +651,7 @@ export async function startMantisSut(params: {
       gatewayPid,
       mockLog,
       mockPid: gatewayPid,
+      mockResponseControl,
       requestLog,
       sutAttestation,
     };
@@ -718,175 +686,7 @@ export async function startMantisSut(params: {
         { cause: error },
       );
     }
+    params.onRuntimeDisposed?.();
     throw error;
   }
-}
-
-function requiredOption(values: Map<string, string>, name: string): string {
-  const value = values.get(name)?.trim();
-  if (!value) {
-    throw new Error(`${name} is required.\n\n${usageText()}`);
-  }
-  return value;
-}
-
-function parseOptions(args: string[]): Map<string, string> {
-  const values = new Map<string, string>();
-  for (let index = 0; index < args.length; index += 2) {
-    const name = args[index];
-    const value = args[index + 1];
-    if (!name?.startsWith("--") || !value || value.startsWith("--")) {
-      throw new Error(`Invalid arguments.\n\n${usageText()}`);
-    }
-    if (values.has(name)) {
-      throw new Error(`${name} was provided more than once.`);
-    }
-    values.set(name, value);
-  }
-  return values;
-}
-
-function resolveOutputDir(value: string): string {
-  if (path.isAbsolute(value)) {
-    throw new Error("--output-dir must be repo-relative.");
-  }
-  const resolved = path.resolve(value);
-  const relative = path.relative(process.cwd(), resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("--output-dir must stay inside the repository.");
-  }
-  return resolved;
-}
-
-function writePrivateJson(file: string, value: unknown): void {
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
-}
-
-async function startCli(values: Map<string, string>): Promise<void> {
-  const allowed = new Set([
-    "--human-delay-fixed-ms",
-    "--lane",
-    "--link-preview",
-    "--mock-response-chunk-delay-ms",
-    "--mock-response-file",
-    "--output-dir",
-    "--repo-root",
-  ]);
-  for (const name of values.keys()) {
-    if (!allowed.has(name)) {
-      throw new Error(`Unknown start option: ${name}`);
-    }
-  }
-  const lane = z.enum(["baseline", "candidate"]).parse(requiredOption(values, "--lane"));
-  const repoRoot = path.resolve(requiredOption(values, "--repo-root"));
-  const outputDir = resolveOutputDir(requiredOption(values, "--output-dir"));
-  const positiveInteger = (name: string): number | undefined => {
-    const value = values.get(name);
-    if (value === undefined) {
-      return undefined;
-    }
-    if (!/^\d+$/u.test(value) || Number(value) < 1 || !Number.isSafeInteger(Number(value))) {
-      throw new Error(`${name} must be a positive integer.`);
-    }
-    return Number(value);
-  };
-  const linkPreviewValue = values.get("--link-preview");
-  if (
-    linkPreviewValue !== undefined &&
-    linkPreviewValue !== "true" &&
-    linkPreviewValue !== "false"
-  ) {
-    throw new Error("--link-preview must be true or false.");
-  }
-  const mockResponseFile = values.get("--mock-response-file");
-  const credentialFile = process.env[CREDENTIAL_PAYLOAD_ENV]?.trim();
-  if (!credentialFile) {
-    throw new Error(`${CREDENTIAL_PAYLOAD_ENV} is required.`);
-  }
-  const credential = credentialPayloadSchema.parse(
-    JSON.parse(fs.readFileSync(credentialFile, "utf8")),
-  );
-  fs.mkdirSync(outputDir, { recursive: true });
-  const runtime = await startMantisSut({
-    gatewayPort: DEFAULT_GATEWAY_PORT,
-    groupId: credential.groupId,
-    humanDelayFixedMs: positiveInteger("--human-delay-fixed-ms"),
-    linkPreview: linkPreviewValue === undefined ? undefined : linkPreviewValue === "true",
-    mockPort: DEFAULT_MOCK_PORT,
-    mockResponseChunkDelayMs: positiveInteger("--mock-response-chunk-delay-ms"),
-    mockResponseText: mockResponseFile
-      ? fs.readFileSync(path.resolve(mockResponseFile), "utf8")
-      : "OPENCLAW_E2E_OK",
-    outputDir,
-    repoRoot,
-    sutLane: lane,
-    sutToken: credential.sutToken,
-    testerId: credential.testerUserId,
-  });
-  const sessionPath = path.join(outputDir, "sut.json");
-  writePrivateJson(sessionPath, {
-    command: "telegram-mantis-sut-session",
-    createdAt: new Date().toISOString(),
-    outputDir,
-    runtime,
-    schemaVersion: 1,
-    telegram: { chat: credential.groupId },
-  } satisfies MantisSutSession);
-  console.log(
-    JSON.stringify({ session: path.relative(process.cwd(), sessionPath), status: "pass" }),
-  );
-}
-
-function stopCli(values: Map<string, string>): void {
-  if (values.size !== 1 || !values.has("--session")) {
-    throw new Error(`stop requires only --session.\n\n${usageText()}`);
-  }
-  const sessionPath = path.resolve(requiredOption(values, "--session"));
-  const session = sutSessionSchema.parse(JSON.parse(fs.readFileSync(sessionPath, "utf8")));
-  const recorderPath = path.join(path.dirname(sessionPath), "recorder.json");
-  let stopped = false;
-  try {
-    stopMantisSut(session.runtime);
-    stopped = true;
-  } finally {
-    if (stopped) {
-      preserveMantisSutRuntimeArtifacts(session.runtime, session.outputDir);
-    }
-    destroyMantisSut(session.runtime);
-    fs.rmSync(sessionPath, { force: true });
-  }
-  if (fs.existsSync(recorderPath)) {
-    const recorder = recorderArtifactsSchema.parse(
-      JSON.parse(fs.readFileSync(recorderPath, "utf8")),
-    );
-    writePrivateJson(path.join(session.outputDir, "telegram-user-crabbox-session-summary.json"), {
-      artifacts: recorder.artifacts,
-      status: recorder.cleanupErrors ? "fail" : "pass",
-      sutAttestation: session.runtime.sutAttestation,
-    });
-  }
-  console.log(JSON.stringify({ status: "pass" }));
-}
-
-async function main(): Promise<void> {
-  const command = process.argv[2];
-  if (!command || command === "--help" || command === "-h") {
-    console.log(usageText());
-    return;
-  }
-  const values = parseOptions(process.argv.slice(3));
-  if (command === "start") {
-    await startCli(values);
-    return;
-  }
-  if (command === "stop") {
-    stopCli(values);
-    return;
-  }
-  throw new Error(`Unknown command: ${command}\n\n${usageText()}`);
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
 }
