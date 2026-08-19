@@ -2,6 +2,13 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+
+const { retryStaleChunkReloadWhenReachable } = vi.hoisted(() => ({
+  retryStaleChunkReloadWhenReachable: vi.fn(),
+}));
+
+vi.mock("../app/stale-chunk-reload.ts", () => ({ retryStaleChunkReloadWhenReachable }));
+
 import "./login-gate.ts";
 
 type LoginGateElement = HTMLElement & {
@@ -37,20 +44,23 @@ async function mountFailure(lastError: string, lastErrorCode: string | null) {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.clearAllMocks();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "execCommand");
 });
 
 describe("login gate failure recovery", () => {
-  it("offers page refresh for a protocol mismatch and reloads when selected", async () => {
+  it("offers page refresh for a protocol mismatch and retries when selected", async () => {
+    let finishRefresh: (reloaded: boolean) => void = () => undefined;
+    const refreshResult = new Promise<boolean>((resolve) => {
+      finishRefresh = resolve;
+    });
+    retryStaleChunkReloadWhenReachable.mockReturnValueOnce(refreshResult);
     const element = await mountFailure(
       "protocol mismatch",
       ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
     );
-    const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
-
     const failure = element.querySelector<HTMLElement>(
       '.login-gate__failure[data-kind="protocol-mismatch"]',
     );
@@ -61,7 +71,25 @@ describe("login gate failure recovery", () => {
     expect(failure?.querySelector(".login-gate__failure-docs")).not.toBeNull();
 
     refresh?.click();
-    expect(reload).toHaveBeenCalledOnce();
+    refresh?.click();
+    await element.updateComplete;
+    expect(retryStaleChunkReloadWhenReachable).toHaveBeenCalledOnce();
+    expect(element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")?.disabled).toBe(
+      true,
+    );
+    expect(
+      element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")?.textContent?.trim(),
+    ).toBe("Refreshing…");
+
+    finishRefresh(false);
+    await refreshResult;
+    await element.updateComplete;
+    expect(element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")?.disabled).toBe(
+      false,
+    );
+    expect(
+      element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")?.textContent?.trim(),
+    ).toBe("Retry");
   });
 
   it.each([

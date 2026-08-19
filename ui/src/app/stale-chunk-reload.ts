@@ -145,7 +145,10 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   if (readGuardBuildId(storage) === buildId) {
     return false;
   }
-  if (!(await probeControlUiDocument())) {
+  if (!(await retryStaleChunkReloadWhenReachable({ reload: () => undefined }))) {
+    return false;
+  }
+  if (readGuardBuildId(storage) === buildId) {
     return false;
   }
   // A reload resets the in-memory state, so without a persisted guard a broken
@@ -257,8 +260,8 @@ export function installMissingStylesheetRecovery(
       getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
       "1");
   const schedule = deps.schedule ?? scheduleStaleChunkReload;
-  // Single-shot (timeoutMs: 0) keeps the stylesheet banner's existing
-  // behavior; only the lazy-route button waits out a restart.
+  // Keep the banner's manual action single-shot; automatic recovery continues
+  // in the background while the banner provides immediate guidance.
   const retry = deps.retry ?? (() => retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
   let detected = false;
   let uninstalled = false;
@@ -317,9 +320,11 @@ export function installMissingStylesheetRecovery(
     }
     detected = true;
     removeListeners();
+    showBanner();
     const reloaded = await schedule();
-    if (!reloaded) {
-      showBanner();
+    if (reloaded) {
+      banner?.remove();
+      banner = null;
     }
   };
 
