@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
-  it("defaults automatic favicon fetching off and enables it only from bootstrap config", async () => {
+  it("stays fail closed before bootstrap and accepts the Gateway favicon setting", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => bootstrapResponse("test", true)),

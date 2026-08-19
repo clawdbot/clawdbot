@@ -1633,7 +1633,6 @@ describe("handleControlUiHttpRequest", () => {
               },
               gateway: {
                 cliAgents: { enabled: true },
-                controlUi: { automaticallyFetchFavicons: true },
               },
             },
           },
@@ -1652,6 +1651,27 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.automaticallyFetchFavicons).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
+      },
+    });
+  });
+
+  it("projects an explicit favicon opt-out into bootstrap config", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              gateway: { controlUi: { automaticallyFetchFavicons: false } },
+            },
+          },
+        );
+
+        expect(handled).toBe(true);
+        expect(parseBootstrapPayload(end).automaticallyFetchFavicons).toBe(false);
       },
     });
   });

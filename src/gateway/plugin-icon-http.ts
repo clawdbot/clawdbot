@@ -347,7 +347,7 @@ export async function handlePluginIconHttpRequest(
 
   if (
     faviconRequest.matched &&
-    opts.config.gateway?.controlUi?.automaticallyFetchFavicons !== true
+    opts.config.gateway?.controlUi?.automaticallyFetchFavicons === false
   ) {
     sendNotFound(res);
     return true;
