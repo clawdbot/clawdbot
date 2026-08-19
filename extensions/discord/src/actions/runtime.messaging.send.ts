@@ -11,7 +11,6 @@ import {
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
-  resolvePollMaxSelections,
 } from "../runtime-api.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import { isThreadChannelType } from "../send.permissions.js";
@@ -189,29 +188,6 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       await discordMessagingActionRuntime.sendStickerDiscord(
         to,
         stickerIds,
-        ctx.withOpts({ content }),
-      );
-      return jsonResult({ ok: true });
-    }
-    case "poll": {
-      if (!ctx.isActionEnabled("polls")) {
-        throw new Error("Discord polls are disabled.");
-      }
-      const to = readStringParam(ctx.params, "to", { required: true });
-      const content = readStringParam(ctx.params, "content");
-      const question = readStringParam(ctx.params, "question", {
-        required: true,
-      });
-      const answers = readStringArrayParam(ctx.params, "answers", {
-        required: true,
-        label: "answers",
-      });
-      const allowMultiselect = readBooleanParam(ctx.params, "allowMultiselect");
-      const durationHours = readPositiveIntegerParam(ctx.params, "durationHours");
-      const maxSelections = resolvePollMaxSelections(answers.length, allowMultiselect);
-      await discordMessagingActionRuntime.sendPollDiscord(
-        to,
-        { question, options: answers, maxSelections, durationHours },
         ctx.withOpts({ content }),
       );
       return jsonResult({ ok: true });

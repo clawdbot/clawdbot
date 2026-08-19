@@ -946,7 +946,12 @@ export const sendHandlers: GatewayRequestHandlers = {
         const { cfg: selectedCfg, sourceCfg, channel } = resolved;
         const cfg = resolveMessageActionRuntimeConfig({ cfg: selectedCfg, sourceCfg });
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-        if (!plugin?.actions?.handleAction) {
+        const canonicalPoll =
+          request.action === "poll" &&
+          Boolean(plugin?.outbound?.sendPoll || plugin?.message?.send?.poll) &&
+          (!plugin?.actions?.handleAction ||
+            plugin.actions.supportsAction?.({ action: "poll" }) === false);
+        if (!plugin || (!plugin.actions?.handleAction && !canonicalPoll)) {
           respond(
             false,
             undefined,
@@ -957,9 +962,9 @@ export const sendHandlers: GatewayRequestHandlers = {
           );
           return undefined;
         }
-        return { cfg, channel, plugin };
+        return { cfg, channel, plugin, canonicalPoll };
       },
-      work: async ({ cfg, channel, accountId, dedupeKey, authorize }) => {
+      work: async ({ cfg, channel, canonicalPoll, accountId, dedupeKey, authorize }) => {
         try {
           const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
           const requestedAgentId =
@@ -1050,11 +1055,9 @@ export const sendHandlers: GatewayRequestHandlers = {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
           const gatewayClientScopes = client?.connect?.scopes ?? [];
-          const inboundEventKind =
-            request.inboundTurnKind === "room_event" || request.inboundTurnKind === "user_request"
-              ? request.inboundTurnKind
-              : undefined;
-          const handled = await dispatchChannelMessageAction({
+          const inboundEventKind: "room_event" | "user_request" =
+            request.inboundTurnKind === "room_event" ? "room_event" : "user_request";
+          const actionContext = {
             channel,
             action: request.action as never,
             cfg,
@@ -1075,21 +1078,39 @@ export const sendHandlers: GatewayRequestHandlers = {
             toolContext: trustedContext.toolContext,
             dryRun: false,
             gatewayClientScopes,
-          });
-          if (!handled) {
-            await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
-            const error = errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Message action ${request.action} not supported for channel ${channel}.`,
-            );
-            return createGatewayInflightResult({
-              context,
-              dedupeKey,
-              channel,
-              result: { ok: false, error },
+          };
+          let payload: unknown;
+          if (canonicalPoll) {
+            const { runMessageAction } =
+              await import("../../infra/outbound/message-action-runner.js");
+            const result = await runMessageAction({
+              ...actionContext,
+              params: {
+                ...request.params,
+                channel,
+                ...(accountId ? { accountId } : {}),
+                idempotencyKey: request.idempotencyKey,
+              },
             });
+            payload = result.payload;
+          } else {
+            const handled = await dispatchChannelMessageAction(actionContext);
+            if (handled) {
+              payload = extractToolPayload(handled);
+            } else {
+              await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
+              const error = errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `Message action ${request.action} not supported for channel ${channel}.`,
+              );
+              return createGatewayInflightResult({
+                context,
+                dedupeKey,
+                channel,
+                result: { ok: false, error },
+              });
+            }
           }
-          const payload = extractToolPayload(handled);
           try {
             await reconcileTerminalSourceReplyDelivery({
               deliveredPayload: payload,

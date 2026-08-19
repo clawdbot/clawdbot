@@ -82,7 +82,6 @@ const discordSendMocks = {
   searchMessagesDiscord: vi.fn(async () => ({})),
   sendDiscordComponentMessage: vi.fn(async () => ({})),
   sendMessageDiscord: vi.fn(async () => ({})),
-  sendPollDiscord: vi.fn(async () => ({})),
   sendStickerDiscord: vi.fn(async () => ({})),
   sendVoiceMessageDiscord: vi.fn(async () => ({})),
   setChannelPermissionDiscord: vi.fn(async () => ({ ok: true })),
@@ -124,7 +123,6 @@ const {
   searchMessagesDiscord,
   sendDiscordComponentMessage,
   sendMessageDiscord,
-  sendPollDiscord,
   sendVoiceMessageDiscord,
   setChannelPermissionDiscord,
   timeoutMemberDiscord,
@@ -1192,31 +1190,6 @@ describe("handleDiscordMessagingAction", () => {
         disabledActions,
       ),
     ).rejects.toThrow(/Discord reactions are disabled/);
-  });
-
-  it("parses string booleans for poll options", async () => {
-    await handleMessagingAction(
-      "poll",
-      {
-        to: "channel:123",
-        question: "Lunch?",
-        answers: ["Pizza", "Sushi"],
-        allowMultiselect: "true",
-        durationHours: "24",
-      },
-      enableAllActions,
-    );
-
-    expect(sendPollDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      {
-        question: "Lunch?",
-        options: ["Pizza", "Sushi"],
-        maxSelections: 2,
-        durationHours: 24,
-      },
-      { cfg: DISCORD_TEST_CFG, content: undefined },
-    );
   });
 
   it("rejects Discord permission reads for non-allowlisted target channels", async () => {

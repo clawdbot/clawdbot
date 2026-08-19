@@ -89,7 +89,8 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
 }));
 
-vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
+vi.mock("../../channels/plugins/message-action-dispatch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/message-action-dispatch.js")>()),
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
@@ -4147,6 +4148,67 @@ describe("gateway send mirroring", () => {
 
     expect(firstRespondCall(respond)[0]).toBe(true);
     expect(lastDispatchChannelMessageActionCall()?.reply).toEqual(reply);
+  });
+
+  it("falls back once to canonical outbound poll delivery when plugin actions decline", async () => {
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        config: { resolveAccount: () => ({ enabled: true }), isConfigured: () => true },
+      }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action !== "poll",
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+      outbound: { deliveryMode: "direct", sendPoll: mocks.sendPoll },
+    };
+    mocks.getChannelPlugin.mockReturnValue(plugin);
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "discord",
+      configured: ["discord"],
+      plugin,
+    });
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+
+    const { respond } = await runMessageActionRequest({
+      channel: "discord",
+      action: "poll",
+      params: {
+        to: "channel:123",
+        threadId: "thread-123",
+        message: "Vote now",
+        pollQuestion: "Ship it?",
+        pollOption: ["Yes", "No"],
+        silent: true,
+      },
+      accountId: "default",
+      sessionKey: "agent:main:discord:channel:123",
+      inboundTurnKind: "room_event",
+      idempotencyKey: "idem-message-action-canonical-poll",
+    });
+
+    const response = firstRespondCall(respond);
+    expect(response[2]).toBeUndefined();
+    expect(response[0]).toBe(true);
+    expect(response[1]).toMatchObject({
+      channel: "discord",
+      question: "Ship it?",
+      options: ["Yes", "No"],
+      via: "direct",
+      result: { messageId: "poll-1" },
+    });
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledOnce();
+    expect(mocks.sendPoll).toHaveBeenCalledOnce();
+    expect(mocks.sendPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("Vote now"),
+        threadId: "thread-123",
+        silent: true,
+        sessionKey: "agent:main:discord:channel:123",
+        inboundEventKind: "room_event",
+      }),
+    );
   });
 
   it("uses signed sender group policy without granting gateway send host reads", async () => {

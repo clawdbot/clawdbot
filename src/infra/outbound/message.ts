@@ -3,6 +3,7 @@ import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-iden
 // requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import {
   sendDurableMessageBatchCore,
@@ -147,6 +148,7 @@ export type MessageSendResult = {
 
 type MessagePollParams = {
   to: string;
+  content?: string;
   question: string;
   options: string[];
   maxSelections?: number;
@@ -161,6 +163,10 @@ type MessagePollParams = {
   cfg?: OpenClawConfig;
   gateway?: OutboundMessageGatewayOptionsInput;
   idempotencyKey?: string;
+  sessionKey?: string;
+  inboundEventKind?: InboundEventKind;
+  /** @internal Runs immediately before recipient-visible poll platform I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
 };
@@ -174,7 +180,7 @@ export type MessagePollResult = {
   durationSeconds: number | null;
   durationHours: number | null;
   via: "direct" | "gateway";
-  result?: Pick<OutboundDeliveryResult, "messageId" | "target" | "toJid" | "pollId">;
+  result?: Pick<OutboundDeliveryResult, "messageId" | "target" | "toJid" | "pollId" | "receipt">;
   dryRun?: boolean;
 };
 
@@ -566,10 +572,14 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       cfg,
       to: resolvedTarget.to,
       poll: normalized,
+      content: params.content,
       accountId: params.accountId,
       threadId: params.threadId,
       silent: params.silent,
       isAnonymous: params.isAnonymous,
+      sessionKey: params.sessionKey,
+      inboundEventKind: params.inboundEventKind,
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
     });
 
     return buildMessagePollResult({

@@ -516,6 +516,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       return {
         to,
         question,
+        content: readToolStringParam(params, "message", { allowEmpty: true }) ?? undefined,
         options,
         maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
         durationHours: durationHours ?? undefined,

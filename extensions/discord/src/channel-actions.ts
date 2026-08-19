@@ -17,6 +17,7 @@ import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.
 
 const localExecutionActions = new Set<ChannelMessageActionName>([
   "send",
+  "poll",
   "upload-file",
   "thread-reply",
   "sticker",

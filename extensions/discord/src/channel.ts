@@ -217,6 +217,7 @@ const discordMessageActions: ChannelMessageActionAdapter = {
     resolveRuntimeDiscordMessageActions()?.prepareSendPayload?.(ctx) ??
     discordMessageActionsImpl.prepareSendPayload?.(ctx) ??
     null,
+  supportsAction: ({ action }) => action !== "poll",
   handleAction: async (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
   ) => {

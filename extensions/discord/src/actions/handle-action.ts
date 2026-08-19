@@ -307,32 +307,6 @@ export async function handleDiscordMessageAction(
     return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
 
-  if (action === "poll") {
-    const to = readStringParam(params, "to", { required: true });
-    const question = readStringParam(params, "pollQuestion", {
-      required: true,
-    });
-    const answers = readStringArrayParam(params, "pollOption", { required: true });
-    const allowMultiselect = readBooleanParam(params, "pollMulti");
-    const durationHours = readPositiveIntegerParam(params, "pollDurationHours");
-    const result = await handleDiscordAction(
-      {
-        action: "poll",
-        accountId: accountId ?? undefined,
-        to,
-        question,
-        answers,
-        allowMultiselect,
-        durationHours: durationHours ?? undefined,
-        content: readStringParam(params, "message"),
-      },
-      cfg,
-      actionOptions,
-    );
-    notifyVisibleOutbound(result, to);
-    return result;
-  }
-
   if (action === "react") {
     const messageIdRaw = resolveReactionMessageId({ args: params, toolContext: ctx.toolContext });
     const messageId = normalizeOptionalStringifiedId(messageIdRaw) ?? "";

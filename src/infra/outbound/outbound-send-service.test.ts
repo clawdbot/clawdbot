@@ -1238,11 +1238,14 @@ describe("executeSendAction", () => {
         channel: "demo-outbound",
         params: {},
         accountId: "acc-1",
+        sessionKey: "agent:main:demo-outbound:channel:123",
+        inboundEventKind: "room_event",
         dryRun: false,
       },
       resolveCorePoll: () => ({
         to: "channel:123",
         question: "Lunch?",
+        content: "Vote now",
         options: ["Pizza", "Sushi"],
         maxSelections: 1,
         durationSeconds: 300,
@@ -1256,11 +1259,14 @@ describe("executeSendAction", () => {
       accountId: "acc-1",
       to: "channel:123",
       question: "Lunch?",
+      content: "Vote now",
       options: ["Pizza", "Sushi"],
       maxSelections: 1,
       durationSeconds: 300,
       threadId: "thread-1",
       isAnonymous: true,
+      sessionKey: "agent:main:demo-outbound:channel:123",
+      inboundEventKind: "room_event",
     });
   });
 
