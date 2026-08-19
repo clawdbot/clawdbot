@@ -160,22 +160,32 @@ if (!recordPath || !configPath || !stateDir) {
   throw new Error("missing fixture environment");
 }
 const record = (value) => fs.appendFileSync(recordPath, JSON.stringify(value) + "\\n");
+const authDbPath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
 if (args[0] === "models") {
   let stdin = "";
   process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) stdin += chunk;
   const provider = args[args.indexOf("--provider") + 1];
+  const configStat = fs.lstatSync(configPath);
   record({
     kind: "auth",
     args,
     stdin,
-    dbExists: fs.existsSync(path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite")),
+    authDbPath,
+    dbExists: fs.existsSync(authDbPath),
+    configPath,
+    configMode: configStat.mode & 0o777,
+    configRegular: configStat.isFile(),
+    configSymlink: configStat.isSymbolicLink(),
+    stateDir,
     env: {
       OPENCLAW_CLI: process.env.OPENCLAW_CLI,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_STATE_DIR: stateDir,
     },
   });
+  fs.mkdirSync(path.dirname(authDbPath), { recursive: true });
+  fs.writeFileSync(authDbPath, "fixture auth");
   if (process.env.QA_FAIL_PROVIDER === provider) {
     process.stderr.write("Authorization: Bearer " + stdin.trim());
     process.exit(9);
@@ -186,7 +196,16 @@ if (args[0] === "models") {
   process.exit(0);
 }
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-record({ kind: "gateway", args, fixtureProfiles: config.fixtureProfiles });
+record({
+  kind: "gateway",
+  args,
+  authDbPath,
+  dbExists: fs.existsSync(authDbPath),
+  configPath,
+  authProfileIds: Object.keys(config.auth?.profiles ?? {}),
+  fixtureProfiles: config.fixtureProfiles,
+  stateDir,
+});
 process.stderr.write("fixture gateway exit");
 process.exit(17);
 `,
@@ -1442,16 +1461,28 @@ describe("buildQaRuntimeEnv", () => {
       ],
     ]);
     for (const record of authRecords) {
-      expect(record.dbExists).toBe(false);
       expect(record.stdin).toMatch(/^sk-qa-mock-[a-f0-9]{32}\n$/u);
       expect(record.env).toMatchObject({
         OPENCLAW_CLI: "1",
       });
+      expect(record.configMode).toBe(0o600);
+      expect(record.configRegular).toBe(true);
+      expect(record.configSymlink).toBe(false);
     }
+    expect(authRecords.map((record) => record.dbExists)).toEqual([false, true]);
+    const authConfigPaths = authRecords.map((record) => String(record.configPath));
+    expect(new Set(authConfigPaths).size).toBe(1);
+    expect(authConfigPaths[0]).toBe(
+      path.join(String(authRecords[0]?.stateDir), "qa-auth-bootstrap", "openclaw.json"),
+    );
     expect(records.at(-1)).toMatchObject({
       kind: "gateway",
-      fixtureProfiles: ["openai", "anthropic"],
+      authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
+      dbExists: true,
     });
+    expect(records.at(-1)?.configPath).not.toBe(authConfigPaths[0]);
+    expect(records.at(-1)?.fixtureProfiles).toBeUndefined();
+    expect(new Set(records.map((record) => record.authDbPath)).size).toBe(1);
   });
 
   it("blocks packaged gateway spawn when candidate auth bootstrap fails", async () => {
@@ -1487,7 +1518,13 @@ describe("buildQaRuntimeEnv", () => {
     );
     const records = await readJsonLines(recordPath);
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ kind: "auth", dbExists: false });
+    expect(records[0]).toMatchObject({
+      kind: "auth",
+      dbExists: false,
+      configMode: 0o600,
+      configRegular: true,
+      configSymlink: false,
+    });
     const submittedKey = String(records[0]?.stdin).trim();
     expect(submittedKey).toMatch(/^sk-qa-mock-[a-f0-9]{32}$/u);
     expect(error.message).not.toContain(submittedKey);

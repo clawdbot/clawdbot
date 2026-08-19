@@ -925,23 +925,32 @@ describe("release Telegram QA workflow", () => {
     );
     expect(createSut).not.toContain('chmod 0711 "$temp_root"');
     expect(createSut).not.toContain('chmod 1777 "$temp_root"');
+    expect(createSut).toContain('"${temp_root}/state/qa-auth-bootstrap/openclaw.json")');
+    expect(createSut).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}"',
+    );
   });
 
-  it("adds an empty PS1 only after attested runtime environment verification", () => {
+  it("strips inherited Bash startup state before the first isolated child", () => {
     const createSut = requireRun(
       "run_telegram",
       "Create isolated Telegram SUT identity and launcher",
     );
     const launcher = extractHereDocument(createSut, "LAUNCHER");
     const verification = '[[ "$actual_env_keys_b64" == "$runtime_expected_env_keys_b64" ]]';
-    const ps1Export = "export PS1=";
+    const stripOptions = "export -n BASHOPTS SHELLOPTS";
+    const stripStartupFiles = "unset BASH_ENV ENV";
+    const isolatedSpawn = "/usr/bin/unshare";
     const candidateExec = 'exec "$runtime_node_bin" "${runtime_node_args[@]}"';
 
-    expect(launcher.match(/export PS1=/gu)).toHaveLength(1);
+    expect(launcher).not.toContain("export PS1=");
+    expect(launcher.indexOf(stripOptions)).toBeGreaterThan(-1);
+    expect(launcher.indexOf(stripStartupFiles)).toBeGreaterThan(launcher.indexOf(stripOptions));
+    expect(launcher.indexOf(isolatedSpawn)).toBeGreaterThan(launcher.indexOf(stripStartupFiles));
     expect(launcher.indexOf(verification)).toBeGreaterThan(-1);
-    expect(launcher.indexOf(ps1Export)).toBeGreaterThan(launcher.indexOf(verification));
-    expect(launcher.indexOf(candidateExec)).toBeGreaterThan(launcher.indexOf(ps1Export));
+    expect(launcher.indexOf(candidateExec)).toBeGreaterThan(launcher.indexOf(verification));
     expect(launcher.match(/exec "\$runtime_node_bin"/gu)).toHaveLength(1);
+    expect(launcher.match(/\/bin\/bash -ceu/gu)).toHaveLength(2);
     expect(launcher).toContain('grep -Ev "^(PWD|SHLVL|_)$"');
   });
 
