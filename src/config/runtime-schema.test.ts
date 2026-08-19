@@ -699,3 +699,95 @@ describe("sensitivity survives schema displacement", () => {
     expect(uiHints["channels.clickclack.opaqueValue"]?.sensitive).toBe(true);
   });
 });
+
+// Codex P1 3809323449 on #123209: redaction gates on `sensitive === true ||
+// hasSensitiveUrlHintTag(hint)`, so a union carrying only `sensitive` still drops a URL-embedded
+// credential that the displaced owner alone tagged `url-secret`.
+describe("url-secret tags survive schema displacement", () => {
+  it("keeps a displaced claimant's url-secret tag on the surviving channel", () => {
+    mockLoadConfig.mockReturnValue(explicitMainRoster());
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "clickclack-plus",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              preferOver: ["clickclack-core"],
+              schema: {
+                type: "object",
+                properties: { plusToken: { type: "string" } },
+                additionalProperties: true,
+              },
+              uiHints: { plusToken: { sensitive: true } },
+            },
+          },
+        },
+        {
+          id: "clickclack-core",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { endpoint: { type: "string" } },
+                additionalProperties: false,
+              },
+              // Not `sensitive`; the credential rides in the URL, which is what the tag is for.
+              uiHints: { endpoint: { label: "Endpoint", tags: ["url-secret"] } },
+            },
+          },
+        },
+      ],
+    });
+
+    const { uiHints } = loadGatewayRuntimeConfigSchema();
+
+    expect(uiHints["channels.clickclack.endpoint"]?.tags).toContain("url-secret");
+  });
+
+  it("leaves the owner's own labels and tags intact", () => {
+    mockLoadConfig.mockReturnValue(explicitMainRoster());
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "clickclack-plus",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              preferOver: ["clickclack-core"],
+              schema: {
+                type: "object",
+                properties: { endpoint: { type: "string" } },
+                additionalProperties: true,
+              },
+              uiHints: { endpoint: { label: "Plus endpoint", tags: ["advanced"] } },
+            },
+          },
+        },
+        {
+          id: "clickclack-core",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: { type: "object", properties: { endpoint: { type: "string" } } },
+              uiHints: { endpoint: { label: "Core endpoint", tags: ["url-secret"] } },
+            },
+          },
+        },
+      ],
+    });
+
+    const { uiHints } = loadGatewayRuntimeConfigSchema();
+    const hint = uiHints["channels.clickclack.endpoint"];
+
+    expect(hint?.label).toBe("Plus endpoint");
+    expect(hint?.tags).toEqual(expect.arrayContaining(["advanced", "url-secret"]));
+  });
+});

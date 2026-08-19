@@ -3,6 +3,10 @@
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  hasSensitiveUrlHintTag,
+  SENSITIVE_URL_HINT_TAG,
+} from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -312,17 +316,24 @@ export function collectPluginSchemaMetadataCore(
  * config-independent metadata (docs, generated baselines), where every declared replacement counts
  * and no operator config is in scope.
  */
+/** The attributes redaction consults, unioned across a channel's claimants. */
+type ChannelRedactionHint = { sensitive: boolean; urlSecret: boolean };
+
 export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
   policy: ChannelOwnershipPolicy = MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
   const displacedOwners = collectDisplacedChannelOwners(registry, policy);
-  // Sensitivity is a property of the field, not of whichever claimant wins the schema. A displaced
+  // Redaction is a property of the field, not of whichever claimant wins the schema. A displaced
   // plugin's config can survive under the shared channel when the replacement accepts additional
-  // properties, so dropping its `sensitive` hints with its schema would leave a retained secret
-  // with no hint and no name-shaped fallback, and redaction would emit it.
-  const sensitivePathsByChannel = new Map<string, Set<string>>();
+  // properties, so dropping its hints with its schema would leave a retained secret with no hint
+  // and no name-shaped fallback, and redaction would emit it.
+  //
+  // Both attributes the redaction path consults travel here: `redactConfigObject` and the system
+  // agent gate on `sensitive === true || hasSensitiveUrlHintTag(hint)`, so carrying only the
+  // former would still leak a URL-embedded credential the displaced owner alone tagged.
+  const redactionByChannel = new Map<string, Map<string, ChannelRedactionHint>>();
 
   for (const record of registry.plugins) {
     const originRank = resolveOriginRank(record.origin);
@@ -376,12 +387,18 @@ export function collectChannelSchemaMetadataWithOwnership(
       // Collect before any ownership decision: a claimant that loses the schema still contributes
       // sensitivity, and the decision below `continue`s past this point for losers.
       for (const [relPath, hint] of Object.entries(channelConfig.uiHints ?? {})) {
-        if (hint?.sensitive !== true) {
+        const sensitive = hint?.sensitive === true;
+        const urlSecret = hasSensitiveUrlHintTag(hint);
+        if (!sensitive && !urlSecret) {
           continue;
         }
-        const carried = sensitivePathsByChannel.get(channelId) ?? new Set<string>();
-        carried.add(relPath);
-        sensitivePathsByChannel.set(channelId, carried);
+        const carried = redactionByChannel.get(channelId) ?? new Map<string, ChannelRedactionHint>();
+        const seen = carried.get(relPath);
+        carried.set(relPath, {
+          sensitive: sensitive || seen?.sensitive === true,
+          urlSecret: urlSecret || seen?.urlSecret === true,
+        });
+        redactionByChannel.set(channelId, carried);
       }
       const current = byChannelId.get(channelId);
       const currentOwnsSchema =
@@ -429,15 +446,25 @@ export function collectChannelSchemaMetadataWithOwnership(
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
     .map(({ originRank: _originRank, ...entry }) => {
-      const carried = sensitivePathsByChannel.get(entry.id);
+      const carried = redactionByChannel.get(entry.id);
       if (!carried) {
         return entry;
       }
-      // Union only sensitivity: the owner keeps its labels, help text, and schema. `entry` is
-      // already a fresh object from the rest destructure above, so assigning into it is local.
+      // Union only what redaction reads: the owner keeps its labels, help text, presentation, and
+      // schema, and its other tags survive. `entry` is already a fresh object from the rest
+      // destructure above, so assigning into it is local.
       const merged: NonNullable<ChannelUiMetadata["configUiHints"]> = { ...entry.configUiHints };
-      for (const relPath of carried) {
-        merged[relPath] = { ...merged[relPath], sensitive: true };
+      for (const [relPath, redaction] of carried) {
+        const owned = merged[relPath];
+        const tags =
+          redaction.urlSecret && !hasSensitiveUrlHintTag(owned)
+            ? [...(owned?.tags ?? []), SENSITIVE_URL_HINT_TAG]
+            : owned?.tags;
+        merged[relPath] = {
+          ...owned,
+          ...(redaction.sensitive ? { sensitive: true } : {}),
+          ...(tags ? { tags } : {}),
+        };
       }
       entry.configUiHints = merged;
       return entry;
