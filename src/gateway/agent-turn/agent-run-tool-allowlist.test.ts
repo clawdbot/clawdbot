@@ -17,4 +17,13 @@ describe("resolveAgentRunToolAllowlist", () => {
       }),
     ).toEqual(["read"]);
   });
+
+  it("preserves the concrete handoff surface for a default Cron wildcard", () => {
+    expect(
+      resolveAgentRunToolAllowlist({
+        restoredCronToolsAllow: ["*"],
+        sessionHandoffToolsAllow: ["read", "write", "apply_patch"],
+      }),
+    ).toEqual(["read", "write", "apply_patch"]);
+  });
 });

@@ -329,7 +329,7 @@ describe("agent runtime identity token", () => {
     expect(readAgentRuntimeExecutionLineage(identity?.sessionSpawnContext)).toBeUndefined();
   });
 
-  it("redeems a private session handoff once for its exact target", async () => {
+  it("redeems a private session handoff once at admission after reconnect", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
     const sessionHandoff = await import("./agent-runtime-session-handoff.js");
@@ -372,6 +372,7 @@ describe("agent runtime identity token", () => {
     expect(decodedPayload).not.toContain("private-handoff-context");
     expect(decodedPayload).not.toContain("private-handoff-execution");
 
+    const disconnectedIdentity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
     const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
     expect(identity).toMatchObject({
       executionIdentity,
@@ -394,6 +395,13 @@ describe("agent runtime identity token", () => {
           idempotencyKey: "handoff-request-1",
         }),
     ).toMatchObject({ inheritedToolPolicy: { allow: ["sessions_send", "read"] } });
+    expect(
+      disconnectedIdentity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(disconnectedIdentity, {
+          sessionKey: "agent:helper:main",
+          idempotencyKey: "handoff-request-1",
+        }),
+    ).toBeUndefined();
     expect(
       identity &&
         sessionHandoff.consumeAgentRuntimeSessionHandoff(identity, {

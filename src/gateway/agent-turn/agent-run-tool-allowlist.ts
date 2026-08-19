@@ -1,4 +1,4 @@
-import { normalizeToolPolicyName, normalizeToolPolicyNames } from "../../agents/tool-policy.js";
+import { isToolAllowedByPolicyNameWithoutAliases } from "../../agents/tool-policy-match.js";
 
 export function resolveAgentRunToolAllowlist(params: {
   restoredCronToolsAllow?: string[];
@@ -9,6 +9,7 @@ export function resolveAgentRunToolAllowlist(params: {
   if (!restored || !handoff) {
     return restored ?? handoff;
   }
-  const restoredNames = normalizeToolPolicyNames(restored);
-  return handoff.filter((name) => restoredNames.has(normalizeToolPolicyName(name)));
+  return handoff.filter((name) =>
+    isToolAllowedByPolicyNameWithoutAliases(name, { allow: restored }),
+  );
 }

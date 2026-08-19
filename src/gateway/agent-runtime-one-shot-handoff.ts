@@ -100,27 +100,28 @@ export function createAgentRuntimeOneShotHandoffRegistry<Payload, Target>(option
         }>
       | undefined {
       const handoff = handoffs.get(params.id);
-      handoffs.delete(params.id);
       if (
         !handoff ||
         handoff.expiresAtMs <= Date.now() ||
         !sameOwner(handoff.owner, params.owner) ||
         !validateAgentRunDelegatedAuthority(handoff.owner.delegatedAuthority)
       ) {
+        handoffs.delete(params.id);
         return undefined;
       }
-      let consumed = false;
       return Object.freeze({
         payload: handoff.payload,
         consume: (target: Target) => {
           if (
-            consumed ||
+            handoffs.get(params.id) !== handoff ||
             !options.sameTarget(handoff.target, target) ||
             !validateAgentRunDelegatedAuthority(handoff.owner.delegatedAuthority)
           ) {
             return undefined;
           }
-          consumed = true;
+          // Authentication may reconnect before admission. Delete only at this
+          // synchronous target check so exactly one admitted consumer can win.
+          handoffs.delete(params.id);
           return handoff.payload;
         },
       });
