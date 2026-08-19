@@ -83,6 +83,7 @@ const qaSharedFlows = {
           {
             if: {
               expr: "config.expectReply",
+              // oxlint-disable-next-line unicorn/no-thenable -- The QA flow DSL names its positive branch `then`.
               then: [
                 {
                   waitForOutbound: {
