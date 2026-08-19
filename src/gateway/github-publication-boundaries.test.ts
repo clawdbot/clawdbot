@@ -145,6 +145,40 @@ describe("Gateway GitHub publication boundaries", () => {
     );
   });
 
+  it("rejects a local turn that starts and finishes during snapshot capture", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    const fallback = mocks.runCommand.getMockImplementation()!;
+    let raced = false;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      if (!raced && argv.includes("add")) {
+        raced = true;
+        const claim = placements.claimTurn({
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          claimId: "claim-during-snapshot",
+          runId: "run-during-snapshot",
+          owner: { kind: "local" },
+        });
+        placements.releaseTurn(claim);
+      }
+      return await fallback(argv, options);
+    });
+    const coordinator = createTestGitHubPublicationCoordinator({ placements });
+
+    await expect(
+      coordinator.requestForSession({
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        idempotencyKey: "local-turn-during-snapshot",
+      }),
+    ).rejects.toThrow("session authority changed during snapshot");
+    expect(commands.some((argv) => argv.includes("commit-tree") || argv.includes("push"))).toBe(
+      false,
+    );
+  });
+
   it("fails before mutation when the local base is outside the authenticated remote lineage", async () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {

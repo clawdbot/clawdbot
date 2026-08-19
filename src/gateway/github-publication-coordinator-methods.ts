@@ -136,6 +136,26 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       });
       const loaded = initialAuthority.loaded;
       const placement = params.placements.get(sessionId);
+      const capturePlacement = placement
+        ? {
+            state: placement.state,
+            generation: placement.generation,
+            updatedAtMs: placement.updatedAtMs,
+          }
+        : null;
+      const assertCaptureAuthority = () => {
+        input.assertCurrent?.();
+        const current = params.placements.get(sessionId);
+        const unchanged = capturePlacement
+          ? current?.state === capturePlacement.state &&
+            current.generation === capturePlacement.generation &&
+            current.updatedAtMs === capturePlacement.updatedAtMs &&
+            !current.turnClaim
+          : current === undefined;
+        if (!unchanged) {
+          throw new Error("GitHub publication session authority changed during snapshot.");
+        }
+      };
       const claim = placement ? exactClaimForPlacement(placement) : undefined;
       if (claim) {
         if (!input.expectedRunId) {
@@ -215,9 +235,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
             }
           : await captureGitHubPublicationWorkspaceSnapshot({
               cwd: worktree.path,
-              assertCurrent: input.assertCurrent,
+              assertCurrent: assertCaptureAuthority,
             });
-      input.assertCurrent?.();
+      assertCaptureAuthority();
       resolveGitHubPublicationWorktreeOwner({
         sessionId,
         sessionKey: loaded.canonicalKey,
