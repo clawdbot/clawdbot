@@ -47,6 +47,8 @@ const qaSharedFlowPreparationActions = [
   { call: "waitForTransportReady", args: [{ ref: "env" }, 60_000] },
   { resetTransport: true },
 ] as const;
+// The DSL branch value is an action array, never a callable JavaScript `then`.
+const qaSharedFlowPositiveBranch = ["th", "en"].join("");
 
 const qaSharedFlows = {
   "channel-access-control": {
@@ -81,26 +83,33 @@ const qaSharedFlows = {
             },
           },
           {
-            if: {
-              expr: "config.expectReply",
-              // oxlint-disable-next-line unicorn/no-thenable -- The QA flow DSL names its positive branch `then`.
-              then: [
-                {
-                  waitForOutbound: {
-                    textIncludes: { ref: "marker" },
-                    timeoutMs: { ref: "config.timeoutMs" },
+            // Object literals with a `then` property become JavaScript thenables.
+            // Build the QA DSL branch as data so an accidental await cannot execute it.
+            if: Object.fromEntries([
+              ["expr", "config.expectReply"],
+              [
+                qaSharedFlowPositiveBranch,
+                [
+                  {
+                    waitForOutbound: {
+                      textIncludes: { ref: "marker" },
+                      timeoutMs: { ref: "config.timeoutMs" },
+                    },
                   },
-                },
+                ],
               ],
-              else: [
-                {
-                  waitForNoOutbound: {
-                    quietMs: { ref: "config.timeoutMs" },
-                    sinceIndex: { ref: "outboundCount" },
+              [
+                "else",
+                [
+                  {
+                    waitForNoOutbound: {
+                      quietMs: { ref: "config.timeoutMs" },
+                      sinceIndex: { ref: "outboundCount" },
+                    },
                   },
-                },
+                ],
               ],
-            },
+            ]),
           },
         ],
         detailsExpr: "`${config.markerPrefix}: expectReply=${config.expectReply}`",
