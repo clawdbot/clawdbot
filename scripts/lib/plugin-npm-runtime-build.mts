@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { build } from "tsdown";
 import {
   collectPluginSourceEntries,
@@ -13,6 +12,7 @@ import {
   listMissingPackageStaticAssetSources,
   runPackageAssetBuild,
 } from "./plugin-npm-runtime-assets.mts";
+import { isRecord } from "./record-shared.mjs";
 import { copyStaticExtensionAssetsForPackage } from "./static-extension-assets.mts";
 
 const env = {
@@ -295,8 +295,12 @@ function resolvePluginNpmRuntimePackagePeerMetadata(plan: {
     );
   }
   const existingPeerDependencies = getStringRecord(plan.packageJson.peerDependencies);
-  const existingPeerDependenciesMeta = asNonArrayRecord(plan.packageJson.peerDependenciesMeta);
-  const existingOpenClawMeta = asNonArrayRecord(existingPeerDependenciesMeta.openclaw);
+  const existingPeerDependenciesMeta = isRecord(plan.packageJson.peerDependenciesMeta)
+    ? plan.packageJson.peerDependenciesMeta
+    : {};
+  const existingOpenClawMeta = isRecord(existingPeerDependenciesMeta.openclaw)
+    ? existingPeerDependenciesMeta.openclaw
+    : {};
   return {
     peerDependencies: {
       ...existingPeerDependencies,
