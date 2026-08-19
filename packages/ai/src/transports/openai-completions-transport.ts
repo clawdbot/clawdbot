@@ -1,8 +1,26 @@
 import type { Context, Model, StreamFn } from "@openclaw/llm-core";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { convertMessages } from "../openai-completions-messages.js";
 import { codeModeToolSurfaceObserver, type OpenAICompletionsOptions } from "../provider-options.js";
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
+import { resolveOpenAIReasoningEffortForModel } from "../providers/openai-reasoning-effort.js";
+import {
+  isOpenAIGpt54MiniModel,
+  isOpenAIGpt55Model,
+  isOpenAIGpt56Model,
+} from "../providers/openai-reasoning-effort.js";
+import {
+  resolveOpenAICompletionsResponseFormat,
+  shouldOmitOllamaCompatResponseFormat,
+} from "../providers/openai-response-format.js";
+import {
+  projectOpenAITools,
+  reconcileOpenAICompletionsToolChoice,
+} from "../providers/openai-tool-projection.js";
+import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { tagUnresolvedTextAsCommentary } from "../utils/assistant-text-phase.js";
 import {
   createFirstStreamEventAbortController,
@@ -16,20 +34,21 @@ import {
   isDedicatedAzureOpenAIHostname,
 } from "./azure-openai-hostnames-internal.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
-import { buildGuardedModelFetch } from "./host-policy.js";
-import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
+import {
+  buildGuardedModelFetch,
+  resolveOpenAIStrictToolSetting,
+  resolveProviderEndpoint,
+} from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
+import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
-import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
+import { isOpenAIFamilyFoundryDeployment } from "./openai-completions-compat.js";
+import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
 } from "./openai-completions-string-content.js";
-import {
-  processCompletionsStream,
-  shouldEmitOpenAICompletionsReasoning,
-} from "./openai-completions-stream.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -37,21 +56,24 @@ import {
   buildOpenAISdkRequestOptions,
   enforceCodeModeResponsesToolSurface,
   getCompat,
+  resolveOpenAIStrictToolFlagWithDiagnostics,
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
 import {
   createOpenAIResponseHook,
+  parseOpenAICompletionsUsage,
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
+import { resolvePromptCacheKey } from "./openai-transport-shared.js";
+import { sortTransportToolsByName } from "./openai-transport-shared.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
-
-export { buildOpenAICompletionsParams } from "./openai-completions-params.js";
+import { supportsModelTools } from "./transport-utils.js";
 
 function assertOpenAICompletionsPayloadHasConversationTurn(
   params: Record<string, unknown>,
@@ -135,6 +157,29 @@ function createOpenAICompletionsClient(
     ...buildOpenAISdkClientOptions(model),
   });
 }
+
+function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl" | "id" | "name">): boolean {
+  if (!model.baseUrl.trim()) {
+    return true;
+  }
+  const endpointClass = resolveProviderEndpoint(model).endpointClass;
+  if (endpointClass === "openai-public" || endpointClass === "azure-openai") {
+    return true;
+  }
+  try {
+    const hostname = new URL(model.baseUrl).hostname.toLowerCase();
+    if (isDedicatedAzureOpenAIHostname(hostname)) {
+      return true;
+    }
+    if (isAzureFoundryMultiModelHostname(hostname)) {
+      return isOpenAIFamilyFoundryDeployment(model.id, model.name);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function buildOpenAICompletionsClientConfig(
   model: Model,
   context: Context,
@@ -1970,16 +2015,13 @@ export function buildOpenAICompletionsParams(
         fallbackMap: compat.reasoningEffortMap,
       })
     : undefined;
+  const hasTools = Array.isArray(context.tools) && context.tools.length > 0;
   const omitChatCompletionsToolReasoningEffort =
-    Array.isArray(params.tools) &&
-    params.tools.length > 0 &&
+    hasTools &&
     (isOpenAIGpt54MiniModel(model) ||
       (isOpenAIGpt55Model(model) && isKnownOpenAICompletionsEndpoint(model)));
   const disableChatCompletionsToolReasoning =
-    Array.isArray(params.tools) &&
-    params.tools.length > 0 &&
-    isOpenAIGpt56Model(model) &&
-    isKnownOpenAICompletionsEndpoint(model);
+    hasTools && isOpenAIGpt56Model(model) && isKnownOpenAICompletionsEndpoint(model);
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
@@ -2015,6 +2057,32 @@ export function buildOpenAICompletionsParams(
     !isCustomProvider
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
+  }
+  let isAzureDedicatedCompletionHost = false;
+  let isAzureFoundryCompletionHost = false;
+  try {
+    const hostname = new URL(model.baseUrl).hostname.toLowerCase();
+    isAzureDedicatedCompletionHost = isDedicatedAzureOpenAIHostname(hostname);
+    isAzureFoundryCompletionHost = isAzureFoundryMultiModelHostname(hostname);
+  } catch {
+    // Leave the host flags false; the earlier URL handling already tolerates invalid URLs.
+  }
+  if (hasTools) {
+    if (
+      isOpenAIGpt56Model(model) &&
+      !isCustomProvider &&
+      (isAzureDedicatedCompletionHost ||
+        (isAzureFoundryCompletionHost && isOpenAIFamilyFoundryDeployment(model.id, model.name)))
+    ) {
+      params.reasoning_effort = "none";
+    } else if (
+      isOpenAIGpt55Model(model) &&
+      (isAzureDedicatedCompletionHost ||
+        (isAzureFoundryCompletionHost && isOpenAIFamilyFoundryDeployment(model.id, model.name)))
+    ) {
+      delete params.reasoning_effort;
+      delete params.reasoning;
+    }
   }
   return params;
 }
