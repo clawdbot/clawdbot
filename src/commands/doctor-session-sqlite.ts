@@ -50,11 +50,11 @@ import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
   readOnlySqliteDbStats,
-  readOnlySqliteSessionEntries,
   readOnlySqliteValidationSnapshot,
   readTranscriptFingerprint,
   readSqliteEntryCount,
   resolveTargetSqlitePath,
+  scanReadOnlySqliteActiveTranscriptFiles,
   type ReadOnlySqliteValidationSnapshot,
 } from "./doctor-session-sqlite-readers.js";
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
@@ -619,6 +619,9 @@ async function importLegacySessionRecords(
   records: readonly LegacySessionRecord[],
   report: DoctorSessionSqliteTargetReport,
 ): Promise<void> {
+  if (records.length === 0) {
+    return;
+  }
   const importedTranscriptSources = new Set<string>();
   const existingSnapshot = readOnlySqliteValidationSnapshot(target);
   for (let offset = 0; offset < records.length; offset += SESSION_IMPORT_BATCH_SIZE) {
@@ -731,6 +734,9 @@ function validateImportedTargetBeforeArchive(
   records: readonly LegacySessionRecord[],
   report: DoctorSessionSqliteTargetReport,
 ): boolean {
+  if (records.length === 0) {
+    return true;
+  }
   const issueCountBeforeValidation = report.issues.length;
   const validation = readOnlySqliteValidationSnapshot(target);
   if (!validation.ok) {
@@ -752,8 +758,8 @@ function validateImportedRecordBeforeArchive(
   snapshot: ReadOnlySqliteValidationSnapshot,
 ): void {
   const normalizedKey = record.sessionKey;
-  const sqliteEntry = snapshot.entriesBySessionKey.get(normalizedKey);
-  if (!sqliteEntry) {
+  const sqliteSessionId = snapshot.sessionIdsBySessionKey.get(normalizedKey);
+  if (!sqliteSessionId) {
     report.issues.push({
       code: "sqlite_entry_missing",
       message: `SQLite entry is missing for ${normalizedKey}.`,
@@ -761,10 +767,10 @@ function validateImportedRecordBeforeArchive(
     });
     return;
   }
-  if (sqliteEntry.sessionId !== record.entry.sessionId) {
+  if (sqliteSessionId !== record.entry.sessionId) {
     report.issues.push({
       code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteEntry.sessionId} does not match ${record.entry.sessionId}.`,
+      message: `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
       sessionKey: record.sessionKey,
     });
     return;
@@ -1018,8 +1024,8 @@ function validateLegacySessionRecord(
   snapshot: ReadOnlySqliteValidationSnapshot,
 ): void {
   const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteEntry = snapshot.entriesBySessionKey.get(normalizedKey);
-  if (!sqliteEntry) {
+  const sqliteSessionId = snapshot.sessionIdsBySessionKey.get(normalizedKey);
+  if (!sqliteSessionId) {
     report.issues.push({
       code: "sqlite_entry_missing",
       message: `SQLite entry is missing for ${normalizedKey}.`,
@@ -1027,10 +1033,10 @@ function validateLegacySessionRecord(
     });
     return;
   }
-  if (sqliteEntry.sessionId !== record.entry.sessionId) {
+  if (sqliteSessionId !== record.entry.sessionId) {
     report.issues.push({
       code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteEntry.sessionId} does not match ${record.entry.sessionId}.`,
+      message: `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
       sessionKey: record.sessionKey,
     });
     return;
@@ -1090,8 +1096,7 @@ function countAlreadyMigratedTranscriptEventsForImport(
     return undefined;
   }
   const normalizedKey = record.sessionKey;
-  const sqliteEntry = snapshot.entriesBySessionKey.get(normalizedKey);
-  if (sqliteEntry?.sessionId !== record.entry.sessionId) {
+  if (snapshot.sessionIdsBySessionKey.get(normalizedKey) !== record.entry.sessionId) {
     return undefined;
   }
   return snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
@@ -1102,8 +1107,7 @@ function countAlreadyMigratedTranscriptEventsForValidate(
   record: LegacySessionRecord,
 ): number | undefined {
   const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteEntry = snapshot.entriesBySessionKey.get(normalizedKey);
-  if (sqliteEntry?.sessionId !== record.entry.sessionId) {
+  if (snapshot.sessionIdsBySessionKey.get(normalizedKey) !== record.entry.sessionId) {
     return undefined;
   }
   return snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
@@ -1153,23 +1157,26 @@ function appendActiveSqliteTranscriptFileIssues(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  const result = readOnlySqliteSessionEntries(target);
+  const result = scanReadOnlySqliteActiveTranscriptFiles(
+    target,
+    (sessionKey, sessionId, sessionFile) => {
+      const transcriptPath = resolveActiveSqliteTranscriptFile(target, {
+        ...(sessionFile ? { sessionFile } : {}),
+        sessionId,
+      });
+      if (transcriptPath) {
+        report.issues.push({
+          code: "active_sqlite_transcript_jsonl",
+          message: `SQLite-backed session still has an active JSONL transcript file: ${transcriptPath}`,
+          sessionKey,
+        });
+      }
+    },
+  );
   if (!result.ok) {
     report.issues.push({
       code: "sqlite_active_transcript_scan_failed",
       message: `Could not scan SQLite-backed sessions for active JSONL transcript files: ${String(result.error)}`,
-    });
-    return;
-  }
-  for (const summary of result.summaries) {
-    const transcriptPath = resolveActiveSqliteTranscriptFile(target, summary.entry);
-    if (!transcriptPath) {
-      continue;
-    }
-    report.issues.push({
-      code: "active_sqlite_transcript_jsonl",
-      message: `SQLite-backed session still has an active JSONL transcript file: ${transcriptPath}`,
-      sessionKey: summary.sessionKey,
     });
   }
 }
@@ -1224,7 +1231,7 @@ function compactSqliteDatabase(
 
 function resolveActiveSqliteTranscriptFile(
   target: SessionStoreTarget,
-  entry: SessionEntry,
+  entry: { sessionFile?: string; sessionId: string },
 ): string | undefined {
   let transcriptPath: string;
   try {

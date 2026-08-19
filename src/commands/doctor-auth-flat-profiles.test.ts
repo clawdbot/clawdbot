@@ -2479,6 +2479,62 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
     }
   });
 
+  it("ignores retained Codex window metadata when preview and repair both skip its tombstone", async () => {
+    const state = await makeTestState();
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry(
+      { storePath, sessionKey, env: state.env },
+      { sessionId: "retained-codex-window", updatedAt: 10 },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    const database = new DatabaseSync(sqlitePath);
+    database
+      .prepare("UPDATE session_nodes SET entry_json = '{}' WHERE session_key = ?")
+      .run(sessionKey);
+    database
+      .prepare("UPDATE session_nodes SET entry_valid = -1 WHERE session_key = ?")
+      .run(sessionKey);
+    database
+      .prepare(
+        "UPDATE session_windows SET agent_harness_id = 'codex', model_provider = 'openai-codex', model = 'gpt-5.5' WHERE session_key = ?",
+      )
+      .run(sessionKey);
+    database.close();
+
+    const preview = await maybeRepairCodexSessionRoutes({
+      cfg: {},
+      env: state.env,
+      shouldRepair: false,
+    });
+    const repair = await maybeRepairCodexSessionRoutes({
+      cfg: {},
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    expect(preview).toMatchObject({ warnings: [], changes: [], repairedSessions: 0 });
+    expect(repair).toMatchObject({ warnings: [], changes: [], repairedSessions: 0 });
+    const verifier = new DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(
+        verifier
+          .prepare("SELECT entry_json, entry_valid FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey),
+      ).toEqual({ entry_json: "{}", entry_valid: -1 });
+      expect(
+        verifier
+          .prepare(
+            "SELECT agent_harness_id, model_provider, model FROM session_windows WHERE session_key = ?",
+          )
+          .get(sessionKey),
+      ).toEqual({ agent_harness_id: "codex", model_provider: "openai-codex", model: "gpt-5.5" });
+    } finally {
+      verifier.close();
+    }
+  });
+
   it("preserves the selected Codex account across auth migration, SQLite sessions, and status", async () => {
     const state = await makeTestState();
     const storePath = path.join(state.sessionsDir(), "sessions.json");
