@@ -20,6 +20,7 @@ type PersistRecordResult =
       anchor?: TranscriptEntryAnchor;
       adoptedMessageId?: string;
       effectiveParentId: string | null;
+      foreignRowDetected?: boolean;
     };
 
 function requireTranscriptEventAppend(
@@ -180,26 +181,29 @@ export class SessionManagerPersistence extends SessionManagerCore {
   /**
    * Snapshot guard for one record append, folding a still-deferred header when pending. Once a
    * header exists, active-branch appends (the tail-rebase path in the append core) reconcile a
-   * foreign row via `effectiveParentId` -- appendEntry detects the mismatch and reloads -- so
-   * guarding those too would turn that graceful rebase into a hard rejection for every concurrent
-   * active-branch writer. Side-mode, deliberate-branch (post-branch/resetLeaf), and leaf-control
-   * appends keep their exact declared parent and never rebase, so they have no other foreign-row
-   * signal: revalidate the tracked snapshot for those so a foreign row committed since this
-   * manager's last read/append is rejected (and the manager reloaded) instead of being silently
-   * folded into the snapshot this append then adopts, which a later rewrite could otherwise delete.
+   * concurrent *identity-tracked* foreign row via `effectiveParentId` -- appendEntry detects the
+   * mismatch and reloads. But that rebase reads transcript_event_identities, so it cannot see a
+   * foreign row with no non-blank `id` (e.g. an msteams FeedbackEvent never gets an identities
+   * row) -- such a row never moves the tail, so no mismatch is ever detected and a later rewrite
+   * built from this manager's contaminated snapshot would delete it. Guard active-branch appends
+   * too, but non-throwing (see PendingTranscriptHeader.nonThrowing): the caller folds a detected
+   * mismatch into a reload instead of a hard rejection, preserving the graceful-rebase intent for
+   * every concurrent active-branch writer. Side-mode, deliberate-branch (post-branch/resetLeaf),
+   * and leaf-control appends keep their exact declared parent and never rebase, so a throwing
+   * guard is their only foreign-row signal.
    */
   private resolveAppendGuard(
     scope: NonNullable<SessionManagerPersistence["persistenceTarget"]>,
     isActiveBranchAppend: boolean,
-  ): PendingTranscriptHeader | undefined {
+  ): PendingTranscriptHeader {
     const event = this.resolveDeferredSessionHeader(scope);
     if (event) {
       return { event, expectedSnapshot: this.persistedRowSnapshot ?? [] };
     }
-    if (isActiveBranchAppend) {
-      return undefined;
-    }
-    return { expectedSnapshot: this.persistedRowSnapshot ?? [] };
+    return {
+      expectedSnapshot: this.persistedRowSnapshot ?? [],
+      ...(isActiveBranchAppend ? { nonThrowing: true } : {}),
+    };
   }
 
   // A guard folding a still-deferred header commits it in the same transaction as this
@@ -208,8 +212,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
   // Skipping this leaves persistenceHeaderPending stuck true, so every later append keeps
   // taking the guarded "deferred header" branch above instead of an active-branch append's
   // intended unguarded tail-rebase path, turning a graceful rebase into a hard rejection.
-  private clearHeaderPendingAfterFold(guard: PendingTranscriptHeader | undefined): void {
-    if (guard?.event) {
+  private clearHeaderPendingAfterFold(guard: PendingTranscriptHeader): void {
+    if (guard.event) {
       this.persistenceHeaderPending = false;
     }
   }
@@ -263,12 +267,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (entry.type !== "message") {
       const isActiveBranchAppend = options?.appendIntent === "active-branch";
       const guard = this.resolveAppendGuard(scope, isActiveBranchAppend);
-      const { result, snapshot, effectiveParentId } = appendTranscriptEventWithSnapshotSync(
-        scope,
-        entry,
-        isActiveBranchAppend ? { appendIntent: options.appendIntent } : undefined,
-        guard,
-      );
+      const { result, snapshot, effectiveParentId, foreignRowDetected } =
+        appendTranscriptEventWithSnapshotSync(
+          scope,
+          entry,
+          isActiveBranchAppend ? { appendIntent: options.appendIntent } : undefined,
+          guard,
+        );
       requireTranscriptEventAppend(
         result,
         `Session transcript entry was not persisted: ${entry.id}`,
@@ -280,7 +285,15 @@ export class SessionManagerPersistence extends SessionManagerCore {
       // lets appendEntry's existing effectiveParentId check reload when a concurrent
       // foreign row moved the tail out from under this entry's declared parentId, instead
       // of trusting a stale in-memory parent a later rewrite could silently drop.
-      return effectiveParentId === undefined ? undefined : { effectiveParentId };
+      // foreignRowDetected additionally covers the id-less row class that rebase alone
+      // cannot see -- see resolveAppendGuard.
+      if (effectiveParentId === undefined && !foreignRowDetected) {
+        return undefined;
+      }
+      return {
+        effectiveParentId: effectiveParentId ?? entry.parentId,
+        ...(foreignRowDetected ? { foreignRowDetected } : {}),
+      };
     }
     const appendOptions = {
       cwd: this.cwd,
@@ -293,7 +306,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
     } satisfies Parameters<typeof appendTranscriptMessageWithSnapshotSync>[1];
     const messageGuard = this.resolveAppendGuard(scope, options?.appendIntent === "active-branch");
-    const { result, snapshot } = appendTranscriptMessageWithSnapshotSync(
+    const { result, snapshot, foreignRowDetected } = appendTranscriptMessageWithSnapshotSync(
       scope,
       appendOptions,
       messageGuard,
@@ -337,6 +350,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
       effectiveParentId: result.effectiveParentId,
+      ...(foreignRowDetected ? { foreignRowDetected } : {}),
     };
   }
 }

@@ -467,12 +467,18 @@ export async function appendTranscriptMessage<TMessage>(
 /**
  * Shared transaction body for the sync message-append entry points. `afterAppend` mirrors
  * appendTranscriptEventSyncCore's contract: it runs inside the same write transaction right
- * after a successful append, so a caller tracking a row snapshot reads it atomically.
+ * after a successful append, so a caller tracking a row snapshot reads it atomically. It also
+ * receives `foreignRowDetected` -- see PendingTranscriptHeader -- for the same id-less foreign
+ * row class the parentId-based rebase in resolveTranscriptMessageAppendParent cannot see.
  */
 function appendTranscriptMessageSyncCore<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
-  afterAppend?: (database: OpenClawAgentDatabase, resolved: { sessionId: string }) => void,
+  afterAppend?: (
+    database: OpenClawAgentDatabase,
+    resolved: { sessionId: string },
+    foreignRowDetected: boolean,
+  ) => void,
   pendingHeader?: PendingTranscriptHeader,
 ): TranscriptMessageAppendResult<TMessage> | undefined {
   // Every sync message append inherits and enforces the admitted writer claim.
@@ -491,12 +497,12 @@ function appendTranscriptMessageSyncCore<TMessage>(
     ) {
       return;
     }
-    if (pendingHeader) {
-      foldPendingTranscriptHeaderInTransaction(database, resolved, pendingHeader);
-    }
+    const foreignRowDetected = pendingHeader
+      ? foldPendingTranscriptHeaderInTransaction(database, resolved, pendingHeader)
+      : false;
     result = appendTranscriptMessageInTransaction(database, resolved, options);
     if (result) {
-      afterAppend?.(database, resolved);
+      afterAppend?.(database, resolved, foreignRowDetected);
     }
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && result === undefined) {
@@ -516,26 +522,32 @@ export function appendTranscriptMessageSync<TMessage>(
 /**
  * Appends one transcript message and atomically captures the post-append row snapshot in
  * the same write transaction. See appendTranscriptEventWithSnapshotSync for why a separate
- * post-commit snapshot read cannot substitute for this.
+ * post-commit snapshot read cannot substitute for this. `foreignRowDetected` signals a
+ * pendingHeader guard's row-count mismatch when the message append itself observed no
+ * parentId divergence (result.effectiveParentId === options.parentId) -- the only remaining
+ * clue that a foreign id-less row landed since the caller's tracked snapshot.
  */
 export function appendTranscriptMessageWithSnapshotSync<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
   pendingHeader?: PendingTranscriptHeader,
 ): {
+  foreignRowDetected: boolean;
   result: TranscriptMessageAppendResult<TMessage> | undefined;
   snapshot?: SqliteTranscriptSnapshotRow[];
 } {
   let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
+  let foreignRowDetected = false;
   const result = appendTranscriptMessageSyncCore(
     scope,
     options,
-    (database, resolved) => {
+    (database, resolved, appendForeignRowDetected) => {
       snapshot = readTranscriptEventRows(database, resolved.sessionId);
+      foreignRowDetected = appendForeignRowDetected;
     },
     pendingHeader,
   );
-  return { result, ...(snapshot ? { snapshot } : {}) };
+  return { foreignRowDetected, result, ...(snapshot ? { snapshot } : {}) };
 }
 
 /** Runs read/append transcript work under one SQLite writer-queue critical section. */
@@ -680,10 +692,20 @@ function assertSqliteTranscriptSnapshotUnchanged(
  * `fileEntries`, so a later rewrite would validate that contaminated snapshot and delete the
  * foreign row). `event` is an optional session header the manager deferred until its first
  * record, folded into this same transaction so header and first record commit atomically.
+ *
+ * `nonThrowing` covers active-branch appends: their own tail-rebase
+ * (readActiveTranscriptAppendParentId / resolveTranscriptMessageAppendParent) already tolerates
+ * and reconciles a concurrent *identity-tracked* foreign row via effectiveParentId, but is
+ * structurally blind to a foreign row with no non-blank `id` (e.g. an msteams FeedbackEvent),
+ * which never gets a transcript_event_identities row and so never moves tailId. This row-set
+ * check is that class of row's only detection signal; throwing here would turn a graceful
+ * rebase into a hard rejection for every concurrent active-branch writer, so a detected
+ * mismatch is reported back to the caller instead.
  */
 export type PendingTranscriptHeader = {
   event?: TranscriptEvent;
   expectedSnapshot: readonly SqliteTranscriptSnapshotRow[];
+  nonThrowing?: boolean;
 };
 
 /**
@@ -692,19 +714,24 @@ export type PendingTranscriptHeader = {
  * IMMEDIATE so a foreign row committed before this transaction cannot be silently absorbed
  * into the post-write snapshot -- which a later rewrite would then delete -- and so the header
  * (when present) commits atomically with the first record instead of racing it in a separate
- * prior transaction.
+ * prior transaction. Returns whether the snapshot had already diverged, so a `nonThrowing`
+ * guard's caller can fold that into its own append result instead of losing the signal.
  */
 export function foldPendingTranscriptHeaderInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   pendingHeader: PendingTranscriptHeader,
-): void {
-  assertSqliteTranscriptSnapshotUnchanged(
+): boolean {
+  const unchanged = isSqliteTranscriptSnapshotUnchanged(
     database,
     resolved.sessionId,
     pendingHeader.expectedSnapshot,
   );
+  if (!unchanged && !pendingHeader.nonThrowing) {
+    throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+  }
   if (pendingHeader.event) {
     appendTranscriptEventInTransaction(database, resolved, pendingHeader.event);
   }
+  return !unchanged;
 }

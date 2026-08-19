@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -795,6 +796,103 @@ describe("session accessor cross-process concurrency", () => {
           parentId: foreignMessageId,
           provider: "openclaw",
           modelId: "sonnet-4.6",
+        }),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("keeps an id-less foreign row alive after a manager active-branch append races it", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-foreign-id-less-race-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-foreign-id-less-race";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+      // Same starting point as the raw-append-race test above: a non-deferred
+      // header and a non-empty tracked snapshot, so the manager's append below
+      // takes the active-branch tail-rebase path rather than the header-fold path.
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "seed-message",
+          parentId: null,
+          message: { role: "user", content: "seed" },
+        },
+      ]);
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-foreign-id-less-race",
+          sessionId,
+          storePath,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 1 });
+          // An id-less foreign row lands during the handshake gap, matching the
+          // real extensions/msteams FeedbackEvent shape exactly: no `id`, no
+          // `parentId`, appended via appendTranscriptEvent with no options --
+          // the same call recordChannelFeedbackEvent makes. It has no non-blank
+          // id, so it never gets a transcript_event_identities row and the
+          // tail-rebase parentId check the raw-append-race test above relies on
+          // cannot see it -- foreignRowDetected is the only signal available.
+          await appendTranscriptEvent(scope, {
+            type: "custom",
+            event: "feedback",
+            ts: Date.now(),
+            messageId: "seed-message",
+            value: "positive",
+            sessionKey: SESSION_KEY,
+            agentId: AGENT_ID,
+            conversationId: "conv-1",
+          });
+        },
+      );
+      // The worker's own model_change append is removed again by its
+      // removeTrailingEntries((entry) => entry.type === "model_change") call
+      // (see the worker script), which forces the real production rewrite
+      // path (replacePersistedTranscript) to run from this manager's
+      // in-memory fileEntries/opaqueFileEntries. getEntries() only counts
+      // indexed (id-bearing) fileEntries left after that removal -- just
+      // seed-message; the id-less feedback row is tracked separately as an
+      // opaque entry (see isIndexedSessionEntry) and is not reflected here
+      // either way, so entryCount alone cannot distinguish pre-fix from
+      // post-fix -- the persisted DB rows asserted below are the real proof.
+      expect(result).toEqual({ ok: true, entryCount: 1 });
+      // Fix verified: foreignRowDetected forced a reload right after the
+      // append, so this manager's opaqueFileEntries picked up the id-less
+      // feedback row before the rewrite ran, and the rewrite below preserves
+      // it. Pre-fix, the manager never observes the row-count mismatch (no
+      // parentId ever moved), so its in-memory opaqueFileEntries never
+      // learns about the foreign row, and the rewrite -- built purely from
+      // that stale in-memory state -- silently omits it: only 2 rows
+      // (header + seed-message) would remain, permanently dropping feedback.
+      const events = await loadTranscriptEvents(scope);
+      expect(events).toHaveLength(3);
+      expect(events[0]).toEqual(expect.objectContaining({ type: "session", id: sessionId }));
+      expect(events[1]).toEqual(
+        expect.objectContaining({
+          type: "message",
+          id: "seed-message",
+          message: expect.objectContaining({ role: "user", content: "seed" }),
+        }),
+      );
+      expect(events[2]).toEqual(
+        expect.objectContaining({
+          type: "custom",
+          event: "feedback",
+          messageId: "seed-message",
+          value: "positive",
         }),
       );
     } finally {

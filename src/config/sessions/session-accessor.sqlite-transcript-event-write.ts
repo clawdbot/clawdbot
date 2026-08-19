@@ -68,6 +68,9 @@ export async function appendTranscriptEvent(
  * effective (possibly rebased) parentId -- see resolveTranscriptEventAppendParent -- so a
  * caller tracking an in-memory tree can detect a rebase and reconcile it, the same way
  * appendTranscriptMessageInTransaction already surfaces effectiveParentId for messages.
+ * `foreignRowDetected` mirrors a `nonThrowing` pendingHeader's row-count mismatch (see
+ * PendingTranscriptHeader) -- a foreign row with no non-blank id, invisible to the
+ * parentId-based rebase above, that landed since the caller's tracked snapshot.
  */
 function appendTranscriptEventSyncCore(
   scope: SessionTranscriptWriteScope,
@@ -77,6 +80,7 @@ function appendTranscriptEventSyncCore(
     database: OpenClawAgentDatabase,
     resolved: { sessionId: string },
     effectiveParentId: string | null | undefined,
+    foreignRowDetected: boolean,
   ) => void,
   pendingHeader?: PendingTranscriptHeader,
 ): Result<boolean, TranscriptEventAppendError> {
@@ -128,9 +132,9 @@ function appendTranscriptEventSyncCore(
     // separate prior transaction leaves a gap where a foreign commit lands after the
     // header but before this append, is folded into the snapshot below, yet never
     // appears in the caller's in-memory entries -- so a later rewrite deletes it.
-    if (pendingHeader) {
-      foldPendingTranscriptHeaderInTransaction(database, resolved, pendingHeader);
-    }
+    const foreignRowDetected = pendingHeader
+      ? foldPendingTranscriptHeaderInTransaction(database, resolved, pendingHeader)
+      : false;
     const { event: rebasedEvent, effectiveParentId } = resolveTranscriptEventAppendParent(
       database,
       resolved.sessionId,
@@ -140,7 +144,7 @@ function appendTranscriptEventSyncCore(
     const appended = appendTranscriptEventInTransaction(database, resolved, rebasedEvent);
     result = ok(appended);
     if (appended) {
-      afterAppend?.(database, resolved, effectiveParentId);
+      afterAppend?.(database, resolved, effectiveParentId, foreignRowDetected);
     }
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
@@ -169,7 +173,9 @@ export function appendTranscriptEventSync(
  * The returned `effectiveParentId` mirrors TranscriptMessageAppendResult.effectiveParentId:
  * when an active-branch append's declared parentId is stale, this exposes the rebased
  * parent the append actually landed under so the caller can reconcile its in-memory tree
- * (reload) instead of trusting a divergent parentId it never observed.
+ * (reload) instead of trusting a divergent parentId it never observed. `foreignRowDetected`
+ * signals a pendingHeader guard's row-count mismatch -- see PendingTranscriptHeader -- for
+ * the id-less foreign row class that mismatch is the only detection signal for.
  */
 export function appendTranscriptEventWithSnapshotSync(
   scope: SessionTranscriptWriteScope,
@@ -177,23 +183,27 @@ export function appendTranscriptEventWithSnapshotSync(
   options: TranscriptEventAppendOptions = {},
   pendingHeader?: PendingTranscriptHeader,
 ): {
+  foreignRowDetected: boolean;
   result: Result<boolean, TranscriptEventAppendError>;
   snapshot?: SqliteTranscriptSnapshotRow[];
   effectiveParentId?: string | null;
 } {
   let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
   let effectiveParentId: string | null | undefined;
+  let foreignRowDetected = false;
   const result = appendTranscriptEventSyncCore(
     scope,
     event,
     options,
-    (database, resolved, appendEffectiveParentId) => {
+    (database, resolved, appendEffectiveParentId, appendForeignRowDetected) => {
       snapshot = readTranscriptEventRows(database, resolved.sessionId);
       effectiveParentId = appendEffectiveParentId;
+      foreignRowDetected = appendForeignRowDetected;
     },
     pendingHeader,
   );
   return {
+    foreignRowDetected,
     result,
     ...(snapshot ? { snapshot } : {}),
     ...(effectiveParentId !== undefined ? { effectiveParentId } : {}),

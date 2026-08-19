@@ -71,7 +71,14 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       persistenceResult && typeof persistenceResult === "object"
         ? persistenceResult.effectiveParentId
         : persistenceResult;
-    if (effectiveParentId !== undefined && effectiveParentId !== canonicalEntry.parentId) {
+    const foreignRowDetected =
+      persistenceResult && typeof persistenceResult === "object"
+        ? persistenceResult.foreignRowDetected === true
+        : false;
+    if (
+      foreignRowDetected ||
+      (effectiveParentId !== undefined && effectiveParentId !== canonicalEntry.parentId)
+    ) {
       this.reloadPersistedTranscript();
       this.pendingDeliberateAppend = false;
       return persistenceResult && typeof persistenceResult === "object"

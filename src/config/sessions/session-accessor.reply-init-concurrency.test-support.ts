@@ -88,6 +88,20 @@ type SyncSideModeAppendRaceChildResult =
       ok: false;
     };
 
+// Drives a real SessionManager active-branch append on a non-empty transcript
+// after an id-less foreign row (no `id`/`parentId`, matching a real msteams
+// FeedbackEvent) lands via a raw appendTranscriptEvent() call -- the only
+// production path that ever writes such a row. That row is invisible to the
+// tail-rebase parentId check, so foreignRowDetected (the manager's own
+// snapshot guard) is the only signal that can trigger a reload here.
+type SyncForeignIdLessRaceChildResult =
+  | { entryCount: number; ok: true }
+  | {
+      message: string;
+      name: string;
+      ok: false;
+    };
+
 type ConcurrencyWorkerRequest =
   | {
       kind: "reply-init";
@@ -134,6 +148,11 @@ type ConcurrencyWorkerRequest =
       sessionId: string;
       storePath: string;
       targetEntryId: string;
+    }
+  | {
+      kind: "sync-foreign-id-less-race";
+      sessionId: string;
+      storePath: string;
     };
 
 type ConcurrencyWorkerReady<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
@@ -156,7 +175,9 @@ type ConcurrencyWorkerResult<TRequest extends ConcurrencyWorkerRequest> = TReque
           ? SyncInitialHeaderRaceChildResult
           : TRequest extends { kind: "sync-side-mode-append-race" }
             ? SyncSideModeAppendRaceChildResult
-            : TranscriptRewriteChildResult;
+            : TRequest extends { kind: "sync-foreign-id-less-race" }
+              ? SyncForeignIdLessRaceChildResult
+              : TranscriptRewriteChildResult;
 
 type ConcurrencyWorkerMessage =
   | { phase: "booted" }

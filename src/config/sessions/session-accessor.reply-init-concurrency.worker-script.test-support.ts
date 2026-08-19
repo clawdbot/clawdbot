@@ -463,6 +463,49 @@ async function runSyncSideModeAppendRace(request) {
   return result;
 }
 
+async function runSyncForeignIdLessRace(request) {
+  let result;
+  try {
+    // Open an already-populated transcript: non-deferred header, non-empty
+    // tracked snapshot -- an active-branch append path, same starting point
+    // as runSyncRawAppendRace.
+    const manager = SessionManager.open({
+      agentId: AGENT_ID,
+      sessionId: request.sessionId,
+      sessionKey: SESSION_KEY,
+      storePath: request.storePath,
+    });
+    const proceed = waitForProceed(request.requestId);
+    send({
+      phase: "ready",
+      requestId: request.requestId,
+      value: { eventCount: manager.getEntries().length },
+    });
+    await proceed;
+    // An id-less foreign row (e.g. an msteams FeedbackEvent) landed during the
+    // handshake gap via a raw appendTranscriptEvent() call with no options,
+    // exactly like recordChannelFeedbackEvent. It has no non-blank id, so it
+    // never gets a transcript_event_identities row and the tail-rebase check
+    // below cannot see it -- foreignRowDetected (the manager's own snapshot
+    // guard) is the only signal that can trigger a reload here.
+    manager.appendModelChange("openclaw", "sonnet-4.6");
+    // Force a full transcript rewrite (removeTrailingEntries is the real
+    // production caller -- see attempt-transcript-helpers.ts) from this
+    // manager's own in-memory fileEntries/opaqueFileEntries. Without the fix's
+    // reload, those never picked up the id-less foreign row, so this rewrite
+    // would silently omit it from the rewritten transcript.
+    manager.removeTrailingEntries((entry) => entry.type === "model_change");
+    result = { ok: true, entryCount: manager.getEntries().length };
+  } catch (error) {
+    result = {
+      ok: false,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return result;
+}
+
 
 process.on("message", (request) => {
   if (!request || typeof request !== "object") {
@@ -496,7 +539,9 @@ process.on("message", (request) => {
                   ? await runSyncInitialHeaderRace(request)
                   : request.kind === "sync-side-mode-append-race"
                     ? await runSyncSideModeAppendRace(request)
-                    : await runTranscriptRewrite(request);
+                    : request.kind === "sync-foreign-id-less-race"
+                      ? await runSyncForeignIdLessRace(request)
+                      : await runTranscriptRewrite(request);
     send({ phase: "result", requestId: request.requestId, value });
   })().catch((error) => {
     send({
