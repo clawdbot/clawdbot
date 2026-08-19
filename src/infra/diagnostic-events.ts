@@ -948,10 +948,13 @@ type DiagnosticEventsGlobalState = {
   marker: symbol;
   enabled: boolean;
   seq: number;
-  listeners: Map<DiagnosticEventListener, InternalDiagnosticEventInterest | undefined>;
+  listeners: Map<
+    DiagnosticEventListener,
+    InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]> | undefined
+  >;
   trustedListeners: Map<
     TrustedDiagnosticEventListener,
-    InternalDiagnosticEventInterest | undefined
+    InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]> | undefined
   >;
   toolExecutionListeners: Set<TrustedToolExecutionEventListener>;
   toolExecutionSeq: number;
@@ -1077,7 +1080,7 @@ export function areDiagnosticsEnabledForProcess(): boolean {
 }
 
 function isDiagnosticEventListenerInterested(
-  interest: InternalDiagnosticEventInterest | undefined,
+  interest: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]> | undefined,
   type: DiagnosticEventPayload["type"],
 ): boolean {
   return (
@@ -1541,7 +1544,7 @@ export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "
 /** Subscribes to diagnostic events with dispatcher metadata. */
 export function onInternalDiagnosticEvent(
   listener: DiagnosticEventListener,
-  filter?: InternalDiagnosticEventInterest,
+  filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
 ): () => void {
   const state = getDiagnosticEventsState();
   if (state.listeners.has(listener)) {
@@ -1562,7 +1565,7 @@ export function onInternalDiagnosticEvent(
 /** Subscribes to diagnostic events plus trusted private payload data. */
 export function onTrustedInternalDiagnosticEvent(
   listener: TrustedDiagnosticEventListener,
-  filter?: InternalDiagnosticEventInterest,
+  filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
 ): () => void {
   const state = getDiagnosticEventsState();
   if (state.trustedListeners.has(listener)) {

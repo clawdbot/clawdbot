@@ -1,5 +1,4 @@
 /** Process-wide listener counts used to avoid telemetry work without consumers. */
-import type { DiagnosticEventPayload } from "./diagnostic-events.js";
 
 const DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
@@ -7,7 +6,7 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY = Symbol.for(
 
 type DiagnosticEventListenerPresence = {
   broadInterestCount: number;
-  eventInterestDeltas: Map<DiagnosticEventPayload["type"], number>;
+  eventInterestDeltas: Map<string, number>;
   marker: symbol;
   internalCount: number;
   trustedCount: number;
@@ -43,14 +42,14 @@ function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
   return state;
 }
 
-export type InternalDiagnosticEventInterest = Readonly<{
-  include?: readonly DiagnosticEventPayload["type"][];
-  exclude?: readonly DiagnosticEventPayload["type"][];
+export type InternalDiagnosticEventInterest<EventType extends string = string> = Readonly<{
+  include?: readonly EventType[];
+  exclude?: readonly EventType[];
 }>;
 
 function updateEventInterestDelta(
   state: DiagnosticEventListenerPresence,
-  type: DiagnosticEventPayload["type"],
+  type: string,
   delta: number,
 ): void {
   const next = (state.eventInterestDeltas.get(type) ?? 0) + delta;
@@ -80,7 +79,7 @@ export function updateInternalDiagnosticEventInterest(
   }
 }
 
-export function hasInternalDiagnosticEventInterest(type: DiagnosticEventPayload["type"]): boolean {
+export function hasInternalDiagnosticEventInterest(type: string): boolean {
   const state = getDiagnosticEventListenerPresence();
   return state.broadInterestCount + (state.eventInterestDeltas.get(type) ?? 0) > 0;
 }
