@@ -8,6 +8,7 @@ import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
+  CronCompletionStatus,
   CronDeliveryTrace,
   CronJob,
   CronNextCheckProposal,
@@ -17,6 +18,7 @@ import type {
 } from "../types.js";
 import type { CronRunReceiptSettlementDisposition } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
+import type { CronResolvedDeliveryState } from "./timer-trigger.js";
 
 export const MAX_CRON_TIMER_DELAY_MS = 60_000;
 
@@ -42,6 +44,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     job: CronJob;
     taskRunId?: string;
+    completionStatus: CronCompletionStatus;
+    deliveryState: CronResolvedDeliveryState;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     deliveryError?: string;
@@ -61,6 +65,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
 
 export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
+    completionStatus?: CronCompletionStatus;
+    deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;

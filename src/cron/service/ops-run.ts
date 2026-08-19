@@ -55,6 +55,7 @@ import {
   applyTriggerNoFireResult,
   applyTriggerRunResult,
   armTimer,
+  authorCronRunCompletion,
   executeJobCoreWithTimeout,
 } from "./timer.js";
 import { wake } from "./wake.js";
@@ -165,11 +166,11 @@ async function finishPreparedManualRun(
       if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {
         receiptSettlementDisposition = "owner-unavailable";
       }
-      coreResult = {
+      coreResult = authorCronRunCompletion(state, executionJob, {
         status: "error",
         error:
           err instanceof CronRunReceiptRevisionError ? err.message : normalizeCronRunErrorText(err),
-      };
+      });
     }
     if (prepared.onTriggerDisposition) {
       const disposition = coreResult.triggerEval?.busy
@@ -205,6 +206,7 @@ async function finishPreparedManualRun(
           action: "finished",
           job,
           status: triggerSkipped ? "skipped" : coreResult.status,
+          completionStatus: triggerSkipped ? "failed" : coreResult.completionStatus,
           error: triggerSkipped
             ? "queued manual run skipped: trigger condition not met"
             : coreResult.error,
@@ -361,6 +363,7 @@ async function finishPreparedManualRun(
               action: "finished",
               job: committed.job,
               status: coreResult.status,
+              completionStatus: coreResult.completionStatus,
               error: coreResult.error,
               summary: coreResult.summary,
               diagnostics: coreResult.diagnostics,

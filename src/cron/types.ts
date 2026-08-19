@@ -112,6 +112,9 @@ export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort"
 /** Execution outcome, separate from delivery outcome. */
 export type CronRunStatus = "ok" | "error" | "skipped";
 
+/** Whole-run completion after execution and any explicitly required delivery settle. */
+export type CronCompletionStatus = "succeeded" | "failed" | "unknown";
+
 /** Delivery outcome for completion or failure-notification sends. */
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 

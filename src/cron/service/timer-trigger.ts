@@ -289,6 +289,13 @@ export function isScheduledTerminalOneShotRetry(
   );
 }
 
+export type CronResolvedDeliveryState = {
+  delivered?: boolean;
+  status: CronDeliveryStatus;
+  error?: string;
+  failureNotification: CronFailureNotificationDelivery;
+};
+
 export function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
@@ -296,12 +303,7 @@ export function resolveDeliveryState(params: {
   deliveryAttempted?: boolean;
   error?: string;
   globalFailureDestination?: CronConfig["failureAlert"];
-}): {
-  delivered?: boolean;
-  status: CronDeliveryStatus;
-  error?: string;
-  failureNotification: CronFailureNotificationDelivery;
-} {
+}): CronResolvedDeliveryState {
   const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
   const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   // Failure destinations can receive alerts even when the primary delivery
