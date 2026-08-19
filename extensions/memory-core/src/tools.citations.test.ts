@@ -74,6 +74,7 @@ beforeEach(() => {
       },
     ],
     readFileImpl: async (params: MemoryReadParams) => ({
+      status: "ok",
       text: "",
       path: params.relPath,
       from: params.from ?? 1,
@@ -206,19 +207,18 @@ describe("memory tools", () => {
     });
   });
 
-  it("returns empty text without error when file does not exist (ENOENT)", async () => {
+  it("returns an explicit not-found result when the file does not exist", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
-      return { text: "", path: "memory/2026-02-19.md", from: 1, lines: 0 };
+      return { status: "not_found", text: "", path: "memory/2026-02-19.md" };
     });
 
     const tool = createMemoryGetToolOrThrow();
 
     const result = await tool.execute("call_enoent", { path: "memory/2026-02-19.md" });
     expect(result.details).toEqual({
+      status: "not_found",
       text: "",
       path: "memory/2026-02-19.md",
-      from: 1,
-      lines: 0,
     });
   });
 
@@ -228,6 +228,7 @@ describe("memory tools", () => {
     const result = await tool.execute("call_builtin_fast_path", { path: "memory/2026-02-19.md" });
 
     expect(result.details).toEqual({
+      status: "ok",
       text: "",
       path: "memory/2026-02-19.md",
       from: 1,
@@ -282,6 +283,7 @@ describe("memory tools", () => {
 
   it("returns truncation metadata and a continuation notice for partial memory_get results", async () => {
     setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      status: "ok",
       path: params.relPath,
       text: "alpha\nbeta\n\n[More content available. Use from=41 to continue.]",
       from: params.from ?? 1,
@@ -294,6 +296,7 @@ describe("memory tools", () => {
     const result = await tool.execute("call_partial", { path: "memory/partial.md" });
 
     expect(result.details).toEqual({
+      status: "ok",
       path: "memory/partial.md",
       text: "alpha\nbeta\n\n[More content available. Use from=41 to continue.]",
       from: 1,
@@ -824,6 +827,7 @@ describe("memory tools", () => {
 
   it("falls back to a wiki corpus supplement when memory_get corpus=all misses memory without throwing", async () => {
     setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      status: "not_found",
       text: "",
       path: params.relPath,
     }));
@@ -861,6 +865,7 @@ describe("memory tools", () => {
 
   it("preserves an empty in-file range for memory_get corpus=all", async () => {
     setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      status: "ok",
       text: "",
       path: params.relPath,
       from: params.from ?? 1,
@@ -889,6 +894,7 @@ describe("memory tools", () => {
     });
 
     expect(result.details).toEqual({
+      status: "ok",
       text: "",
       path: "memory/entities/alpha.md",
       from: 10,

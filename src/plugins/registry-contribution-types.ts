@@ -3,7 +3,12 @@ import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-e
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
-import type { MemorySearchManager, MemorySearchResult } from "../memory-host-sdk/host/types.js";
+import type {
+  LegacyMemoryReadResult,
+  MemoryReadResult,
+  MemorySearchManager,
+  MemorySearchResult,
+} from "../memory-host-sdk/host/types.js";
 import type {
   EmbeddingProvider,
   EmbeddingProviderAdapter,
@@ -247,7 +252,11 @@ export type MemoryFlushPlanResolver = (params: {
   nowMs?: number;
 }) => MemoryFlushPlan | null;
 
-export type RegisteredMemorySearchManager = MemorySearchManager;
+export type RegisteredMemorySearchManager = Omit<MemorySearchManager, "readFile"> & {
+  readFile(
+    params: Parameters<MemorySearchManager["readFile"]>[0],
+  ): Promise<LegacyMemoryReadResult | MemoryReadResult>;
+};
 
 type MemoryRuntimeBackendConfig = { backend: "builtin" };
 

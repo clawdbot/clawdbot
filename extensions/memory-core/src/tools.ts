@@ -310,10 +310,6 @@ async function resolveMemoryReadFailureResult(params: {
   return jsonResult({ path: params.relPath, text: "", disabled: true, error: message });
 }
 
-function isMissingMemoryReadResult(result: MemoryReadResult, relPath: string): boolean {
-  return result.path === relPath && result.text === "" && result.from === undefined;
-}
-
 async function executeMemoryReadResult(params: {
   read: () => Promise<MemoryReadResult>;
   requestedCorpus?: "memory" | "wiki" | "all";
@@ -326,7 +322,7 @@ async function executeMemoryReadResult(params: {
 }) {
   try {
     const result = await params.read();
-    if (params.requestedCorpus === "all" && isMissingMemoryReadResult(result, params.relPath)) {
+    if (params.requestedCorpus === "all" && result.status === "not_found") {
       const supplement = await getSupplementMemoryReadResult({
         relPath: params.relPath,
         from: params.from,

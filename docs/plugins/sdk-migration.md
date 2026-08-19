@@ -83,6 +83,18 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+### Memory read missing results
+
+Memory managers now return `status: "ok"` for successful excerpts and
+`status: "not_found"` when an allowed file is missing. This keeps empty files
+and empty ranges distinct from missing files without relying on pagination
+metadata.
+
+At registration, the host normalizes pre-status results returned by older
+external memory managers, including the legacy `{ text: "", path }` missing
+sentinel. New producers should emit the explicit status; registered-input
+normalization remains available through the next Plugin SDK major.
+
 ### Channel state migration declarations
 
 Channel plugins should declare `doctorContract.stateMigrations: true` in
