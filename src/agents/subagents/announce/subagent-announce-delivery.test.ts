@@ -3712,6 +3712,39 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("records a committed direct completion when the announce turn ends incomplete", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: "Agent couldn't generate a response.",
+        },
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
+            text: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
+            sourceReplyFinal: true,
+          },
+        ],
+      },
+    });
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: "(no output)",
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+  });
+
   it.each([
     {
       name: "accepts message delivery to the requester",
