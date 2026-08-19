@@ -16,6 +16,7 @@ import type {
   PluginPackageInstall,
 } from "./manifest.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS } from "./official-external-plugin-bundled-catalogs.js";
+import type { OfficialExternalPluginCatalogShardRoot } from "./official-external-plugin-catalog-shards.js";
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -247,6 +248,7 @@ export type HostedOfficialExternalPluginCatalogSnapshotMonotonicState = {
   mode: "signed-feed";
   sequence: number;
   generatedAt?: string;
+  currentMaterializedFeedSha256?: string;
 };
 
 export type HostedOfficialExternalPluginCatalogLoadResult =
@@ -312,8 +314,10 @@ const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalP
   };
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS = 5000;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES = 1024 * 1024;
+const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SIGNED_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS = 5000;
 const DSSE_ENVELOPE_MEDIA_TYPE = "application/vnd.dsse+json";
+const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_CONCURRENCY = 4;
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST = ["clawhub.ai"];
 const ISO_CALENDAR_DATE_PREFIX_RE = /^(\d{4})-(\d{2})-(\d{2})/u;
 
@@ -401,6 +405,51 @@ function normalizeHostedCatalogHeader(value: string | null): string | undefined 
 
 function sha256Hex(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function stableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableJsonValue);
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, stableJsonValue(child)]),
+    );
+  }
+  return value;
+}
+
+/** Hashes authenticated catalog content while excluding refresh-window metadata. */
+export function hashOfficialExternalPluginCatalogMaterializedFeed(
+  feed: OfficialExternalPluginCatalogFeed,
+): string {
+  const { generatedAt: _generatedAt, expiresAt: _expiresAt, entries, ...rest } = feed;
+  const content = {
+    ...rest,
+    entries: entries
+      .map((entry) => stableJsonValue(entry))
+      .toSorted((left, right) => {
+        const leftJson = JSON.stringify(left);
+        const rightJson = JSON.stringify(right);
+        return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
+      }),
+  };
+  return sha256Hex(JSON.stringify(stableJsonValue(content)));
+}
+
+function isLegacyCatalogSnapshotWithoutMaterializedDigest(body: string): boolean {
+  try {
+    const document = JSON.parse(body) as Record<string, unknown>;
+    return (
+      (document.kind === "official-external-plugin-catalog-changes-v1" ||
+        document.kind === "official-external-plugin-catalog-shards-v1") &&
+      typeof document.materializedFeedSha256 !== "string"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function resolveHostedCatalogFeedUrl(raw: string): URL {
@@ -751,21 +800,136 @@ async function parseHostedCatalogFeedBody(params: {
   now: Date;
   allowExpired?: boolean;
   allowMissingExpiry?: boolean;
+  loadShardBodies?: (root: OfficialExternalPluginCatalogShardRoot) => Promise<readonly string[]>;
 }): Promise<{
   feed: OfficialExternalPluginCatalogFeed;
   trust?: HostedOfficialExternalPluginCatalogTrustState;
   expired?: boolean;
+  snapshotBody?: string;
+  wireBody?: string;
+  authenticatedMaterializedFeedSha256?: string;
 }> {
-  const raw = JSON.parse(params.body) as unknown;
+  const document = JSON.parse(params.body) as unknown;
   if (params.verification?.mode === "signed") {
-    const { verifyOfficialExternalPluginCatalogSignedEnvelope } =
-      await import("./official-external-plugin-catalog-envelope.js");
+    const {
+      applyVerifiedOfficialExternalPluginCatalogChangeBodies,
+      parseOfficialExternalPluginCatalogIncrementalSnapshot,
+      parseOfficialExternalPluginCatalogResetFloorSnapshot,
+    } = await import("./official-external-plugin-catalog-changes.js");
+    const resetFloorSnapshot = parseOfficialExternalPluginCatalogResetFloorSnapshot(document);
+    if (resetFloorSnapshot) {
+      const base = await parseHostedCatalogFeedBody({
+        ...params,
+        body: resetFloorSnapshot.snapshotBody,
+      });
+      if (base.feed.sequence < resetFloorSnapshot.minimumSequence) {
+        throw new HostedCatalogSignedFeedMonotonicityError(
+          `hosted catalog signed feed sequence is older than reset floor ${resetFloorSnapshot.minimumSequence}`,
+        );
+      }
+      return {
+        ...base,
+        wireBody: base.wireBody ?? resetFloorSnapshot.snapshotBody,
+      };
+    }
+    const incrementalSnapshot = parseOfficialExternalPluginCatalogIncrementalSnapshot(document);
+    if (incrementalSnapshot) {
+      const base = await parseHostedCatalogFeedBody({
+        ...params,
+        body: incrementalSnapshot.baseBody,
+        allowExpired: true,
+        allowMissingExpiry: true,
+      });
+      if (!base.trust) {
+        throw new Error("hosted catalog incremental base is not signed");
+      }
+      const applied = applyVerifiedOfficialExternalPluginCatalogChangeBodies({
+        feed: base.feed,
+        changeBodies: incrementalSnapshot.changeBodies,
+        trustedKeys: params.verification.keys,
+        threshold: params.verification.threshold,
+        expectedFeedId: params.expectedFeedId,
+      });
+      const authenticatedMaterializedFeedSha256 = hashOfficialExternalPluginCatalogMaterializedFeed(
+        applied.feed,
+      );
+      if (
+        incrementalSnapshot.materializedFeedSha256 !== undefined &&
+        incrementalSnapshot.materializedFeedSha256 !== authenticatedMaterializedFeedSha256
+      ) {
+        throw new Error(
+          "hosted catalog incremental snapshot materialized feed digest did not match",
+        );
+      }
+      const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(applied.feed.generatedAt);
+      const expiresAt = normalizeOptionalString(applied.feed.expiresAt);
+      const expiresAtMs = expiresAt
+        ? parseOfficialExternalPluginCatalogTimestamp(expiresAt)
+        : undefined;
+      if (
+        generatedAtMs === undefined ||
+        expiresAtMs === undefined ||
+        expiresAtMs <= generatedAtMs
+      ) {
+        throw new Error("hosted catalog incremental result has an invalid validity window");
+      }
+      const expired = expiresAtMs <= params.now.getTime();
+      if (expired && params.allowExpired !== true) {
+        throw new Error(`hosted catalog signed feed expired at ${expiresAt}`);
+      }
+      return {
+        feed: enforceHostedCatalogFeedInstallAuthority(applied.feed),
+        trust: {
+          mode: "signed",
+          signedBy: applied.signedBy,
+          signatureCount: applied.signatureCount,
+          threshold: applied.threshold,
+          verifiedAt: params.verifiedAt,
+        },
+        ...(expired ? { expired: true } : {}),
+        authenticatedMaterializedFeedSha256,
+      };
+    }
+    const {
+      OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+      OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
+      verifyOfficialExternalPluginCatalogEnvelopePayload,
+      verifyOfficialExternalPluginCatalogSignedEnvelope,
+    } = await import("./official-external-plugin-catalog-envelope.js");
+    const {
+      parseOfficialExternalPluginCatalogShardedSnapshot,
+      parseOfficialExternalPluginCatalogShardRoot,
+      serializeOfficialExternalPluginCatalogShardedSnapshot,
+      validateOfficialExternalPluginCatalogShardSet,
+    } = await import("./official-external-plugin-catalog-shards.js");
+    const snapshot = parseOfficialExternalPluginCatalogShardedSnapshot(document);
+    const wireBody = snapshot?.rootBody ?? params.body;
+    const raw = snapshot ? (JSON.parse(snapshot.rootBody) as unknown) : document;
     const threshold = params.verification.threshold ?? 1;
-    const verification = verifyOfficialExternalPluginCatalogSignedEnvelope(raw, {
-      trustedKeys: params.verification.keys,
-      threshold,
-      ...(params.allowLegacyBetaEnvelope ? { allowLegacyBetaEnvelope: true } : {}),
-    });
+    const verification =
+      isRecord(raw) && raw.payloadType === OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE
+        ? (() => {
+            const feedVerification = verifyOfficialExternalPluginCatalogSignedEnvelope(raw, {
+              trustedKeys: params.verification.keys,
+              threshold,
+              ...(params.allowLegacyBetaEnvelope ? { allowLegacyBetaEnvelope: true } : {}),
+            });
+            return feedVerification.ok
+              ? {
+                  ...feedVerification,
+                  payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+                  payload: feedVerification.feed,
+                }
+              : feedVerification;
+          })()
+        : verifyOfficialExternalPluginCatalogEnvelopePayload(raw, {
+            trustedKeys: params.verification.keys,
+            acceptedPayloadTypes: new Set([
+              OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
+            ]),
+            threshold,
+            ...(params.allowLegacyBetaEnvelope ? { allowLegacyBetaEnvelope: true } : {}),
+          });
     if (!verification.ok) {
       const invalidTimestampSequence =
         verification.error === "invalid-payload" && "authenticatedPayload" in verification
@@ -778,15 +942,66 @@ async function parseHostedCatalogFeedBody(params: {
       }
       throw new Error(verification.message);
     }
-    if (params.expectedFeedId && verification.feed.id !== params.expectedFeedId) {
+    let feed: OfficialExternalPluginCatalogFeed;
+    let snapshotBody: string | undefined;
+    if (verification.payloadType === OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE) {
+      if (!isOfficialExternalPluginCatalogFeed(verification.payload)) {
+        const invalidTimestampSequence = readOfficialExternalPluginCatalogInvalidTimestampSequence(
+          verification.payload,
+        );
+        if (invalidTimestampSequence !== undefined) {
+          throw new HostedCatalogFeedTimestampError(
+            "hosted catalog signed envelope payload is invalid",
+            invalidTimestampSequence,
+          );
+        }
+        throw new Error("hosted catalog signed envelope payload is invalid");
+      }
+      feed = verification.payload;
+    } else {
+      const root = parseOfficialExternalPluginCatalogShardRoot(verification.payload);
+      const rootGeneratedAtMs = parseOfficialExternalPluginCatalogTimestamp(root.generatedAt);
+      const rootExpiresAtMs = parseOfficialExternalPluginCatalogTimestamp(root.expiresAt);
+      if (rootGeneratedAtMs === undefined || rootExpiresAtMs === undefined) {
+        throw new Error("hosted catalog shard root requires valid timestamps");
+      }
+      if (rootExpiresAtMs <= rootGeneratedAtMs) {
+        throw new Error("hosted catalog shard root expiresAt must be later than generatedAt");
+      }
+      if (rootExpiresAtMs <= params.now.getTime() && params.allowExpired !== true) {
+        throw new Error(`hosted catalog shard root expired at ${root.expiresAt}`);
+      }
+      const shardBodies = snapshot?.shardBodies ?? (await params.loadShardBodies?.(root));
+      if (!shardBodies) {
+        throw new Error("hosted catalog shard set is unavailable");
+      }
+      const shardedFeed = validateOfficialExternalPluginCatalogShardSet(root, shardBodies);
+      if (!isOfficialExternalPluginCatalogFeed(shardedFeed)) {
+        throw new Error("hosted catalog shard set contains an invalid feed");
+      }
+      feed = shardedFeed;
+      snapshotBody =
+        snapshot === null
+          ? serializeOfficialExternalPluginCatalogShardedSnapshot({
+              rootBody: params.body,
+              shardBodies,
+              materializedFeedSha256: hashOfficialExternalPluginCatalogMaterializedFeed(feed),
+            })
+          : params.body;
+    }
+    if (
+      snapshot?.materializedFeedSha256 !== undefined &&
+      snapshot.materializedFeedSha256 !== hashOfficialExternalPluginCatalogMaterializedFeed(feed)
+    ) {
+      throw new Error("hosted catalog sharded snapshot materialized feed digest did not match");
+    }
+    if (params.expectedFeedId && feed.id !== params.expectedFeedId) {
       throw new Error(
-        `hosted catalog feed id "${verification.feed.id}" did not match expected "${params.expectedFeedId}"`,
+        `hosted catalog feed id "${feed.id}" did not match expected "${params.expectedFeedId}"`,
       );
     }
-    const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(
-      verification.feed.generatedAt,
-    );
-    const expiresAt = normalizeOptionalString(verification.feed.expiresAt);
+    const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(feed.generatedAt);
+    const expiresAt = normalizeOptionalString(feed.expiresAt);
     if (generatedAtMs === undefined) {
       throw new Error("hosted catalog signed feed requires a valid generatedAt value");
     }
@@ -814,7 +1029,7 @@ async function parseHostedCatalogFeedBody(params: {
       );
     }
     return {
-      feed: enforceHostedCatalogFeedInstallAuthority(verification.feed),
+      feed: enforceHostedCatalogFeedInstallAuthority(feed),
       trust: {
         mode: "signed",
         signedBy: verification.signedBy,
@@ -823,17 +1038,20 @@ async function parseHostedCatalogFeedBody(params: {
         verifiedAt: params.verifiedAt,
       },
       ...(expired ? { expired: true } : {}),
+      ...(snapshotBody ? { snapshotBody } : {}),
+      ...(snapshot ? { wireBody } : {}),
+      authenticatedMaterializedFeedSha256: hashOfficialExternalPluginCatalogMaterializedFeed(feed),
     };
   }
-  if (!isOfficialExternalPluginCatalogFeed(raw)) {
+  if (!isOfficialExternalPluginCatalogFeed(document)) {
     throw new Error("hosted catalog feed did not match a supported schema version");
   }
-  if (params.expectedFeedId && raw.id !== params.expectedFeedId) {
+  if (params.expectedFeedId && document.id !== params.expectedFeedId) {
     throw new Error(
-      `hosted catalog feed id "${raw.id}" did not match expected "${params.expectedFeedId}"`,
+      `hosted catalog feed id "${document.id}" did not match expected "${params.expectedFeedId}"`,
     );
   }
-  return { feed: enforceHostedCatalogFeedInstallAuthority(raw) };
+  return { feed: enforceHostedCatalogFeedInstallAuthority(document) };
 }
 
 function enforceHostedCatalogFeedInstallAuthority(
@@ -893,6 +1111,7 @@ async function loadHostedCatalogSnapshotResult(params: {
   expectedFeedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
   now: Date;
+  minimumSignedSequence?: number;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   assertSnapshotMatchesRequestValidators({
     snapshot: params.snapshot,
@@ -902,9 +1121,6 @@ async function loadHostedCatalogSnapshotResult(params: {
   const checksum = sha256Hex(params.snapshot.body);
   if (checksum !== params.snapshot.metadata.checksum) {
     throw new Error("hosted catalog snapshot checksum mismatch");
-  }
-  if (params.expectedSha256 && params.expectedSha256 !== checksum) {
-    throw new Error("hosted catalog snapshot checksum did not match expected checksum");
   }
   const parsed = await parseHostedCatalogFeedBody({
     body: params.snapshot.body,
@@ -916,6 +1132,18 @@ async function loadHostedCatalogSnapshotResult(params: {
     allowExpired: true,
     allowMissingExpiry: true,
   });
+  const wireChecksum = sha256Hex(parsed.wireBody ?? params.snapshot.body);
+  if (params.expectedSha256 && params.expectedSha256 !== wireChecksum) {
+    throw new Error("hosted catalog snapshot checksum did not match expected checksum");
+  }
+  if (
+    params.minimumSignedSequence !== undefined &&
+    parsed.feed.sequence < params.minimumSignedSequence
+  ) {
+    throw new HostedCatalogSignedFeedMonotonicityError(
+      `hosted catalog signed feed sequence is older than reset floor ${params.minimumSignedSequence}`,
+    );
+  }
   const entries = dedupeOfficialExternalPluginCatalogEntries(
     filterOfficialExternalPluginCatalogEntriesBySourceRefs(
       parseOfficialExternalPluginCatalogEntries(parsed.feed),
@@ -932,7 +1160,7 @@ async function loadHostedCatalogSnapshotResult(params: {
     source: "hosted-snapshot",
     entries: visibleEntries,
     feed: parsed.expired ? { ...parsed.feed, entries: visibleEntries } : parsed.feed,
-    metadata: params.snapshot.metadata,
+    metadata: { ...params.snapshot.metadata, checksum: wireChecksum },
     snapshot: params.snapshot,
     ...(parsed.trust ? { trust: parsed.trust } : {}),
     error: parsed.expired
@@ -1002,6 +1230,7 @@ async function snapshotOrBundledFallbackResult(params: {
   expectedFeedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
   now: Date;
+  minimumSignedSequence?: number;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   if (params.snapshotStore) {
     try {
@@ -1018,6 +1247,7 @@ async function snapshotOrBundledFallbackResult(params: {
           expectedFeedId: params.expectedFeedId,
           verification: params.verification,
           now: params.now,
+          minimumSignedSequence: params.minimumSignedSequence,
         });
       }
     } catch (snapshotErr) {
@@ -1053,6 +1283,365 @@ async function resolveHostedCatalogSnapshotStore(params: {
     ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     ...(params.stateDatabasePath ? { stateDatabasePath: params.stateDatabasePath } : {}),
   });
+}
+
+async function loadHostedCatalogShardBodies(params: {
+  root: OfficialExternalPluginCatalogShardRoot;
+  rootUrl: string;
+  hostnameAllowlist: readonly string[];
+  fetchImpl?: FetchLike;
+  timeoutMs: number;
+  chunkTimeoutMs: number;
+}): Promise<readonly string[]> {
+  const rootOrigin = new URL(params.rootUrl).origin;
+  for (const descriptor of params.root.shards) {
+    if (new URL(descriptor.url).origin !== rootOrigin) {
+      throw new Error("hosted catalog shard URL must use the signed root origin");
+    }
+  }
+  const { fetchWithSsrFGuard } = await import("../infra/net/fetch-guard.js");
+  const controller = new AbortController();
+  const bodies = Array.from({ length: params.root.shards.length }, () => "");
+  let nextIndex = 0;
+  let firstError: unknown;
+  let failed = false;
+  const worker = async () => {
+    while (!controller.signal.aborted) {
+      const index = nextIndex;
+      if (index >= params.root.shards.length) {
+        return;
+      }
+      nextIndex += 1;
+      const descriptor = params.root.shards[index];
+      if (!descriptor) {
+        return;
+      }
+      try {
+        let response: Response | undefined;
+        let release: (() => Promise<void>) | undefined;
+        try {
+          const guarded = await fetchWithSsrFGuard({
+            url: descriptor.url,
+            fetchImpl: params.fetchImpl,
+            init: { method: "GET" },
+            requireHttps: true,
+            maxRedirects: 2,
+            timeoutMs: params.timeoutMs,
+            signal: controller.signal,
+            policy: { hostnameAllowlist: [...params.hostnameAllowlist] },
+            auditContext: "official-external-plugin-catalog-shard",
+          });
+          response = guarded.response;
+          release = guarded.release;
+          if (new URL(guarded.finalUrl).origin !== rootOrigin) {
+            throw new Error("hosted catalog shard redirect changed the signed root origin");
+          }
+          if (!response.ok) {
+            throw new Error(`hosted catalog shard returned HTTP ${response.status}`);
+          }
+          bodies[index] = await readHostedCatalogResponseText({
+            response,
+            maxBytes: descriptor.byteLength,
+            chunkTimeoutMs: params.chunkTimeoutMs,
+          });
+        } finally {
+          if (response?.bodyUsed !== true) {
+            await response?.body?.cancel().catch(() => undefined);
+          }
+          await release?.().catch(() => undefined);
+        }
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          firstError = error;
+          controller.abort(error);
+        }
+        return;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      {
+        length: Math.min(
+          DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_CONCURRENCY,
+          params.root.shards.length,
+        ),
+      },
+      worker,
+    ),
+  );
+  if (failed) {
+    throw firstError;
+  }
+  return bodies;
+}
+
+async function tryLoadHostedCatalogIncrementalRefresh(params: {
+  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
+  url: URL;
+  hostnameAllowlist: readonly string[];
+  expectedFeedId?: string;
+  verification: Extract<OfficialExternalPluginCatalogFeedVerification, { mode: "signed" }>;
+  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+  requireManifestInstallSourceRef: boolean;
+  fetchImpl?: FetchLike;
+  timeoutMs: number;
+  chunkTimeoutMs: number;
+  now: () => Date;
+  requireSnapshotWrite?: boolean;
+}): Promise<HostedOfficialExternalPluginCatalogLoadResult | { resetSequenceFloor: number } | null> {
+  if (!params.snapshotStore) {
+    return null;
+  }
+  const snapshot = await params.snapshotStore.read(params.url.href).catch(() => null);
+  if (!snapshot || snapshot.trust?.mode !== "signed") {
+    return null;
+  }
+  const current = await parseHostedCatalogFeedBody({
+    body: snapshot.body,
+    expectedFeedId: params.expectedFeedId,
+    verification: params.verification,
+    verifiedAt: snapshot.trust.verifiedAt,
+    allowLegacyBetaEnvelope: true,
+    now: params.now(),
+    allowExpired: true,
+    allowMissingExpiry: true,
+  }).catch(() => null);
+  if (!current?.trust) {
+    return null;
+  }
+  const {
+    applyVerifiedOfficialExternalPluginCatalogChanges,
+    parseOfficialExternalPluginCatalogIncrementalSnapshot,
+    serializeOfficialExternalPluginCatalogResetFloorSnapshot,
+    serializeOfficialExternalPluginCatalogIncrementalSnapshot,
+    verifyOfficialExternalPluginCatalogChangeEnvelopeBody,
+  } = await import("./official-external-plugin-catalog-changes.js");
+  const storedWrapper = parseOfficialExternalPluginCatalogIncrementalSnapshot(
+    JSON.parse(snapshot.body) as unknown,
+  );
+  const changesUrl = new URL(params.url.href);
+  changesUrl.pathname = `${changesUrl.pathname.replace(/\/$/u, "")}/changes`;
+  changesUrl.search = "";
+  changesUrl.hash = "";
+  const newBodies: string[] = [];
+  const newVerifications: Array<
+    ReturnType<typeof verifyOfficialExternalPluginCatalogChangeEnvelopeBody>
+  > = [];
+  let cursor: string | null = null;
+  let downloadedBytes = 0;
+  const consumedCursors = new Set<string>();
+  let lastStatus = 200;
+  const { fetchWithSsrFGuard } = await import("../infra/net/fetch-guard.js");
+  for (let pageCount = 0; pageCount < 2048; pageCount += 1) {
+    const requestUrl = new URL(changesUrl.href);
+    if (cursor === null) {
+      requestUrl.searchParams.set("fromSequence", String(current.feed.sequence));
+      requestUrl.searchParams.set("limit", "500");
+    } else {
+      if (consumedCursors.has(cursor)) {
+        return null;
+      }
+      consumedCursors.add(cursor);
+      requestUrl.searchParams.set("cursor", cursor);
+    }
+    let response: Response | undefined;
+    let release: (() => Promise<void>) | undefined;
+    try {
+      const guarded = await fetchWithSsrFGuard({
+        url: requestUrl.href,
+        fetchImpl: params.fetchImpl,
+        init: {
+          method: "GET",
+          headers: { accept: DSSE_ENVELOPE_MEDIA_TYPE },
+        },
+        requireHttps: true,
+        maxRedirects: 2,
+        timeoutMs: params.timeoutMs,
+        policy: { hostnameAllowlist: [...params.hostnameAllowlist] },
+        auditContext: "official-external-plugin-catalog-changes",
+      });
+      response = guarded.response;
+      release = guarded.release;
+      if (new URL(guarded.finalUrl).origin !== params.url.origin) {
+        return null;
+      }
+      lastStatus = response.status;
+      if (response.status !== 200 && response.status !== 409) {
+        return null;
+      }
+      if (
+        response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !==
+        DSSE_ENVELOPE_MEDIA_TYPE
+      ) {
+        return null;
+      }
+      const body = await readHostedCatalogResponseText({
+        response,
+        maxBytes: DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SIGNED_MAX_BYTES,
+        chunkTimeoutMs: params.chunkTimeoutMs,
+      });
+      downloadedBytes += Buffer.byteLength(body, "utf8");
+      if (downloadedBytes > 256 * 1024 * 1024) {
+        return null;
+      }
+      const verified = verifyOfficialExternalPluginCatalogChangeEnvelopeBody(body, {
+        trustedKeys: params.verification.keys,
+        threshold: params.verification.threshold,
+      });
+      if (
+        verified.payload.feedId !== current.feed.id ||
+        verified.payload.fromSequence !== current.feed.sequence
+      ) {
+        return null;
+      }
+      if ("resetRequired" in verified.payload) {
+        // The signed reset URL is never followed here: the configured root
+        // remains the authority. Cross-origin reset locations are ignored too.
+        const resetExpiresAtMs = parseOfficialExternalPluginCatalogTimestamp(
+          verified.payload.expiresAt,
+        );
+        const resetNow = params.now();
+        if (resetExpiresAtMs === undefined || resetExpiresAtMs <= resetNow.getTime()) {
+          return null;
+        }
+        const floorBody = serializeOfficialExternalPluginCatalogResetFloorSnapshot({
+          snapshotBody: snapshot.body,
+          minimumSequence: verified.payload.currentSequence,
+        });
+        await params.snapshotStore
+          .write({
+            body: floorBody,
+            metadata: {
+              ...snapshot.metadata,
+              status: response.status,
+              checksum: sha256Hex(floorBody),
+            },
+            savedAt: resetNow.toISOString(),
+            trust: {
+              mode: "signed",
+              signedBy: verified.signedBy,
+              signatureCount: verified.signatureCount,
+              threshold: verified.threshold,
+              verifiedAt: resetNow.toISOString(),
+            },
+            monotonic: {
+              mode: "signed-feed",
+              sequence: verified.payload.currentSequence,
+            },
+          })
+          .catch((error: unknown) => {
+            if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
+              throw error;
+            }
+            if (params.requireSnapshotWrite) {
+              throw new HostedCatalogSnapshotWriteError(error);
+            }
+          });
+        return { resetSequenceFloor: verified.payload.currentSequence };
+      }
+      if (response.status !== 200) {
+        return null;
+      }
+      newBodies.push(body);
+      newVerifications.push(verified);
+      cursor = verified.payload.nextCursor;
+      if (cursor === null) {
+        break;
+      }
+    } finally {
+      if (response?.bodyUsed !== true) {
+        await response?.body?.cancel().catch(() => undefined);
+      }
+      await release?.().catch(() => undefined);
+    }
+  }
+  if (cursor !== null || newBodies.length === 0) {
+    return null;
+  }
+  const existingBodies = storedWrapper?.changeBodies ?? [];
+  if (existingBodies.length + newBodies.length > 2048) {
+    return null;
+  }
+  const applied = applyVerifiedOfficialExternalPluginCatalogChanges({
+    feed: current.feed,
+    changes: newVerifications,
+    expectedFeedId: params.expectedFeedId,
+  });
+  const terminalNow = params.now();
+  const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(applied.feed.generatedAt);
+  const expiresAt = normalizeOptionalString(applied.feed.expiresAt);
+  const expiresAtMs = expiresAt
+    ? parseOfficialExternalPluginCatalogTimestamp(expiresAt)
+    : undefined;
+  if (generatedAtMs === undefined || expiresAtMs === undefined || expiresAtMs <= generatedAtMs) {
+    throw new Error("hosted catalog incremental result has an invalid validity window");
+  }
+  if (expiresAtMs <= terminalNow.getTime()) {
+    throw new Error(`hosted catalog signed feed expired at ${expiresAt}`);
+  }
+  const materializedFeedSha256 = hashOfficialExternalPluginCatalogMaterializedFeed(applied.feed);
+  const feed = enforceHostedCatalogFeedInstallAuthority(applied.feed);
+  const baseBody = storedWrapper?.baseBody ?? snapshot.body;
+  const snapshotBody = serializeOfficialExternalPluginCatalogIncrementalSnapshot({
+    baseBody,
+    changeBodies: [...existingBodies, ...newBodies],
+    materializedFeedSha256,
+  });
+  if (Buffer.byteLength(snapshotBody, "utf8") > 256 * 1024 * 1024) {
+    return null;
+  }
+  const verifiedAt = terminalNow.toISOString();
+  const trust: HostedOfficialExternalPluginCatalogTrustState = {
+    mode: "signed",
+    signedBy: applied.signedBy,
+    signatureCount: applied.signatureCount,
+    threshold: applied.threshold,
+    verifiedAt,
+  };
+  const entries = filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+    parseOfficialExternalPluginCatalogEntries(feed),
+    {
+      catalogConfig: params.catalogConfig,
+      requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
+    },
+  );
+  const metadata: HostedOfficialExternalPluginCatalogMetadata = {
+    url: params.url.href,
+    status: lastStatus,
+    checksum: sha256Hex(snapshotBody),
+  };
+  await params.snapshotStore
+    .write({
+      body: snapshotBody,
+      metadata,
+      savedAt: verifiedAt,
+      trust,
+      monotonic: {
+        mode: "signed-feed",
+        sequence: feed.sequence,
+        generatedAt: feed.generatedAt,
+        currentMaterializedFeedSha256:
+          current.authenticatedMaterializedFeedSha256 ??
+          hashOfficialExternalPluginCatalogMaterializedFeed(current.feed),
+      },
+    })
+    .catch((error: unknown) => {
+      if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
+        throw error;
+      }
+      if (params.requireSnapshotWrite) {
+        throw new HostedCatalogSnapshotWriteError(error);
+      }
+    });
+  return {
+    source: "hosted",
+    entries: dedupeOfficialExternalPluginCatalogEntries(entries),
+    feed,
+    metadata,
+    trust,
+  };
 }
 
 async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
@@ -1103,6 +1692,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     feedProfile: params?.feedProfile,
     catalogConfig: params?.catalogConfig,
   });
+  let incrementalResetSequenceFloor: number | undefined;
   if (params?.offline === true) {
     return await snapshotOrBundledFallbackResult({
       error: "hosted catalog feed offline mode",
@@ -1114,7 +1704,59 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       expectedFeedId: source.expectedFeedId,
       verification: source.verification,
       now: currentTime(),
+      minimumSignedSequence: incrementalResetSequenceFloor,
     });
+  }
+  if (
+    source.verification?.mode === "signed" &&
+    !expectedSha256 &&
+    !normalizeOptionalString(params?.ifNoneMatch) &&
+    !normalizeOptionalString(params?.ifModifiedSince)
+  ) {
+    try {
+      const incremental = await tryLoadHostedCatalogIncrementalRefresh({
+        snapshotStore,
+        url,
+        hostnameAllowlist: source.hostnameAllowlist,
+        expectedFeedId: source.expectedFeedId,
+        verification: source.verification,
+        catalogConfig: params?.catalogConfig,
+        requireManifestInstallSourceRef,
+        fetchImpl: params?.fetchImpl,
+        timeoutMs: params?.timeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS,
+        chunkTimeoutMs:
+          params?.chunkTimeoutMs ??
+          DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
+        now: currentTime,
+        requireSnapshotWrite: params?.requireSnapshotWrite,
+      });
+      if (incremental) {
+        if ("resetSequenceFloor" in incremental) {
+          incrementalResetSequenceFloor = incremental.resetSequenceFloor;
+        } else {
+          return incremental;
+        }
+      }
+    } catch (error) {
+      if (error instanceof HostedCatalogSnapshotWriteError) {
+        throw error.originalError;
+      }
+      if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
+        return await snapshotOrBundledFallbackResult({
+          error,
+          snapshotStore,
+          url: url.href,
+          catalogConfig: params?.catalogConfig,
+          requireManifestInstallSourceRef,
+          expectedFeedId: source.expectedFeedId,
+          verification: source.verification,
+          now: currentTime(),
+          minimumSignedSequence: incrementalResetSequenceFloor,
+        });
+      }
+      // A missing, unavailable, or malformed changes route is compatible with
+      // older publishers. Continue with the existing full snapshot refresh.
+    }
   }
   const headers = new Headers();
   const ifNoneMatch = normalizeOptionalString(params?.ifNoneMatch);
@@ -1157,6 +1799,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     });
     response = guarded.response;
     release = guarded.release;
+    const rootFinalUrl = guarded.finalUrl;
     const base = metadataBase(response);
     if (response.status === 304) {
       return await snapshotOrBundledFallbackResult({
@@ -1172,6 +1815,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now: currentTime(),
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     }
     if (!response.ok) {
@@ -1188,6 +1832,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now: currentTime(),
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     }
     if (
@@ -1207,11 +1852,16 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now: currentTime(),
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     }
     const body = await readHostedCatalogResponseText({
       response,
-      maxBytes: params?.maxBytes ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES,
+      maxBytes:
+        params?.maxBytes ??
+        (source.verification?.mode === "signed"
+          ? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SIGNED_MAX_BYTES
+          : DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES),
       chunkTimeoutMs:
         params?.chunkTimeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
     });
@@ -1231,6 +1881,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now: currentTime(),
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     }
     const now = currentTime();
@@ -1241,6 +1892,18 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       verification: source.verification,
       verifiedAt,
       now,
+      loadShardBodies: async (root) =>
+        await loadHostedCatalogShardBodies({
+          root,
+          rootUrl: rootFinalUrl,
+          hostnameAllowlist: source.hostnameAllowlist,
+          fetchImpl: params?.fetchImpl,
+          timeoutMs:
+            params?.timeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS,
+          chunkTimeoutMs:
+            params?.chunkTimeoutMs ??
+            DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
+        }),
     }).catch(async (err: unknown) => {
       return await snapshotOrBundledFallbackResult({
         error: err,
@@ -1255,36 +1918,54 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now,
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     });
     if ("source" in parsed) {
       return parsed;
     }
+    if (
+      incrementalResetSequenceFloor !== undefined &&
+      parsed.trust?.mode === "signed" &&
+      parsed.feed.sequence < incrementalResetSequenceFloor
+    ) {
+      throw new HostedCatalogSignedFeedMonotonicityError(
+        `hosted catalog signed feed sequence is older than reset floor ${incrementalResetSequenceFloor}`,
+      );
+    }
+    let currentMaterializedFeedSha256: string | undefined;
+    let skipSameSequenceLegacySnapshotWrite = false;
     if (snapshotStore && parsed.trust?.mode === "signed") {
       const currentSnapshot = await snapshotStore.read(url.href);
       if (currentSnapshot?.trust?.mode === "signed") {
+        const parsedCurrent = await parseHostedCatalogFeedBody({
+          body: currentSnapshot.body,
+          expectedFeedId: source.expectedFeedId,
+          verification: source.verification,
+          verifiedAt: currentSnapshot.trust.verifiedAt,
+          allowLegacyBetaEnvelope: true,
+          now,
+          allowExpired: true,
+          allowMissingExpiry: true,
+        }).catch((err: unknown) => {
+          // Invalid timestamps remain repairable, and accepted monotonic metadata stays
+          // authoritative when configured signing keys rotate away from the stored signer.
+          if (err instanceof HostedCatalogFeedTimestampError) {
+            return { feed: { sequence: err.sequence } };
+          }
+          if (currentSnapshot.monotonic?.mode === "signed-feed") {
+            return undefined;
+          }
+          throw err;
+        });
         const current =
           currentSnapshot.monotonic?.mode === "signed-feed"
             ? currentSnapshot.monotonic
-            : (
-                await parseHostedCatalogFeedBody({
-                  body: currentSnapshot.body,
-                  expectedFeedId: source.expectedFeedId,
-                  verification: source.verification,
-                  verifiedAt: currentSnapshot.trust.verifiedAt,
-                  allowLegacyBetaEnvelope: true,
-                  now,
-                  allowExpired: true,
-                  allowMissingExpiry: true,
-                }).catch((err: unknown) => {
-                  // Only an authenticated invalid-timestamp payload is repairable. Signature
-                  // and trust failures must remain fail-closed so rollback checks cannot be bypassed.
-                  if (err instanceof HostedCatalogFeedTimestampError) {
-                    return { feed: { sequence: err.sequence } };
-                  }
-                  throw err;
-                })
-              ).feed;
+            : parsedCurrent!.feed;
+        currentMaterializedFeedSha256 =
+          parsedCurrent && "authenticatedMaterializedFeedSha256" in parsedCurrent
+            ? parsedCurrent.authenticatedMaterializedFeedSha256
+            : undefined;
         if (
           isHostedCatalogSignedFeedRollback({
             candidate: parsed.feed,
@@ -1295,6 +1976,10 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
             "hosted catalog signed feed sequence is older than current snapshot",
           );
         }
+        skipSameSequenceLegacySnapshotWrite =
+          parsed.feed.sequence === current.sequence &&
+          currentMaterializedFeedSha256 === undefined &&
+          isLegacyCatalogSnapshotWithoutMaterializedDigest(currentSnapshot.body);
       }
     }
     const entries = filterOfficialExternalPluginCatalogEntriesBySourceRefs(
@@ -1304,10 +1989,22 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         requireManifestInstallSourceRef,
       },
     );
-    await snapshotStore
+    const snapshotBody = parsed.snapshotBody ?? body;
+    const snapshotMetadata = {
+      ...metadata,
+      checksum: sha256Hex(snapshotBody),
+    };
+    if (skipSameSequenceLegacySnapshotWrite && params?.requireSnapshotWrite) {
+      throw new HostedCatalogSnapshotWriteError(
+        new Error(
+          "cannot compact a same-sequence legacy catalog snapshot after its signing key rotated",
+        ),
+      );
+    }
+    await (skipSameSequenceLegacySnapshotWrite ? undefined : snapshotStore)
       ?.write({
-        body,
-        metadata,
+        body: snapshotBody,
+        metadata: snapshotMetadata,
         savedAt: verifiedAt,
         ...(parsed.trust ? { trust: parsed.trust } : {}),
         ...(parsed.trust?.mode === "signed"
@@ -1316,6 +2013,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
                 mode: "signed-feed",
                 sequence: parsed.feed.sequence,
                 generatedAt: parsed.feed.generatedAt,
+                ...(currentMaterializedFeedSha256 ? { currentMaterializedFeedSha256 } : {}),
               },
             }
           : {}),
@@ -1351,6 +2049,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       expectedFeedId: source.expectedFeedId,
       verification: source.verification,
       now: currentTime(),
+      minimumSignedSequence: incrementalResetSequenceFloor,
     });
   } finally {
     await cancelUnreadResponseBody(response);

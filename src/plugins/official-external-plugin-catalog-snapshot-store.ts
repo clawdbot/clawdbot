@@ -15,11 +15,13 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   HostedCatalogSignedFeedMonotonicityError,
+  hashOfficialExternalPluginCatalogMaterializedFeed,
   type HostedOfficialExternalPluginCatalogMetadata,
   type HostedOfficialExternalPluginCatalogSnapshot,
   type HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type HostedOfficialExternalPluginCatalogTrustState,
+  type OfficialExternalPluginCatalogFeed,
   isOfficialExternalPluginCatalogSequence,
   parseOfficialExternalPluginCatalogTimestamp,
 } from "./official-external-plugin-catalog.js";
@@ -54,6 +56,7 @@ type StoredHostedCatalogMonotonicState = {
   sequence: number;
   generatedAt?: string;
   payloadSha256: string;
+  payloadDigestMode: "materialized" | "legacy-wire";
 };
 
 function resolveStoreEnv(
@@ -116,35 +119,112 @@ function decodeBase64Payload(payload: string): string {
 function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicState | undefined {
   try {
     const document = JSON.parse(body) as {
+      kind?: unknown;
+      changeBodies?: unknown;
+      rootBody?: unknown;
+      minimumSequence?: unknown;
+      materializedFeedSha256?: unknown;
       payload?: unknown;
       sequence?: unknown;
       generatedAt?: unknown;
     };
-    const payload =
-      typeof document.payload === "string" ? decodeBase64Payload(document.payload) : body;
-    const feed =
-      typeof document.payload === "string"
-        ? (JSON.parse(payload) as {
+    if (
+      document.kind === "official-external-plugin-catalog-reset-floor-v1" &&
+      isOfficialExternalPluginCatalogSequence(document.minimumSequence)
+    ) {
+      return {
+        sequence: document.minimumSequence,
+        payloadSha256: createHash("sha256").update(body).digest("hex"),
+        payloadDigestMode: "legacy-wire",
+      };
+    }
+    if (
+      document.kind === "official-external-plugin-catalog-changes-v1" &&
+      Array.isArray(document.changeBodies) &&
+      document.changeBodies.length > 0
+    ) {
+      const lastBody = document.changeBodies.at(-1);
+      if (typeof lastBody !== "string") {
+        return undefined;
+      }
+      const envelope = JSON.parse(lastBody) as { payload?: unknown };
+      if (typeof envelope.payload !== "string") {
+        return undefined;
+      }
+      const change = JSON.parse(decodeBase64Payload(envelope.payload)) as {
+        toSequence?: unknown;
+        generatedAt?: unknown;
+      };
+      if (!isOfficialExternalPluginCatalogSequence(change.toSequence)) {
+        return undefined;
+      }
+      return {
+        sequence: change.toSequence,
+        ...(typeof change.generatedAt === "string" &&
+        parseOfficialExternalPluginCatalogTimestamp(change.generatedAt) !== undefined
+          ? { generatedAt: change.generatedAt }
+          : {}),
+        payloadSha256:
+          typeof document.materializedFeedSha256 === "string" &&
+          /^sha256:[a-f0-9]{64}$/u.test(document.materializedFeedSha256)
+            ? document.materializedFeedSha256
+            : createHash("sha256").update(body).digest("hex"),
+        payloadDigestMode:
+          typeof document.materializedFeedSha256 === "string" ? "materialized" : "legacy-wire",
+      };
+    }
+    const wireDocument =
+      document.kind === "official-external-plugin-catalog-shards-v1" &&
+      typeof document.rootBody === "string"
+        ? (JSON.parse(document.rootBody) as {
+            payload?: unknown;
             sequence?: unknown;
             generatedAt?: unknown;
           })
         : document;
+    const payload =
+      typeof wireDocument.payload === "string" ? decodeBase64Payload(wireDocument.payload) : body;
+    const feed =
+      typeof wireDocument.payload === "string"
+        ? (JSON.parse(payload) as {
+            sequence?: unknown;
+            generatedAt?: unknown;
+          })
+        : wireDocument;
     if (!isOfficialExternalPluginCatalogSequence(feed.sequence)) {
       return undefined;
     }
+    const materializedFeedSha256 =
+      typeof document.materializedFeedSha256 === "string" &&
+      /^sha256:[a-f0-9]{64}$/u.test(document.materializedFeedSha256)
+        ? document.materializedFeedSha256
+        : undefined;
+    const legacyShardedSnapshot =
+      document.kind === "official-external-plugin-catalog-shards-v1" &&
+      materializedFeedSha256 === undefined;
+    const payloadSha256 =
+      materializedFeedSha256 ??
+      (legacyShardedSnapshot
+        ? createHash("sha256").update(body).digest("hex")
+        : hashOfficialExternalPluginCatalogMaterializedFeed(
+            feed as OfficialExternalPluginCatalogFeed,
+          ));
+    const payloadDigestMode = legacyShardedSnapshot ? "legacy-wire" : "materialized";
     if (
       typeof feed.generatedAt !== "string" ||
       parseOfficialExternalPluginCatalogTimestamp(feed.generatedAt) === undefined
     ) {
       return {
         sequence: feed.sequence,
-        payloadSha256: createHash("sha256").update(payload).digest("hex"),
+        payloadSha256,
+        payloadDigestMode,
       };
     }
     return {
       sequence: feed.sequence,
       generatedAt: feed.generatedAt,
-      payloadSha256: createHash("sha256").update(payload).digest("hex"),
+      payloadSha256,
+      payloadDigestMode,
     };
   } catch {
     return undefined;
@@ -188,9 +268,13 @@ function assertSignedSnapshotWriteIsMonotonic(params: {
     return;
   }
   const candidate = readMonotonicStateFromBody(params.candidateBody);
+  const currentPayloadSha256 =
+    current.payloadDigestMode === "legacy-wire" && params.candidate.currentMaterializedFeedSha256
+      ? params.candidate.currentMaterializedFeedSha256
+      : current.payloadSha256;
   if (
     candidate?.sequence === params.candidate.sequence &&
-    candidate.payloadSha256 !== current.payloadSha256
+    candidate.payloadSha256 !== currentPayloadSha256
   ) {
     throw new HostedCatalogSignedFeedMonotonicityError(
       "hosted catalog signed feed payload changed without a sequence increment",
