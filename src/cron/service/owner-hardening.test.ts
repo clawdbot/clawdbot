@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -30,11 +30,25 @@ import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 import { stopTimer } from "./timer.js";
 
-const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
 let runnerScript = "";
-const tempDirs = createTempDirTracker();
+
+// Register this before the temp and store hooks because children can retain
+// both filesystem and SQLite ownership until their exit event is observed.
+afterEach(async () => {
+  const activeChildren = [...children].filter(
+    (child) => child.exitCode === null && child.signalCode === null,
+  );
+  for (const child of activeChildren) {
+    child.kill("SIGKILL");
+  }
+  await Promise.all(activeChildren.map(waitForExit));
+  children.clear();
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
 
 beforeEach(async () => {
   scriptRoot = tempDirs.make("cron-owner-hardening-script-", os.tmpdir());
@@ -112,18 +126,6 @@ beforeEach(async () => {
   );
 });
 
-afterEach(async () => {
-  const activeChildren = [...children].filter(
-    (child) => child.exitCode === null && child.signalCode === null,
-  );
-  for (const child of activeChildren) {
-    child.kill("SIGKILL");
-  }
-  await Promise.all(activeChildren.map(waitForExit));
-  children.clear();
-  tempDirs.cleanup();
-});
-
 function makeCommandJob(id: string, nextRunAtMs: number, trigger = false): CronJob {
   return {
     id,
@@ -183,13 +185,37 @@ function spawnRunner(params: {
 async function waitForLine(child: ChildProcess, expected: string): Promise<void> {
   let stdout = "";
   let stderr = "";
+  let protocolFailure: Error | undefined;
   const onStderr = (chunk: unknown) => {
     stderr += String(chunk);
   };
   if (!child.stdout) {
     throw new Error(`cron child has no stdout while waiting for ${expected}`);
   }
+  const failure = (reason: string, cause?: Error) =>
+    new Error(`cron child ${reason} before ${expected}: ${stderr || stdout}`, { cause });
+  const onExit = () => {
+    protocolFailure = failure("exited");
+    child.stdout?.destroy(protocolFailure);
+  };
+  const onChildError = (error: Error) => {
+    protocolFailure = failure("failed", error);
+    child.stdout?.destroy(protocolFailure);
+  };
+  const onStdoutClose = () => {
+    protocolFailure ??= failure("closed stdout");
+  };
+  const onStdoutError = (error: Error) => {
+    protocolFailure ??= failure("failed to read stdout", error);
+  };
+  if (child.exitCode !== null || child.signalCode !== null) {
+    throw failure("exited");
+  }
   child.stderr?.on("data", onStderr);
+  child.once("exit", onExit);
+  child.once("error", onChildError);
+  child.stdout.once("close", onStdoutClose);
+  child.stdout.once("error", onStdoutError);
   try {
     for await (const chunk of child.stdout.iterator({ destroyOnReturn: false })) {
       stdout += String(chunk);
@@ -197,9 +223,15 @@ async function waitForLine(child: ChildProcess, expected: string): Promise<void>
         return;
       }
     }
-    throw new Error(`cron child exited before ${expected}: ${stderr || stdout}`);
+    throw protocolFailure ?? failure("closed stdout");
+  } catch (error) {
+    throw protocolFailure ?? error;
   } finally {
     child.stderr?.off("data", onStderr);
+    child.off("exit", onExit);
+    child.off("error", onChildError);
+    child.stdout.off("close", onStdoutClose);
+    child.stdout.off("error", onStdoutError);
   }
 }
 
