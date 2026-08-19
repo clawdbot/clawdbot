@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 339585,
-  "reason": "Startup growth reflects session placement move controls, ownership chips, assignment menus, participant stack, cloud worker settings navigation and machine selection, plus the session permission picker (five-option menu with Default), permission chip, and guardian review notices joining the startup chat composer path.",
-  "updatedAt": "2026-08-17"
+  "startupJsGzipBytes": 344429,
+  "reason": "Channel conversation avatars (PR #125668): lead-slot render branch + row plumbing on top of the 344395 B main baseline; avatar element itself is code-split out of startup",
+  "updatedAt": "2026-08-18"
 }

@@ -169,7 +169,6 @@ describe("followup prompt metadata carrier", () => {
       "---\nQueued #1\n[media attached: /tmp/a.png (image/png)]\nfirst",
       "---\nQueued #2\n[media attached: /tmp/b.pdf (application/pdf)]\nsecond",
     ].join("\n\n");
-    expect(calls).toHaveLength(2);
     expect(calls.map((run) => run.prompt)).toEqual([expectedPrompt, expectedPrompt]);
     expect(calls.map((run) => run.media)).toEqual([
       [

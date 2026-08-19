@@ -198,6 +198,97 @@ describe("doctor invalid config process exit", () => {
 });
 
 describe.concurrent("gateway startup-migration refusal", () => {
+  it("repairs the stable upgrade config and additive state schema before readiness", async () => {
+    const root = await fs.promises.realpath(tempDirs.make("openclaw-stable-upgrade-ready-"));
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    const stableConfig = {
+      meta: {
+        lastTouchedAt: "2026-08-01T00:00:00.000Z",
+        lastTouchedVersion: "2026.7.1-2",
+      },
+      agents: { defaults: { heartbeat: { skipWhenBusy: true } } },
+      gateway: { mode: "local", auth: { mode: "none" } },
+    };
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(stableConfig));
+    const preflightUrl = new URL("./doctor-config-preflight.ts", import.meta.url).href;
+    const stateDatabaseUrl = new URL("../state/openclaw-state-db.ts", import.meta.url).href;
+    const script = `
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const { DatabaseSync } = await import("node:sqlite");
+      const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
+      const { closeOpenClawStateDatabase, openOpenClawStateDatabase } =
+        await import(${JSON.stringify(stateDatabaseUrl)});
+      openOpenClawStateDatabase({ env: process.env });
+      closeOpenClawStateDatabase();
+      const oldDatabase = new DatabaseSync(${JSON.stringify(databasePath)});
+      oldDatabase.exec("ALTER TABLE task_runs DROP COLUMN tool_use_count");
+      oldDatabase.close();
+      const legacyIdentityPath = path.join(${JSON.stringify(stateDir)}, "identity", "device.json");
+      fs.mkdirSync(path.dirname(legacyIdentityPath), { recursive: true });
+      fs.writeFileSync(legacyIdentityPath, JSON.stringify({
+        deviceId: "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+        publicKey: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+        privateKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        createdAtMs: 1700000000000,
+      }));
+      const result = await runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        observe: false,
+        requireStartupMigrationCheckpoint: true,
+        beforeStateMigrations: async () => true,
+      });
+      const config = JSON.parse(fs.readFileSync(${JSON.stringify(configPath)}, "utf8"));
+      const repairedDatabase = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
+      const columns = repairedDatabase.prepare("PRAGMA table_info(task_runs)").all();
+      const identity = repairedDatabase
+        .prepare("SELECT device_id FROM device_identities WHERE identity_key = 'primary'")
+        .get();
+      repairedDatabase.close();
+      console.log("__RESULT__" + JSON.stringify({
+        valid: result.snapshot.valid,
+        hasLastTouchedAt: Object.hasOwn(config.meta ?? {}, "lastTouchedAt"),
+        hasSkipWhenBusy: Object.hasOwn(config.agents?.defaults?.heartbeat ?? {}, "skipWhenBusy"),
+        hasToolUseCount: columns.some((column) => column.name === "tool_use_count"),
+        migratedDeviceIdentity: identity?.device_id === "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+        removedLegacyDeviceIdentity: !fs.existsSync(legacyIdentityPath),
+      }));
+    `;
+
+    const result = await runIsolatedModuleScript(env, script, { timeoutMs: 60_000 });
+    const output = `${result.stderr}\n${result.stdout}`;
+    const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
+
+    expect(resultLine, output).toBeDefined();
+    expect(JSON.parse(resultLine!.slice("__RESULT__".length))).toEqual({
+      valid: true,
+      hasLastTouchedAt: false,
+      hasSkipWhenBusy: false,
+      hasToolUseCount: true,
+      migratedDeviceIdentity: true,
+      removedLegacyDeviceIdentity: true,
+    });
+    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+  }, 75_000);
+
   it("refuses readiness for a schema-only legacy agent database without an owner", () => {
     const root = fs.realpathSync(tempDirs.make("openclaw-ownerless-agent-refusal-"));
     const stateDir = path.join(root, "state");

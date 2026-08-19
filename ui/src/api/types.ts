@@ -440,6 +440,7 @@ export type GatewaySessionRow = SessionRow & {
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
   placementMove?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacementMove;
   icon?: string;
+  channelAvatarUrl?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   surface?: string;
@@ -701,6 +702,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   alias?: string;
+  tags?: string[];
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
@@ -719,6 +721,8 @@ export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;
 export type ToolsCatalogResult =
   import("../../../packages/gateway-protocol/src/schema.js").ToolsCatalogResult;
+export type ToolsGitHubStatusResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubStatusResult;
 export type ToolsEffectiveEntry =
   import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveEntry;
 export type ToolsEffectiveResult =

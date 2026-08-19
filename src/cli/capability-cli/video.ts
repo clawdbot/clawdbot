@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import type { Command } from "commander";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
   assertOkOrThrowHttpError,
   assertProviderBinaryResponseContent,
@@ -117,13 +117,15 @@ async function runVideoGenerate(params: {
   audio?: boolean;
   watermark?: boolean;
   timeoutMs?: number;
+  agent?: string;
 }) {
   requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer video.generate",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video.generate");
+  const agentDir = resolveAgentDir(cfg, agentId);
   const result = await generateVideo({
     cfg,
     agentDir,
@@ -273,6 +275,10 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--watermark", "Request provider watermark when supported")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
+    .option(
+      "--agent <id>",
+      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -287,6 +293,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+          agent: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });

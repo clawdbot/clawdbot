@@ -23,6 +23,7 @@ import {
   writeBuildAllStepCacheStamp,
 } from "../../scripts/build-all.mts";
 import {
+  listPluginSdkDistArtifacts,
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
@@ -62,6 +63,7 @@ function withBuildCacheFixture(
             }
         >;
         requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
+        requiredCacheHitOutputs?: string[];
         restore?: "always";
         runOnHit?: {
           env?: NodeJS.ProcessEnv;
@@ -431,6 +433,7 @@ describe("resolveBuildAllSteps", () => {
     expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    expect(unified.cache?.requiredCacheHitOutputs).toEqual(listPluginSdkDistArtifacts());
   });
 
   it("uses a runtime artifact plus plugin SDK export profile for ci artifacts", () => {
@@ -979,6 +982,36 @@ describe("resolveBuildAllStepCacheState", () => {
         stampedOutputs: ["dist/output.js"],
       });
       expect(restoreBuildAllStepCacheOutputs(stale, { rootDir })).toBe(false);
+    });
+  });
+
+  it("rejects a cache hit when a required live output was removed", () => {
+    withBuildCacheFixture(({ rootDir, outputPath, step }) => {
+      const declarationPath = path.join(rootDir, "dist/output.d.ts");
+      fs.writeFileSync(declarationPath, "export declare const output: true;");
+      const guardedStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          outputs: [{ path: "dist", extensions: [".d.ts"] }],
+          requiredCacheHitOutputs: ["dist/output.js"],
+          restore: "always" as const,
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(guardedStep, { rootDir });
+      writeBuildAllStepCacheStamp(guardedStep, cacheState, { rootDir });
+
+      expect(resolveBuildAllStepCacheState(guardedStep, { rootDir })).toMatchObject({
+        fresh: true,
+        restorable: true,
+      });
+      fs.rmSync(outputPath);
+
+      expect(resolveBuildAllStepCacheState(guardedStep, { rootDir })).toMatchObject({
+        fresh: false,
+        reason: "stale",
+        restorable: false,
+      });
     });
   });
 

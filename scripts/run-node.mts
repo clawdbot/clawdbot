@@ -328,6 +328,23 @@ const readRuntimePostBuildStamp = (deps: RunNodeRuntimeRequirementDeps) => {
   return readJsonStamp(deps.runtimePostBuildStampPath, deps);
 };
 
+const isImmutableGitDeployment = (deps: RunNodeRequirementDeps) => {
+  try {
+    const deployment = JSON.parse(
+      deps.fs.readFileSync(path.join(deps.cwd, "deployment.json"), "utf8"),
+    );
+    // Deployment ownership outranks source-checkout freshness. A mismatched
+    // checkout must fail closed instead of repairing manager-owned artifacts.
+    return (
+      deployment?.kind === "git" &&
+      typeof deployment.sourceHead === "string" &&
+      deployment.sourceHead.trim().length > 0
+    );
+  } catch {
+    return false;
+  }
+};
+
 const hasSourceMtimeChanged = (stampMtime: number, deps: RunNodeRequirementDeps) => {
   let latestSourceMtime: number | null = null;
   for (const sourceRoot of deps.sourceRoots) {
@@ -770,6 +787,19 @@ const RUNTIME_POSTBUILD_REASON_LABELS = {
 const formatBuildReason = (reason: BuildRequirement["reason"]) => BUILD_REASON_LABELS[reason];
 const formatRuntimePostBuildReason = (reason: RuntimePostBuildRequirement["reason"]) =>
   RUNTIME_POSTBUILD_REASON_LABELS[reason];
+
+const refuseImmutableDeploymentMutation = async (
+  deps: RunNodeDeps,
+  artifactKind: "build" | "runtime",
+  reason: string,
+) => {
+  const message =
+    `[openclaw] Cannot regenerate ${artifactKind} artifacts in an immutable deployment (${reason}). ` +
+    "Replace this deployment with a complete release, then use its installed `openclaw` command or run `node openclaw.mjs ...` from that release.\n";
+  deps.stderr.write(message);
+  deps.outputTee?.write(message);
+  return await closeRunNodeOutputTee(deps, 1);
+};
 
 const SIGNAL_EXIT_CODES = {
   SIGINT: 130,
@@ -1597,6 +1627,14 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
       return await closeRunNodeOutputTee(deps, exitCode);
     }
     const buildRequirement = resolveBuildRequirement(deps);
+    const immutableDeployment = isImmutableGitDeployment(deps);
+    if (immutableDeployment && buildRequirement.shouldBuild) {
+      return await refuseImmutableDeploymentMutation(
+        deps,
+        "build",
+        formatBuildReason(buildRequirement.reason),
+      );
+    }
     const qaReportScript = resolveQaReportSourceScript(deps, buildRequirement);
     if (qaReportScript) {
       const reportName = qaReportScript === "qa-parity-report.ts" ? "parity" : "coverage";
@@ -1609,6 +1647,13 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
     }
     if (!buildRequirement.shouldBuild) {
       const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
+      if (immutableDeployment && runtimePostBuildRequirement.shouldSync) {
+        return await refuseImmutableDeploymentMutation(
+          deps,
+          "runtime",
+          formatRuntimePostBuildReason(runtimePostBuildRequirement.reason),
+        );
+      }
       if (
         runtimePostBuildRequirement.shouldSync &&
         !shouldSkipWatchRuntimeSync(deps, runtimePostBuildRequirement)

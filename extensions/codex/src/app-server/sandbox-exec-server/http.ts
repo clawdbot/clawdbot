@@ -2,15 +2,18 @@
  * Implements sandboxed HTTP requests for Codex native tools by routing network
  * access through the active OpenClaw sandbox backend.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { SsrFBlockedError, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
 import { requireBackend } from "./runtime.js";
+import {
+  prepareSandboxChildExec,
+  spawnSandboxChild,
+  type SandboxChildOwner,
+} from "./sandbox-child.js";
 import type { HttpHeader, OpenClawExecServer } from "./types.js";
 
 /** Maximum JSON-line size accepted from the streaming HTTP helper process. */
@@ -111,38 +114,34 @@ async function runStreamingSandboxHttpRequest(
   params: SandboxHttpRequest,
 ): Promise<JsonObject> {
   const backend = requireBackend(execServer);
+  const remoteExec = prepareSandboxChildExec(backend, {});
   const execSpec = await backend.buildExecSpec({
     command: SANDBOX_HTTP_REQUEST_SCRIPT,
     workdir: execServer.sandbox.containerWorkdir,
-    env: {},
+    env: remoteExec.env,
     usePty: false,
   });
-  let child: ChildProcessWithoutNullStreams;
-  try {
-    const [command, ...args] = execSpec.argv;
-    if (!command) {
-      throw new Error("OpenClaw sandbox HTTP exec spec did not provide a command.");
-    }
-    child = spawn(command, args, {
-      env: execSpec.env,
-      stdio: ["pipe", "pipe", "pipe"],
+  const lifecycle = { failed: false };
+  const owner = await spawnSandboxChild({
+    argv: execSpec.argv,
+    env: execSpec.env,
+    finalizeExec: backend.finalizeExec,
+    finalizeToken: execSpec.finalizeToken,
+    finalizeStatus: (outcome) =>
+      lifecycle.failed || outcome.exitCode !== 0 ? "failed" : "completed",
+    onFinalizeError: (error) => {
+      embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
+    },
+    owners: execServer.children,
+    terminateRemote: remoteExec.terminate,
+  });
+  const child = owner.process;
+  const abortOnSocketClose = () => {
+    lifecycle.failed = true;
+    void owner.terminate().catch((error: unknown) => {
+      embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
     });
-  } catch (error) {
-    try {
-      await backend.finalizeExec?.({
-        status: "failed",
-        exitCode: null,
-        timedOut: false,
-        token: execSpec.finalizeToken,
-      });
-    } catch (finalizeError) {
-      embeddedAgentLog.warn("codex sandbox http/request finalize after start failure failed", {
-        error: finalizeError,
-      });
-    }
-    throw error;
-  }
-  const abortOnSocketClose = () => child.kill("SIGTERM");
+  };
   socket.once("close", abortOnSocketClose);
   child.once("close", () => {
     socket.off("close", abortOnSocketClose);
@@ -156,17 +155,17 @@ async function runStreamingSandboxHttpRequest(
   child.stdin.end(JSON.stringify(params));
   return await readStreamingSandboxHttpResponse({
     child,
-    execSpec,
-    finalizeExec: backend.finalizeExec,
+    lifecycle,
+    owner,
     requestId,
     socket,
   });
 }
 
 function readStreamingSandboxHttpResponse(params: {
-  child: ChildProcessWithoutNullStreams;
-  execSpec: { finalizeToken?: unknown };
-  finalizeExec?: NonNullable<SandboxContext["backend"]>["finalizeExec"];
+  child: SandboxChildOwner["process"];
+  lifecycle: { failed: boolean };
+  owner: SandboxChildOwner;
   requestId: string;
   socket: WebSocket;
 }): Promise<JsonObject> {
@@ -177,21 +176,14 @@ function readStreamingSandboxHttpResponse(params: {
     let lastBodySeq = 0;
     let stdoutBuffer = "";
     let stderr = "";
-    const finalize = async (status: "completed" | "failed", exitCode: number | null) => {
-      await params.finalizeExec?.({
-        status,
-        exitCode,
-        timedOut: false,
-        token: params.execSpec.finalizeToken,
-      });
-    };
-    const fail = (message: string, exitCode: number | null) => {
+    const fail = (message: string, _exitCode: number | null) => {
       if (failed) {
         return;
       }
       failed = true;
-      void finalize("failed", exitCode).catch((error: unknown) => {
-        embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
+      params.lifecycle.failed = true;
+      void params.owner.terminate().catch((error: unknown) => {
+        embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
       });
       if (headerResolved) {
         sendHttpBodyDelta(params.socket, {
@@ -241,7 +233,6 @@ function readStreamingSandboxHttpResponse(params: {
         newline = stdoutBuffer.indexOf("\n");
       }
       if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
-        params.child.kill("SIGKILL");
         fail(
           `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
           null,
@@ -256,6 +247,7 @@ function readStreamingSandboxHttpResponse(params: {
       // ChildProcess error can precede close while the helper is still alive.
       // Keep its backend lease until close provides the terminal exit state.
       childFailure ??= error.message;
+      params.lifecycle.failed = true;
     });
     params.child.once("close", (code) => {
       const exitCode = code ?? 1;
@@ -267,10 +259,8 @@ function readStreamingSandboxHttpResponse(params: {
         return;
       }
       if (exitCode === 0) {
-        void finalize("completed", exitCode).catch((error: unknown) => {
-          embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
-        });
         if (!headerResolved) {
+          params.lifecycle.failed = true;
           reject(new Error("sandbox http/request exited before returning headers"));
         }
         return;

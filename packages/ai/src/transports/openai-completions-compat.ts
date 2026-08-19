@@ -7,7 +7,7 @@
 import type { Model, OpenAICompletionsCompat } from "@openclaw/llm-core";
 import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
-import { resolveProviderRequestCapabilities } from "./host-policy.js";
+import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
 
 type ProviderEndpointClass = string;
 type ProviderRequestCapabilities = AiProviderRequestCapabilities;
@@ -196,11 +196,11 @@ export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
     compat?: { supportsStore?: boolean } | null;
   },
-  resolveCapabilities: (
-    input: AiProviderRequestPolicyInput,
-  ) => ProviderRequestCapabilities = resolveProviderRequestCapabilities,
+  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
 ): DetectedOpenAICompletionsCompat {
-  const capabilities = resolveCapabilities({
+  const capabilities = (
+    resolveCapabilities ?? ((input) => resolveModelProviderRequestCapabilities(input, model))
+  )({
     provider: model.provider,
     api: "openai-completions",
     baseUrl: model.baseUrl,
@@ -243,9 +243,7 @@ function resolveSessionAffinity(
 /** Applies explicit model overrides once on top of the canonical transport defaults. */
 export function resolveOpenAICompletionsCompat(
   model: Model<"openai-completions">,
-  resolveCapabilities: (
-    input: AiProviderRequestPolicyInput,
-  ) => ProviderRequestCapabilities = resolveProviderRequestCapabilities,
+  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
 ): ResolvedOpenAICompletionsCompat {
   const { defaults } = detectOpenAICompletionsCompat(model, resolveCapabilities);
   const configured = model.compat;

@@ -12,6 +12,7 @@ import {
   NODE_WORKER_BUNDLE_STATUS_VERSION,
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
+  type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
@@ -212,7 +213,7 @@ function isWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
-    (!requireLaunchEligibility || current.workerHost.capacity === "available")
+    (!requireLaunchEligibility || current.workerHost.capacity.available > 0)
   );
 }
 
@@ -251,10 +252,17 @@ function updateWorkerRunnerInventory(
     nodeId: node.nodeId,
     connId: node.connId,
     pairingIdentity: node.pairingIdentity,
+    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeatures: [...params.declaration.protocolFeatures],
-    ...(workerHost ? { workerHost: { ...workerHost } } : {}),
+    ...(workerHost
+      ? {
+          workerHost: workerHost.enabled
+            ? { ...workerHost, capacity: { ...workerHost.capacity } }
+            : { enabled: false },
+        }
+      : {}),
   };
   const statusCleared =
     next.workerHost?.enabled !== true ||
@@ -264,6 +272,7 @@ function updateWorkerRunnerInventory(
       : false;
   const changed =
     !previous ||
+    previous.pairingGeneration !== next.pairingGeneration ||
     !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
     !sameNodeWorkerHostDeclaration(previous.workerHost, next.workerHost) ||
     statusCleared;
@@ -608,11 +617,7 @@ export function isNodeRunnerSessionHost(params: {
     return false;
   }
   const proof = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
-  return Boolean(
-    proof &&
-    proof.pairingGeneration === params.pairingGeneration &&
-    proof.workerHost.capacity === "available",
-  );
+  return Boolean(proof && proof.pairingGeneration === params.pairingGeneration);
 }
 
 function getNodeRunnerInventoryIssue(params: {
@@ -625,6 +630,23 @@ function getNodeRunnerInventoryIssue(params: {
   return state && node?.connId === params.connId
     ? resolveNodeRunnerInventoryIssue(node, state.runnerInventoryByConn)
     : undefined;
+}
+
+export function collectNodeWorkerCapacityByNodeId(
+  registry: object,
+  connectedNodes: ReadonlyArray<{ nodeId: string; connId: string }>,
+): Map<string, NodeWorkerCapacitySnapshot> {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(registry);
+  return new Map(
+    connectedNodes.flatMap((node) => {
+      const current = state?.context.getNode(node.nodeId);
+      if (!state || !current || current.connId !== node.connId) {
+        return [];
+      }
+      const proof = resolveNodeWorkerSupervisorProof(current, state.runnerInventoryByConn);
+      return proof ? [[node.nodeId, { ...proof.workerHost.capacity }] as const] : [];
+    }),
+  );
 }
 
 export function collectNodeWorkerBundleStatusByNodeId(
@@ -682,7 +704,9 @@ export function settleNodeRegistryPairingGenerationChange(params: {
   if (!state) {
     return;
   }
-  if (state.bundleStatusByConn.delete(params.connId)) {
+  const inventoryChanged = state.runnerInventoryByConn.delete(params.connId);
+  const statusChanged = state.bundleStatusByConn.delete(params.connId);
+  if (inventoryChanged || statusChanged) {
     state.publishRunnerInventoryChanged(params.nodeId);
   }
   for (const pending of state.context.pendingInvokes.values()) {

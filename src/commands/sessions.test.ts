@@ -148,6 +148,52 @@ describe("sessionsCommand", () => {
     );
   });
 
+  it("renders current context after a same-model runtime change", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
+          },
+        },
+      },
+    }));
+    const store = await writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "stale-openclaw-window",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "openclaw",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+          totalTokens: 11,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        },
+      },
+      "sessions-current-runtime-table",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    cleanupStore(store);
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("OpenAI Codex");
+    expect(row).toContain("0.0k/1000k (0%)");
+    expect(row).not.toContain("272k");
+  });
+
   it("shows placeholder rows when tokens are missing", async () => {
     const store = await writeStore({
       "agent:main:quietchat:group:demo": {
@@ -411,6 +457,8 @@ describe("sessionsCommand", () => {
         global: {
           sessionId: "telegram-global",
           updatedAt: Date.now() - 60_000,
+          modelProvider: "claude-cli",
+          model: "opus",
           delivery: normalizeSessionDeliveryState({
             origin: {
               provider: "telegram",
@@ -429,20 +477,29 @@ describe("sessionsCommand", () => {
       agents: {
         ownership: "explicit",
         defaults: {
-          model: { primary: "test:opus" },
-          models: { "test:opus": {} },
+          model: { primary: "anthropic/opus" },
+          models: { "anthropic/opus": {} },
           sessionStore: { agentId: "ops" },
         },
-        entries: { ops: {}, research: {} },
+        entries: {
+          ops: { models: { "custom/opus": {} } },
+          research: {},
+        },
       },
     }));
 
     const payload = await runSessionsJson<{
-      sessions?: Array<{ agentId?: string; key: string; runtimePolicySessionKey?: string }>;
+      sessions?: Array<{
+        agentId?: string;
+        key: string;
+        modelProvider?: string;
+        runtimePolicySessionKey?: string;
+      }>;
     }>(sessionsCommand, store, { active: "10" });
 
     expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
       agentId: "ops",
+      modelProvider: "custom",
       runtimePolicySessionKey: "agent:ops:telegram:default:direct:42",
     });
   });

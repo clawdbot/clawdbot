@@ -984,6 +984,8 @@ describe("agents delete command", () => {
   it("retains workspace state when workspace trash fails", async () => {
     await withStateDirEnv("openclaw-agents-delete-trash-failure-", async ({ stateDir }) => {
       const opsWorkspace = path.join(stateDir, "workspace-ops");
+      const opsAgentDir = path.join(stateDir, "agents", "ops", "agent");
+      const opsSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
       const cfg: OpenClawConfig = {
         agents: {
           list: [
@@ -998,6 +1000,14 @@ describe("agents delete command", () => {
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+      expect(readJsonLogs()[0]).toMatchObject({
+        removed: [
+          { path: opsAgentDir, method: "trash" },
+          { path: opsSessionsDir, method: "missing" },
+        ],
+        failed: [{ path: opsWorkspace, reason: "trash unavailable" }],
+      });
+      expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
     });
   });
 });

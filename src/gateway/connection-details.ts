@@ -53,7 +53,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     options.configPath ??
     resolvers.resolveConfigPath?.(process.env) ??
     resolveConfigPath(process.env);
-  const isRemoteMode = config.gateway?.mode === "remote";
+  const isRemoteMode = options.localPortOverride === undefined && config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort =

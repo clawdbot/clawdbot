@@ -23,12 +23,13 @@ describe("cronRunLogEntryFromEvent", () => {
         jobId: "script-job",
         action: "finished",
         status: "error",
+        completionStatus: "failed",
         error: "cron script failed",
       },
       1,
       { kind: "reason", reason: "timeout" },
     );
 
-    expect(entry.errorReason).toBe("timeout");
+    expect(entry).toMatchObject({ errorReason: "timeout", completionStatus: "failed" });
   });
 });

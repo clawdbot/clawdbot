@@ -201,7 +201,6 @@ describe("cron run-log task import", () => {
             "SELECT task_id, cleanup_after FROM task_runs WHERE task_id LIKE 'cron-runlog-import:%' ORDER BY task_id",
           )
           .all() as Array<{ task_id: string; cleanup_after: number | null }>;
-        expect(imported).toHaveLength(4);
         expect(imported.map((row) => row.task_id)).toEqual([
           "cron-runlog-import:legacy-history-job:1100:1",
           "cron-runlog-import:legacy-history-job:2100:1",

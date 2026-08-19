@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
 import { Buffer } from "node:buffer";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
@@ -20,9 +20,9 @@ import { fileURLToPath } from "node:url";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
 
@@ -39,11 +39,9 @@ const FORWARDED_SIGNAL_KILL_AFTER_MS = 250;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 type ChildSignal = ChildProcess["signalCode"];
-type ProcessSignal = Parameters<ChildProcess["kill"]>[0];
 type TimerHandle = ReturnType<typeof setTimeout>;
-type ChildKiller = (signal: ProcessSignal) => void;
+type ChildKiller = (signal: NodeJS.Signals) => void;
 type ProcessTreeChild = Pick<ChildProcess, "exitCode" | "kill" | "pid" | "signalCode">;
-type ProcessTreeSignalTarget = Pick<ChildProcess, "kill" | "pid">;
 type CommandOutputBuffer = {
   text: string;
   truncatedChars: number;
@@ -363,7 +361,7 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
     let killTimer: TimerHandle | undefined;
     let forceKillAt: number | undefined;
     const killChild: ChildKiller = (signal) =>
-      signalChildProcessTree(child, signal, { useProcessGroup });
+      terminateManagedChild(child, signal, { useProcessGroup });
     const terminateChild = () => {
       killChild("SIGTERM");
       forceKillAt = Date.now() + resolvedKillAfterMs;
@@ -477,53 +475,6 @@ async function finishTimedOutProcessTree(
     killChild("SIGKILL");
     await waitForProcessTreeExit(child, killAfterMs, useProcessGroup);
   }
-}
-
-export function signalChildProcessTree(
-  processChild: ProcessTreeSignalTarget,
-  processSignal: ProcessSignal,
-  {
-    platform = process.platform,
-    runTaskkill = (command, args, options) => spawnSync(command, args, options),
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: typeof process.platform;
-    runTaskkill?:
-      | ((
-          command: string,
-          args: readonly string[],
-          options: { stdio: "ignore" },
-        ) => { error?: Error; status: number | null })
-      | undefined;
-    useProcessGroup?: boolean | undefined;
-  } = {},
-) {
-  if (useProcessGroup && processChild.pid) {
-    try {
-      process.kill(-processChild.pid, processSignal);
-      return;
-    } catch {
-      // The process group can disappear between timeout and cleanup.
-    }
-  }
-  if (platform === "win32" && typeof processChild.pid === "number") {
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const args = ["/PID", String(processChild.pid), "/T"];
-    if (processSignal === "SIGKILL") {
-      args.push("/F");
-    }
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (processSignal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  processChild.kill(processSignal);
 }
 
 function childHasExited(child: ProcessTreeChild) {

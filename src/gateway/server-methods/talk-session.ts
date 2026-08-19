@@ -23,6 +23,7 @@ import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-reso
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import { resolveTalkAgentConsultAuthority } from "../talk-client-gateway-control.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../talk-handoff.js";
 import {
   cancelTalkRealtimeRelayTurn,
@@ -297,6 +298,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           context,
           connId,
           cfg: runtimeConfig,
+          consultAuthority: resolveTalkAgentConsultAuthority(client?.connect?.scopes),
           provider: resolution.provider,
           providerConfig: relayLaunch.providerConfig,
           instructions: buildRealtimeInstructions(realtimeContext.instructions),

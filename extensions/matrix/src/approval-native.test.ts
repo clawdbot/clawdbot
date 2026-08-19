@@ -222,6 +222,41 @@ describe("matrix approval capability", () => {
     ).toEqual({ authorized: true });
   });
 
+  it("requires exact Matrix identities for native approval actions", () => {
+    const cfg = buildConfig({
+      dm: { allowFrom: ["@\u212A:example.org"] },
+      execApprovals: {
+        enabled: true,
+        approvers: ["@\u212A:example.org"],
+        target: "both",
+      },
+    });
+
+    for (const approvalKind of ["plugin", "exec"] as const) {
+      expect(
+        matrixApprovalCapability.authorizeActorAction?.({
+          cfg,
+          accountId: "default",
+          senderId: "@\u212A:example.org",
+          action: "approve",
+          approvalKind,
+        }),
+      ).toEqual({ authorized: true });
+      expect(
+        matrixApprovalCapability.authorizeActorAction?.({
+          cfg,
+          accountId: "default",
+          senderId: "@k:example.org",
+          action: "approve",
+          approvalKind,
+        }),
+      ).toEqual({
+        authorized: false,
+        reason: `\u274c You are not authorized to approve ${approvalKind} requests on Matrix.`,
+      });
+    }
+  });
+
   it("requires Matrix DM approvers before enabling plugin approval auth", () => {
     const cfg = buildConfig({
       dm: { allowFrom: [] },

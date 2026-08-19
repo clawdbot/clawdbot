@@ -1063,8 +1063,8 @@ export class NodeRegistry {
     if (generationTransition) {
       const previousPairingGeneration = node.pairingGeneration;
       node.pairingGeneration = generationTransition.nextPairingGeneration;
-      // Protocol features describe this exact live process. Keep the connection
-      // declaration while private proof resolution binds the new generation.
+      // Runner declarations are pairing-generation facts. Retire the old
+      // declaration so the live process must publish for its promoted generation.
       settleNodeRegistryPairingGenerationChange({
         registry: this,
         nodeId,

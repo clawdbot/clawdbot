@@ -26,7 +26,6 @@ import {
   resetToolStream,
   type CompactionStatus,
   type FallbackStatus,
-  type PlanStatus,
   type WaitingApprovalStatus,
 } from "./tool-stream.ts";
 
@@ -65,7 +64,6 @@ type RunLifecycleHost = Omit<
   compactionClearTimer?: TimerHandle | number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: TimerHandle | number | null;
-  planStatus?: PlanStatus | null;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
@@ -142,20 +140,32 @@ export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | n
   return Boolean(host.chatSending || host.chatRunId);
 }
 
-export function hasAbortableSessionRun(host: {
+type SessionRunHost = {
   chatRunId?: string | null;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
-}): boolean {
-  if (host.chatRunId) {
-    return true;
-  }
+};
+
+export function hasDirectSessionRun(host: SessionRunHost): boolean {
   return Boolean(
+    host.chatRunId ||
     host.sessionsResult?.sessions.some(
       (session) =>
-        areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
-        (isSessionRunActive(session) || session.hasActiveSubagentRun === true),
+        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
     ),
+  );
+}
+
+export function hasAbortableSessionRun(host: SessionRunHost): boolean {
+  return (
+    hasDirectSessionRun(host) ||
+    Boolean(
+      host.sessionsResult?.sessions.some(
+        (session) =>
+          areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
+          session.hasActiveSubagentRun === true,
+      ),
+    )
   );
 }
 
@@ -355,12 +365,6 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
     if (!runId || !waitingApproval.runId || waitingApproval.runId === runId) {
       host.waitingApprovalStatuses?.delete(approvalId);
     }
-  }
-  // Plan checklists are run-owned (unlike the transient compaction/fallback
-  // toasts): a terminal reconcile for another run must not clear them.
-  const planOwner = host.planStatus?.runId;
-  if (host.planStatus && (!runId || !planOwner || planOwner === runId)) {
-    host.planStatus = null;
   }
 }
 

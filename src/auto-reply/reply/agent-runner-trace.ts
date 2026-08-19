@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { FailoverReason } from "../../agents/failover/signal.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
@@ -76,7 +75,7 @@ type TraceAttemptView = {
   status?: number;
 };
 
-export type TraceExecutionView = {
+type TraceExecutionView = {
   winnerProvider?: string;
   winnerModel?: string;
   attempts?: TraceAttemptView[];
@@ -132,88 +131,6 @@ function formatKeyValueTraceBlock(
     return undefined;
   }
   return `🔎 ${title}:\n~~~text\n${lines.join("\n")}\n~~~`;
-}
-
-function inferFallbackAttemptResult(attempt: { reason?: FailoverReason; status?: number }): string {
-  if (attempt.reason === "timeout") {
-    return "timeout";
-  }
-  return "candidate_failed";
-}
-
-export function mergeExecutionTrace(params: {
-  fallbackAttempts?: Array<{
-    provider: string;
-    model: string;
-    reason?: FailoverReason;
-    status?: number;
-  }>;
-  executionTrace?: {
-    winnerProvider?: string;
-    winnerModel?: string;
-    attempts?: TraceAttemptView[];
-    fallbackUsed?: boolean;
-    runner?: "embedded" | "cli";
-  };
-  provider?: string;
-  model?: string;
-  runner: "embedded" | "cli";
-  exhausted?: boolean;
-}): TraceExecutionView | undefined {
-  const executionAttempts = params.exhausted
-    ? (params.executionTrace?.attempts ?? []).filter((attempt) => attempt.result !== "success")
-    : (params.executionTrace?.attempts ?? []);
-  const attempts: TraceAttemptView[] = [
-    ...(params.fallbackAttempts ?? []).map((attempt) =>
-      Object.assign(
-        {
-          provider: attempt.provider,
-          model: attempt.model,
-          result: inferFallbackAttemptResult(attempt),
-        },
-        attempt.reason ? { reason: attempt.reason } : {},
-        typeof attempt.status === `number` ? { status: attempt.status } : {},
-      ),
-    ),
-    ...executionAttempts,
-  ];
-  const winnerProvider = params.exhausted
-    ? undefined
-    : (params.executionTrace?.winnerProvider ?? normalizeOptionalString(params.provider));
-  const winnerModel = params.exhausted
-    ? undefined
-    : (params.executionTrace?.winnerModel ?? normalizeOptionalString(params.model));
-  if (
-    winnerProvider &&
-    winnerModel &&
-    !attempts.some(
-      (attempt) =>
-        attempt.provider === winnerProvider &&
-        attempt.model === winnerModel &&
-        attempt.result === "success",
-    )
-  ) {
-    attempts.push({
-      provider: winnerProvider,
-      model: winnerModel,
-      result: "success",
-    });
-  }
-  if (!winnerProvider && !winnerModel && attempts.length === 0) {
-    return undefined;
-  }
-  const fallbackAttemptCount = params.fallbackAttempts?.length ?? 0;
-  const traceFallbackUsed = params.executionTrace?.fallbackUsed;
-  return {
-    winnerProvider,
-    winnerModel,
-    attempts: attempts.length > 0 ? attempts : undefined,
-    fallbackUsed:
-      traceFallbackUsed === true ||
-      fallbackAttemptCount > 0 ||
-      (traceFallbackUsed === undefined && attempts.length > 1),
-    runner: params.executionTrace?.runner ?? params.runner,
-  };
 }
 
 function formatExecutionResultTraceBlock(

@@ -72,7 +72,6 @@ package-manager preflight:
 - Bounded focused proof with ready dependencies:
   `node scripts/run-vitest.mjs <path-or-filter>`.
 - Changed typecheck/lint/guard proof: `node scripts/check-changed.mjs`.
-- `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree <local-heavy-check command>`: keeps heavy-check serialization inside the current worktree instead of the Git common dir for commands such as `pnpm check:changed` and targeted `pnpm test ...`. Use it only on high-capacity local hosts when you intentionally run independent checks across linked worktrees.
 
 For remote-environment proof, invoke `node scripts/crabbox-wrapper.mjs`
 directly. Avoid local `pnpm crabbox:run` in linked worktrees because pnpm may

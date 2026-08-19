@@ -10,6 +10,18 @@ export type ApplicationStatusBanner = {
   text: string;
 };
 
+export type RecordedUpdateAttempt = {
+  timestampMs: number;
+  status: string;
+  reason: string;
+  installKind: string | null;
+  installedVersion: string | null;
+  installedSha: string | null;
+  targetVersion: string | null;
+  targetSha: string | null;
+  failure: UpdateFailureCause | null;
+};
+
 const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
 const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
@@ -63,8 +75,11 @@ export type UpdateRestartStatusResponse = {
   sentinel?: {
     kind?: string;
     status?: string;
+    ts?: number;
     stats?: {
+      mode?: string | null;
       reason?: string | null;
+      before?: { sha?: string | null; version?: string | null } | null;
       after?: { sha?: string | null; version?: string | null } | null;
       steps?: UpdateSentinelStep[] | null;
     } | null;
@@ -74,6 +89,32 @@ export type UpdateRestartStatusResponse = {
 };
 
 type UpdateFailureCause = { step: string; detail: string };
+
+function readRecordedUpdateAttempt(
+  sentinel: UpdateRestartStatusResponse["sentinel"],
+): RecordedUpdateAttempt | null {
+  if (
+    sentinel?.kind !== "update" ||
+    !sentinel.status ||
+    sentinel.status === "ok" ||
+    isPendingUpdateHandoffSentinel(sentinel) ||
+    typeof sentinel.ts !== "number"
+  ) {
+    return null;
+  }
+  const stats = sentinel.stats;
+  return {
+    timestampMs: sentinel.ts,
+    status: sentinel.status,
+    reason: stats?.reason?.trim() || "unexpected-error",
+    installKind: stats?.mode?.trim() || null,
+    installedVersion: stats?.before?.version?.trim() || null,
+    installedSha: stats?.before?.sha?.trim() || null,
+    targetVersion: stats?.after?.version?.trim() || null,
+    targetSha: stats?.after?.sha?.trim() || null,
+    failure: readUpdateFailureCause(sentinel),
+  };
+}
 
 function lastLogLine(tail: string | null | undefined): string | null {
   const lines = (tail ?? "")
@@ -118,12 +159,14 @@ async function requestUpdateRestartStatus(
   client: Pick<GatewayBrowserClient, "request">,
   timeoutMs: number,
   request: { refreshCheckout?: true } = {},
+  onError?: (error: unknown) => void,
 ): Promise<UpdateRestartStatusResponse | null> {
   try {
     return await client.request<UpdateRestartStatusResponse>("update.status", request, {
       timeoutMs,
     });
-  } catch {
+  } catch (error) {
+    onError?.(error);
     return null;
   }
 }
@@ -133,17 +176,38 @@ export function createUpdateStatusRefresher(params: {
   getEpoch: () => number;
   canRefresh: () => boolean;
   isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
+  onRefreshing: (refreshing: boolean) => void;
   onStatus: (response: UpdateRestartStatusResponse) => void;
+  onError: (error: unknown) => void;
 }) {
+  let generation = 0;
   return async () => {
     const client = params.getClient();
     const epoch = params.getEpoch();
     if (!client || !params.canRefresh()) {
       return;
     }
-    const response = await requestUpdateRestartStatus(client, 5_000, { refreshCheckout: true });
-    if (response && params.isCurrent(client, epoch)) {
-      params.onStatus(response);
+    const operationGeneration = ++generation;
+    const isCurrent = () => operationGeneration === generation && params.isCurrent(client, epoch);
+    params.onRefreshing(true);
+    try {
+      const response = await requestUpdateRestartStatus(
+        client,
+        5_000,
+        { refreshCheckout: true },
+        (error) => {
+          if (isCurrent()) {
+            params.onError(error);
+          }
+        },
+      );
+      if (response && isCurrent()) {
+        params.onStatus(response);
+      }
+    } finally {
+      if (isCurrent()) {
+        params.onRefreshing(false);
+      }
     }
   };
 }
@@ -225,6 +289,11 @@ export function createUpdateVerificationController(params: {
   getHello: () => GatewayHelloOk | null;
   publish: () => void;
   publishBanner: (banner: ApplicationStatusBanner | null) => void;
+  publishRecordedAttempt?: (attempt: RecordedUpdateAttempt | null) => void;
+  publishRecordedFailure: (params: {
+    attempt: RecordedUpdateAttempt | null;
+    banner: ApplicationStatusBanner;
+  }) => void;
   onVerifiedInstall?: (identity: { version: string | null; sha: string | null }) => void;
 }) {
   let generation = 0;
@@ -289,13 +358,14 @@ export function createUpdateVerificationController(params: {
       }
       if (sentinel?.kind === "update" && sentinel.status && sentinel.status !== "ok") {
         params.clearPending();
-        params.publishBanner(
-          resolveUpdateStatusBanner({
+        params.publishRecordedFailure({
+          attempt: readRecordedUpdateAttempt(sentinel),
+          banner: resolveUpdateStatusBanner({
             status: "error",
             ...(sentinel.stats?.reason ? { reason: sentinel.stats.reason } : {}),
             cause: readUpdateFailureCause(sentinel),
           }),
-        );
+        });
         return;
       }
       const actualVersion = sentinel?.stats?.after?.version?.trim() || null;
@@ -308,6 +378,7 @@ export function createUpdateVerificationController(params: {
         const hasActualIdentity = actualVersion !== null || actualSha !== null;
         if (versionMatches && shaMatches && (hasActualIdentity || !hasExpectedIdentity)) {
           params.clearPending();
+          params.publishRecordedAttempt?.(null);
           params.onVerifiedInstall?.({ version: actualVersion, sha: actualSha });
           params.publishBanner(null);
           return;
@@ -420,10 +491,12 @@ export function projectUpdateStatusResponse(
   response: UpdateRestartStatusResponse,
   current: {
     updateStatusBanner: ApplicationStatusBanner | null;
+    recordedUpdateAttempt: RecordedUpdateAttempt | null;
     heldUpdateCampaignId: string | null;
   },
 ): {
   updateStatusBanner: ApplicationStatusBanner | null;
+  recordedUpdateAttempt: RecordedUpdateAttempt | null;
   updateAvailable?: UpdateAvailable | null;
   updateSchedule?: UpdateScheduleState | null;
   heldUpdateCampaignId?: string | null;
@@ -443,6 +516,10 @@ export function projectUpdateStatusResponse(
               cause: readUpdateFailureCause(sentinel),
             })
         : current.updateStatusBanner,
+    recordedUpdateAttempt:
+      sentinel?.kind === "update" && sentinel.status
+        ? readRecordedUpdateAttempt(sentinel)
+        : current.recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")
       ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
       : {}),
