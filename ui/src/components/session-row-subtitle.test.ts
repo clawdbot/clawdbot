@@ -47,6 +47,21 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
+        narrationLine: undefined,
+      }),
+    ).toEqual({ subtitle: "Waiting for a concurrency slot", narration: undefined });
+  });
+
+  it("keeps the concurrency-slot explanation when previews are hidden", () => {
+    // Without it a queued run reads as an idle session: a visible non-outcome.
+    expect(
+      resolveSidebarSessionSubtitle({
+        session: { ...workSession(), hasActiveRun: true, status: "queued" },
+        hasDisplay: false,
+        displaySubtitle: undefined,
+        sidebarLiveActivity: true,
+        showPreview: false,
         narrationLine: undefined,
       }),
     ).toEqual({ subtitle: "Waiting for a concurrency slot", narration: undefined });

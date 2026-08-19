@@ -36,7 +36,7 @@ import {
   extendSidebarSessionSelection,
   findSidebarMainSessionRow,
   findProjectedSidebarSession,
-  flattenSidebarSessionTree,
+  someSidebarSessionInTree,
   mergeAdoptedSessionPullRequestRows,
   partitionSidebarVisibleSections,
   promoteSidebarSessionCreatedOrder,
@@ -681,7 +681,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
     if (
       selectedFallback &&
-      !flattenSidebarSessionTree(projected).some((row) => row.key === selectedFallback.key)
+      !someSidebarSessionInTree(projected, (row) => row.key === selectedFallback.key)
     ) {
       projected.unshift(navigationState.toSidebarSession(selectedFallback));
     }

@@ -26,17 +26,19 @@ export function resolveSidebarSessionSubtitle(params: {
 }): SidebarSessionSubtitle {
   const { session } = params;
   const attention = sessionAttentionSubtitle(session.attention);
-  // Preview off hides ambient text only. Attention survives the toggle because an
-  // error or pending approval is state the operator must act on, and a display
-  // preference that can silence it turns a visible failure into a silent one.
+  const running = session.hasActiveRun;
+  const queued =
+    running && session.status === "queued" ? t("sessionsView.waitingForConcurrency") : undefined;
+  // Preview off hides ambient text only. Attention and the queued explanation survive
+  // the toggle: an error, a pending approval, or the reason an admitted run is sitting
+  // still is state the operator must act on, and a display preference that can silence
+  // it turns a visible non-outcome into a silent one.
   if (!params.showPreview) {
-    return { subtitle: attention, narration: undefined };
+    return { subtitle: attention ?? queued, narration: undefined };
   }
   // Agent-declared status (sessions tool) outranks live narration: it is an
   // explicit message to the user, not ambient activity.
   const agentStatus = session.agentStatusNote || undefined;
-  const running = session.hasActiveRun;
-  const queued = session.status === "queued" ? t("sessionsView.waitingForConcurrency") : undefined;
   const activeRunIds = session.activeRunIds ?? [];
   const digestMatchesActiveRun = (
     digest: typeof params.observerDigest,
