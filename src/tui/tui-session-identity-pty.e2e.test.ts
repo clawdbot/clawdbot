@@ -15,14 +15,17 @@ const STARTUP_TIMEOUT_MS = 60_000;
 const REMEMBERED_SESSION_KEY = "agent:main:picker-target";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function seedRememberedSession(stateDir: string) {
+async function seedRememberedSession(
+  stateDir: string,
+  sessionKey: string = REMEMBERED_SESSION_KEY,
+) {
   await writeTuiLastSessionKey({
     scopeKey: buildTuiLastSessionScopeKey({
       connectionUrl: "pty-fixture://local",
       agentId: "main",
       sessionScope: "per-sender",
     }),
-    sessionKey: REMEMBERED_SESSION_KEY,
+    sessionKey,
     stateDir,
   });
 }
@@ -101,6 +104,47 @@ it("hides a stale approval when startup restores the remembered session", async 
     );
 
     expect(rows.join("\n")).not.toContain("workspace skill approval");
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
+it("restores a remembered global session before startup admits the first send", async () => {
+  const stateDir = tempDirs.make("openclaw-tui-global-session-");
+  const marker = "global startup session proof";
+  await seedRememberedSession(stateDir, "global");
+  const fixture = await startTuiFixture({
+    env: {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      OPENCLAW_TUI_PTY_PICKER_SESSION_KEY: "global",
+    },
+  });
+
+  try {
+    const lookup = await fixture.waitForLogEntry(
+      (entry) => entry.method === "listSessions" && objectFieldEquals(entry, "search", "global"),
+      STARTUP_TIMEOUT_MS,
+    );
+    expect(lookup.payload).toMatchObject({
+      search: "global",
+      includeGlobal: true,
+      includeUnknown: false,
+      agentId: "main",
+    });
+
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await fixture.run.write(`${marker}\r`, { delay: false });
+    await fixture.waitForLogEntry(
+      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", marker),
+      STARTUP_TIMEOUT_MS,
+    );
+
+    const sends = (await readFixtureLog(fixture.logPath)).filter(
+      (entry) => entry.method === "sendChat",
+    );
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.payload).toMatchObject({ sessionKey: "global", agentId: "main" });
   } finally {
     await fixture.cleanup();
   }

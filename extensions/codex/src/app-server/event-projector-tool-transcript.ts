@@ -36,11 +36,12 @@ import {
   type ToolTranscriptResultInput,
 } from "./event-projector-tool-progress.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
-import type {
-  CodexDynamicToolCallOutputContentItem,
-  CodexThreadItem,
-  JsonObject,
-  JsonValue,
+import {
+  isJsonObject,
+  type CodexDynamicToolCallOutputContentItem,
+  type CodexThreadItem,
+  type JsonObject,
+  type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
@@ -64,6 +65,24 @@ const CODE_MODE_NATIVE_PATCH_SOURCE_RE =
   /^\s*(?:\/\/[^\r\n]*\r?\n\s*)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.apply_patch\(\s*("(?:\\[\s\S]|[^"\\])*")\s*\)\s*;?\s*text\(\s*\1\s*\)\s*;?\s*$/u;
 const CODE_MODE_NATIVE_PATCH_RESULT_RE =
   /^\s*Script (completed|failed)\s*\r?\nWall time\s+\d+(?:\.\d+)?\s+seconds\s*\r?\nOutput:\s*([\s\S]*?)\s*$/iu;
+const MAX_TOOL_APPROVAL_REVIEWS = 16;
+
+type ToolApprovalReviewOutcome = "approved" | "denied" | "reviewing";
+
+type ToolApprovalReviewState = {
+  reviews: JsonObject[];
+  denied: boolean;
+  /** `null` means more unresolved IDs existed than the bounded set could retain. */
+  unresolvedReviewIds: Set<string> | null;
+};
+
+function toolApprovalReviewOutcome(state: ToolApprovalReviewState): ToolApprovalReviewOutcome {
+  return state.denied
+    ? "denied"
+    : state.unresolvedReviewIds === null || state.unresolvedReviewIds.size > 0
+      ? "reviewing"
+      : "approved";
+}
 
 function readCodeModeNativePatchInput(source: unknown): string | undefined {
   if (typeof source !== "string") {
@@ -129,6 +148,7 @@ export class CodexToolTranscriptProjection {
   private readonly afterToolCallObservedItemIds = new Set<string>();
   private readonly nativeMcpAppResultDetails = new Map<string, unknown>();
   private readonly nativeMcpAppResultDetailsAttempted = new Set<string>();
+  private readonly approvalReviewsByCallId = new Map<string, ToolApprovalReviewState>();
   private readonly rawNativeToolOutputByCallId = new Map<string, string>();
   private readonly codeModeNativePatchInputsByCallId = new Map<string, string>();
 
@@ -147,6 +167,44 @@ export class CodexToolTranscriptProjection {
 
   get transcriptMessages(): readonly AgentMessage[] {
     return this.messages;
+  }
+
+  recordToolApprovalReview(
+    toolCallId: string,
+    reviewId: string,
+    status: string,
+    review: JsonObject,
+  ): ToolApprovalReviewOutcome {
+    const state = this.approvalReviewsByCallId.get(toolCallId) ?? {
+      reviews: [],
+      denied: false,
+      unresolvedReviewIds: new Set<string>(),
+    };
+    state.reviews = [
+      ...state.reviews.filter((candidate) => candidate.id !== reviewId),
+      review,
+    ].slice(-MAX_TOOL_APPROVAL_REVIEWS);
+    state.denied ||= ["denied", "timed_out", "aborted"].includes(status);
+    const unresolved = state.unresolvedReviewIds;
+    if (status === "in_progress") {
+      state.unresolvedReviewIds =
+        unresolved && (unresolved.size < MAX_TOOL_APPROVAL_REVIEWS || unresolved.has(reviewId))
+          ? unresolved.add(reviewId)
+          : null;
+    } else {
+      unresolved?.delete(reviewId);
+    }
+    this.approvalReviewsByCallId.set(toolCallId, state);
+    return toolApprovalReviewOutcome(state);
+  }
+
+  finalizeToolApprovalReviews(toolCallId: string): ToolApprovalReviewOutcome | undefined {
+    const state = this.approvalReviewsByCallId.get(toolCallId);
+    if (!state) {
+      return undefined;
+    }
+    state.unresolvedReviewIds = new Set();
+    return toolApprovalReviewOutcome(state);
   }
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
@@ -345,7 +403,25 @@ export class CodexToolTranscriptProjection {
   }
 
   async recordNativeToolResultWithDetails(item: CodexThreadItem | undefined): Promise<void> {
-    this.recordNativeToolResult(item, await this.prepareNativeMcpAppResultDetails(item));
+    const preparedDetails = await this.prepareNativeMcpAppResultDetails(item);
+    const approvalReviewState = item ? this.approvalReviewsByCallId.get(item.id) : undefined;
+    // The terminal tool result is the durable owner for its reviews. Live
+    // review events disappear with the run snapshot; details survive history.
+    const reviewDetails = approvalReviewState
+      ? {
+          approvalReviews: approvalReviewState.reviews,
+          approvalReviewOutcome: toolApprovalReviewOutcome(approvalReviewState),
+        }
+      : undefined;
+    const details = reviewDetails
+      ? isJsonObject(preparedDetails)
+        ? { ...preparedDetails, ...reviewDetails }
+        : {
+            ...(preparedDetails !== undefined ? { toolDetails: preparedDetails } : {}),
+            ...reviewDetails,
+          }
+      : preparedDetails;
+    this.recordNativeToolResult(item, details);
   }
 
   private async prepareNativeMcpAppResultDetails(

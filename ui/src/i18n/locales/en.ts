@@ -5948,6 +5948,16 @@ export const en: TranslationMap = {
       noOutputFailed: "No output — tool failed.",
       noOutputSucceeded: "No output — tool completed successfully.",
       noResult: "No result available.",
+      review: {
+        reviewing: "{reviewer} reviewing",
+        approved: "{reviewer} approved",
+        denied: "{reviewer} denied",
+        timedOut: "{reviewer} timed out",
+        aborted: "{reviewer} stopped",
+        risk: "{level} risk",
+        authorization: "{level} authorization",
+        noRationale: "No rationale was provided.",
+      },
       verbs: {
         read: "Read",
         edit: "Edit",

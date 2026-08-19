@@ -32,13 +32,7 @@ import {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
-import {
-  visibleWorkspaceConflictPaths,
-  workspaceConflictCount,
-  workspaceConflictPathForDisplay,
-  workspaceResultConflictFromTranscript,
-  type WorkspaceResultConflict,
-} from "../workspace-conflict.ts";
+import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { renderMessageImages, resolveRenderableMessageImages } from "./chat-message-images.ts";
 import {
@@ -63,6 +57,7 @@ import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
+  renderToolApprovalReviews,
   renderToolCard,
   renderToolOutcome,
   renderToolPreview,
@@ -71,6 +66,7 @@ import {
   syncToolDisclosureOverflow,
   toggleToolDisclosureKeepingScroll,
 } from "./chat-tool-cards.ts";
+import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 
 function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;
@@ -90,6 +86,7 @@ function renderInlineToolCards(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    showApprovalReviews?: boolean;
   },
 ) {
   return html`
@@ -110,6 +107,7 @@ function renderInlineToolCards(
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+          showApprovalReviews: opts.showApprovalReviews,
         });
       })}
     </div>
@@ -582,6 +580,7 @@ export function renderGroupedMessage(
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                              showApprovalReviews: false,
                             })
                         : nothing}
                       ${failedToolCard
@@ -590,6 +589,7 @@ export function renderGroupedMessage(
                     </div>
                   `
                 : nothing}
+              ${toolCards.map((card) => renderToolApprovalReviews(card))}
             </div>
           `
         : html`
@@ -674,52 +674,6 @@ export function renderGroupedMessage(
             ×${duplicateCount}
           </div>`
         : nothing}
-    </div>
-  `;
-}
-
-function renderWorkspaceConflictTranscriptMessage(
-  conflict: WorkspaceResultConflict,
-  messageKey: string,
-  entryId?: string,
-) {
-  const count = workspaceConflictCount(conflict);
-  const visible = visibleWorkspaceConflictPaths(conflict);
-  return html`
-    <div
-      class="chat-bubble chat-bubble--workspace-conflict"
-      data-message-id=${messageKey}
-      data-entry-id=${entryId || nothing}
-    >
-      <div class="chat-workspace-conflict-event" role="status">
-        <div class="chat-workspace-conflict-event__header">
-          <span aria-hidden="true">${icons.alertTriangle}</span>
-          <strong
-            >${t(
-              count === 1
-                ? "chat.workspaceConflict.eventTitleOne"
-                : "chat.workspaceConflict.eventTitleMany",
-              { count: String(count) },
-            )}</strong
-          >
-        </div>
-        <p>${t("chat.workspaceConflict.eventDescription")}</p>
-        <ul class="chat-workspace-conflict-paths">
-          ${visible.paths.map(
-            (entryPath) =>
-              html`<li><code>${workspaceConflictPathForDisplay(entryPath)}</code></li>`,
-          )}
-        </ul>
-        ${visible.remaining > 0
-          ? html`<div class="chat-workspace-conflict-more">
-              ${t("chat.workspaceConflict.morePaths", { count: String(visible.remaining) })}
-            </div>`
-          : nothing}
-        <div class="chat-workspace-conflict-ref">
-          <span>${t("chat.workspaceConflict.stagedResult")}</span>
-          <code>${conflict.stagedResultRef}</code>
-        </div>
-      </div>
     </div>
   `;
 }

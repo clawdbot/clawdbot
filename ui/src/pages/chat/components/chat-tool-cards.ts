@@ -6,7 +6,12 @@ import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
+import type {
+  ToolApprovalReview,
+  ToolCard,
+  ToolCardOutcome,
+} from "../../../lib/chat/chat-types.ts";
+import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
@@ -768,6 +773,57 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
   return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
 }
 
+function toolReviewLabel(review: ToolApprovalReview): string {
+  const key =
+    review.status === "in_progress"
+      ? "reviewing"
+      : review.status === "timed_out"
+        ? "timedOut"
+        : review.status;
+  return t(`chat.toolCards.review.${key}`, { reviewer: review.label });
+}
+
+export function renderToolApprovalReviews(card: ToolCard) {
+  const reviews = readToolApprovalReviews(card.details);
+  if (reviews.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-tool-reviews">
+      ${reviews.map((review) => {
+        const adverse = ["denied", "timed_out", "aborted"].includes(review.status);
+        return html`
+          <div class="chat-tool-review" data-review-status=${review.status}>
+            <div class="chat-tool-review__header">
+              <span class="chat-tool-review__icon"
+                >${adverse ? icons.shieldX : icons.shieldCheck}</span
+              >
+              <span class="chat-tool-review__label">${toolReviewLabel(review)}</span>
+              ${review.riskLevel
+                ? html`<span class="chat-tool-review__chip"
+                    >${t("chat.toolCards.review.risk", { level: review.riskLevel })}</span
+                  >`
+                : nothing}
+              ${review.userAuthorization
+                ? html`<span class="chat-tool-review__chip"
+                    >${t("chat.toolCards.review.authorization", {
+                      level: review.userAuthorization,
+                    })}</span
+                  >`
+                : nothing}
+            </div>
+            ${review.status === "in_progress"
+              ? nothing
+              : html`<div class="chat-tool-review__rationale">
+                  ${review.rationale ?? t("chat.toolCards.review.noRationale")}
+                </div>`}
+          </div>
+        `;
+      })}
+    </div>
+  `;
+}
+
 export function renderToolCard(
   card: ToolCard,
   opts: {
@@ -781,6 +837,7 @@ export function renderToolCard(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    showApprovalReviews?: boolean;
   },
 ) {
   const outcome = resolveToolCardOutcome(card, opts.runActive);
@@ -865,6 +922,7 @@ export function renderToolCard(
             </div>
           `
         : nothing}
+      ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
     </div>
   `;
 }
