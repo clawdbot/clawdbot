@@ -32,7 +32,7 @@ export function managedWorktreeName(cardId: string): string {
 
 export type WorkboardWorktreeCleanupRuntime = Pick<PluginRuntime["worktrees"], "removeIfLossless">;
 
-export type WorkboardWorkspaceMutation = {
+type WorkboardWorkspaceMutation = {
   before: WorkboardCard;
   after: WorkboardCard;
 };
