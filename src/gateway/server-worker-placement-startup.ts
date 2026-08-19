@@ -407,6 +407,11 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         if (!executionMode) {
           throw new Error(`Runtime ${runtime} lacks cloud placement support`);
         }
+        if (moveTarget.kind === "device" && executionMode !== "worker-turn") {
+          throw new Error(
+            `runtime ${runtime} cannot move to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or move to an SSH-backed cloud worker provider`,
+          );
+        }
         return { executionMode, ...destination.value };
       },
       resolveWorkspacePath,
