@@ -89,7 +89,6 @@ import {
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
 export { updateFinalizeCommand } from "./update-command-finalize.js";
-export { POST_CORE_UPDATE_ENV } from "./update-command-post-core.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;

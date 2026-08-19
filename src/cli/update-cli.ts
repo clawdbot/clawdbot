@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
 import { defaultRuntime } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
@@ -14,11 +15,7 @@ import type {
   UpdateWizardOptions,
 } from "./update-cli/shared.js";
 import { updateStatusCommand } from "./update-cli/status.js";
-import {
-  POST_CORE_UPDATE_ENV,
-  updateCommand,
-  updateFinalizeCommand,
-} from "./update-cli/update-command.js";
+import { updateCommand, updateFinalizeCommand } from "./update-cli/update-command.js";
 import { updateWizardCommand } from "./update-cli/wizard.js";
 
 export { updateCommand, updateFinalizeCommand, updateStatusCommand, updateWizardCommand };

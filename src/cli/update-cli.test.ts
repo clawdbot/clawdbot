@@ -6941,7 +6941,7 @@ describe("update-cli", () => {
     const gitRoot = path.join(tempDir, "..", "openclaw");
     const completionCacheSpy = vi
       .spyOn(updateCliShared, "tryWriteCompletionCache")
-      .mockResolvedValue("completed");
+      .mockResolvedValueOnce("completed");
     mockPackageInstallStatus(tempDir);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
