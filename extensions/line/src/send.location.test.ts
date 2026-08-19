@@ -39,6 +39,22 @@ describe("createLocationMessage", () => {
     },
   );
 
+  it("caps an oversized label so the fallback stays inside LINE's text limit", () => {
+    // Nothing bounds the label at the schema, so an unbounded fallback would be
+    // rejected for length and lose the location exactly as before.
+    const message = createLocationMessage({
+      title: "A".repeat(6000),
+      address: " ",
+      latitude: 35.6895,
+      longitude: 139.6917,
+    });
+
+    expect(message.type).toBe("text");
+    const text = (message as { text: string }).text;
+    expect(text).toBe("A".repeat(100) + String.fromCharCode(10) + "35.6895, 139.6917");
+    expect(text.length).toBeLessThanOrEqual(5000);
+  });
+
   it("still delivers the coordinates when the sender left both labels blank", () => {
     const message = createLocationMessage({
       title: "  ",

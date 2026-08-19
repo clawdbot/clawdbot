@@ -37,6 +37,7 @@ const userProfileCache = new Map<
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
 const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
+const LINE_LOCATION_LABEL_LIMIT = 100;
 
 function cacheUserProfile(
   userId: string,
@@ -261,7 +262,11 @@ function isValidLineLocation(location: LineLocation): boolean {
 // coordinates are always present, so the location degrades to the text it was
 // made of instead of vanishing from the reply.
 function locationTextFallback(location: LineLocation): TextMessage {
-  const authored = [location.title.trim(), location.address.trim()].filter(Boolean);
+  // The pin caps each label, and so must the fallback: an unbounded label would
+  // breach LINE's text limit and lose the location the same silent way.
+  const authored = [location.title, location.address]
+    .map((label) => truncateUtf16Safe(label.trim(), LINE_LOCATION_LABEL_LIMIT))
+    .filter(Boolean);
   return {
     type: "text",
     text: [...authored, `${location.latitude}, ${location.longitude}`].join("\n"),
@@ -274,8 +279,8 @@ export function createLocationMessage(location: LineLocation): LocationMessage |
   }
   return {
     type: "location",
-    title: truncateUtf16Safe(location.title, 100),
-    address: truncateUtf16Safe(location.address, 100),
+    title: truncateUtf16Safe(location.title, LINE_LOCATION_LABEL_LIMIT),
+    address: truncateUtf16Safe(location.address, LINE_LOCATION_LABEL_LIMIT),
     latitude: location.latitude,
     longitude: location.longitude,
   };
