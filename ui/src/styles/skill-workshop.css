@@ -163,10 +163,6 @@
   align-self: stretch;
 }
 
-.sw-queue-resizer {
-  cursor: col-resize;
-}
-
 .sw-queue__search {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);

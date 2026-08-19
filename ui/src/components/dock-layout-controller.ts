@@ -254,15 +254,11 @@ export const dockPanelStyles = css`
     top: 0;
     left: 0;
     right: 0;
-    height: var(--resize-handle-size, 6px);
-    cursor: ns-resize;
   }
   :is(.bp-resizer--right, .tp-resizer--right) {
     top: 0;
     bottom: 0;
     left: 0;
-    width: var(--resize-handle-size, 6px);
-    cursor: ew-resize;
   }
   .rail-header {
     box-sizing: border-box;
