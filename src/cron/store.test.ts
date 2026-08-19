@@ -510,40 +510,49 @@ describe("cron store", () => {
   });
 
   it("quarantines jobs with present-but-malformed precheck instead of fail-open (ClawSweeper P1)", async () => {
-    const { storePath } = await makeStorePath();
-    const malformed = expectDefined(
-      makeStore("malformed-precheck", true).jobs[0],
-      "malformed precheck fixture",
-    );
-    const surviving = expectDefined(
-      makeStore("surviving-precheck-neighbor", true).jobs[0],
-      "surviving precheck neighbor fixture",
-    );
-    await saveCronStore(storePath, { version: 1, jobs: [malformed, surviving] });
-    // Corrupt only the precheck gate in job_json; leave schedule/payload valid so a
-    // fail-open decoder would still load the row and run the payload ungated.
-    openOpenClawStateDatabase()
-      .db.prepare(
-        "UPDATE cron_jobs SET job_json = json_set(COALESCE(job_json, '{}'), '$.precheck', json(?)) WHERE store_key = ? AND job_id = ?",
-      )
-      .run(
-        JSON.stringify({ command: "echo NO_WORK; exit 2", timeoutMs: 0 }),
-        path.resolve(storePath),
-        malformed.id,
+    const shapes: Array<{ name: string; precheck: unknown }> = [
+      { name: "timeoutMs-zero", precheck: { command: "echo NO_WORK; exit 2", timeoutMs: 0 } },
+      { name: "empty-object", precheck: {} },
+      { name: "blank-command", precheck: { command: "   " } },
+      { name: "scalar-string", precheck: "not-an-object" },
+      { name: "unsupported-kind", precheck: { kind: "shell", command: "echo hi" } },
+    ];
+
+    for (const shape of shapes) {
+      const { storePath } = await makeStorePath();
+      const malformed = expectDefined(
+        makeStore(`malformed-precheck-${shape.name}`, true).jobs[0],
+        "malformed precheck fixture",
       );
+      const surviving = expectDefined(
+        makeStore(`surviving-precheck-neighbor-${shape.name}`, true).jobs[0],
+        "surviving precheck neighbor fixture",
+      );
+      await saveCronStore(storePath, { version: 1, jobs: [malformed, surviving] });
+      // Corrupt only the precheck gate in job_json; leave schedule/payload valid so a
+      // fail-open decoder would still load the row and run the payload ungated.
+      openOpenClawStateDatabase()
+        .db.prepare(
+          "UPDATE cron_jobs SET job_json = json_set(COALESCE(job_json, '{}'), '$.precheck', json(?)) WHERE store_key = ? AND job_id = ?",
+        )
+        .run(JSON.stringify(shape.precheck), path.resolve(storePath), malformed.id);
 
-    const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+      const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
 
-    expect(loaded.store.jobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect(loaded.invalidConfigRows).toEqual([
-      expect.objectContaining({
-        sourceIndex: 0,
-        reason: "invalid-precheck",
-        job: expect.objectContaining({ id: malformed.id }),
-      }),
-    ]);
-    // Neighbor must not inherit or drop because of the quarantined row.
-    expect(loaded.store.jobs[0]?.precheck).toBeUndefined();
+      expect(
+        loaded.store.jobs.map((job) => job.id),
+        shape.name,
+      ).toEqual([surviving.id]);
+      expect(loaded.invalidConfigRows, shape.name).toEqual([
+        expect.objectContaining({
+          sourceIndex: 0,
+          reason: "invalid-precheck",
+          job: expect.objectContaining({ id: malformed.id }),
+        }),
+      ]);
+      // Neighbor must not inherit or drop because of the quarantined row.
+      expect(loaded.store.jobs[0]?.precheck, shape.name).toBeUndefined();
+    }
   });
 
   it("keeps valid cron row metadata aligned when an earlier SQLite row is malformed", async () => {

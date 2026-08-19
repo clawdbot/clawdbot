@@ -166,11 +166,10 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   if (rawPrecheck !== undefined && rawPrecheck !== null) {
     try {
       const precheck = normalizeCronJobPrecheck(rawPrecheck);
-      if (precheck) {
-        runtimeConfig.precheck = precheck;
-      } else {
-        delete runtimeConfig.precheck;
+      if (!precheck) {
+        throw new Error("invalid-precheck");
       }
+      runtimeConfig.precheck = precheck;
     } catch {
       throw new Error("invalid-precheck");
     }
