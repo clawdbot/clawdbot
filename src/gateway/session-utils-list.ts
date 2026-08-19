@@ -181,6 +181,7 @@ function filterSessionEntries(params: {
   getRowContext?: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   involvingActorId?: string;
+  statusFilter?: ListSessionsFromStoreParams["statusFilter"];
 }): Pick<SessionEntrySelection, "ownerFacet" | "entries"> {
   const { cfg, store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;

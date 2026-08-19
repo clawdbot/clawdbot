@@ -14,7 +14,7 @@ OpenClaw gives agents tools to work across sessions, inspect status, and orchest
 | Tool                 | What it does                                                                            |
 | -------------------- | --------------------------------------------------------------------------------------- |
 | `sessions`           | Patch, reset, delete, or assign ownership of visible sessions and manage session groups |
-| `sessions_list`      | List and filter visible session organization, status, ownership, and previews            |
+| `sessions_list`      | List and filter visible session organization, status, ownership, and previews           |
 | `sessions_search`    | Search visible session transcripts and return matching excerpts                         |
 | `sessions_history`   | Read the transcript of a specific session                                               |
 | `sessions_send`      | Run another session on the same Gateway and optionally wait                             |

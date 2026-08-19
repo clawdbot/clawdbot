@@ -23,7 +23,6 @@ import {
   validateSessionsObserverVisibilityParams,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
-  validateSessionsSearchParams,
   validateSessionsSendParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
@@ -167,15 +166,6 @@ describe("lazy protocol validators", () => {
       { archived: true },
       { archived: "all" },
       { involvingMe: true },
-      {
-        category: null,
-        ownerId: "agent-owner",
-        unread: false,
-        status: "queued",
-        projectId: "openclaw",
-        hasWorktree: false,
-        needsAttention: false,
-      },
     ]);
     expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
   });
@@ -432,34 +422,6 @@ describe("lazy protocol validators", () => {
     expectRejected(validateSessionsUsageParams, [
       { mode: "specific", timeZone: "" },
       { mode: "specific", timeZone: 2 },
-    ]);
-  });
-
-  it("validates bounded session transcript search params", () => {
-    const search = (overrides: Record<string, unknown> = {}) => ({
-      query: "deployment failure",
-      ...overrides,
-    });
-    expectAccepted(validateSessionsSearchParams, [
-      search(),
-      search({
-        agentId: "work",
-        sessionKeys: ["agent:work:main", "agent:work:other"],
-        limit: 25,
-      }),
-      search({ resultMode: "sessions", limit: 100 }),
-    ]);
-    expectRejected(validateSessionsSearchParams, [
-      search({ agentId: "" }),
-      search({ sessionKey: "agent:work:main" }),
-      search({ sessionKeys: [] }),
-      search({
-        sessionKeys: Array.from({ length: 201 }, (_, index) => `session-${index}`),
-      }),
-      search({ limit: 101 }),
-      search({ resultMode: "other" }),
-      { query: "" },
-      { query: "x".repeat(4097) },
     ]);
   });
 

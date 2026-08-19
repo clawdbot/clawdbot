@@ -233,11 +233,12 @@ export function createSessionsListTool(opts?: {
       const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
       const label = readToolStringParam(params, "label");
-      const category = params.category === null ? null : readToolStringParam(params, "category");
+      const categoryFilter =
+        params.category === null ? null : readToolStringParam(params, "category");
       const agentId = readToolStringParam(params, "agentId");
       const ownerId = readToolStringParam(params, "ownerId");
-      const status = readToolStringParam(params, "status");
-      const projectId = readToolStringParam(params, "projectId");
+      const statusFilter = readToolStringParam(params, "status");
+      const projectIdFilter = readToolStringParam(params, "projectId");
       const search = readToolStringParam(params, "search");
       const archived = params.archived === true;
       const includeDerivedTitles = params.includeDerivedTitles === true;
@@ -273,12 +274,12 @@ export function createSessionsListTool(opts?: {
             offset,
             activeMinutes,
             label,
-            ...(Object.hasOwn(params, "category") ? { category } : {}),
+            ...(Object.hasOwn(params, "category") ? { category: categoryFilter } : {}),
             agentId,
             ownerId,
             ...(params.unread !== undefined ? { unread: params.unread === true } : {}),
-            status,
-            projectId,
+            status: statusFilter,
+            projectId: projectIdFilter,
             ...(params.hasWorktree !== undefined
               ? { hasWorktree: params.hasWorktree === true }
               : {}),

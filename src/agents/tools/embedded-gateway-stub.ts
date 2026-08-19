@@ -42,6 +42,7 @@ interface EmbeddedGatewayRuntime {
     agentId: string;
     limit?: number;
     query: string;
+    resultMode?: "messages" | "sessions";
     sessionKeys?: string[];
   }) => {
     hits: unknown[];
