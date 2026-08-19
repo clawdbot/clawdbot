@@ -38,10 +38,29 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
   };
 });
 
-vi.mock("../../../../src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: getReplyFromConfigMock,
-  prewarmConfigDrivenReplyRuntime: vi.fn(async () => undefined),
-}));
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
+      const resolveTurn = params.adapter.resolveTurn;
+      return await actual.runChannelInboundEvent({
+        ...params,
+        adapter: {
+          ...params.adapter,
+          resolveTurn: async (...args: Parameters<typeof resolveTurn>) => {
+            const resolved = await resolveTurn(...args);
+            return "runDispatch" in resolved
+              ? resolved
+              : ({ ...resolved, replyResolver: getReplyFromConfigMock } as typeof resolved);
+          },
+        },
+      });
+    },
+  };
+});
 
 vi.mock("../send.js", () => ({
   sendMessageSignal: sendMessageSignalMock,
