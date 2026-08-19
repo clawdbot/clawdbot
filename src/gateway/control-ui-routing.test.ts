@@ -52,7 +52,7 @@ describe("isControlUiFocusDocumentPath", () => {
     { basePath: "", pathname: "/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb" },
     { basePath: "", pathname: "/focus/not-supported" },
     { basePath: "/openclaw", pathname: "/openclaw/focus/desktop/control" },
-  ])("reserves $pathname", ({ basePath, pathname }) => {
+  ])("classifies $pathname", ({ basePath, pathname }) => {
     expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(true);
   });
 
@@ -61,7 +61,7 @@ describe("isControlUiFocusDocumentPath", () => {
     { basePath: "", pathname: "/focused/terminal" },
     { basePath: "/openclaw", pathname: "/focus/terminal" },
     { basePath: "/openclaw", pathname: "/openclaw/focused" },
-  ])("does not reserve $pathname", ({ basePath, pathname }) => {
+  ])("does not classify $pathname", ({ basePath, pathname }) => {
     expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(false);
   });
 });

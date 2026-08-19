@@ -326,6 +326,17 @@ export function createGatewayHttpServer(opts: {
           agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
           root: controlUiRoot,
         });
+      const handleStandaloneControlUiRequest = async () => {
+        if (!controlUiEnabled) {
+          respondNotFound(res);
+          return true;
+        }
+        if (await handleControlUiRequest()) {
+          return true;
+        }
+        respondNotFound(res);
+        return true;
+      };
       const requestStages: GatewayHttpRequestStage[] = [
         {
           run: () =>
@@ -461,27 +472,15 @@ export function createGatewayHttpServer(opts: {
             config: openAiChatCompletionsConfig,
           }),
       );
-      const standaloneControlUiDocument =
-        isControlUiApprovalDocumentPath({
-          basePath: controlUiBasePath,
-          pathname: scopedRequestPath,
-        }) ||
-        isControlUiFocusDocumentPath({
-          basePath: controlUiBasePath,
-          pathname: scopedRequestPath,
-        });
-      addRequestStage(standaloneControlUiDocument, async () => {
-        if (!controlUiEnabled) {
-          respondNotFound(res);
-          return true;
-        }
-        const handled = await handleControlUiRequest();
-        if (handled) {
-          return true;
-        }
-        respondNotFound(res);
-        return true;
+      const approvalDocument = isControlUiApprovalDocumentPath({
+        basePath: controlUiBasePath,
+        pathname: scopedRequestPath,
       });
+      const focusDocument = isControlUiFocusDocumentPath({
+        basePath: controlUiBasePath,
+        pathname: scopedRequestPath,
+      });
+      addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
@@ -584,6 +583,8 @@ export function createGatewayHttpServer(opts: {
           },
         );
       }
+
+      addRequestStage(focusDocument, handleStandaloneControlUiRequest);
 
       addRequestStage(
         scopedRequestPath.startsWith("/api/chat/media/outgoing/") ||

@@ -46,7 +46,7 @@ export function isControlUiApprovalDocumentPath(params: {
   return encodedId.length > 0 && !encodedId.includes("/");
 }
 
-/** Core-owned focused presentation namespace, before plugin routing. */
+/** Focused presentation namespace used only after plugin routing declines it. */
 export function isControlUiFocusDocumentPath(params: {
   basePath: string;
   pathname: string;
