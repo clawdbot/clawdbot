@@ -1,5 +1,6 @@
 // Control UI view renders agents utils screen content.
 import { formatByteSize } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -216,6 +217,7 @@ type AgentConfigEntry = {
   workspace?: string;
   agentDir?: string;
   model?: unknown;
+  models?: Record<string, unknown>;
   agentRuntime?: unknown;
   skills?: string[];
   tools?: {
@@ -232,7 +234,7 @@ type ConfigSnapshot = {
     defaults?: {
       workspace?: string;
       model?: unknown;
-      models?: Record<string, { alias?: string }>;
+      models?: Record<string, unknown>;
       skills?: string[];
     };
     entries?: Record<string, AgentConfigEntry>;
@@ -488,27 +490,38 @@ type ConfiguredModelOption = {
   value: string;
   label: string;
   provider?: string;
+  tags?: string[];
+  alias?: string;
 };
 
 function resolveConfiguredModels(
   configForm: Record<string, unknown> | null,
+  agentId?: string,
 ): ConfiguredModelOption[] {
+  const config = agentId ? resolveAgentConfig(configForm, agentId) : undefined;
   const cfg = configForm as ConfigSnapshot | null;
-  const models = cfg?.agents?.defaults?.models;
-  if (!models || typeof models !== "object") {
+  const defaultModels = cfg?.agents?.defaults?.models;
+  const agentModels = config?.entry?.models;
+  const modelIds = new Set([
+    ...Object.keys(defaultModels ?? {}),
+    ...Object.keys(agentModels ?? {}),
+  ]);
+  if (modelIds.size === 0) {
     return [];
   }
   const options: ConfiguredModelOption[] = [];
-  for (const [modelId, modelRaw] of Object.entries(models)) {
+  for (const modelId of modelIds) {
     const trimmed = modelId.trim();
     if (!trimmed) {
       continue;
     }
+    const defaultMetadata = asOptionalRecord(defaultModels?.[modelId]);
+    const agentMetadata = asOptionalRecord(agentModels?.[modelId]);
+    const aliasOwner =
+      agentMetadata && Object.hasOwn(agentMetadata, "alias") ? agentMetadata : defaultMetadata;
     const alias =
-      modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
-        ? typeof (modelRaw as { alias?: unknown }).alias === "string"
-          ? (modelRaw as { alias?: string }).alias?.trim()
-          : undefined
+      aliasOwner && Object.hasOwn(aliasOwner, "alias")
+        ? (normalizeOptionalString(aliasOwner.alias) ?? "")
         : undefined;
     const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
     const separator = trimmed.indexOf("/");
@@ -516,6 +529,7 @@ function resolveConfiguredModels(
       value: trimmed,
       label,
       ...(separator > 0 ? { provider: trimmed.slice(0, separator) } : {}),
+      ...(alias !== undefined ? { alias } : {}),
     });
   }
   return options;
@@ -525,43 +539,63 @@ export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
   catalog?: ModelCatalogEntry[],
+  agentId?: string,
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
   const catalogOptions = new Map<string, ConfiguredModelOption>();
-  const addOption = (value: string, label: string, provider?: string) => {
+  const configuredOptions = resolveConfiguredModels(configForm, agentId);
+  const addOption = (value: string, label: string, provider?: string, tags?: string[]) => {
     const key = normalizeLowercaseStringOrEmpty(value);
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    options.push({ value, label, ...(provider ? { provider } : {}) });
+    options.push({ value, label, ...(provider ? { provider } : {}), ...(tags ? { tags } : {}) });
   };
 
   if (catalog) {
-    const displayLookup = buildCatalogDisplayLookup(catalog);
-    for (const entry of catalog) {
+    const configuredAliases = new Map(
+      configuredOptions.flatMap((option) =>
+        option.alias !== undefined
+          ? [[normalizeLowercaseStringOrEmpty(option.value), option.alias] as const]
+          : [],
+      ),
+    );
+    const displayCatalog = catalog.map((entry) => {
+      const value = `${entry.provider}/${entry.id}`;
+      const key = normalizeLowercaseStringOrEmpty(value);
+      if (!configuredAliases.has(key)) {
+        return entry;
+      }
+      const alias = configuredAliases.get(key) ?? "";
+      return { ...entry, alias: alias || undefined };
+    });
+    const displayLookup = buildCatalogDisplayLookup(displayCatalog);
+    for (const entry of displayCatalog) {
       const option = buildChatModelOptionFromLookup(entry, displayLookup);
       catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), {
         ...option,
         provider: entry.provider,
+        ...(entry.tags ? { tags: entry.tags } : {}),
       });
     }
   }
 
-  for (const opt of resolveConfiguredModels(configForm)) {
-    // Configured options keep their order and fallback aliases; an authoritative
-    // catalog match must still expose the same model identity as the chat picker.
+  for (const opt of configuredOptions) {
+    // Raw config supplies rows the Gateway catalog lacks and explicit alias edits;
+    // catalog identity and tags remain authoritative for matching rows.
     const catalogOption = catalogOptions.get(normalizeLowercaseStringOrEmpty(opt.value));
     addOption(
-      opt.value,
+      catalogOption?.value ?? opt.value,
       catalogOption?.label ?? opt.label,
       catalogOption?.provider ?? opt.provider,
+      catalogOption?.tags,
     );
   }
 
   for (const option of catalogOptions.values()) {
-    addOption(option.value, option.label, option.provider);
+    addOption(option.value, option.label, option.provider, option.tags);
   }
 
   if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {

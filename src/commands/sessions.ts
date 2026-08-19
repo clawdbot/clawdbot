@@ -387,7 +387,7 @@ export async function sessionsCommand(
     // ACP rows need stored-key metadata before model/runtime resolution so
     // bridge sessions and true ACP runtime sessions display differently.
     const modelRef = applyAcpModelOverlayIfNeeded(
-      resolveSessionDisplayModelRef(cfg, row, classifyCliProvider),
+      resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
       acpSessionKey,
       acpRuntime,
     );
