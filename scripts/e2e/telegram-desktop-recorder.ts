@@ -21,7 +21,6 @@ import {
   scpFromRemote,
   shellQuote,
   sshRun,
-  TELEGRAM_DESKTOP_CROP,
   telegramPrivatePostLink,
 } from "./telegram-desktop-crabbox.ts";
 import {
@@ -106,18 +105,30 @@ export function renderLaunchDesktop(): string {
 export DISPLAY=:99
 root=${REMOTE_ROOT}
 mkdir -p "$root"
-pkill -f '${TELEGRAM_BINARY}.*${TELEGRAM_WORKDIR}' >/dev/null 2>&1 || true
+# Match the process name exactly: -f patterns also match this script's own shell,
+# whose command line contains these paths, so pkill -f would kill the launcher.
+pkill -x Telegram >/dev/null 2>&1 || true
 rm -rf ${shellQuote(TELEGRAM_WORKDIR)}
-nohup ${TELEGRAM_BINARY} -noupdate -workdir ${shellQuote(TELEGRAM_WORKDIR)} >${shellQuote(remotePaths.desktopLog)} 2>&1 &
-pid=$!
+# setsid plus closed stdin detaches Telegram from this SSH session: container sshd
+# tears down the session process group on exit, which kills a plain background child.
+setsid ${TELEGRAM_BINARY} -noupdate -workdir ${shellQuote(TELEGRAM_WORKDIR)} </dev/null >${shellQuote(remotePaths.desktopLog)} 2>&1 &
 for _ in $(seq 1 30); do
-  kill -0 "$pid" >/dev/null 2>&1 || { tail -c 262144 ${shellQuote(remotePaths.desktopLog)} >&2 || true; exit 1; }
+  pgrep -x Telegram >/dev/null 2>&1 || { tail -c 262144 ${shellQuote(remotePaths.desktopLog)} >&2 || true; echo "Telegram Desktop exited before opening a window." >&2; exit 1; }
   wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {found=1} END {exit !found}' && exit 0
   sleep 1
 done
 tail -c 262144 ${shellQuote(remotePaths.desktopLog)} >&2 || true
 echo "Telegram Desktop window did not open." >&2
 exit 1`;
+}
+
+export function renderReadWindowGeometry(): string {
+  return `set -euo pipefail
+export DISPLAY=:99
+win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
+test -n "$win"
+eval "$(xdotool getwindowgeometry --shell "$win")"
+printf '%s %s %s %s\n' "$X" "$Y" "$WIDTH" "$HEIGHT"`;
 }
 
 export function renderPrepareQr(): string {
@@ -142,17 +153,19 @@ click_window_ratio 80`;
 export function renderReadQrLink(): string {
   return `set -euo pipefail
 export DISPLAY=:99
-scrot ${shellQuote(`${REMOTE_ROOT}/telegram-login-qr.png`)}
+# -o is required: scrot exits 0 but silently keeps the existing file otherwise,
+# so every later capture would re-read the first screenshot.
+scrot -o ${shellQuote(`${REMOTE_ROOT}/telegram-login-qr.png`)}
 zbarimg --raw ${shellQuote(`${REMOTE_ROOT}/telegram-login-qr.png`)} 2>/dev/null | awk 'index($0, "tg://login?token=") == 1 {print; found=1; exit} END {exit !found}'`;
 }
 
-export function renderWaitForMainWindow(): string {
+export function renderWaitForMainWindow(seconds = 30): string {
   return `set -euo pipefail
 export DISPLAY=:99
-for _ in $(seq 1 30); do
+for _ in $(seq 1 ${seconds}); do
   win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
   if [ -n "$win" ]; then
-    scrot ${shellQuote(`${REMOTE_ROOT}/telegram-main-window.png`)}
+    scrot -o ${shellQuote(`${REMOTE_ROOT}/telegram-main-window.png`)}
     if ! zbarimg --raw ${shellQuote(`${REMOTE_ROOT}/telegram-main-window.png`)} 2>/dev/null | grep -q '^tg://login?token='; then
       exit 0
     fi
@@ -161,6 +174,23 @@ for _ in $(seq 1 30); do
 done
 echo "Telegram Desktop did not reach the main window." >&2
 exit 1`;
+}
+
+export function parseWindowGeometry(raw: string): {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+} {
+  const parts = raw.trim().split(/\s+/u).map(Number);
+  if (parts.length !== 4 || parts.some((value) => !Number.isFinite(value) || value < 0)) {
+    throw new Error(`Telegram Desktop window geometry was not readable: ${raw.trim()}`);
+  }
+  const [x, y, width, height] = parts as [number, number, number, number];
+  if (width < 200 || height < 200) {
+    throw new Error(`Telegram Desktop window is too small to crop: ${width}x${height}`);
+  }
+  return { height, width, x, y };
 }
 
 function driverCommand(userDriver: string[], args: string[]) {
@@ -190,6 +220,25 @@ export async function confirmQrLink(params: {
   return String(confirmed.session.id);
 }
 
+async function desktopReachedMainWindow(params: {
+  cwd: string;
+  inspect: CrabboxInspect;
+  operations: RecorderOperations;
+  seconds: number;
+}): Promise<boolean> {
+  try {
+    await params.operations.sshRun({
+      command: renderWaitForMainWindow(params.seconds),
+      cwd: params.cwd,
+      inspect: params.inspect,
+      run: params.operations.runCommand,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function authorizeDesktop(params: {
   cwd: string;
   inspect: CrabboxInspect;
@@ -202,8 +251,13 @@ async function authorizeDesktop(params: {
     inspect: params.inspect,
     run: params.operations.runCommand,
   });
+  // Telegram rotates the login token roughly every 30s and silently ignores a
+  // confirmation for a rotated one, so a confirmed session id is not proof of
+  // login: read a fresh code, confirm it, then verify the client left the QR
+  // screen before trusting it.
   let lastLink = "";
-  for (let attempt = 1; attempt <= 25; attempt += 1) {
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    let link = "";
     try {
       const qr = await params.operations.sshRun({
         command: renderReadQrLink(),
@@ -212,27 +266,33 @@ async function authorizeDesktop(params: {
         run: params.operations.runCommand,
         stdio: "pipe",
       });
-      const link = qr.stdout.trim();
-      if (!link || link === lastLink) {
-        await sleep(1000);
-        continue;
-      }
-      lastLink = link;
-      const desktopSessionId = await confirmQrLink({
+      link = qr.stdout.trim();
+    } catch {
+      link = "";
+    }
+    if (!link || link === lastLink) {
+      await sleep(2000);
+      continue;
+    }
+    lastLink = link;
+    const desktopSessionId = await confirmQrLink({
+      cwd: params.cwd,
+      link,
+      run: params.operations.runCommand,
+      userDriver: params.userDriver,
+    });
+    if (
+      await desktopReachedMainWindow({
         cwd: params.cwd,
-        link,
-        run: params.operations.runCommand,
-        userDriver: params.userDriver,
-      });
+        inspect: params.inspect,
+        operations: params.operations,
+        seconds: 20,
+      })
+    ) {
       return desktopSessionId;
-    } catch (error) {
-      if (coerceErrorMessage(error).includes("requires a 2FA password")) {
-        throw error;
-      }
-      await sleep(1000);
     }
   }
-  throw new Error("Telegram Desktop QR authorization failed after 25 rotated-token attempts.");
+  throw new Error("Telegram Desktop stayed on the login screen after 6 confirmed QR codes.");
 }
 
 function resolveOutputDir(cwd: string, outputDir: string): string {
@@ -355,12 +415,6 @@ export async function startRecorder(
       operations,
       userDriver: opts.userDriver,
     });
-    await operations.sshRun({
-      command: renderWaitForMainWindow(),
-      cwd,
-      inspect,
-      run: operations.runCommand,
-    });
     const link = opts.messageId ? telegramPrivatePostLink(opts.chat, opts.messageId) : undefined;
     await operations.sshRun({
       command: renderTelegramViewCommand({
@@ -372,6 +426,16 @@ export async function startRecorder(
       inspect,
       run: operations.runCommand,
     });
+    // Crop from the window Telegram actually got: window managers and providers
+    // place it differently, and a fixed crop silently cuts the chat pane.
+    const geometry = await operations.sshRun({
+      command: renderReadWindowGeometry(),
+      cwd,
+      inspect,
+      run: operations.runCommand,
+      stdio: "pipe",
+    });
+    const windowGeometry = parseWindowGeometry(geometry.stdout);
     await operations.sshRun({
       command: renderStartRemoteRecording({ paths: remotePaths, recordFps: opts.recordFps }),
       cwd,
@@ -387,6 +451,7 @@ export async function startRecorder(
       recordFps: opts.recordFps,
       remotePaths,
       schemaVersion: 1,
+      window: windowGeometry,
       startedAt: new Date().toISOString(),
       userDriver: opts.userDriver,
     };
@@ -472,7 +537,7 @@ async function captureScreenshot(params: {
   remotePath: string;
 }): Promise<void> {
   await params.operations.sshRun({
-    command: `set -euo pipefail\nDISPLAY=:99 scrot ${shellQuote(params.remotePath)}`,
+    command: `set -euo pipefail\nDISPLAY=:99 scrot -o ${shellQuote(params.remotePath)}`,
     cwd: params.cwd,
     inspect: params.inspect,
     run: params.operations.runCommand,
@@ -528,8 +593,18 @@ export async function stopRecorder(
     }
   };
   let inspect: CrabboxInspect | undefined;
+  let leaseGone = false;
   await attempt("inspect", async () => {
-    inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
+    try {
+      inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
+    } catch (error) {
+      // A lease that no longer exists is the desired end state, not a failure.
+      if (coerceErrorMessage(error).includes("lease not found")) {
+        leaseGone = true;
+        return;
+      }
+      throw error;
+    }
   });
   const videoPath = path.join(outputDir, "telegram-desktop-recorder-session.mp4");
   const desktopLogPath = path.join(outputDir, "telegram-desktop.log");
@@ -599,7 +674,13 @@ export async function stopRecorder(
     );
     await attempt("cropped motion preview", async () => {
       await operations.createCroppedMotionPreview({
-        crop: TELEGRAM_DESKTOP_CROP,
+        crop: {
+          cropWidth: session.window.width,
+          height: session.window.height,
+          width: session.window.width,
+          x: session.window.x,
+          y: session.window.y,
+        },
         croppedGifPath,
         croppedVideoPath,
         cwd,
@@ -623,7 +704,7 @@ export async function stopRecorder(
       });
     });
   }
-  if (!opts.keepBox && session.leaseOwned) {
+  if (!opts.keepBox && session.leaseOwned && !leaseGone) {
     await attempt("stop Crabbox", async () => {
       await stopBox({
         crabboxBin,

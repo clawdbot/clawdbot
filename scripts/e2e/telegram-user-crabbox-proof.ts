@@ -1996,7 +1996,7 @@ click_window_ratio() {
   sleep 1
 }
 read_qr_link() {
-  scrot "$root/telegram-login-qr.png"
+  scrot -o "$root/telegram-login-qr.png"
   { zbarimg --raw "$root/telegram-login-qr.png" 2>/dev/null || true; } | awk 'index($0, "tg://login?token=") == 1 {print; exit}'
 }
 wait_for_qr_link() {

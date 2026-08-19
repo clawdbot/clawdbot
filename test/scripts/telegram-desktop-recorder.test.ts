@@ -9,6 +9,7 @@ import {
 import {
   confirmQrLink,
   parseRecorderArgs,
+  parseWindowGeometry,
   readRecorderSession,
   type RecorderOperations,
   type RecorderSession,
@@ -50,6 +51,7 @@ function testSession(): RecorderSession {
     },
     schemaVersion: 1,
     startedAt: "2026-08-15T12:00:00.000Z",
+    window: { height: 1000, width: 650, x: 635, y: 40 },
     userDriver: ["python3", "driver.py", "--account", "qa shared"],
   };
 }
@@ -326,6 +328,17 @@ describe("Telegram Desktop recorder remote contract", () => {
     expect(scripts).toContain("DISPLAY=:99 xdpyinfo");
     expect(scripts).toContain("wmctrl xdotool scrot ffmpeg zbarimg xdpyinfo");
     expect(scripts.toLowerCase()).not.toMatch(/apt-get|curl|wget|tdlib|python/u);
+    // -f patterns also match this script's own shell (its command line contains the
+    // binary path), so a -f pkill kills the launcher instead of a stale Telegram.
+    expect(scripts).toContain("pkill -x Telegram");
+    expect(scripts).toContain("pgrep -x Telegram");
+    expect(scripts).not.toMatch(/p(kill|grep) -f [^\n]*Telegram/u);
+    // Container sshd tears down the session process group; the client must detach.
+    expect(scripts).toContain("setsid /opt/Telegram/Telegram");
+    // scrot exits 0 but keeps the existing file without -o, so repeated captures
+    // would silently re-read the first screenshot.
+    expect(scripts).not.toMatch(/scrot (?!-o)['"/]/u);
+    expect(scripts).toContain("</dev/null");
   });
 
   it("passes a decoded QR link only to the local confirm-qr command", async () => {
@@ -349,6 +362,56 @@ describe("Telegram Desktop recorder remote contract", () => {
       cwd: "/repo",
       redactValues: [link],
     });
+  });
+});
+
+describe("Telegram Desktop recorder window geometry", () => {
+  it("parses the measured window and rejects unusable geometry", () => {
+    expect(parseWindowGeometry(" 636 45 648 995 \n")).toEqual({
+      height: 995,
+      width: 648,
+      x: 636,
+      y: 45,
+    });
+    expect(() => parseWindowGeometry("636 45 648")).toThrow("was not readable");
+    expect(() => parseWindowGeometry("636 45 10 10")).toThrow("too small to crop");
+  });
+
+  it("crops the recorded window instead of a fixed rectangle", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    writeRecorderSession(sessionPath, {
+      ...testSession(),
+      window: { height: 995, width: 648, x: 636, y: 45 },
+    });
+    const cropped = vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 648 }));
+    const operations = {
+      createCroppedMotionPreview: cropped,
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: (async () => ({
+        stderr: "",
+        stdout: JSON.stringify({ ok: true }),
+      })) as RunCommand,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    await stopRecorder(
+      root,
+      { command: "stop", crop: "telegram-window", keepBox: false, sessionPath },
+      operations,
+    );
+    expect(cropped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        crop: { cropWidth: 648, height: 995, width: 648, x: 636, y: 45 },
+      }),
+    );
   });
 });
 
