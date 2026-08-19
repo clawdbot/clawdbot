@@ -379,8 +379,7 @@ type OpenClawCodingToolsOptions = {
   /** Consumed in-process completion capability; never derived from model-facing input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Consumed one-shot sessions_send authority carried outside public params. */
-  trustedSessionHandoff?: boolean;
-  sessionHandoffRequester?: AgentRuntimeSessionHandoffContext["requester"];
+  trustedSessionHandoff?: AgentRuntimeSessionHandoffContext;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -444,7 +443,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,
       trustedSessionHandoff: options?.trustedSessionHandoff,
-      sessionHandoffRequester: options?.sessionHandoffRequester,
       scheduledToolPolicy: options?.scheduledToolPolicy,
       pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
     });

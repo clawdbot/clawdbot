@@ -8,7 +8,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
-import type { AgentRuntimeSessionHandoffRequester } from "../gateway/agent-runtime-session-handoff.js";
+import type { AgentRuntimeSessionHandoffContext } from "../gateway/agent-runtime-session-handoff.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -110,8 +110,7 @@ export type ConversationCapabilityProfileParams = {
   /** Consumed in-process completion capability; public callers cannot set this fact. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Consumed one-shot sessions_send authority; public callers cannot set this fact. */
-  trustedSessionHandoff?: boolean;
-  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
+  trustedSessionHandoff?: AgentRuntimeSessionHandoffContext;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -266,11 +265,14 @@ export function resolveConversationCapabilityProfile(
     conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
   });
   const sessionHandoffPolicy =
-    params.trustedSessionHandoff === true &&
+    params.trustedSessionHandoff &&
     params.inputProvenance?.kind === "inter_session" &&
     params.inputProvenance.sourceTool === "sessions_send" &&
     params.runtimeToolAllowlist
-      ? { allow: params.runtimeToolAllowlist }
+      ? {
+          allow: params.runtimeToolAllowlist,
+          deny: params.trustedSessionHandoff.inheritedToolPolicy.deny,
+        }
       : undefined;
   const handoffTargetPolicies = sessionHandoffPolicy
     ? resolveSessionHandoffTargetToolPolicies({
@@ -283,7 +285,7 @@ export function resolveConversationCapabilityProfile(
         groupChannel: trustedGroupChannel,
         groupSpace: trustedGroupSpace,
         spawnedBy: params.spawnedBy,
-        requester: params.sessionHandoffRequester,
+        requester: params.trustedSessionHandoff?.requester,
       })
     : undefined;
   const requesterPolicies = sessionHandoffPolicy
@@ -314,9 +316,9 @@ export function resolveConversationCapabilityProfile(
     params.sandboxToolPolicy,
     subagentPolicy,
   ];
-  const runtimeToolPolicy = params.runtimeToolAllowlist
-    ? { allow: params.runtimeToolAllowlist }
-    : undefined;
+  const runtimeToolPolicy =
+    sessionHandoffPolicy ??
+    (params.runtimeToolAllowlist ? { allow: params.runtimeToolAllowlist } : undefined);
   const runtimeToolPolicyForInheritance =
     params.inheritRuntimeToolAllowlist === true ? runtimeToolPolicy : undefined;
   const runtimeToolAlsoAllowlist = uniqueStrings(

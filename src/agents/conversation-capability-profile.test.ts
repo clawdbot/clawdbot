@@ -145,10 +145,16 @@ describe("resolveConversationCapabilityProfile", () => {
         sourceSessionKey: "agent:main:discord:direct:source-user",
         sourceTool: "sessions_send",
       },
-      trustedSessionHandoff: true,
-      sessionHandoffRequester: {
-        messageProvider: "discord",
-        senderId: "source-user",
+      trustedSessionHandoff: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "write", "exec"],
+          deny: [],
+        },
+        requester: {
+          messageProvider: "discord",
+          senderId: "source-user",
+        },
       },
     });
 
@@ -538,5 +544,37 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     for (const toolName of ["read", "write", "exec", "apply_patch"]) {
       expect(isToolAllowedByPolicyName(toolName, groupPolicy)).toBe(false);
     }
+  });
+
+  it("preserves explicit session handoff denies across runtime allow aliases", () => {
+    const profile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["write"],
+      inheritRuntimeToolAllowlist: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:source",
+        sourceTool: "sessions_send",
+      },
+      trustedSessionHandoff: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["write"],
+          deny: ["apply_patch"],
+        },
+        requester: {},
+      },
+    });
+
+    expect(
+      projectConversationToolNames({
+        capabilityProfile: profile,
+        toolNames: ["write", "apply_patch"],
+        warn: () => {},
+      }),
+    ).toEqual(["write"]);
+    expect(profile.policy.runtimeToolPolicyForInheritance).toEqual({
+      allow: ["write"],
+      deny: ["apply_patch"],
+    });
   });
 });

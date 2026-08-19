@@ -249,6 +249,7 @@ export class McpLoopbackToolCache {
       // allowlist (deny-all), so the marker distinguishes presence.
       params.toolsAllow ? `allow:${[...new Set(params.toolsAllow)].toSorted().join(",")}` : "",
       JSON.stringify(params.skillWorkshop?.proposalRevision ?? null),
+      JSON.stringify(params.trustedSessionHandoff ?? null),
       JSON.stringify(params.scheduledToolPolicy ?? null),
       params.nodeExecAllowed === true ? "node-exec" : "",
       params.execSession?.execHost ?? "",

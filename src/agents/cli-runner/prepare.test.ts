@@ -3345,6 +3345,60 @@ describe("prepareCliRunContext", () => {
     );
   });
 
+  it("materializes session handoff denies before selectable CLI execution", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    const resolveMcpLoopbackPolicyTools = vi.fn(() => ({
+      agentId: "main",
+      tools: [{ name: "write" }],
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    setCliRunnerPrepareTestDeps({ resolveMcpLoopbackPolicyTools });
+
+    const context = await fixture.prepare({
+      provider: "selectable-cli",
+      toolsAllow: ["write"],
+      trustedSessionHandoff: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["write"],
+          deny: ["apply_patch"],
+        },
+        requester: {},
+      },
+    });
+
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: ["write"] });
+    expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolsAllow: ["write"],
+        trustedSessionHandoff: {
+          inheritedToolPolicy: {
+            version: 1,
+            allow: ["write"],
+            deny: ["apply_patch"],
+          },
+          requester: {},
+        },
+      }),
+    );
+  });
+
   it("translates disableTools into an exact empty cap for selectable backends", async () => {
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
       ...context.baseArgs,

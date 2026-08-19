@@ -466,7 +466,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     trustedSessionHandoff: params.trustedSessionHandoff,
-    sessionHandoffRequester: params.sessionHandoffRequester,
     scheduledToolPolicy: params.scheduledToolPolicy,
     cronCreatorAuthorityCapability: params.cronCreatorAuthorityCapability,
     cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,

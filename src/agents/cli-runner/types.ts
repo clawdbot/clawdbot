@@ -24,7 +24,7 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
-import type { AgentRuntimeSessionHandoffRequester } from "../../gateway/agent-runtime-session-handoff.js";
+import type { AgentRuntimeSessionHandoffContext } from "../../gateway/agent-runtime-session-handoff.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -238,8 +238,7 @@ export type RunCliAgentParams = {
   /** Exact Skill Workshop proposal revision bound by the Gateway for this turn. */
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   /** Verified sessions_send authority carried into the Gateway-owned MCP grant. */
-  trustedSessionHandoff?: boolean;
-  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
+  trustedSessionHandoff?: AgentRuntimeSessionHandoffContext;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Server-authored origin for fresh automation mutations from this CLI run. */

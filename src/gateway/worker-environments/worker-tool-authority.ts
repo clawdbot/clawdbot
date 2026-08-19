@@ -68,7 +68,6 @@ function resolveWorkerCapabilityProfile(params: {
     inputProvenance: turn.inputProvenance,
     trustedInternalHandoff: turn.trustedInternalHandoff,
     trustedSessionHandoff: turn.trustedSessionHandoff,
-    sessionHandoffRequester: turn.sessionHandoffRequester,
     scheduledToolPolicy: turn.scheduledToolPolicy,
   });
 }

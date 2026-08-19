@@ -262,6 +262,29 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 
+  it("does not share cache rows across session handoff policies or requesters", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+    const handoff = (senderId: string, deny = ["exec"]) => ({
+      trustedSessionHandoff: {
+        inheritedToolPolicy: { version: 1 as const, allow: ["write"], deny },
+        requester: { senderId },
+      },
+    });
+
+    cache.resolve(scopeParams({ cfg, ...handoff("a") }));
+    cache.resolve(scopeParams({ cfg, ...handoff("b") }));
+    cache.resolve(
+      scopeParams({
+        cfg,
+        ...handoff("a", ["apply_patch"]),
+      }),
+    );
+    cache.resolve(scopeParams({ cfg, ...handoff("a") }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
+  });
+
   it("does not share loopback tools across prepared vision capabilities", () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;

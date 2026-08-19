@@ -1022,7 +1022,6 @@ export function runAgentAttempt(params: {
               params.opts.toolsAllowIsDefault,
             ),
             trustedSessionHandoff: params.opts.trustedSessionHandoff,
-            sessionHandoffRequester: params.opts.sessionHandoffRequester,
             scheduledToolPolicy: params.opts.scheduledToolPolicy,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
@@ -1214,7 +1213,6 @@ export function runAgentAttempt(params: {
       ? params.opts.trustedInternalHandoff
       : undefined,
     trustedSessionHandoff: params.opts.trustedSessionHandoff,
-    sessionHandoffRequester: params.opts.sessionHandoffRequester,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     internalEvents: params.opts.internalEvents,

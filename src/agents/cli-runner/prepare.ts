@@ -114,6 +114,7 @@ import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
+import { isToolAllowedByPolicyName } from "../tool-policy-match.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
@@ -512,10 +513,13 @@ export async function prepareCliRunContext(
         expandToolGroups(params.toolsAllow)
           .map((toolName) => normalizeToolPolicyName(toolName))
           .filter(Boolean),
+      ).filter((toolName) =>
+        isToolAllowedByPolicyName(toolName, params.trustedSessionHandoff?.inheritedToolPolicy),
       );
       if (
         fallbackOpenClawTools.includes("write") &&
-        !fallbackOpenClawTools.includes("apply_patch")
+        !fallbackOpenClawTools.includes("apply_patch") &&
+        isToolAllowedByPolicyName("apply_patch", params.trustedSessionHandoff?.inheritedToolPolicy)
       ) {
         fallbackOpenClawTools.push("apply_patch");
       }

@@ -17,7 +17,7 @@ import type { SessionEntry, SessionToolOverrides } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
-import type { AgentRuntimeSessionHandoffRequester } from "../../../gateway/agent-runtime-session-handoff.js";
+import type { AgentRuntimeSessionHandoffContext } from "../../../gateway/agent-runtime-session-handoff.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -289,8 +289,7 @@ export type RunEmbeddedAgentParams = {
   /** Consumed in-process subagent-completion capability; never derived from public input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Consumed one-shot sessions_send authority carried outside public params. */
-  trustedSessionHandoff?: boolean;
-  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
+  trustedSessionHandoff?: AgentRuntimeSessionHandoffContext;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */

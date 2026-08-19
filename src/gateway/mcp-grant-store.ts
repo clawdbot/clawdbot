@@ -16,7 +16,7 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
-import type { AgentRuntimeSessionHandoffRequester } from "./agent-runtime-session-handoff.js";
+import type { AgentRuntimeSessionHandoffContext } from "./agent-runtime-session-handoff.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
@@ -61,8 +61,7 @@ export type McpLoopbackRequestContext = {
     openClaw: string[];
   };
   /** Host-stamped sessions_send authority; never accepted from MCP request fields. */
-  trustedSessionHandoff?: boolean;
-  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
+  trustedSessionHandoff?: AgentRuntimeSessionHandoffContext;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Host-owned creator origin; child MCP request fields cannot widen it. */
   cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;

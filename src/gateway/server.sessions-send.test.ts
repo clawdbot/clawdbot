@@ -217,8 +217,8 @@ describe("sessions_send gateway loopback", () => {
           sessionsSendHandoff: {
             inheritedToolPolicy: {
               version: 1,
-              allow: ["sessions_send", "session_status"],
-              deny: ["message"],
+              allow: ["sessions_send", "session_status", "write"],
+              deny: ["message", "apply_patch"],
             },
             requester: { messageProvider: "discord", senderId: "speaker-1" },
           },
@@ -245,16 +245,23 @@ describe("sessions_send gateway loopback", () => {
               opts as {
                 sessionKey?: string;
                 toolsAllow?: string[];
-                trustedSessionHandoff?: boolean;
-                sessionHandoffRequester?: { senderId?: string };
+                trustedSessionHandoff?: {
+                  inheritedToolPolicy: { allow: string[]; deny: string[] };
+                  requester: { senderId?: string };
+                };
                 disableMessageTool?: boolean;
               },
           )
           .find((call) => call.sessionKey === targetSessionKey);
         expect(targetCall).toMatchObject({
-          toolsAllow: ["sessions_send", "session_status"],
-          trustedSessionHandoff: true,
-          sessionHandoffRequester: { senderId: "speaker-1" },
+          toolsAllow: ["sessions_send", "session_status", "write"],
+          trustedSessionHandoff: {
+            inheritedToolPolicy: {
+              allow: ["sessions_send", "session_status", "write"],
+              deny: ["message", "apply_patch"],
+            },
+            requester: { senderId: "speaker-1" },
+          },
           disableMessageTool: true,
         });
       } finally {

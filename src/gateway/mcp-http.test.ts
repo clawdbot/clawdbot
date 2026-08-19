@@ -1251,10 +1251,16 @@ describe("mcp loopback server", () => {
       sourceReplyOnly: true,
       toolsAllow: ["message"],
       cliToolAvailability: { native: ["Read", "Bash"], openClaw: ["message"] },
-      trustedSessionHandoff: true,
-      sessionHandoffRequester: {
-        messageProvider: "discord",
-        senderId: "bound-sender",
+      trustedSessionHandoff: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["message"],
+          deny: [],
+        },
+        requester: {
+          messageProvider: "discord",
+          senderId: "bound-sender",
+        },
       },
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,

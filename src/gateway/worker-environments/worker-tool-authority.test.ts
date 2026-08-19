@@ -158,10 +158,16 @@ describe("resolveWorkerToolAuthority", () => {
           sourceSessionKey: "agent:main:whatsapp:direct:guest",
           sourceTool: "sessions_send",
         },
-        trustedSessionHandoff: true,
-        sessionHandoffRequester: {
-          messageProvider: "whatsapp",
-          senderId: "guest",
+        trustedSessionHandoff: {
+          inheritedToolPolicy: {
+            version: 1,
+            allow: ["read", "write"],
+            deny: [],
+          },
+          requester: {
+            messageProvider: "whatsapp",
+            senderId: "guest",
+          },
         },
       }),
     ).toEqual(["read"]);

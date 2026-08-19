@@ -154,9 +154,17 @@ export function buildCliMcpGrantContext(params: {
           },
         }
       : {}),
-    ...(params.run.trustedSessionHandoff ? { trustedSessionHandoff: true } : {}),
-    ...(params.run.trustedSessionHandoff && params.run.sessionHandoffRequester
-      ? { sessionHandoffRequester: { ...params.run.sessionHandoffRequester } }
+    ...(params.run.trustedSessionHandoff
+      ? {
+          trustedSessionHandoff: {
+            requester: { ...params.run.trustedSessionHandoff.requester },
+            inheritedToolPolicy: {
+              version: 1,
+              allow: [...params.run.trustedSessionHandoff.inheritedToolPolicy.allow],
+              deny: [...params.run.trustedSessionHandoff.inheritedToolPolicy.deny],
+            },
+          },
+        }
       : {}),
     ...(params.run.scheduledToolPolicy
       ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
