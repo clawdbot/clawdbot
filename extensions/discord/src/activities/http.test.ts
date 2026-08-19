@@ -244,6 +244,16 @@ function createWidgetFixture(
 }
 
 describe("Discord Activity HTTP OAuth", () => {
+  it("leaves the public prefix externally absent while Activities are disabled", async () => {
+    const base = await startServer(
+      createActivityTestRuntime({ channels: { discord: { token: "testtok" } } }),
+    );
+
+    const response = await fetch(`${base}/discord/activity/`);
+    await expect(response.text()).resolves.toBe("not found");
+    expect(response.status).toBe(404);
+  });
+
   it("terminates stalled token request bodies within the read timeout", async () => {
     const base = await startServer(createActivityTestRuntime(), { bodyTimeoutMs: 25 });
 

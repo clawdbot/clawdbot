@@ -39,13 +39,17 @@ describe("Canvas widget presenter", () => {
 
     await expect(
       presenter.present({
-        documentUrlPath: "/__openclaw__/canvas/documents/cv_1/index.html",
+        document: {
+          kind: "html",
+          html: "<p>Status</p>",
+          hostedUrl: "/__openclaw__/canvas/documents/cv_1/index.html",
+        },
         title: "Status",
-        sessionContext: { sessionKey: "agent:main:status" },
+        context: { sessionKey: "agent:main:status" },
       }),
     ).resolves.toEqual({
       ok: true,
-      value: { nodeId: "mac-local", nodeName: "Studio" },
+      value: { kind: "node", nodeId: "mac-local", nodeName: "Studio" },
     });
     expect(runtime.invoke).toHaveBeenNthCalledWith(
       1,
@@ -90,9 +94,13 @@ describe("Canvas widget presenter", () => {
     const presenter = createCanvasWidgetPresenter(runtime);
     await expect(
       presenter.present({
-        documentUrlPath: "/__openclaw__/canvas/documents/cv_2/index.html",
+        document: {
+          kind: "html",
+          html: "<p>Status</p>",
+          hostedUrl: "/__openclaw__/canvas/documents/cv_2/index.html",
+        },
         title: "Status",
-        sessionContext: {},
+        context: {},
       }),
     ).resolves.toEqual({
       ok: false,
@@ -127,9 +135,9 @@ describe("Canvas widget presenter", () => {
     });
 
     const result = await createCanvasWidgetPresenter(runtime).present({
-      documentUrlPath,
+      document: { kind: "html", html: "<p>Status</p>", hostedUrl: documentUrlPath },
       title: "Status",
-      sessionContext: {},
+      context: {},
     });
 
     expect(result).toEqual({
@@ -160,9 +168,13 @@ describe("Canvas widget presenter", () => {
     });
     await expect(
       presenter.present({
-        documentUrlPath: "/__openclaw__/canvas/documents/cv_linux/index.html",
+        document: {
+          kind: "html",
+          html: "<p>Status</p>",
+          hostedUrl: "/__openclaw__/canvas/documents/cv_linux/index.html",
+        },
         title: "Status",
-        sessionContext: {},
+        context: {},
       }),
     ).resolves.toMatchObject({
       ok: false,

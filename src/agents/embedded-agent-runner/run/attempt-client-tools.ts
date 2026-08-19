@@ -176,6 +176,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
   return {
     allCustomTools,
     builtinToolNames,
+    coreBuiltinToolNames,
     clientToolCallSlots,
     clientToolDefs,
     clientToolLoopDetection,
