@@ -207,22 +207,22 @@ suite.define(() => {
             const app = document.querySelector("openclaw-app") as HTMLElement & {
               runtime?: {
                 context: {
-                  cloudStartup: {
+                  placementStartup: {
                     get: (sessionKey: string) => { error?: string; phase: string } | null;
                     subscribe: (listener: () => void) => () => void;
                   };
                 };
               };
             };
-            const cloudStartup = app.runtime?.context.cloudStartup;
-            if (!cloudStartup) {
-              reject(new Error("cloud startup runtime unavailable"));
+            const placementStartup = app.runtime?.context.placementStartup;
+            if (!placementStartup) {
+              reject(new Error("session placement startup unavailable"));
               return;
             }
             let settled = false;
             const subscription: { stop?: () => void } = {};
             const resolveFailed = () => {
-              const status = cloudStartup.get(key);
+              const status = placementStartup.get(key);
               if (settled || status?.phase !== "failed") {
                 return;
               }
@@ -230,7 +230,7 @@ suite.define(() => {
               subscription.stop?.();
               resolve(status.error ?? "");
             };
-            subscription.stop = cloudStartup.subscribe(resolveFailed);
+            subscription.stop = placementStartup.subscribe(resolveFailed);
             if (settled) {
               subscription.stop();
             } else {
