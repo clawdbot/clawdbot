@@ -25,6 +25,22 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
     },
   );
 
+  it("does not fetch an assistant message that merely contains the sentinel text", () => {
+    // The in-band "...(truncated)..." is ordinary Markdown to the UI; without the
+    // Gateway's structural marker it is not evidence of a display cap.
+    const details = resolveMessageActionDetails({
+      message: {
+        role: "assistant",
+        content: "Quoting a log line:\n...(truncated)...\nand continuing normally.",
+        __openclaw: { id: "msg-3" },
+      },
+      messageId: "msg-3",
+      canFetchFullMessage: true,
+      senderLabel: "assistant",
+    });
+    expect(details?.shouldFetchFullMessage).toBe(false);
+  });
+
   it("does not fetch an untruncated assistant message", () => {
     const details = resolveMessageActionDetails({
       message: { role: "assistant", content: "Complete.", __openclaw: { id: "msg-2" } },

@@ -129,15 +129,16 @@ export function resolveMessageActionDetails(params: {
   const normalizedMessage = normalizeMessage(message);
   const role = normalizeRoleForGrouping(normalizedMessage.role);
   const previewMarkdown = resolveMessageReplyText(message);
-  // Loaded text must not erase the preview's truncation fact or collapse its disclosure.
-  // Assistant-only: the full-message expander renders loaded content for assistant
-  // rows alone, so a capped user row must not trigger a fetch it never displays.
+  // The Gateway records every display-cap truncation as __openclaw.truncated, so
+  // that marker is the whole contract: sniffing the in-band sentinel would fetch
+  // for any reply that merely contains the text. Assistant-only because the
+  // expander renders loaded content for assistant rows alone.
   const shouldFetchFullMessage = Boolean(
     role === "assistant" &&
     canFetchFullMessage &&
     messageId &&
     !record.openclawMessageToolMirror &&
-    (transcriptMeta?.truncated === true || previewMarkdown.includes("\n...(truncated)...")),
+    transcriptMeta?.truncated === true,
   );
   const expansion =
     role === "assistant" && shouldFetchFullMessage && messageId
