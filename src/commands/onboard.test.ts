@@ -959,6 +959,7 @@ describe("setupWizardCommand", () => {
   });
 
   it.each([
+    ["--agent-name", { agentName: "robby" }],
     ["--tui", { tui: true }],
     ["--skip-ui", { skipUi: true }],
   ])("keeps %s on guided onboarding", async (_label, opts) => {
