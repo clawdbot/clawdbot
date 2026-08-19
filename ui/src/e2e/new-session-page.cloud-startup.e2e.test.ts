@@ -240,6 +240,7 @@ suite.define(() => {
         sessionKey,
       );
       expect(startupError).toContain("send outcome unknown");
+      await waitForCommittedChatRoute(page);
       const startupErrorAlert = page.locator(".chat-cloud-startup-error");
       await startupErrorAlert.waitFor({ state: "visible" });
       expect(await startupErrorAlert.textContent()).toContain("send outcome unknown");
