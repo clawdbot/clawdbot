@@ -317,11 +317,11 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin ships Codex app-server `0.147.0` and accepts external versions through
-`0.148.0-alpha.15`. Versions outside that tested range and malformed or
-unversioned handshakes are rejected. Build metadata does not affect SemVer
-precedence. The same range applies to explicit custom executables, remote
-app-servers, and macOS desktop binaries; admission is not readiness proof.
+The plugin ships Codex app-server `0.147.0` and accepts external versions at or
+above that minimum. Older, malformed, and unversioned handshakes are rejected.
+Build metadata does not affect SemVer precedence. The same minimum applies to
+explicit custom executables, remote app-servers, and macOS desktop binaries;
+admission is not readiness proof.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an

@@ -9,11 +9,7 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { createClientHarness } from "./test-support.js";
-import {
-  CODEX_APP_SERVER_VERSION,
-  MAX_SUPPORTED_CODEX_APP_SERVER_VERSION,
-  MIN_SUPPORTED_CODEX_APP_SERVER_VERSION,
-} from "./version.js";
+import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const mocks = vi.hoisted(() => ({
   bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
@@ -283,7 +279,7 @@ describe("shared Codex app-server client", () => {
     await sendInitializeResult(harness, "openclaw/0.117.9 (macOS; test)");
 
     await expect(listPromise).rejects.toThrow(
-      `A Codex app-server from ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} through ${MAX_SUPPORTED_CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required`,
     );
     expect(harness.process.stdin.destroyed).toBe(true);
     startSpy.mockRestore();
@@ -518,7 +514,7 @@ describe("shared Codex app-server client", () => {
     const startOptions = configureManagedDesktopFallback();
 
     const acquire = getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
-    await sendInitializeResult(desktop, "openclaw/0.148.0-alpha.9 (macOS; test)");
+    await sendInitializeResult(desktop, "openclaw/0.148.0-alpha.23 (macOS; test)");
     const client = await acquire;
 
     expect(client).toBe(desktop.client);
@@ -532,7 +528,7 @@ describe("shared Codex app-server client", () => {
     expect(mocks.embeddedAgentLog.warn).toHaveBeenCalledWith(
       "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
       {
-        detectedVersion: "0.148.0-alpha.9",
+        detectedVersion: "0.148.0-alpha.23",
         validatedVersion: CODEX_APP_SERVER_VERSION,
       },
     );

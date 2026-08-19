@@ -31,11 +31,7 @@ import {
   closeCodexAppServerTransportAndWait,
   type CodexAppServerTransport,
 } from "./transport.js";
-import {
-  CODEX_APP_SERVER_VERSION,
-  MAX_SUPPORTED_CODEX_APP_SERVER_VERSION,
-  MIN_SUPPORTED_CODEX_APP_SERVER_VERSION,
-} from "./version.js";
+import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 8 * 1024 * 1024;
@@ -1004,7 +1000,7 @@ class CodexAppServerVersionError extends Error {
       ? `detected ${detectedVersion}`
       : "OpenClaw could not determine the running Codex version";
     super(
-      `A Codex app-server from ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} through ${MAX_SUPPORTED_CODEX_APP_SERVER_VERSION} is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
+      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
     this.name = "CodexAppServerVersionError";
     this.detectedVersion = detectedVersion;
@@ -1017,11 +1013,7 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
     throw new CodexAppServerVersionError(detectedVersion);
   }
   const detected = parseSemver(detectedVersion);
-  if (
-    !detected ||
-    detected.compare(MIN_SUPPORTED_CODEX_APP_SERVER_VERSION) < 0 ||
-    detected.compare(MAX_SUPPORTED_CODEX_APP_SERVER_VERSION) > 0
-  ) {
+  if (!detected || detected.compare(MIN_SUPPORTED_CODEX_APP_SERVER_VERSION) < 0) {
     throw new CodexAppServerVersionError(detectedVersion);
   }
   if (detected.compare(CODEX_APP_SERVER_VERSION) > 0) {

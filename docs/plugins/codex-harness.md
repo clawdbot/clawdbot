@@ -89,12 +89,12 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.147.0` through `0.148.0-alpha.15`. The plugin still ships and manages the
+- Codex app-server `0.147.0` or newer. The plugin still ships and manages the
   exact `@openai/codex` `0.147.0` artifact, so a `codex` command on `PATH` does
   not affect normal startup. Explicit custom, remote, and macOS desktop-owned
-  app-servers must report valid SemVer inside that tested external range.
-  Versions above the managed artifact initialize with a warning; acceptance
-  permits an attempt and is not readiness or capability proof.
+  app-servers must report valid SemVer at or above that managed baseline.
+  Newer versions initialize with a warning; acceptance permits an attempt and
+  is not readiness or capability proof.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -1355,11 +1355,10 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use Codex `0.147.0` through
-`0.148.0-alpha.15`. OpenClaw rejects versions outside that tested range, plus
-malformed and unversioned servers. Same-version prereleases such as
+**The app-server is rejected:** use Codex `0.147.0` or newer. OpenClaw rejects
+older, malformed, and unversioned servers. Same-version prereleases such as
 `0.147.0-alpha.2` remain below the stable minimum; build metadata such as
-`0.147.0+desktop` does not affect precedence. An accepted external version is
+`0.147.0+desktop` does not affect precedence. A newer external version is
 permitted to initialize rather than treated as proof of compatibility, so
 startup and capability operations can still fail with their normal diagnostics.
 
