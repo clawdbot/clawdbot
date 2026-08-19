@@ -30,6 +30,7 @@ import type {
 } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
@@ -211,6 +212,7 @@ type GatewaySystemAgentSession = {
 /** Kernel-owned services and state that can be constructed without binding sockets. */
 type GatewayKernelContext = {
   deps: CliDeps;
+  configRevisionProjector: GatewayConfigRevisionProjector;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;

@@ -30,6 +30,8 @@ const MCP_OAUTH_PENDING_SCHEMA_END = "\n) STRICT;";
 const DEVICE_PAIRING_JOIN_CODE_SCHEMA_START =
   "CREATE TABLE IF NOT EXISTS device_pairing_join_codes (";
 const DEVICE_PAIRING_JOIN_CODE_SCHEMA_END = "\n) STRICT;";
+const CONFIG_REVISION_KEY_SCHEMA_START = "CREATE TABLE IF NOT EXISTS config_revision_keys (";
+const CONFIG_REVISION_KEY_SCHEMA_END = "\n) STRICT;";
 
 function secretStoreSchemaSql(): string {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
@@ -75,6 +77,18 @@ export function ensureDevicePairingJoinCodeSchema(database: DatabaseSync): void 
       endMarkerStart + DEVICE_PAIRING_JOIN_CODE_SCHEMA_END.length,
     ),
   ); // sqlite-allow-raw -- Canonical additive DDL only.
+}
+
+/** Lazily installs the Gateway's installation-local config revision key owner. */
+export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(CONFIG_REVISION_KEY_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(CONFIG_REVISION_KEY_SCHEMA_END, start);
+  if (start < 0 || endMarkerStart < start) {
+    throw new Error("OpenClaw config revision key schema marker is missing.");
+  }
+  database.exec(
+    OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + CONFIG_REVISION_KEY_SCHEMA_END.length),
+  ); // sqlite-allow-raw -- Canonical additive DDL only; key rows use Kysely.
 }
 
 export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {

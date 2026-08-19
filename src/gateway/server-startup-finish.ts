@@ -356,6 +356,7 @@ export async function finishGatewayStartup(params: {
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
   const configReloaderParams: Parameters<typeof startManagedGatewayConfigReloader>[0] = {
+    configRevisionProjector: gatewayRequestContext.configRevisionProjector,
     minimalTestGateway,
     initialConfig: cfgAtStart,
     initialCompareConfig: startupLastGoodSnapshot.sourceConfig,

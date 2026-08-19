@@ -258,6 +258,11 @@ CREATE TABLE IF NOT EXISTS audit_identity_keys (
   created_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS config_revision_keys (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  hmac_key BLOB NOT NULL CHECK (length(hmac_key) = 32)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS execution_identity_contexts (
   context_id TEXT NOT NULL PRIMARY KEY CHECK (length(context_id) BETWEEN 1 AND 256),
   execution_id TEXT NOT NULL UNIQUE CHECK (length(execution_id) BETWEEN 1 AND 256),

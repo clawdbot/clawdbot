@@ -207,6 +207,10 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     commitTerminalConfig: vi.fn(),
     acceptTerminalConfig: vi.fn(),
     ...params,
+    configRevisionProjector: params.configRevisionProjector ?? {
+      projectRawHash: (hash) => hash,
+      projectResolvedHash: (hash) => hash,
+    },
     initialSnapshotRawHash: params.initialSnapshotRawHash ?? null,
     initialAuthoredConfig: params.initialAuthoredConfig ?? {},
     initialSnapshotValid: params.initialSnapshotValid ?? true,
