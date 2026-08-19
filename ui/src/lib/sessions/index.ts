@@ -507,7 +507,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     deleteMany: mutations.deleteMany,
     reset: mutations.reset,
     compact: operations.compact,
-    steer: operations.steer,
     listFiles: operations.listFiles,
     getFile: operations.getFile,
     setFile: operations.setFile,

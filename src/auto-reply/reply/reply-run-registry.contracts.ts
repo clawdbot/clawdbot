@@ -148,6 +148,11 @@ export type ReplyMessageInjectionTarget = {
   readonly runId?: string;
 };
 
+export const replyRunInterruptTargetOperation = Symbol("replyRunInterruptTargetOperation");
+export type ReplyRunInterruptTarget = {
+  readonly [replyRunInterruptTargetOperation]: ReplyOperation;
+};
+
 type ReplyMessageInjectionRejectionReason =
   | "no_active_run"
   | "not_running"
@@ -323,6 +328,8 @@ export type ReplyRunRegistry = {
   isActive(sessionKey: string): boolean;
   /** Captures the current direct owner without requiring client-supplied run identity. */
   resolveCurrentMessageInjectionTarget(sessionKey: string): ReplyMessageInjectionTarget | undefined;
+  /** Captures the current direct owner for exact-instance interruption. */
+  resolveCurrentInterruptTarget(sessionKey: string): ReplyRunInterruptTarget | undefined;
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,

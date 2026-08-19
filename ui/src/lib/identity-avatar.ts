@@ -13,7 +13,7 @@ export type IdentityAvatarInput = SenderIdentity & {
 const ORIGIN_PROBE = "https://origin-probe.invalid";
 
 let appGatewayOrigin: string | null = null;
-let appGatewayBasePath = "";
+let appGatewayResourceBasePath = "";
 let appGatewayAuthHeader: string | null = null;
 
 const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
@@ -75,22 +75,22 @@ function toHttpOrigin(url: string | null | undefined): string | null {
 export function setAvatarGatewayOrigin(
   gatewayUrl: string | null | undefined,
   authHeader: string | null = null,
-  controlUiBasePath = "",
+  resourceBasePath = "",
 ): void {
   const nextOrigin = toHttpOrigin(gatewayUrl);
   const documentOrigin = globalThis.location?.origin;
-  const nextBasePath =
-    nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(controlUiBasePath) : "";
+  const nextResourceBasePath =
+    nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(resourceBasePath) : "";
   const nextAuthHeader = authHeader?.trim() || null;
   if (
     appGatewayOrigin !== nextOrigin ||
-    appGatewayBasePath !== nextBasePath ||
+    appGatewayResourceBasePath !== nextResourceBasePath ||
     appGatewayAuthHeader !== nextAuthHeader
   ) {
     clearIdentityAvatarCache();
   }
   appGatewayOrigin = nextOrigin;
-  appGatewayBasePath = nextBasePath;
+  appGatewayResourceBasePath = nextResourceBasePath;
   appGatewayAuthHeader = nextAuthHeader;
 }
 
@@ -112,13 +112,13 @@ function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string
     const relativeRoute = parsed.origin === ORIGIN_PROBE;
     const canonicalPathname = relativeRoute
       ? parsed.pathname
-      : appGatewayBasePath && parsed.pathname.startsWith(`${appGatewayBasePath}/`)
-        ? parsed.pathname.slice(appGatewayBasePath.length)
+      : appGatewayResourceBasePath && parsed.pathname.startsWith(`${appGatewayResourceBasePath}/`)
+        ? parsed.pathname.slice(appGatewayResourceBasePath.length)
         : parsed.pathname;
     if (!USER_AVATAR_PATHNAME.test(canonicalPathname)) {
       return null;
     }
-    const suffix = `${appGatewayBasePath}${canonicalPathname}${parsed.search}`;
+    const suffix = `${appGatewayResourceBasePath}${canonicalPathname}${parsed.search}`;
     if (relativeRoute) {
       return gatewayOrigin ? new URL(suffix, gatewayOrigin).toString() : suffix;
     }

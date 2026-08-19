@@ -107,7 +107,7 @@ export function sidebarPanelDefinitions(
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
           .presented=${params?.browserPresented ?? false}
-          .basePath=${state.basePath}
+          .resourceBasePath=${state.resourceBasePath}
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`
       : null;

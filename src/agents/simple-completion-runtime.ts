@@ -156,11 +156,14 @@ function resolveSimpleCompletionSelectionRequest(
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
     manifestPlugins: params.manifestPlugins,
   });
   const resolved = split
     ? resolveModelRefFromString({
+        cfg: params.cfg,
+        agentId: params.agentId,
         raw: split.model,
         defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
         aliasIndex,

@@ -118,7 +118,7 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   override render() {
     const store = this.store;
-    const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.basePath);
+    const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.resourceBasePath);
     if (store.setupRequired) {
       const unavailable = store.setupIssue === "unavailable";
       return html`

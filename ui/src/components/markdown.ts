@@ -2,7 +2,7 @@
 import DOMPurify from "dompurify";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
-import { resolveControlUiBasePath } from "../app/browser.ts";
+import { resolveControlUiPaths } from "../app/browser.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
 import { renderAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
@@ -369,7 +369,7 @@ function currentControlUiBasePath(): string {
   if (typeof window === "undefined") {
     return "";
   }
-  return resolveControlUiBasePath(window.location.pathname);
+  return resolveControlUiPaths(window.location.pathname)[0];
 }
 
 function pathSegments(pathname: string): string[] {

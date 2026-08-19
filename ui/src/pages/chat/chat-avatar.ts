@@ -35,7 +35,7 @@ export function renderChatAvatar(
   role: string,
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
   user?: { name?: string | null; avatar?: string | null },
-  basePath?: string,
+  resourceBasePath?: string,
   authToken?: string | null,
   sender?: SenderIdentity | null,
 ) {
@@ -48,7 +48,7 @@ export function renderChatAvatar(
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
-  const assistantFallbackAvatar = assistantAvatarFallbackUrl(basePath ?? "");
+  const assistantFallbackAvatar = assistantAvatarFallbackUrl(resourceBasePath ?? "");
   const userName = resolveLocalUserName(user);
   const userAvatarUrl = resolveLocalUserAvatarUrl(user);
   const userAvatarText = resolveLocalUserAvatarText(user);
@@ -189,7 +189,7 @@ function isAvatarUrl(value: string): boolean {
 type ChatAvatarHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
-  basePath: string;
+  resourceBasePath: string;
   chatAvatarReason?: string | null;
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -271,8 +271,8 @@ function shouldApplyChatAvatarResult(
   );
 }
 
-function buildAvatarMetaUrl(basePath: string, agentId: string): string {
-  const base = normalizeBasePath(basePath);
+function buildAvatarMetaUrl(resourceBasePath: string, agentId: string): string {
+  const base = normalizeBasePath(resourceBasePath);
   const encoded = encodeURIComponent(agentId);
   return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
 }
@@ -445,7 +445,7 @@ async function fetchChatAvatarSnapshot(
 ): Promise<ChatAvatarSnapshot | null> {
   const authHeader = resolveControlUiAuthHeader(host);
   const headers = buildControlUiAuthHeaders(authHeader);
-  const url = buildAvatarMetaUrl(host.basePath, agentId);
+  const url = buildAvatarMetaUrl(host.resourceBasePath, agentId);
   const metaController = new AbortController();
   const metaTimeout = scheduleChatAvatarFetchTimeout(metaController, "chat avatar metadata fetch");
   let data: {

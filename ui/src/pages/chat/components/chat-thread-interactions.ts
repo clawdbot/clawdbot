@@ -92,6 +92,7 @@ export type ChatThreadProps = {
   userName?: string | null;
   userAvatar?: string | null;
   basePath?: string;
+  resourceBasePath?: string;
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
   localMediaPreviewRoots?: string[];

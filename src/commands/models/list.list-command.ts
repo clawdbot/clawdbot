@@ -107,7 +107,7 @@ export async function modelsListCommand(
   const providerFilter = parsedProviderFilter
     ? providerAliasCanonicalizer.provider(parsedProviderFilter)
     : undefined;
-  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot, agentId);
   if (providerFilter) {
     const knownProviderIds = new Set(
       [

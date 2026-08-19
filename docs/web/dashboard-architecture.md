@@ -55,9 +55,11 @@ Principles:
 
 ## UX flows
 
-- **Graduation:** agent calls `show_widget` in any chat → widget renders inline
-  in the transcript exactly as today → hover shows **Pin to dashboard** → widget
-  appears on the session's board. The agent can pass `pin: true` to do the same.
+- **Graduation:** agent calls `show_widget` from an inline-capable chat → widget
+  renders in the transcript → hover shows **Pin to dashboard** → widget appears
+  on the session's board. The agent can pass `pin: true` to do the same. A
+  channel presenter can instead make the same core document visible on the
+  current transport.
 - **Board view:** a session with a board gets a view switch (Chat / Split /
   Dashboard). Split = tab strip (only when >1 tab) + fluid grid + docked chat
   pane; Dashboard is the same without the chat. The chat dock is resizable and
@@ -335,11 +337,11 @@ Widget bytes are served over the authenticated HTTP surface, not the socket.
 
 ## Agent tools
 
-Three tools total (core, always registered; rendering gated on the
-`inline-widgets` client cap as today):
+Three tools total (core; `show_widget` is exposed only for an `inline-widgets`
+client or one unambiguous matching current-channel presenter):
 
 - `show_widget { title, widget_code, kind?, name?, pin?, size?, tab?, after?,
-capabilities? }` — create/update by name; `kind` defaults to `html` and its enum
+presentation?, capabilities? }` — create/update by name; `kind` defaults to `html` and its enum
   includes active registered kinds; `pin` places it on the board.
   Without `name`/`pin` it behaves exactly like today (inline, ephemeral).
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
@@ -363,7 +365,8 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
   (`src/canvas/`); the plugin keeps the node-canvas control tool (`canvas`) and
   A2UI. The `pluginSurfaceUrls["canvas"]` advertisement and
   `/__openclaw__/canvas` paths are shipped native-client contracts and stay
-  stable. Discord sessions keep the Discord-owned `show_widget` variant.
+  stable. Discord Activities register a contextual presenter behind core's
+  canonical `show_widget` tool.
 
 ## Non-goals (this program)
 

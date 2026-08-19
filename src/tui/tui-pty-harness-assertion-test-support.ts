@@ -415,20 +415,7 @@ async function assertTerminalAttackPrefixSanitized(
   );
 }
 
-function hasStatusFrame(
-  raw: string,
-  markers: string[],
-  status: RegExp,
-  dimensions: PtyTerminalDimensions,
-) {
-  return latestFrameHasRow(
-    raw,
-    dimensions,
-    (row) => markers.every((marker) => row.includes(marker)) && status.test(row),
-  );
-}
-
-export async function exerciseSelectorOutputSafety(
+async function exerciseSelectorOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -555,7 +542,7 @@ export async function exerciseNarrowTerminalRendering(
   }
 }
 
-export async function exerciseGatewayOutputSafety(
+async function exerciseGatewayOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -588,9 +575,14 @@ export async function exerciseGatewayOutputSafety(
     for (const attack of systemAttacks) {
       expect(raw).not.toContain(attack);
     }
-    expect(hasStatusFrame(fixture.run.output(), idlePayload.markers, /\| idle/u, fixture.run)).toBe(
-      true,
-    );
+    expect(
+      latestFrameHasRow(
+        fixture.run.output(),
+        fixture.run,
+        (row) =>
+          idlePayload.markers.every((marker) => row.includes(marker)) && /\| idle/u.test(row),
+      ),
+    ).toBe(true);
     await waitForSynchronizedFrameRows(
       fixture.run,
       (rows) =>
@@ -611,7 +603,7 @@ export async function exerciseGatewayOutputSafety(
   }
 }
 
-export async function exerciseMarkdownAndAutocompleteOutputSafety(
+async function exerciseMarkdownAndAutocompleteOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -667,7 +659,7 @@ export async function exerciseMarkdownAndAutocompleteOutputSafety(
   }
 }
 
-export async function exerciseInteractiveOutputSafety(
+async function exerciseInteractiveOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
 ) {
@@ -703,6 +695,18 @@ export async function exerciseInteractiveOutputSafety(
   } finally {
     await fixture.cleanup();
   }
+}
+
+export async function exerciseTerminalOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  await Promise.all([
+    exerciseGatewayOutputSafety(startFixture, startupTimeoutMs),
+    exerciseInteractiveOutputSafety(startFixture, startupTimeoutMs),
+    exerciseMarkdownAndAutocompleteOutputSafety(startFixture, startupTimeoutMs),
+    exerciseSelectorOutputSafety(startFixture, startupTimeoutMs),
+  ]);
 }
 
 /** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */

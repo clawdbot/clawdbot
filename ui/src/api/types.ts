@@ -702,6 +702,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   alias?: string;
+  tags?: string[];
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;

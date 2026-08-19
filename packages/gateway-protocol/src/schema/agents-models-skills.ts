@@ -42,6 +42,7 @@ export const ModelChoiceSchema = closedObject({
   name: NonEmptyString,
   provider: NonEmptyString,
   alias: Type.Optional(NonEmptyString),
+  tags: Type.Optional(Type.Array(NonEmptyString)),
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),

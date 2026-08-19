@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import { markReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
 
 const state = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -94,7 +95,6 @@ describe("executeFollowupTurn", () => {
   it("normalizes queued route facts into the canonical execution call", async () => {
     const turn = createTurn();
     const typing = createTypingController();
-    const onExecutionStarted = vi.fn();
     const onAgentRunStart = vi.fn();
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       params.opts?.onAgentRunStart?.("run-1");
@@ -109,7 +109,6 @@ describe("executeFollowupTurn", () => {
         defaultModel: "claude",
         opts: { onAgentRunStart },
       },
-      onExecutionStarted,
       onToolResult: vi.fn(async () => {}),
       onCompactionNoticePayload: vi.fn(async () => {}),
     });
@@ -135,7 +134,6 @@ describe("executeFollowupTurn", () => {
       SenderId: "user-1",
     });
     expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
-    expect(onExecutionStarted).toHaveBeenCalledOnce();
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1", undefined);
   });
 
@@ -985,6 +983,46 @@ describe("executeFollowupTurn", () => {
     releaseProgress();
     await expect(pending).rejects.toBe(failure);
     expect(order).toEqual(["progress"]);
+  });
+
+  it("normalizes a post-start execution failure after draining detached progress", async () => {
+    const failure = new Error("execution failed after start");
+    const onItemEvent = vi.fn(async () => {});
+    const fail = vi.fn();
+    const operation = {
+      abortSignal: new AbortController().signal,
+      fail,
+    } as unknown as AdmittedFollowupTurn["operation"];
+    const turn = createTurn({ operation });
+    turn.queued.originatingChatType = "direct";
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      void params.opts?.onItemEvent?.({ progressText: "working" });
+      markReplyOperationExecutionStarted(operation);
+      throw failure;
+    });
+    const pending = executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onItemEvent },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      execution: {
+        runId: "run-1",
+        outcome: {
+          kind: "rejected",
+          payload: { isError: true },
+        },
+      },
+    });
+    expect(onItemEvent).toHaveBeenCalledOnce();
+    expect(fail).toHaveBeenCalledWith("run_failed", failure);
   });
 
   it("waits for every pending task before propagating a drain failure", async () => {

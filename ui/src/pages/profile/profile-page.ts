@@ -20,7 +20,7 @@ import {
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
+import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderDocsLink,
@@ -37,9 +37,10 @@ import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/ava
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import "../../styles/profile.css";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
+import "../../styles/profile.css";
 import { renderIdentitySection } from "./identity-section.ts";
+import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
@@ -280,6 +281,7 @@ export class ProfilePage extends OpenClawLightDomElement {
         this.context.gateway.connection.gatewayUrl,
         result.profile.id,
         result.avatarRevision,
+        this.context.resourceBasePath,
       );
       const presenceAvatarChanged =
         this.selfUser?.id === result.profile.id && this.selfUser.avatarUrl !== selfAvatarUrlBefore;
@@ -388,6 +390,7 @@ export class ProfilePage extends OpenClawLightDomElement {
             this.context.gateway.connection.gatewayUrl,
             this.ownProfile.id,
             this.ownProfile.updatedAt,
+            this.context.resourceBasePath,
           );
     return renderIdentitySection({
       profile: this.ownProfile,

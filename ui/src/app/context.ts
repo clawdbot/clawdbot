@@ -84,6 +84,7 @@ export type ApplicationChatAttachmentHandoff = {
 
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
+  readonly resourceBasePath: string;
   readonly gateway: ApplicationGateway;
   readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;

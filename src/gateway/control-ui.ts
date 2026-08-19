@@ -673,9 +673,9 @@ async function serveResolvedIndexHtml(
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath);
-  const basePathAttribute = normalizedBasePath
-    ? ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`
-    : "";
+  // An empty base path is authoritative for Gateway resources even when the
+  // router infers a namespace. Always emit it so resources stay root-mounted.
+  const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`;
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
   const prepared = withBasePath.replace(
