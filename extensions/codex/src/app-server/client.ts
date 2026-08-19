@@ -1047,8 +1047,20 @@ class CodexAppServerVersionError extends Error {
 
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
-  if (detectedVersion !== CODEX_APP_SERVER_VERSION) {
+  // External app-servers may advance independently of OpenClaw's bundled runtime.
+  // Keep the reviewed stable release as a compatibility floor, not an exact pin.
+  if (
+    !detectedVersion ||
+    !/^\d+\.\d+\.\d+$/.test(detectedVersion) ||
+    detectedVersion.localeCompare(CODEX_APP_SERVER_VERSION, "en", { numeric: true }) < 0
+  ) {
     throw new CodexAppServerVersionError(detectedVersion);
+  }
+  if (detectedVersion !== CODEX_APP_SERVER_VERSION) {
+    embeddedAgentLog.warn(
+      "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
+      { detectedVersion, validatedVersion: CODEX_APP_SERVER_VERSION },
+    );
   }
   return detectedVersion;
 }

@@ -431,19 +431,19 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("blocks stable Codex app-server versions newer than generated schemas", async () => {
-    const newerVersion = "0.146.1";
-    const { harness, initializing, outbound } = startInitialize();
-    harness.send({
-      id: outbound.id,
-      result: { userAgent: `openclaw/${newerVersion} (macOS; test)` },
-    });
+  it.each(["0.146.1", "0.149.0"])(
+    "accepts newer stable Codex app-server version %s",
+    async (newerVersion) => {
+      const { harness, initializing, outbound } = startInitialize();
+      harness.send({
+        id: outbound.id,
+        result: { userAgent: `openclaw/${newerVersion} (macOS; test)` },
+      });
 
-    await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
-    );
-    expect(harness.writes).toHaveLength(1);
-  });
+      await expect(initializing).resolves.toBeUndefined();
+      expect(harness.writes).toHaveLength(2);
+    },
+  );
 
   it("blocks app-server initialize responses without a version", async () => {
     const { harness, initializing, outbound } = startInitialize();
