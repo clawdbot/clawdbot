@@ -34,6 +34,7 @@ export function resolveMatrixPollRootEventId(
 // unbounded O(votes) re-fetch inside the room's serial ingress queue.
 const POLL_RELATIONS_PAGE_LIMIT = 100;
 const POLL_RELATIONS_MAX_PAGES = 10;
+const POLL_RELATIONS_MAX_EVENTS = POLL_RELATIONS_PAGE_LIMIT * POLL_RELATIONS_MAX_PAGES;
 
 async function readAllPollRelations(
   client: MatrixClient,
@@ -48,7 +49,13 @@ async function readAllPollRelations(
       from: nextBatch,
       limit: POLL_RELATIONS_PAGE_LIMIT,
     });
-    relationEvents.push(...pageResult.events);
+    // `limit` is only a request hint — a faulty or malicious homeserver may
+    // return oversized pages, so enforce the hard event bound locally.
+    const remaining = POLL_RELATIONS_MAX_EVENTS - relationEvents.length;
+    relationEvents.push(...pageResult.events.slice(0, remaining));
+    if (relationEvents.length >= POLL_RELATIONS_MAX_EVENTS) {
+      break;
+    }
     const batch = pageResult.nextBatch ?? undefined;
     if (!batch || seenBatches.has(batch)) {
       break;

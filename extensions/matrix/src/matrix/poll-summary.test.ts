@@ -65,4 +65,26 @@ describe("fetchMatrixPollSnapshot relation pagination", () => {
     expect(calls).toHaveLength(10);
     expect(calls.every((call) => call.limit === 100)).toBe(true);
   });
+
+  it("hard-bounds collected events when a page exceeds the requested limit", async () => {
+    const oversizedPage = Array.from({ length: 5000 }, (_, index) => ({
+      event_id: `$vote${index}`,
+      type: "m.poll.response",
+      sender: `@user${index}:example.org`,
+      origin_server_ts: index,
+      content: {
+        "m.poll.response": { answers: ["yes"] },
+        "m.relates_to": { rel_type: "m.reference", event_id: "$poll1" },
+      },
+    }));
+    const { calls, client } = createFakeClient([{ events: oversizedPage, nextBatch: "tok-more" }]);
+
+    const snapshot = await fetchMatrixPollSnapshot(client, "room-1", POLL_START_EVENT);
+
+    expect(snapshot).not.toBeNull();
+    // The cap is already full after the first oversized page — no further requests.
+    expect(calls).toHaveLength(1);
+    // Only 1000 of the 5000 returned events are retained and counted.
+    expect(snapshot?.text).toContain("Total voters: 1000");
+  });
 });
