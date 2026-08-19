@@ -333,7 +333,7 @@ export function scanTopLevelChars(
 
   for (let i = 0; i < command.length; i += 1) {
     const char = command.charAt(i);
-    const previousWasUnquotedDollar = previousUnquotedDollar;
+    const previousWasUnquotedDollar: boolean = previousUnquotedDollar;
     previousUnquotedDollar = false;
 
     if (escaped) {
@@ -532,7 +532,7 @@ const SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE = new RegExp(
 /** Returns whether unquoted shell syntax contains a compound-command introducer. */
 export function hasShellCompoundCommand(command: string): boolean {
   // Keep quoted and escaped fragments token-occupying so `"x"select` cannot become `select`.
-  const syntaxChars = new Array<string>(command.length).fill("\0");
+  const syntaxChars = Array.from({ length: command.length }, () => "\0");
   scanTopLevelChars(command, (char, index) => {
     syntaxChars[index] = char;
     return true;
