@@ -4,6 +4,8 @@ import {
   drainSessionStoreWriterQueuesForTest,
 } from "../config/sessions/store-writer-state.js";
 import { drainFileLockStateForTest } from "../infra/file-lock.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 let fileLockDrainerForTests: typeof drainFileLockStateForTest | null = null;
 let sessionStoreWriterQueueDrainerForTests: typeof drainSessionStoreWriterQueuesForTest | null =
@@ -29,6 +31,10 @@ export function resetSessionStateCleanupRuntimeForTests(): void {
 
 export async function cleanupSessionStateForTest(): Promise<void> {
   await (sessionStoreWriterQueueDrainerForTests ?? drainSessionStoreWriterQueuesForTest)();
-  clearSessionStoreCacheForTest();
   await (fileLockDrainerForTests ?? drainFileLockStateForTest)();
+  clearSessionStoreCacheForTest();
+  // A queued writer can reopen both databases after an earlier close. Handles
+  // therefore close only after every session writer and file lock has drained.
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
 }
