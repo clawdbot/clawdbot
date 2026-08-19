@@ -4,15 +4,14 @@ import { normalizeChatChannelId } from "../channels/registry.js";
 import { normalizePluginId } from "../plugins/config-state.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { collectPluginIdsForConfiguredChannel } from "./channel-activation-candidates.js";
+import {
+  collectConfiguredChannelIds,
+  collectPluginIdsForConfiguredChannel,
+} from "./channel-activation-candidates.js";
 import {
   type ChannelOwnershipPolicy,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
-import {
-  hasMeaningfulChannelConfigShallow,
-  resolveChannelConfigRecord,
-} from "./channel-configured-shared.js";
 import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js";
 import {
   isPluginExplicitlySelected,
@@ -77,9 +76,16 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   // the plugin loader graph into an import cycle, and re-deriving the rule here would let it drift
   // from the one activation applies.
   //
-  // Narrowing applies only to channels the authored config configures. The shallow check is
-  // deliberate: auto-enable also treats env and persisted state as presence signals, and being
-  // stricter here only means declining to narrow, which preserves the previous behavior.
+  // Presence uses auto-enable's own decision, not an approximation of it. An authored-config-only
+  // check looked safely conservative and was not: a channel configured purely through env vars is
+  // one auto-enable narrows, so declining to narrow there kept the very defect this fixes — the
+  // Control UI could offer a field from a claimant that never loads, and saving it would make the
+  // config meaningful, flip ownership to the real pair, and reject the field just offered.
+  let configuredChannelIds: Set<string> | undefined;
+  const isChannelConfiguredForActivation = (channelId: string): boolean => {
+    configuredChannelIds ??= new Set(collectConfiguredChannelIds(sourceConfig, params.env));
+    return configuredChannelIds.has(channelId);
+  };
   const candidatesByChannel = new Map<string, Set<string>>();
   const channelCandidates = (channelId: string): Set<string> | undefined => {
     const key = normalizeChatChannelId(channelId) ?? channelId;
@@ -87,7 +93,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     if (cached) {
       return cached;
     }
-    if (!hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(sourceConfig, key))) {
+    if (!isChannelConfiguredForActivation(key)) {
       return undefined;
     }
     const candidates = new Set(

@@ -10,15 +10,7 @@ import {
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
-import {
-  listPotentialConfiguredChannelPresenceSignals,
-  type AmbientEnvTriggerPolicy,
-  type ChannelPresenceSignalSource,
-} from "../channels/config-presence.js";
-import {
-  hasBundledChannelConfiguredState,
-  listBundledChannelIdsWithConfiguredState,
-} from "../channels/plugins/configured-state.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -34,10 +26,10 @@ import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.j
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
 import {
+  collectConfiguredChannelIds,
   collectPluginIdsForConfiguredChannel,
   normalizeManifestChannelId,
 } from "./channel-activation-candidates.js";
-import { isChannelConfigured } from "./channel-configured.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {
   PluginAutoEnableCandidate,
@@ -242,58 +234,6 @@ function resolvePluginIdForConfiguredWebSearchProvider(
       (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProviderId,
     ),
   )?.id;
-}
-
-function collectConfiguredChannelIds(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  discovery?: PluginDiscoveryResult,
-  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
-): string[] {
-  const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState(discovery));
-  return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
-    includePersistedAuthState: false,
-    discovery,
-    ambientEnvTriggers,
-  })
-    .map((signal) => ({
-      source: signal.source,
-      channelId: normalizeChatChannelId(signal.channelId) ?? signal.channelId,
-    }))
-    .filter(({ channelId, source }) =>
-      isAutoEnableConfiguredChannelSignal({
-        cfg,
-        env,
-        channelId,
-        source,
-        configuredStateChannelIds,
-        discovery,
-      }),
-    )
-    .map(({ channelId }) => channelId);
-}
-
-function isAutoEnableConfiguredChannelSignal(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  channelId: string;
-  source: ChannelPresenceSignalSource;
-  configuredStateChannelIds: ReadonlySet<string>;
-  discovery?: PluginDiscoveryResult;
-}): boolean {
-  if (
-    params.source === "env" &&
-    params.configuredStateChannelIds.has(params.channelId) &&
-    !hasBundledChannelConfiguredState({
-      channelId: params.channelId,
-      cfg: params.cfg,
-      env: params.env,
-      discovery: params.discovery,
-    })
-  ) {
-    return false;
-  }
-  return isChannelConfigured(params.cfg, params.channelId, params.env);
 }
 
 function hasConfiguredWebSearchProviderSelection(cfg: OpenClawConfig): boolean {

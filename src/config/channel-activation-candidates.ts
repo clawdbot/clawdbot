@@ -5,9 +5,21 @@
 // Both sides import this module rather than one importing the other, because routing ownership
 // through the auto-enable barrel drags the whole plugin loader graph into an import cycle, and a
 // second copy of the rule would be free to drift from the one activation actually applies.
+import {
+  type AmbientEnvTriggerPolicy,
+  type ChannelPresenceSignalSource,
+  listPotentialConfiguredChannelPresenceSignals,
+} from "../channels/config-presence.js";
+import {
+  hasBundledChannelConfiguredState,
+  listBundledChannelIdsWithConfiguredState,
+} from "../channels/plugins/configured-state.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
+import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { isChannelConfigured } from "./channel-configured.js";
 import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function normalizeManifestChannelId(channelId: string): string {
   return normalizeChatChannelId(channelId) ?? channelId;
@@ -64,4 +76,57 @@ export function collectPluginIdsForConfiguredChannel(
     return [...preferredIds].toSorted((left, right) => left.localeCompare(right));
   }
   return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
+}
+
+export function isAutoEnableConfiguredChannelSignal(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  channelId: string;
+  source: ChannelPresenceSignalSource;
+  configuredStateChannelIds: ReadonlySet<string>;
+  discovery?: PluginDiscoveryResult;
+}): boolean {
+  if (
+    params.source === "env" &&
+    params.configuredStateChannelIds.has(params.channelId) &&
+    !hasBundledChannelConfiguredState({
+      channelId: params.channelId,
+      cfg: params.cfg,
+      env: params.env,
+      discovery: params.discovery,
+    })
+  ) {
+    return false;
+  }
+  return isChannelConfigured(params.cfg, params.channelId, params.env);
+}
+
+/** The channels auto-enable treats as configured — config, env, and persisted state alike. */
+export function collectConfiguredChannelIds(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  discovery?: PluginDiscoveryResult,
+  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+): string[] {
+  const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState(discovery));
+  return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
+    includePersistedAuthState: false,
+    discovery,
+    ambientEnvTriggers,
+  })
+    .map((signal) => ({
+      source: signal.source,
+      channelId: normalizeChatChannelId(signal.channelId) ?? signal.channelId,
+    }))
+    .filter(({ channelId, source }) =>
+      isAutoEnableConfiguredChannelSignal({
+        cfg,
+        env,
+        channelId,
+        source,
+        configuredStateChannelIds,
+        discovery,
+      }),
+    )
+    .map(({ channelId }) => channelId);
 }
