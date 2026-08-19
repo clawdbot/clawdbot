@@ -223,8 +223,24 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     try {
       const page = await context.newPage();
       await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
-      const widget = page.locator('[data-widget-name="service-pulse"]');
+      const widget = page.locator('[data-widget-name="deploy-window"]');
       const chrome = widget.locator(".board-widget__bar");
+      const resizeHandle = widget.locator(".board-widget__resize-handle");
+      const visibility = (selector: typeof chrome) =>
+        selector.evaluate((element) => ({
+          opacity: getComputedStyle(element).opacity,
+          visibility: getComputedStyle(element).visibility,
+        }));
+      const isHitTarget = (selector: typeof chrome) =>
+        selector.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          return (
+            document.elementFromPoint(
+              bounds.left + bounds.width / 2,
+              bounds.top + bounds.height / 2,
+            ) === element
+          );
+        });
       const bounds = await widget.boundingBox();
       if (!bounds) {
         throw new Error("board fixture widget has no layout bounds");
@@ -233,9 +249,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       await page.mouse.move(0, 0);
       await page.mouse.move(bounds.x + 24, bounds.y + 20, { steps: 12 });
       await page.waitForTimeout(500);
-      expect(await chrome.evaluate((element) => getComputedStyle(element).visibility)).toBe(
-        "hidden",
-      );
+      expect(await visibility(chrome)).toEqual({ opacity: "0", visibility: "hidden" });
+      expect(await visibility(resizeHandle)).toEqual({ opacity: "0", visibility: "hidden" });
+      expect(await isHitTarget(resizeHandle)).toBe(false);
 
       const centeredBounds = await widget.boundingBox();
       if (!centeredBounds) {
@@ -260,6 +276,32 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       });
       expect(centers.visibility).toBe("visible");
       expect(Math.abs(centers.chrome - centers.widget)).toBeLessThanOrEqual(1);
+      expect(await visibility(resizeHandle)).toEqual({ opacity: "1", visibility: "visible" });
+
+      const handleBounds = await resizeHandle.boundingBox();
+      if (!handleBounds) {
+        throw new Error("board fixture resize handle has no layout bounds");
+      }
+      const handleTarget = {
+        x: handleBounds.x + handleBounds.width / 2,
+        y: handleBounds.y + handleBounds.height / 2,
+      };
+      await page.mouse.move(
+        (centeredBounds.x + centeredBounds.width / 2 + handleTarget.x) / 2,
+        (centeredBounds.y + 20 + handleTarget.y) / 2,
+        { steps: 6 },
+      );
+      await page.waitForTimeout(200);
+      await page.mouse.move(handleTarget.x, handleTarget.y, { steps: 12 });
+      await page.waitForTimeout(500);
+      expect(await isHitTarget(resizeHandle)).toBe(true);
+      expect(
+        await resizeHandle.evaluate((element) => ({
+          hover: element.matches(":hover"),
+          opacity: getComputedStyle(element).opacity,
+          visibility: getComputedStyle(element).visibility,
+        })),
+      ).toEqual({ hover: true, opacity: "1", visibility: "visible" });
     } finally {
       await context.close();
     }

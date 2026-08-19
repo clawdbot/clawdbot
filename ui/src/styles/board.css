@@ -678,8 +678,8 @@ openclaw-workboard-board-widget {
   .board-widget__resize-handle {
     opacity: 0;
     transition:
-      opacity 100ms ease,
-      visibility 0s linear 100ms;
+      opacity 100ms ease 500ms,
+      visibility 0s linear 600ms;
     visibility: hidden;
   }
 
@@ -691,9 +691,18 @@ openclaw-workboard-board-widget {
     visibility: visible;
   }
 
-  .board-widget:hover .board-widget__resize-handle {
+  /* The center zone owns coordinated pointer reveal. The transparent handle
+     remains the only secondary host target: grace keeps it visible in transit,
+     then its bounded corner pins the resize affordance. */
+  .board-widget__hover-zone:hover ~ .board-widget__resize-handle {
     opacity: 1;
-    transition-delay: 350ms;
+    transition-delay: 350ms, 350ms;
+    visibility: visible;
+  }
+
+  .board-widget__resize-handle:hover {
+    opacity: 1;
+    transition-delay: 0s;
     visibility: visible;
   }
 
@@ -721,17 +730,19 @@ openclaw-workboard-board-widget {
     position: absolute;
     right: 10px;
     top: 10px;
-    transition: opacity 120ms ease;
+    transition: opacity 120ms ease 300ms;
     width: 6px;
     z-index: 4;
   }
 
   .board-widget__hover-zone:hover ~ .board-widget__grant-dot,
   .board-widget__bar:hover ~ .board-widget__grant-dot,
+  .board-widget__resize-handle:hover ~ .board-widget__grant-dot,
   .board-widget:focus-within .board-widget__grant-dot,
   .board-widget--dragging .board-widget__grant-dot,
   .board-widget:has(.board-widget__menu[open]) .board-widget__grant-dot {
     opacity: 0;
+    transition-delay: 0s;
   }
 
   /* Frameless is a fine-pointer treatment only: touch keeps the card shell
@@ -746,6 +757,7 @@ openclaw-workboard-board-widget {
 
   .board-widget--frameless:has(> .board-widget__hover-zone:hover),
   .board-widget--frameless:has(> .board-widget__bar:hover),
+  .board-widget--frameless:has(> .board-widget__resize-handle:hover),
   .board-widget--frameless:focus-within,
   .board-widget--frameless:has(.board-widget__menu[open]) {
     border-color: var(--board-line);

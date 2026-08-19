@@ -94,6 +94,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const bar = view.querySelector<HTMLElement>(".board-widget__bar");
     const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
     expect(getComputedStyle(bar!).visibility).toBe("hidden");
+    expect(getComputedStyle(handle!).opacity).toBe("0");
     expect(getComputedStyle(handle!).visibility).toBe("hidden");
   });
 
