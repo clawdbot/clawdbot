@@ -7,11 +7,11 @@ import {
 
 describe("preserved session worktree presentation", () => {
   it.each([
-    ["owner-mismatch", "registered to another owner"],
-    ["busy", "still in use by a live run or another cleanup"],
-    ["foreign-lock", "Git reports a lock owned outside OpenClaw"],
+    ["owner-mismatch", "owned elsewhere"],
+    ["busy", "in use by a live run or cleanup"],
+    ["foreign-lock", "locked in Git outside OpenClaw"],
     ["snapshot-failed", "OpenClaw could not create a safety snapshot"],
-    ["cleanup-failed", "cleanup did not finish normally"],
+    ["cleanup-failed", "cleanup failed"],
   ] satisfies Array<[WorktreePreservationReason, string]>)(
     "describes %s accurately",
     (reason, expected) => {
@@ -44,7 +44,7 @@ describe("preserved session worktree presentation", () => {
       "The session worktree openclaw/snapshot-task needs attention. Reason: OpenClaw could not create a safety snapshot. Delete the checkout anyway?",
     );
     expect(formatPreservedWorktreesNotice([busy, snapshot])).toBe(
-      "2 session worktree(s) need attention:\nopenclaw/busy-task — still in use by a live run or another cleanup\nopenclaw/snapshot-task — OpenClaw could not create a safety snapshot\nManage them under Settings -> Worktrees.",
+      "Managed Worktrees:\nopenclaw/busy-task — in use by a live run or cleanup\nopenclaw/snapshot-task — OpenClaw could not create a safety snapshot",
     );
   });
 });

@@ -941,15 +941,15 @@ export const en: TranslationMap = {
     actionRequiresRead: "This action requires operator.read access.",
     actionRequiresWrite: "This action requires operator.write access.",
     actionRequiresAdmin: "This action requires operator.admin access.",
-    deletePreservedWorktrees:
-      "{count} session worktree(s) need attention:\n{details}\nManage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
       "The session worktree {branch} needs attention. Reason: {reason}. Delete the checkout anyway?",
-    deletePreservedReasonOwnerMismatch: "registered to another owner",
-    deletePreservedReasonBusy: "still in use by a live run or another cleanup",
-    deletePreservedReasonForeignLock: "Git reports a lock owned outside OpenClaw",
-    deletePreservedReasonSnapshotFailed: "OpenClaw could not create a safety snapshot",
-    deletePreservedReasonCleanupFailed: "cleanup did not finish normally",
+    deletePreservedReasons: {
+      "owner-mismatch": "owned elsewhere",
+      busy: "in use by a live run or cleanup",
+      "foreign-lock": "locked in Git outside OpenClaw",
+      "snapshot-failed": "OpenClaw could not create a safety snapshot",
+      "cleanup-failed": "cleanup failed",
+    },
     draftCleanupFailed: "Session deleted; browser draft remains. Clear site data.",
     title: "Sessions",
     subtitle: "Browse sessions and manage per-session overrides.",
