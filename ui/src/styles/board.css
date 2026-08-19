@@ -615,9 +615,9 @@ openclaw-workboard-board-widget {
     box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
     height: 30px;
     left: 50%;
-    /* Keep the pill compact enough to leave widget-owned corner actions clear.
-       Below 184px the container query strips it to the irreducible controls. */
-    max-width: max(88px, calc(100% - 96px));
+    /* Centered widgets reserve 88px for actions in both top corners. Narrow
+       cards fall back to the prior left placement below. */
+    max-width: calc(100% - 176px);
     opacity: 0;
     padding: 0 5px;
     position: absolute;
@@ -645,6 +645,14 @@ openclaw-workboard-board-widget {
   .board-widget__bar > .board-widget__capabilities {
     min-width: 0;
     overflow: hidden;
+  }
+
+  @container (max-width: 264px) {
+    .board-widget__bar {
+      left: 7px;
+      max-width: max(88px, calc(100% - 96px));
+      transform: none;
+    }
   }
 
   /* Below 184px the 96px reservation and the 88px pill cannot coexist, so the

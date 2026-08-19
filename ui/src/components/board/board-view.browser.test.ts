@@ -127,6 +127,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
   it("reveals widget chrome while the widget has focus", async () => {
     const view = await mount();
+    view.style.width = "1200px";
     const sink = focusSink();
     const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
     const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
@@ -148,8 +149,9 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     await vi.waitFor(() => expectChromeHidden(widget!, bar!));
   });
 
-  it("keeps centered chrome bounded for narrow long-titled widgets", async () => {
+  it("keeps centered chrome bounded for wide long-titled widgets", async () => {
     const view = await mount();
+    view.style.width = "1200px";
     view.snapshot = {
       ...structuredClone(source),
       widgets: [
@@ -172,8 +174,8 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     // children may overflow the capped box into widget-owned content.
     const widgetBounds = widget!.getBoundingClientRect();
     const barBounds = bar!.getBoundingClientRect();
-    expect(barBounds.left).toBeGreaterThan(widgetBounds.left);
-    expect(barBounds.right).toBeLessThan(widgetBounds.right);
+    expect(barBounds.left - widgetBounds.left).toBeGreaterThanOrEqual(88);
+    expect(widgetBounds.right - barBounds.right).toBeGreaterThanOrEqual(88);
     for (const child of bar!.children) {
       expect(child.getBoundingClientRect().right).toBeLessThanOrEqual(
         bar!.getBoundingClientRect().right + 1,
@@ -209,7 +211,10 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const kind = bar!.querySelector<HTMLElement>(".board-widget__kind");
     expect(getComputedStyle(title!).display).toBe("none");
     expect(getComputedStyle(kind!).display).toBe("none");
-    expect(bar!.getBoundingClientRect().width).toBeLessThanOrEqual(76);
+    const widgetBounds = widget!.getBoundingClientRect();
+    const barBounds = bar!.getBoundingClientRect();
+    expect(barBounds.width).toBeLessThanOrEqual(76);
+    expect(barBounds.left - widgetBounds.left).toBeLessThan(widgetBounds.right - barBounds.right);
   });
 
   it("keeps widget chrome visible while its menu is open", async () => {
