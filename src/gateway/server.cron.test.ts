@@ -2340,7 +2340,7 @@ describe("gateway server cron", () => {
         sessionKey: "agent:avery:feishu:direct:ou_founder",
         message:
           '⚠️ Automation "session target failure fallback" failed\n' +
-          "Check automation history for details.",
+          "Last error: cron job agent is unavailable: avery",
         includeRunStarted: true,
       });
     } finally {
