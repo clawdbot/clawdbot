@@ -1836,6 +1836,122 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
   });
 
+  it("fails required preflight when nothing new compacts while the session stays over budget", async () => {
+    // Regression for #121617: an already-compacted verdict on a required
+    // token preflight leaves the over-budget session unresolved; the gate
+    // must reject with the unresolved reason instead of skipping ahead.
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Already compacted",
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
+    };
+    const onCompactionNotice = vi.fn();
+
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100,
+        sessionEntry,
+        sessionStore: { "agent:main:main": sessionEntry },
+        sessionKey: "agent:main:main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+        onCompactionNotice,
+      }),
+    ).rejects.toThrow(
+      "Preflight compaction required but failed: Context still exceeds the target budget after the latest compaction; nothing new to compact",
+    );
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
+  });
+
+  it("keeps the benign already-compacted skip for byte-only preflights", async () => {
+    // The transcript-byte guard shares the required preflight but its model
+    // context may still fit, so an already-compacted verdict stays a benign
+    // skip (openclaw#121617).
+    const sessionFile = path.join(rootDir, "large-session.jsonl");
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(256) } }],
+    });
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Already compacted",
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+    };
+    const onCompactionNotice = vi.fn();
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onCompactionNotice,
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+  });
+
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
@@ -3483,6 +3599,8 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.currentTokenCount).toBe(12);
     expect(compactCall.sessionFile).toBe("main");
+    // Byte-only pressure keeps the transcript_bytes trigger label (openclaw#121617 dual-trigger).
+    expect(compactCall.preflightCompactionTrigger).toBe("transcript_bytes");
   });
 
   it.each([

@@ -8,6 +8,7 @@ import {
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import { UNRESOLVED_TOKEN_PREFLIGHT_COMPACTION_REASON } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
   describeFailoverError,
   findCliMaxTurnsError,
@@ -158,6 +159,15 @@ export function buildPreflightCompactionFailureText(
   )
     .trim()
     .replace(/\s+/gu, " ");
+  // The unresolved token-preflight state cannot be recovered by retrying or
+  // compacting again, so its default reply must say that and point at /new;
+  // the generic copy would send the user down a dead end (openclaw#121617).
+  if (reason === UNRESOLVED_TOKEN_PREFLIGHT_COMPACTION_REASON) {
+    return (
+      "⚠️ Context is too large for this session even after compaction — nothing new can be " +
+      "compacted, so retrying or /compact cannot recover this turn. Use /new to start a fresh session."
+    );
+  }
   const reasonSuffix = options?.includeDetails && reason ? ` Reason: ${reason}.` : "";
   return (
     "⚠️ Context is too large and auto-compaction could not recover this turn." +

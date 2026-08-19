@@ -12,6 +12,17 @@ const COMPACTION_PROVIDER_5XX = new Set([500, 502, 503, 504]);
 export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
 
+/**
+ * Rejection reason when a required token preflight reports "already compacted"
+ * while the session stays over budget: the gate observes an unresolved
+ * over-budget state with nothing new to compact, so compacting again can
+ * never resolve it (openclaw#121617). Shared with the reply-failure renderer,
+ * which recognizes this exact reason to show a cause and working remedy in
+ * the default (non-verbose) reply.
+ */
+export const UNRESOLVED_TOKEN_PREFLIGHT_COMPACTION_REASON =
+  "Context still exceeds the target budget after the latest compaction; nothing new to compact";
+
 function isGenericCompactionCancelledReason(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);
   return normalized === "compaction cancelled" || normalized === "error: compaction cancelled";

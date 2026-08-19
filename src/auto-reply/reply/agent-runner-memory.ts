@@ -12,7 +12,11 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
-import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import {
+  classifyCompactionReason,
+  isBenignCompactionSkipResult,
+  UNRESOLVED_TOKEN_PREFLIGHT_COMPACTION_REASON,
+} from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
@@ -990,28 +994,32 @@ export async function runPreflightCompactionIfNeeded(params: {
       abortSignal: params.replyOperation.abortSignal,
     });
 
-    if (!result?.ok) {
-      const reason = result?.reason ?? "not_compacted";
-      if (result && isBenignCompactionSkipResult(result)) {
+    if (!result?.ok || !result.compacted) {
+      const reason = normalizeOptionalString(result?.reason) ?? "not_compacted";
+      // A token-pressure preflight that reports "already compacted" leaves the
+      // over-budget session unresolved; reject it instead of benign-skipping
+      // into a later generic auto-compaction failure (openclaw#121617).
+      // Byte-only preflights keep the benign skip: their model context may
+      // still fit. Classified at this gate because it owns
+      // shouldCompactByTokens; the trigger label prefers transcript_bytes
+      // when both guards fire.
+      const unresolvedTokenPreflight =
+        shouldCompactByTokens &&
+        result != null &&
+        !result.compacted &&
+        classifyCompactionReason(result.reason) === "already_compacted";
+      if (!unresolvedTokenPreflight && result && isBenignCompactionSkipResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
       }
       await notifyTerminalCompaction("incomplete");
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
-    }
-
-    if (!result.compacted) {
-      const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
-      if (isBenignCompactionSkipResult(result)) {
-        await notifyTerminalCompaction("skipped");
-        logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
-        return entry ?? params.sessionEntry;
-      }
-      await notifyTerminalCompaction("incomplete");
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      logVerbose(
+        `preflightCompaction ${unresolvedTokenPreflight ? "unresolved" : "failed"}: sessionKey=${params.sessionKey} reason=${reason}`,
+      );
+      throw new Error(
+        `Preflight compaction required but failed: ${unresolvedTokenPreflight ? UNRESOLVED_TOKEN_PREFLIGHT_COMPACTION_REASON : reason}`,
+      );
     }
 
     await deps.incrementCompactionCount({
