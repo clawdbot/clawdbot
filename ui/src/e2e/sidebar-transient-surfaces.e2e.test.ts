@@ -73,6 +73,7 @@ suite.define(() => {
 
         const session = page.locator(`openclaw-app-sidebar [data-session-key="${sessionKey}"]`);
         await session.waitFor();
+        await session.hover();
         await session.locator("[data-session-menu]").click();
         const menuSurface = page.locator("wa-dropdown.session-menu").locator('[part="menu"]');
         await menuSurface.waitFor({ state: "visible" });
