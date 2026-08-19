@@ -273,10 +273,15 @@ describe("chat header session menu", () => {
     ]);
   });
 
-  it("renders quick actions directly in the compact menu", async () => {
+  it("drills into compact menu groups without rendering side flyouts", async () => {
     const showTasks = vi.fn();
+    const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
+    const research = { type: "agent", id: "research:one", label: "Research" } as const;
     const menu = await mountMenu({
       compact: true,
+      worktreePath: "/work/openclaw",
       panelActions: [
         {
           id: "background-tasks",
@@ -286,15 +291,71 @@ describe("chat header session menu", () => {
           onActivate: showTasks,
         },
       ],
+      layoutActions: [
+        {
+          id: "split-right",
+          label: "Split right",
+          icon: icons.panelRightOpen,
+          onActivate: vi.fn(),
+        },
+      ],
+      ownerOptions: [ada, research],
+      selfOwner: ada,
+      currentOwnerId: research.id,
+      onSettingsChange,
+      onAction,
     });
 
-    expect(menu.querySelector(".session-menu__section-label")?.textContent?.trim()).toBe("Panels");
+    const rootLabels = Array.from(
+      menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
+    ).map(itemLabel);
+    expect(rootLabels).toEqual([
+      "Open in",
+      "Panels",
+      "Layout",
+      "Rename…",
+      "Assign to…",
+      "View",
+      "Fork",
+      "Continue in terminal…",
+      "Archive session",
+      "Delete…",
+    ]);
+    expect(menu.querySelector("[slot='submenu']")).toBeNull();
+
+    select(menu, "compact:open-view");
+    await menu.updateComplete;
+    expect(
+      Array.from(
+        menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
+      ).map(itemLabel),
+    ).toEqual(["Back", "Reasoning", "Tool calls", "Keep commentary"]);
+    expect(menu.querySelector("[slot='submenu']")).toBeNull();
+    select(menu, "view:reasoning");
+    expect(onSettingsChange).toHaveBeenCalledWith({ chatShowThinking: false });
+
+    select(menu, "compact:back");
+    await menu.updateComplete;
+    select(menu, "compact:open-panels");
+    await menu.updateComplete;
     const action = item(menu, "Show background tasks");
-    expect(action.getAttribute("slot")).toBeNull();
     expect(action.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
 
     select(menu, "quick:panels:background-tasks");
     expect(showTasks).toHaveBeenCalledOnce();
+
+    select(menu, "compact:open-assign-owner");
+    await menu.updateComplete;
+    expect(
+      Array.from(
+        menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
+      ).map(itemLabel),
+    ).toEqual(["Back", "Ada", "Research"]);
+    select(menu, "assign-owner:human:profile-ada");
+    expect(onAction).toHaveBeenCalledWith({
+      kind: "assign-owner",
+      owner: { type: "human", id: "profile-ada" },
+    });
   });
 
   it("pins and disables onboarding view preferences", async () => {

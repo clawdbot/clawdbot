@@ -724,11 +724,15 @@ openclaw-chat-pane {
   min-height: 44px;
 }
 
-.chat-header-session-menu--compact .session-menu__section-label {
-  padding: 4px 8px 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
+.chat-header-session-menu--compact .session-menu__back {
+  z-index: 1;
+  position: sticky;
+  top: 0;
+  background: var(--wa-color-surface-raised);
+}
+
+.chat-header-session-menu--compact .session-menu__chevron {
+  display: inline-flex;
 }
 
 .chat-header-session-menu--compact::part(menu) {
