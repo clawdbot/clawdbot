@@ -41,9 +41,22 @@ describe("splitTelegramReasoningText", () => {
     });
   });
 
-  it("does not emit partial reasoning tag prefixes", () => {
-    expect(splitTelegramReasoningText("  <thi", true)).toStrictEqual({});
-    expect(splitTelegramReasoningText("  <int", true)).toStrictEqual({});
+  it.each([
+    "  <thi",
+    "  <int",
+    "< internal",
+    "<  internal",
+    "</ internal",
+    "< / internal",
+    "<\u00a0internal",
+  ])("does not emit partial reasoning tag prefix %j", (text) => {
+    expect(splitTelegramReasoningText(text, true)).toStrictEqual({});
+  });
+
+  it("keeps unrelated partial tags visible", () => {
+    expect(splitTelegramReasoningText("< interface", true)).toStrictEqual({
+      reasoningText: "🧠 _< interface_",
+    });
   });
 
   it("keeps visible Thinking-prefixed answers in the answer lane", () => {
