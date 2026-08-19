@@ -1,3 +1,4 @@
+import type { NodeInvokeCancelEvent } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { NodeInvokeRequestPayload } from "./invoke-types.js";
 
 const MAX_INVOKE_INPUT_BYTES = 16 * 1024;
@@ -31,9 +32,7 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
   };
 }
 
-export function coerceNodeInvokeCancelPayload(
-  payload: unknown,
-): { invokeId: string; nodeId: string } | null {
+export function coerceNodeInvokeCancelPayload(payload: unknown): NodeInvokeCancelEvent | null {
   const value =
     payload && typeof payload === "object" && !Array.isArray(payload)
       ? (payload as Record<string, unknown>)

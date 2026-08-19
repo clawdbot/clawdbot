@@ -10,6 +10,7 @@ import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-i
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
 import type {
+  NodeInvokeCancelEvent,
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
@@ -236,10 +237,11 @@ export class NodeRegistry {
       ) {
         return;
       }
-      this.sendEventToSession(node, "node.invoke.cancel", {
+      const payload: NodeInvokeCancelEvent = {
         invokeId: requestId,
         nodeId: pending.nodeId,
-      });
+      };
+      this.sendEventToSession(node, "node.invoke.cancel", payload);
     },
     isConnectionActive: (pending) => {
       const node = this.nodesById.get(pending.nodeId);

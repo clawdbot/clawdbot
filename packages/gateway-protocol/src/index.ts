@@ -184,6 +184,7 @@ export {
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   NodeInvokeInputEventSchema,
+  NodeInvokeCancelEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventResultSchema,
   NodePresenceAlivePayloadSchema,
