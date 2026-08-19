@@ -1,4 +1,7 @@
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import {
+  createMeetingLeaveSource,
+  createMeetingTranscriptSource,
+} from "openclaw/plugin-sdk/meeting-page-script-runtime";
 import { ZOOM_MEETING_SELECTORS } from "./zoom-meetings-selectors.js";
 import { zoomMeetingStatusCallSource } from "./zoom-meetings-status-call-source.js";
 import { zoomMeetingStatusPreludeSource } from "./zoom-meetings-status-prejoin-source.js";
@@ -81,7 +84,7 @@ export function zoomMeetingTranscriptScript(
   finalize: boolean,
 ) {
   const expectedIdentity = normalizeZoomMeetingUrlForReuse(meetingUrl);
-  return MeetingPlatformAdapter.createTranscriptSource({
+  return createMeetingTranscriptSource({
     expectedIdentity,
     finalize,
     globals: {
@@ -102,7 +105,7 @@ export function zoomMeetingLeaveScript(params: {
 }) {
   const selectors = JSON.stringify(ZOOM_MEETING_SELECTORS);
   const expectedIdentity = normalizeZoomMeetingUrlForReuse(params.meetingUrl);
-  return MeetingPlatformAdapter.createLeaveSource({
+  return createMeetingLeaveSource({
     controlSource: `const first = (list) => {
     for (const selector of list) {
       const node = document.querySelector(selector);

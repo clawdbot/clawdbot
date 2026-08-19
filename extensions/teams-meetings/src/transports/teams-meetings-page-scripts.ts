@@ -1,4 +1,7 @@
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import {
+  createMeetingLeaveSource,
+  createMeetingTranscriptSource,
+} from "openclaw/plugin-sdk/meeting-page-script-runtime";
 import { TEAMS_MEETING_SELECTORS } from "./teams-meetings-selectors.js";
 import { teamsMeetingStatusCallSource } from "./teams-meetings-status-call-source.js";
 import { teamsMeetingStatusPreludeSource } from "./teams-meetings-status-prejoin-source.js";
@@ -109,7 +112,7 @@ export function teamsMeetingTranscriptScript(
   finalize: boolean,
 ) {
   const expectedIdentity = normalizeTeamsMeetingUrlForReuse(meetingUrl);
-  return MeetingPlatformAdapter.createTranscriptSource({
+  return createMeetingTranscriptSource({
     expectedIdentity,
     finalize,
     globals: {
@@ -130,7 +133,7 @@ export function teamsMeetingLeaveScript(params: {
 }) {
   const selectors = JSON.stringify(TEAMS_MEETING_SELECTORS);
   const expectedIdentity = normalizeTeamsMeetingUrlForReuse(params.meetingUrl);
-  return MeetingPlatformAdapter.createLeaveSource({
+  return createMeetingLeaveSource({
     controlSource: `const first = (list) => {
     for (const selector of list) {
       const node = document.querySelector(selector);
