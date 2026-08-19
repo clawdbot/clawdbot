@@ -2044,6 +2044,40 @@ describe("model-selection", () => {
       });
     });
 
+    it("keeps a proxy provider ref whose multi-level model id starts with a builtin provider name (#126430)", () => {
+      // OmniRoute/LiteLLM-style proxy: the model id is a multi-level upstream ref
+      // (`groq/openai/gpt-oss-120b`) whose first sub-token (`groq`) is the name of
+      // a builtin provider. The owning provider must stay the configured proxy, not
+      // be hijacked into `groq` (which has no key) at auth time.
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "omniroute/groq/openai/gpt-oss-120b" },
+          },
+        },
+        models: {
+          providers: {
+            omniroute: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:20128/v1",
+              models: [{ id: "groq/openai/gpt-oss-120b", name: "Groq OSS 120B" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "omniroute",
+        model: "groq/openai/gpt-oss-120b",
+      });
+    });
+
     it("keeps built-in provider refs before bare alias values that point to them", () => {
       const cfg = {
         agents: {

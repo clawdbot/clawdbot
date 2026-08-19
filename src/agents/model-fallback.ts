@@ -1006,6 +1006,42 @@ function resolveFallbackCandidateModelProviderCacheParts(cfg: OpenClawConfig | u
   }));
 }
 
+/**
+ * True when `provider` is a configured provider whose `api` adapter differs from
+ * its own id (an OpenAI/Anthropic-compatible proxy/aggregator such as OmniRoute
+ * or LiteLLM) AND `model` is a multi-level upstream id. In that case `model`
+ * must stay an opaque id owned by `provider`, never re-parsed into a nested
+ * provider for auth. Mirrors the passthrough that `openrouter`/`nvidia` get via
+ * hardcoded cases in `normalizeBuiltInProviderModelId`, but generically. (#126430)
+ */
+function isConfiguredProxyProviderRef(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): boolean {
+  if (!model.includes("/")) {
+    return false;
+  }
+  const providers = cfg?.models?.providers;
+  if (!providers) {
+    return false;
+  }
+  const providerKey = normalizeOptionalString(provider)?.toLowerCase();
+  if (!providerKey) {
+    return false;
+  }
+  const configured = Object.entries(providers).find(
+    ([key]) => key.trim().toLowerCase() === providerKey,
+  );
+  if (!configured) {
+    return false;
+  }
+  const [configuredProvider, providerConfig] = configured;
+  const api =
+    typeof providerConfig?.api === "string" ? providerConfig.api.trim().toLowerCase() : "";
+  return api.length > 0 && api !== configuredProvider.trim().toLowerCase();
+}
+
 function resolveFallbackCandidatesUncached(
   params: {
     cfg: OpenClawConfig | undefined;
@@ -1041,6 +1077,17 @@ function resolveFallbackCandidatesUncached(
     ? normalizePluginsConfig(params.cfg.plugins).enabled
     : true;
   const normalizedPrimary = normalizeCandidateRef(providerRaw, modelRaw);
+  // When `providerRaw` is a configured proxy provider (its `api` differs from the
+  // provider id, e.g. OmniRoute/LiteLLM with api:"openai-completions"), `modelRaw`
+  // is that provider's opaque multi-level upstream model id (e.g.
+  // "groq/openai/gpt-oss-120b"). Re-resolving it as a standalone ref below would
+  // treat its leading sub-token ("groq") as a builtin provider and hijack auth
+  // (#126430). Keep the primary bound to the owning proxy provider in that case.
+  const primaryOwnedByConfiguredProxy = isConfiguredProxyProviderRef(
+    params.cfg,
+    providerRaw,
+    modelRaw,
+  );
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
@@ -1084,10 +1131,11 @@ function resolveFallbackCandidatesUncached(
       normalizedPrimary.provider === defaultProvider)
       ? resolvedModelAlias.ref
       : null;
-  const resolvedPrimary =
-    (resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
-    resolvedBareModelAlias ??
-    normalizedPrimary;
+  const resolvedPrimary = primaryOwnedByConfiguredProxy
+    ? normalizedPrimary
+    : ((resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
+      resolvedBareModelAlias ??
+      normalizedPrimary);
   const effectivePrimary = normalizeCandidateRef(resolvedPrimary.provider, resolvedPrimary.model);
 
   addExplicitCandidate(effectivePrimary);
