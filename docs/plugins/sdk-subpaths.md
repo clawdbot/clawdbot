@@ -8,10 +8,9 @@ title: "Plugin SDK subpaths"
 ---
 
 The plugin SDK contains narrow public subpaths and repository-only bundled
-helpers under `openclaw/plugin-sdk/`. This page catalogs every typed public
-subpath and selected private-local entries that clarify the package boundary;
-it is not an inventory of every internal runtime helper. Three files define
-the boundary:
+helpers under `openclaw/plugin-sdk/`.
+This page catalogs every typed public subpath and labels selected private-local entries explicitly; it is not an inventory of every internal runtime helper.
+Three files define the boundary:
 
 - `scripts/lib/plugin-sdk-entrypoints.json`: the maintained entrypoint inventory
   the build compiles.
