@@ -226,18 +226,6 @@ export function derivePluginSdkTypeInputsFromBuildInfo(buildInfoPath: string, ro
   return derivePluginSdkTypeInputs(entries as string[], buildInfoDir, rootDir);
 }
 
-/** Normalizes the tsgo shim so Windows can execute it, matching every other repo tool runner. */
-export function createPluginSdkTypeInputsCommand(
-  tsgoPath: string,
-  platform: NodeJS.Platform = process.platform,
-) {
-  return createManagedCommandInvocation({
-    args: ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
-    bin: tsgoPath,
-    platform,
-  });
-}
-
 /** Resolves declaration inputs from build metadata or the compiler on cold cache. */
 export function resolvePluginSdkTypeInputs(rootDir = repoRoot) {
   const buildInfoPath = resolve(rootDir, "dist/plugin-sdk/.tsbuildinfo");
@@ -246,7 +234,10 @@ export function resolvePluginSdkTypeInputs(rootDir = repoRoot) {
   }
   const tsgoPath = resolveRepoToolBinPath("tsgo");
   ensureRepoToolNodeModulesLink(tsgoPath);
-  const tsgo = createPluginSdkTypeInputsCommand(tsgoPath);
+  const tsgo = createManagedCommandInvocation({
+    args: ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
+    bin: tsgoPath,
+  });
   const result = spawnSync(tsgo.command, tsgo.args, {
     cwd: rootDir,
     encoding: "utf8",

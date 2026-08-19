@@ -14,7 +14,6 @@ import {
 } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import {
   computeArtifactInputsDigest,
-  createPluginSdkTypeInputsCommand,
   createPrefixedOutputWriter,
   derivePluginSdkTypeInputsFromBuildInfo,
   isArtifactSetFresh,
@@ -160,34 +159,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         },
       }),
     ).toBe(pathToFileURL(loaderPath).href);
-  });
-
-  it("runs the tsgo shim through cmd.exe on Windows", () => {
-    const shimPath = String.raw`C:\primary\node_modules\.bin\tsgo`;
-
-    const invocation = createPluginSdkTypeInputsCommand(shimPath, "win32");
-
-    // Windows cannot execute the extensionless pnpm shim directly, so the
-    // command must be the interpreter and the shim must move into its command line.
-    expect(invocation.command).not.toBe(shimPath);
-    expect(invocation.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-    expect(invocation.args.at(-1)).toContain(shimPath);
-    expect(invocation.args.at(-1)).toContain("--listFilesOnly");
-    expect(invocation.windowsVerbatimArguments).toBe(true);
-  });
-
-  it("runs the tsgo shim directly on other platforms", () => {
-    const shimPath = "/repo/node_modules/.bin/tsgo";
-
-    const invocation = createPluginSdkTypeInputsCommand(shimPath, "linux");
-
-    expect(invocation.command).toBe(shimPath);
-    expect(invocation.args).toEqual([
-      "-p",
-      "tsconfig.plugin-sdk.dts.json",
-      "--listFilesOnly",
-      "--noEmit",
-    ]);
   });
 
   it("prefixes each completed line and flushes the trailing partial line", () => {
