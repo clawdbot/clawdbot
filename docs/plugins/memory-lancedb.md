@@ -243,7 +243,7 @@ capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 
 ```bash
 openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
-openclaw ltm search <query> [--agent <id>] [--limit <n>]
+openclaw ltm search <query> [--agent <id>] [--limit <n>] [--scope <slug>]
 openclaw ltm stats [--agent <id>]
 ```
 
@@ -264,11 +264,87 @@ openclaw ltm query --filter "category = 'preference'" --order-by createdAt:desc
 
 Agents get three tools from the active memory plugin:
 
-- `memory_recall`: vector search over stored memories.
+- `memory_recall`: vector search over stored memories. Takes an optional `scope`
+  to read one partition (see [Scope](#scope-partitioning-a-shared-store));
+  unscoped, it reads global memories only.
 - `memory_store`: save a fact, preference, decision, or entity (rejects text
   that looks like a prompt-injection payload; skips near-duplicate stores).
+  Prefix the text with `[SCOPE:<slug>]` to partition the memory.
 - `memory_forget`: delete by `memoryId`, or by `query` (auto-deletes a single
-  match above 90% score, otherwise lists candidate IDs to disambiguate).
+  match above 90% score, otherwise lists candidate IDs to disambiguate). Takes an
+  optional `scope`; unscoped, it only deletes global memories, and a `memoryId`
+  delete is fenced to the target row's scope.
+
+## Scope (partitioning a shared store)
+
+Every memory belongs to one agent (see the per-agent isolation notes above);
+within an agent's store, every memory is **global** by default: visible to
+recall, auto-recall, and forget across that whole store. A memory can instead be
+tagged with an opaque **scope** — a caller-chosen partition key such as a
+project, person, or channel — so the scope-aware read and delete paths only
+return it when that scope is requested. This partitions one agent's shared store
+without splitting it into a separate store per context.
+
+**Scope is a retrieval partition, not access control.** The scope key is
+supplied by whoever calls the tool (or writes the tagged text), not derived from
+a trusted session identity, and any caller may request any scope. Use it to keep
+one agent's store organized and recalls relevant — do not rely on it to isolate
+untrusted callers or sensitive data from each other; that kind of enforcement
+needs a trusted identity signal and is out of scope for this feature.
+
+- **Tagging.** Prefix the stored text with `[SCOPE:<slug>]` (via the
+  `memory_store` tool or a tagged user message). The tag is parsed into a `scope`
+  column and stripped before embedding, so the vector reflects the fact, not the
+  prefix, and the tag is never echoed back on recall. A scope key must be a slug
+  matching `[A-Za-z0-9_-]+`; a tag whose key is not a valid slug (for example a
+  raw channel/room id with punctuation) is **rejected**, not silently stored
+  global — map it to a slug first. A tag with no text after it (`[SCOPE:<slug>]`
+  alone) is likewise rejected on store and skipped on auto-capture, so the control
+  tag is never embedded or persisted as a memory on its own.
+- **Scoped vs unscoped recall.** `memory_recall` takes an optional `scope`. A
+  scoped call returns that scope's matches first, with global rows filling the
+  rest (scope and global are retrieved in separate vector passes so strong global
+  neighbors cannot crowd the scope out). An unscoped call returns global rows
+  only, so a scoped memory stays out of a plain recall.
+- **Scoped vs unscoped forget.** `memory_forget` takes the same `scope`. A scoped
+  forget only deletes within that scope; an unscoped forget only deletes global
+  rows. This holds for both delete paths: a `query` forget filters by scope, and a
+  `memoryId` forget is fenced by first checking the target row's scope — so a
+  known id from another partition does not delete through it.
+- **Automatic recall is global-only.** The `before_prompt_build` auto-recall has
+  no active-scope signal, so it injects only global/untagged memories; a scoped
+  memory is never auto-recalled into an unrelated turn.
+- **`ltm search` mirrors the tool.** It is global-only by default; pass
+  `--scope <slug>` to vector-search within one partition. Each result row
+  reports its `scope`.
+- **`ltm list`, `ltm query`, and `ltm stats` are operator inspection paths.**
+  They intentionally stay scope-blind in coverage: they enumerate and count an
+  agent's rows across **all** partitions, exactly like before this feature —
+  an explicit operator-level bypass for auditing and debugging, consistent
+  with scope being an organizational partition rather than an authorization
+  boundary. Each row they return carries its `scope` key (`""` = global), so
+  an operator can see which partition a memory lives in and then target it:
+  `scope` is a selectable, filterable column in `ltm query` (for example
+  `--filter "scope = 'proj-x'"`), and `ltm stats` reports the scoped/global
+  split. On a not-yet-migrated (pre-scope) table `ltm query` drops the absent
+  `scope` column from output and rejects a `scope` filter with the Doctor
+  pointer.
+
+Scope is behavior-preserving until you use it, and upgrades never interrupt an
+existing store. A pre-existing table (no `scope` column yet) keeps working in
+**legacy mode**: all of its rows are global, unscoped recall/forget/capture and
+the CLI behave exactly as before this feature, scoped reads simply find no
+scoped rows, and only a scoped **write** (a `[SCOPE:<slug>]` store) is refused
+— storing it global would silently mis-scope it. The `memory_store` tool
+returns the Doctor pointer; auto-capture logs and skips the tagged message and
+keeps walking its batch, so later global captures still land and the capture
+cursor still advances.
+Schema changes never happen during normal startup: adding the `scope` column is
+a **doctor-only** step (ordinary config preflight skips it) that you run once
+with `openclaw doctor --fix` to enable partitions — previewed and verified,
+every existing row stays global, then restart. A table predating per-agent
+isolation gains both the `agentId` and `scope` columns in that same single
+doctor pass.
 
 ## Storage
 

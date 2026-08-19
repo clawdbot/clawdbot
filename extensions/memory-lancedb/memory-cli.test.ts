@@ -82,7 +82,61 @@ describe("memory-lancedb CLI embedding lifecycle", () => {
       provider: "openai",
       model: "text-embedding-3-small",
     });
-    expect(harness.search).toHaveBeenCalledWith("private", [0.1, 0.2], 5, 0.3);
+    expect(harness.search).toHaveBeenCalledWith("private", [0.1, 0.2], 5, 0.3, undefined, "");
+    expect(harness.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("searches global-only by default and one partition with --scope", async () => {
+    // Mirror of the memory_recall tool contract: an unscoped ltm search must
+    // not scan the whole table (scoped rows would leak across partitions), and
+    // --scope restricts the vector search to that partition's rows.
+    const harness = createHarness();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      await harness.program.parseAsync([
+        "node",
+        "openclaw",
+        "ltm",
+        "search",
+        "release deadline",
+        "--scope",
+        "demo-shop_eu",
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(harness.search).toHaveBeenCalledWith(
+      "main",
+      [0.1, 0.2],
+      5,
+      0.3,
+      undefined,
+      "demo-shop_eu",
+    );
+    expect(harness.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a non-slug --scope before generating an embedding", async () => {
+    // A punctuated key (for example a raw channel/room id) must fail loudly
+    // instead of being canonicalized into — or silently mixed with — a
+    // different partition.
+    const harness = createHarness();
+
+    await expect(
+      harness.program.parseAsync([
+        "node",
+        "openclaw",
+        "ltm",
+        "search",
+        "hello",
+        "--scope",
+        "!ops:example.org",
+      ]),
+    ).rejects.toThrow('--scope must be a slug matching [A-Za-z0-9_-]+ (got "!ops:example.org")');
+
+    expect(harness.embed).not.toHaveBeenCalled();
+    expect(harness.search).not.toHaveBeenCalled();
     expect(harness.close).toHaveBeenCalledTimes(1);
   });
 

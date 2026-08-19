@@ -6,8 +6,12 @@ import type { MemoryCategory } from "./config.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
 import {
   hasAgentScopeColumn,
+  hasMemoryScopeColumn,
   legacyMemorySchemaError,
+  legacyScopeSchemaError,
   memoryAgentPredicate,
+  MEMORY_SCOPE_COLUMN,
+  memoryScopePredicate,
   MEMORY_TABLE_NAME,
   quoteLanceSqlString,
 } from "./lancedb-schema.js";
@@ -22,6 +26,8 @@ export type MemoryEntry = {
   importance: number;
   category: MemoryCategory;
   createdAt: number;
+  /** Opaque caller-defined partition within one agent's rows; "" = global. */
+  scope?: string;
 };
 
 type MemoryListEntry = Omit<MemoryEntry, "vector">;
@@ -35,7 +41,14 @@ export type MemorySearchResult = {
   score: number;
 };
 
-export const MEMORY_QUERY_COLUMNS = ["id", "text", "importance", "category", "createdAt"] as const;
+export const MEMORY_QUERY_COLUMNS = [
+  "id",
+  "text",
+  "importance",
+  "category",
+  "createdAt",
+  "scope",
+] as const;
 export type MemoryQueryColumn = (typeof MEMORY_QUERY_COLUMNS)[number];
 export type MemoryQueryFilter = {
   column: MemoryQueryColumn;
@@ -62,6 +75,7 @@ function createMemoryTableSchema(vectorDim: number): Schema {
     new Field("category", new Utf8(), true),
     new Field("createdAt", new Float64(), true),
     new Field("agentId", new Utf8(), true),
+    new Field("scope", new Utf8(), true),
   ]);
 }
 
@@ -115,6 +129,7 @@ export class MemoryDB {
   private db: LanceDB.Connection | null = null;
   private table: LanceDB.Table | null = null;
   private initPromise: Promise<void> | null = null;
+  private hasScopeColumn = true;
 
   constructor(
     private readonly dbPath: string,
@@ -146,9 +161,18 @@ export class MemoryDB {
     let table: LanceDB.Table | null = null;
     try {
       table = await openOrCreateMemoryTable(db, this.vectorDim);
-      if (!hasAgentScopeColumn(await table.schema())) {
+      const schema = await table.schema();
+      if (!hasAgentScopeColumn(schema)) {
         throw legacyMemorySchemaError();
       }
+      // Schema changes are never applied during normal runtime initialization:
+      // adding the scope column goes through explicit `openclaw doctor --fix`
+      // (see the doctor-only entry in doctor-contract-api.ts), which previews,
+      // mutates, and verifies the table. Until that runs, a pre-scope table
+      // stays fully usable in legacy mode: every row is global, unscoped
+      // operations behave exactly as before the column existed, scoped reads
+      // match nothing, and only a scoped write is refused (see store()).
+      this.hasScopeColumn = hasMemoryScopeColumn(schema);
 
       this.db = db;
       this.table = table;
@@ -163,11 +187,22 @@ export class MemoryDB {
     await this.ensureInitialized();
 
     const fullEntry: MemoryEntry = {
+      scope: "",
       ...entry,
       id: randomUUID(),
       createdAt: Date.now(),
     };
+    // A partitioned write cannot be represented on a table that predates the
+    // scope column — refusing it (with a Doctor pointer) is the only safe
+    // option, because storing it global would silently mis-scope the memory.
+    // Global writes keep working: they use the pre-scope row shape.
+    if (!this.hasScopeColumn && fullEntry.scope) {
+      throw legacyScopeSchemaError();
+    }
     const storedEntry: StoredMemoryRow = { ...fullEntry, agentId };
+    if (!this.hasScopeColumn) {
+      delete storedEntry.scope;
+    }
 
     await this.table!.add([storedEntry]);
     return fullEntry;
@@ -179,13 +214,28 @@ export class MemoryDB {
     limit = 5,
     minScore = 0.5,
     executionOptions?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs">,
+    scope?: string,
   ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
 
+    // A legacy (pre-scope) table has no partitioned rows: a scoped search
+    // matches nothing by definition, and a scope predicate would error on the
+    // missing column, so short-circuit. Its global view ("" and undefined
+    // alike) is the plain agent predicate — exactly the pre-scope behavior.
+    if (!this.hasScopeColumn && scope) {
+      return [];
+    }
     // LanceDB applies metadata predicates before vector ranking. Foreign rows
-    // must never enter this agent's candidate set or top-K.
+    // must never enter this agent's candidate set or top-K. When a scope is
+    // given ("" = global-only, non-empty = that exact partition), it joins the
+    // same single predicate — LanceDB replaces rather than combines repeated
+    // where() calls, so agent isolation cannot be lost.
+    const predicate =
+      scope === undefined || !this.hasScopeColumn
+        ? memoryAgentPredicate(agentId)
+        : `(${memoryAgentPredicate(agentId)}) AND (${memoryScopePredicate(scope)})`;
     const results = await this.table!.vectorSearch(vector)
-      .where(memoryAgentPredicate(agentId))
+      .where(predicate)
       .limit(limit)
       .toArray(executionOptions);
 
@@ -200,12 +250,36 @@ export class MemoryDB {
           importance: row.importance as number,
           category: row.category as MemoryEntry["category"],
           createdAt: row.createdAt as number,
+          // scope is a nullable Utf8 column; legacy rows (NULL or a pre-scope
+          // schema) normalize to "" (global).
+          scope: typeof row.scope === "string" ? row.scope : "",
         },
         score,
       };
     });
 
     return mapped.filter((result) => result.score >= minScore);
+  }
+
+  // Returns the scope of one of this agent's rows by id ("" = global), or null
+  // when the agent has no such row. Used to fence memoryId-based deletes to the
+  // caller's partition without leaking other agents' rows.
+  async getScopeById(agentId: string, id: string): Promise<string | null> {
+    await this.ensureInitialized();
+    if (!UUID_PATTERN.test(id)) {
+      throw new Error(`Invalid memory ID format: ${id}`);
+    }
+    const rows = await this.table!.query()
+      .where(scopedPredicate(agentId, { column: "id", operator: "=", value: id }))
+      .limit(1)
+      .toArray();
+    if (rows.length === 0) {
+      return null;
+    }
+    // scope is a nullable Utf8 column; NULL or a pre-scope schema reads as ""
+    // (global) for the fence comparison.
+    const rowScope = rows[0]?.scope;
+    return typeof rowScope === "string" ? rowScope : "";
   }
 
   async list(
@@ -215,9 +289,14 @@ export class MemoryDB {
   ): Promise<MemoryListEntry[]> {
     await this.ensureInitialized();
 
-    let query = this.table!.query()
-      .where(memoryAgentPredicate(agentId))
-      .select(["id", "text", "importance", "category", "createdAt"]);
+    // Operators need the partition key to know which scope a row lives in;
+    // a pre-scope table has no such column, so it is selected conditionally
+    // and every legacy row reads as "" (global) — which is exactly its state.
+    const columns = ["id", "text", "importance", "category", "createdAt"];
+    if (this.hasScopeColumn) {
+      columns.push(MEMORY_SCOPE_COLUMN);
+    }
+    let query = this.table!.query().where(memoryAgentPredicate(agentId)).select(columns);
     if (!options.orderByCreatedAt && limit !== undefined) {
       query = query.limit(limit);
     }
@@ -229,6 +308,7 @@ export class MemoryDB {
       importance: row.importance as number,
       category: row.category as MemoryEntry["category"],
       createdAt: row.createdAt as number,
+      scope: typeof row.scope === "string" ? row.scope : "",
     }));
     if (options.orderByCreatedAt) {
       entries.sort((a, b) => b.createdAt - a.createdAt);
@@ -240,11 +320,23 @@ export class MemoryDB {
   async query(agentId: string, options: MemoryQueryOptions): Promise<Record<string, unknown>[]> {
     await this.ensureInitialized();
 
+    // Legacy (pre-scope) tables: selecting the absent scope column is silently
+    // dropped (the output faithfully shows the table's real shape), while an
+    // explicit scope FILTER is refused with the Doctor pointer — the operator
+    // asked a partition question the table cannot answer yet.
+    let columns = options.columns;
+    if (!this.hasScopeColumn) {
+      if (options.filter?.column === MEMORY_SCOPE_COLUMN) {
+        throw legacyScopeSchemaError();
+      }
+      columns = columns.filter((column) => column !== MEMORY_SCOPE_COLUMN);
+    }
+
     let query = this.table!.query()
       // LanceDB 0.30 replaces rather than combines repeated where() calls.
       // Scope and operator filter stay one predicate so scope cannot be lost.
       .where(scopedPredicate(agentId, options.filter))
-      .select(options.columns);
+      .select(columns);
     if (options.limit !== undefined) {
       query = query.limit(options.limit);
     }
@@ -264,6 +356,17 @@ export class MemoryDB {
   async count(agentId: string): Promise<number> {
     await this.ensureInitialized();
     return await this.table!.countRows(memoryAgentPredicate(agentId));
+  }
+
+  // Operator statistics: how many of this agent's rows live in a non-global
+  // partition. A pre-scope table has no partitioned rows by definition.
+  async countScoped(agentId: string): Promise<number> {
+    await this.ensureInitialized();
+    if (!this.hasScopeColumn) {
+      return 0;
+    }
+    const scoped = `${MEMORY_SCOPE_COLUMN} IS NOT NULL AND ${MEMORY_SCOPE_COLUMN} != ''`;
+    return await this.table!.countRows(`(${memoryAgentPredicate(agentId)}) AND (${scoped})`);
   }
 
   close(): void {

@@ -10,7 +10,7 @@ import {
   type MemoryQueryFilter,
   type MemoryDB,
 } from "./lancedb-store.js";
-import { normalizeRecallQuery } from "./memory-policy.js";
+import { normalizeRecallQuery, parseScopeArg } from "./memory-policy.js";
 
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
@@ -136,6 +136,10 @@ export function registerMemoryCli(
         .argument("<query>", "Search query")
         .option("--agent <id>", "Agent id (default: configured default agent)")
         .option("--limit <n>", "Max results", "5")
+        .option(
+          "--scope <slug>",
+          "Restrict the search to a scope partition (default: global/untagged rows only)",
+        )
         .action(async (query, opts) => {
           let operationError: unknown;
           let operationFailed = false;
@@ -143,18 +147,30 @@ export function registerMemoryCli(
             const agentId = resolveCliAgentId(opts.agent);
             const limit = parsePositiveIntegerOption(opts.limit, "--limit");
             const config = resolveConfig();
+            // Mirror the memory_recall tool contract: no --scope means
+            // global-only (a table-wide scan would leak scoped rows across
+            // partitions), a slug restricts to that partition, and a non-slug
+            // key is rejected rather than silently canonicalized into another
+            // partition.
+            const scopeArg = parseScopeArg(opts.scope);
+            if ("invalidKey" in scopeArg) {
+              throw new Error(
+                `--scope must be a slug matching [A-Za-z0-9_-]+ (got "${scopeArg.invalidKey}")`,
+              );
+            }
             const vector = await embeddings.embed(
               agentId,
               normalizeRecallQuery(query, config.recallMaxChars),
               config.embedding,
             );
-            const results = await db.search(agentId, vector, limit, 0.3);
+            const results = await db.search(agentId, vector, limit, 0.3, undefined, scopeArg.scope);
             const output = results.map((r) => ({
               id: r.entry.id,
               text: r.entry.text,
               category: r.entry.category,
               importance: r.entry.importance,
               score: r.score,
+              scope: r.entry.scope ?? "",
             }));
             defaultRuntime.writeJson(output);
           } catch (err) {
@@ -228,7 +244,9 @@ export function registerMemoryCli(
         .action(async (opts) => {
           const agentId = resolveCliAgentId(opts.agent);
           const count = await db.count(agentId);
+          const scoped = await db.countScoped(agentId);
           console.log(`Total memories: ${count}`);
+          console.log(`Scoped memories: ${scoped} (global: ${count - scoped})`);
         });
     },
     {
