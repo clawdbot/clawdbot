@@ -483,17 +483,28 @@ describe("Telegram Desktop recorder remote contract", () => {
       userDriver: ["python3", "driver.py"],
     };
 
-    await expect(startRecorder(root, options, operations)).rejects.toThrow(
-      "telegram-login-screen.png",
-    );
-    expect(scpFromRemote).toHaveBeenCalledWith(
-      expect.objectContaining({ remote: expect.stringContaining("telegram-login-qr.png") }),
-    );
+    // Exhausting the login attempts twice waits out twelve 2s backoffs, so this test alone
+    // slept for 24s of the suite. Fake timers keep the retry count honest off the wall clock.
+    vi.useFakeTimers();
+    try {
+      const exhausted = expect(startRecorder(root, options, operations)).rejects.toThrow(
+        "telegram-login-screen.png",
+      );
+      await vi.runAllTimersAsync();
+      await exhausted;
+      expect(scpFromRemote).toHaveBeenCalledWith(
+        expect.objectContaining({ remote: expect.stringContaining("telegram-login-qr.png") }),
+      );
 
-    scpFromRemote.mockRejectedValueOnce(new Error("scp: connection closed"));
-    await expect(startRecorder(root, options, operations)).rejects.toThrow(
-      "Login screen could not be fetched: scp: connection closed",
-    );
+      scpFromRemote.mockRejectedValueOnce(new Error("scp: connection closed"));
+      const unfetchable = expect(startRecorder(root, options, operations)).rejects.toThrow(
+        "Login screen could not be fetched: scp: connection closed",
+      );
+      await vi.runAllTimersAsync();
+      await unfetchable;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports the blocked user when the output dir is not writable", async () => {
