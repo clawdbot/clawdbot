@@ -47,7 +47,7 @@ function resolveMatchingPersistedResolution(params: {
   model: string | null | undefined;
   agentHarnessId: string | null | undefined;
 }): number | undefined {
-  if (params.entry?.contextTokensSource !== "resolved") {
+  if (params.entry?.contextTokensSource !== "resolved-v1") {
     return undefined;
   }
   return isExactProducerSelection(params)

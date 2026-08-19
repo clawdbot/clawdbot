@@ -221,6 +221,19 @@ describe("accountFollowupTurn", () => {
     );
   });
 
+  it("marks a successful current model lookup with versioned resolved provenance", async () => {
+    const params = createParams();
+
+    await accountFollowupTurn(params);
+
+    expect(mocks.persistRunSessionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextTokensUsed: 200_000,
+        contextTokensSource: "resolved-v1",
+      }),
+    );
+  });
+
   it("does not label a prior context fallback as a current resolution after a model switch", async () => {
     mocks.resolveContextTokensForModel.mockReturnValueOnce(undefined);
     const params = createParams();

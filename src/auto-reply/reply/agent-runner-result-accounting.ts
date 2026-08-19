@@ -249,7 +249,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     (runtimeContextTokens !== undefined
       ? "runtime"
       : resolvedContextTokens !== undefined
-        ? "resolved"
+        ? "resolved-v1"
         : undefined);
 
   await persistRunSessionUsage({

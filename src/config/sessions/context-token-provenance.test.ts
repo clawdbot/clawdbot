@@ -127,11 +127,21 @@ describe("resolveProjectedSessionContextTokens", () => {
   it("falls back to the matching persisted resolution while current resolution is unavailable", () => {
     expect(
       resolveProjectedSessionContextTokens({
-        entry: { ...matchingRuntimeEntry, contextTokensSource: "resolved" },
+        entry: { ...matchingRuntimeEntry, contextTokensSource: "resolved-v1" },
         ...currentSelection,
         resolvedContextTokens: undefined,
       }),
     ).toBe(272_000);
+  });
+
+  it("rejects a legacy resolved row because its producer may have reused a fallback", () => {
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: { ...matchingRuntimeEntry, contextTokensSource: "resolved" },
+        ...currentSelection,
+        resolvedContextTokens: undefined,
+      }),
+    ).toBeUndefined();
   });
 
   it("does not resurrect a removed runtime-configured cap while resolution is unavailable", () => {
@@ -153,7 +163,7 @@ describe("resolveProjectedSessionContextTokens", () => {
       resolveProjectedSessionContextTokens({
         entry: {
           ...matchingRuntimeEntry,
-          contextTokensSource: "resolved",
+          contextTokensSource: "resolved-v1",
           ...patch,
         },
         ...currentSelection,

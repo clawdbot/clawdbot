@@ -1605,7 +1605,7 @@ describe("gateway session utils", () => {
         model: "gpt-5.6-sol",
         agentHarnessId: "codex",
         contextTokens: 272_000,
-        contextTokensSource: "resolved",
+        contextTokensSource: "resolved-v1",
       } as SessionEntry;
 
       const row = buildGatewaySessionRow({
