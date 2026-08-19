@@ -57,7 +57,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       password: gateway.connection.password,
     });
     return {
-      routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
+      routeUrl: workspaceIconRouteUrl(this.context.resourceBasePath, sessionKey),
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };

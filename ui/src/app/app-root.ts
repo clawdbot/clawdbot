@@ -74,7 +74,7 @@ function renderApprovalDocument(runtime: ApplicationRuntime) {
       <main class="approval-page approval-page--booting" role="status" aria-live="polite">
         <img
           class="connect-splash__logo"
-          src=${controlUiPublicAssetPath("favicon.svg", runtime.context.basePath)}
+          src=${controlUiPublicAssetPath("favicon.svg", runtime.context.resourceBasePath)}
           alt=""
         />
         <span>${t("common.loading")}</span>
@@ -521,7 +521,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
         <openclaw-tooltip-provider>
           <openclaw-login-gate
             .props=${{
-              basePath: context.basePath,
+              resourceBasePath: context.resourceBasePath,
               connected: gatewayConnected,
               lastError: gatewaySnapshot.lastError,
               lastErrorCode: gatewaySnapshot.lastErrorCode,

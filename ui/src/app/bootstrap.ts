@@ -31,7 +31,7 @@ import {
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
-import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
+import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
@@ -252,7 +252,7 @@ export function bootstrapApplication(
 ): ApplicationRuntime {
   const history = createBrowserHistory();
   const startupLocation = history.location();
-  const initialBasePath = resolveControlUiBasePath(
+  const { basePath: initialBasePath } = resolveControlUiPaths(
     startupLocation.pathname || globalThis.location?.pathname || "/",
   );
   const documentMode = resolveApprovalDocumentMode(startupLocation.pathname, initialBasePath);
@@ -283,7 +283,7 @@ export function bootstrapApplication(
   if (applicationLocation !== startup.location) {
     history.replace(applicationLocation);
   }
-  const basePath = resolveControlUiBasePath(
+  const { basePath, resourceBasePath } = resolveControlUiPaths(
     applicationLocation.pathname || globalThis.location?.pathname || "/",
   );
   const focusLocation = parseControlUiFocusLocation(applicationLocation, basePath);
@@ -309,7 +309,7 @@ export function bootstrapApplication(
     undefined,
     {
       persistDefaultConnectionSettings: documentMode === null,
-      basePath,
+      resourceBasePath,
       ...(startup.pendingBootstrapProfile
         ? { bootstrapProfile: startup.pendingBootstrapProfile }
         : {}),
@@ -353,7 +353,7 @@ export function bootstrapApplication(
   const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);
   const config = createApplicationConfigCapability({
-    basePath,
+    resourceBasePath,
     auth: {
       settings: { token: settings.token },
       password: startup.password ?? "",
@@ -503,6 +503,7 @@ export function bootstrapApplication(
     navigateWithMode(routeId, options, "push");
   const context: ApplicationContext<RouteId> = {
     basePath,
+    resourceBasePath,
     gateway,
     agents,
     agentIdentity,

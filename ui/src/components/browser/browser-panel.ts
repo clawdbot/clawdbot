@@ -45,8 +45,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   @property({ type: Boolean }) available = false;
   /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
   @property({ type: Boolean }) suppressed = false;
-  /** Control UI base path, used for the authenticated media fetch. */
-  @property({ attribute: false }) basePath = "";
+  /** Gateway HTTP resource mount used for the authenticated media fetch. */
+  @property({ attribute: false }) resourceBasePath = "";
   /** Bearer credential for the assistant-media screenshot fetch. */
   @property({ attribute: false }) authToken: string | null = null;
   /** Hosted by the chat side panel, which owns visibility and geometry. */

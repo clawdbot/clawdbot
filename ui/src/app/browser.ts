@@ -7,7 +7,7 @@ type WindowWithControlUiBasePath = Window &
     [key: string]: unknown;
   };
 
-export function resolveControlUiBasePath(pathname: string): string {
+function readControlUiResourceBasePath(): string | null {
   if (typeof window !== "undefined") {
     const windowValue = (window as WindowWithControlUiBasePath)[
       "__OPENCLAW_CONTROL_UI_BASE_PATH__"
@@ -22,7 +22,28 @@ export function resolveControlUiBasePath(pathname: string): string {
       return normalizeBasePath(documentValue);
     }
   }
-  return inferBasePathFromPathname(pathname);
+  return null;
+}
+
+/** Route mount used by the application router and navigation URLs. */
+export function resolveControlUiBasePath(pathname: string): string {
+  return resolveControlUiPaths(pathname).basePath;
+}
+
+/** Gateway HTTP mount used by config, media, icons, avatars, and static assets. */
+export function resolveControlUiResourceBasePath(pathname: string): string {
+  return resolveControlUiPaths(pathname).resourceBasePath;
+}
+
+export function resolveControlUiPaths(pathname: string) {
+  const resourceBasePath = readControlUiResourceBasePath();
+  const inferredBasePath = resourceBasePath
+    ? resourceBasePath
+    : inferBasePathFromPathname(pathname);
+  return {
+    basePath: inferredBasePath,
+    resourceBasePath: resourceBasePath ?? inferredBasePath,
+  };
 }
 
 function readLocation(): RouteLocation {

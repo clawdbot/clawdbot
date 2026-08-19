@@ -1,3 +1,4 @@
+import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import type { PresenceEntry } from "../api/types.ts";
 
 export type AuthenticatedUser = NonNullable<PresenceEntry["user"]>;
@@ -46,13 +47,15 @@ export function userProfileAvatarUrl(
   gatewayUrl: string,
   profileId: string,
   revision: string | number,
-  documentHref = globalThis.location?.href,
+  resourceBasePath = "",
+  documentHref?: string,
 ): string | null {
-  if (!documentHref) {
+  const pageHref = documentHref ?? globalThis.location?.href;
+  if (!pageHref) {
     return null;
   }
   try {
-    const url = new URL(gatewayUrl, documentHref);
+    const url = new URL(gatewayUrl, pageHref);
     if (url.protocol === "ws:") {
       url.protocol = "http:";
     } else if (url.protocol === "wss:") {
@@ -65,7 +68,13 @@ export function userProfileAvatarUrl(
     }
     url.username = "";
     url.password = "";
-    url.pathname = `/api/users/${encodeURIComponent(profileId)}/avatar`;
+    const documentOrigin =
+      documentHref === undefined && globalThis.location?.origin
+        ? globalThis.location.origin
+        : new URL(pageHref).origin;
+    const sameOriginResourceBase =
+      url.origin === documentOrigin ? normalizeRouteBasePath(resourceBasePath) : "";
+    url.pathname = `${sameOriginResourceBase}/api/users/${encodeURIComponent(profileId)}/avatar`;
     url.search = `?v=${revision}`;
     url.hash = "";
     return url.href;

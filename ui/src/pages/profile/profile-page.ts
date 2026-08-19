@@ -280,6 +280,7 @@ export class ProfilePage extends OpenClawLightDomElement {
         this.context.gateway.connection.gatewayUrl,
         result.profile.id,
         result.avatarRevision,
+        this.context.resourceBasePath,
       );
       const presenceAvatarChanged =
         this.selfUser?.id === result.profile.id && this.selfUser.avatarUrl !== selfAvatarUrlBefore;
@@ -388,6 +389,7 @@ export class ProfilePage extends OpenClawLightDomElement {
             this.context.gateway.connection.gatewayUrl,
             this.ownProfile.id,
             this.ownProfile.updatedAt,
+            this.context.resourceBasePath,
           );
     return renderIdentitySection({
       profile: this.ownProfile,
