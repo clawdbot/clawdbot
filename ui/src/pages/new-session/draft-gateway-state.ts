@@ -15,11 +15,6 @@ import {
   discoverPlaceCatalog,
   selectProfiles,
 } from "./cloud-profile-discovery.ts";
-import {
-  resolveScope,
-  resolveSubmissionOutcomeReason,
-  type SubmissionOutcomeReason,
-} from "./cloud-recovery-state.ts";
 import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -33,6 +28,11 @@ import {
   replaceBrowserPreference,
   type NewSessionPreference,
 } from "./preferences.ts";
+import {
+  resolveScope,
+  resolveSubmissionOutcomeReason,
+  type SubmissionOutcomeReason,
+} from "./session-placement-recovery-state.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
@@ -44,7 +44,7 @@ type DraftGatewaySnapshot = Readonly<{
   canStartAsDraft: boolean;
   visibility: "normal" | "draft" | "incognito";
   cloudProfileId: string;
-  pendingCloud: Readonly<{
+  pendingPlacement: Readonly<{
     sessionKey: string;
     gatewayUrl: string;
     recoveryScope: string;
@@ -59,7 +59,7 @@ type DraftGatewayCallbacks = {
   onVisibilityRetired: () => void;
   onCloudProfileCleared: () => void;
   onCloudState: (error: string | null) => void;
-  onPendingCloudReset: () => void;
+  onPendingPlacementReset: () => void;
   onRecoveryReady: (gatewayUrl: string, recoveryScope: string) => void;
   onAdoptAgentDefaults: () => void;
 };
@@ -236,7 +236,7 @@ export class DraftGatewayState {
         ownerChanged,
         resolveSubmissionOutcomeReason({
           gatewayIdentityChanged,
-          cloudDraftOwned: Boolean(this.read().pendingCloud.sessionKey),
+          placementDraftOwned: Boolean(this.read().pendingPlacement.sessionKey),
         }),
       );
     }
@@ -247,13 +247,13 @@ export class DraftGatewayState {
       recoveryScopeBecameReady ||
       becameConnected
     ) {
-      const pending = this.read().pendingCloud;
+      const pending = this.read().pendingPlacement;
       if (
         pending.gatewayUrl &&
         (pending.gatewayUrl !== this.gatewayUrlValue ||
           pending.recoveryScope !== this.gatewayRecoveryScopeValue)
       ) {
-        this.callbacks.onPendingCloudReset();
+        this.callbacks.onPendingPlacementReset();
       }
       if (connected && snapshot.client?.recoveryScopeReady) {
         this.callbacks.onRecoveryReady(this.gatewayUrlValue, this.gatewayRecoveryScopeValue);
@@ -369,7 +369,7 @@ export class DraftGatewayState {
     if (
       catalog.isTarget(snapshot.data) ||
       snapshot.data?.group ||
-      snapshot.pendingCloud.sessionKey
+      snapshot.pendingPlacement.sessionKey
     ) {
       return null;
     }
@@ -383,7 +383,7 @@ export class DraftGatewayState {
     if (
       catalog.isTarget(snapshot.data) ||
       snapshot.data?.group ||
-      snapshot.pendingCloud.sessionKey
+      snapshot.pendingPlacement.sessionKey
     ) {
       return;
     }
@@ -445,13 +445,13 @@ export class DraftGatewayState {
     );
     this.cloudProfilesValue = recovery.profiles;
     const snapshot = this.read();
-    const pendingCloud = Boolean(snapshot.pendingCloud.sessionKey);
+    const pendingPlacement = Boolean(snapshot.pendingPlacement.sessionKey);
     const canWrite = hasOperatorWriteAccess(snapshot.context?.gateway.snapshot.hello?.auth ?? null);
-    if ((!this.gatewayConnectedValue || !canWrite) && !pendingCloud) {
+    if ((!this.gatewayConnectedValue || !canWrite) && !pendingPlacement) {
       this.callbacks.onCloudProfileCleared();
     }
     const selectionUnavailable =
-      !pendingCloud &&
+      !pendingPlacement &&
       Boolean(snapshot.cloudProfileId) &&
       !profiles.some((profile) => profile.id === snapshot.cloudProfileId);
     if (selectionUnavailable) {

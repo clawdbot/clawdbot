@@ -21,7 +21,6 @@ import "../../styles/new-session.css";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
-import type { SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
 import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
 import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
@@ -43,6 +42,7 @@ import {
   readPresenceEntries,
 } from "./new-session-runtime.ts";
 import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
+import type { SubmissionOutcomeReason } from "./session-placement-recovery-state.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
@@ -89,7 +89,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         canStartAsDraft: this.submission?.canStartAsDraft() ?? false,
         visibility: this.submission?.visibility ?? "normal",
         cloudProfileId: this.place?.cloudProfileId ?? "",
-        pendingCloud: this.submission?.pendingCloud ?? {
+        pendingPlacement: this.submission?.pendingPlacement ?? {
           sessionKey: "",
           gatewayUrl: "",
           recoveryScope: "",
@@ -104,7 +104,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         onVisibilityRetired: () => this.submission.setVisibility("normal"),
         onCloudProfileCleared: () => this.place.clearCloudProfile(),
         onCloudState: (error) => this.submission.setError(error),
-        onPendingCloudReset: () => this.submission.resetPendingCloudWithoutClearingStorage(),
+        onPendingPlacementReset: () => this.submission.releasePendingPlacementOwner(),
         onRecoveryReady: (gatewayUrl, recoveryScope) =>
           restoreDraftOwner(this.submission, gatewayUrl, recoveryScope),
         onAdoptAgentDefaults: () =>
@@ -141,7 +141,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         context: this.context,
         data: this.data,
         submitting: this.submission?.submitting ?? false,
-        pendingCloudSessionKey: this.submission?.pendingCloud.sessionKey ?? "",
+        pendingCloudSessionKey: this.submission?.pendingPlacement.sessionKey ?? "",
       }),
       {
         requestUpdate: () => this.requestUpdate(),
@@ -235,7 +235,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     this.subscriptions.clear();
     this.gateway.invalidateDiscovery(
       true,
-      this.submission.pendingCloud.sessionKey ? "cloud-interrupted" : "gateway-changed",
+      this.submission.pendingPlacement.sessionKey ? "cloud-interrupted" : "gateway-changed",
     );
     this.gateway.disconnect();
     this.browser.disconnect();
@@ -304,7 +304,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     this.place.invalidateGatewayDiscovery(resetHostSelection);
     this.submission.attachmentDraft.abortReads();
     this.submission.invalidate(submissionOutcome);
-    if (resetHostSelection && this.submission.pendingCloud.sessionKey) {
+    if (resetHostSelection && this.submission.pendingPlacement.sessionKey) {
       this.submission.markPendingCloudUnavailable(submissionOutcome);
     }
     if (resetHostSelection) {
@@ -341,7 +341,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       agents: this.place.agents(),
       agentId: this.place.agentId,
       agentIdentity: this.context?.agentIdentity,
-      disabled: this.submission.submitting || Boolean(this.submission.pendingCloud.sessionKey),
+      disabled: this.submission.submitting || Boolean(this.submission.pendingPlacement.sessionKey),
       onSelect: (agentId) => this.place.selectAgentId(agentId),
     });
   }
@@ -403,7 +403,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       ? t("newSession.gatewayNamed", { name: this.gateway.gatewayName })
       : t("newSession.gateway");
     const submitting = this.submission.submitting;
-    const pendingCloud = Boolean(this.submission.pendingCloud.sessionKey);
+    const pendingCloud = Boolean(this.submission.pendingPlacement.sessionKey);
     return html`${renderWhereChip({
       state: whereState,
       gatewayName: this.gateway.gatewayName,
@@ -611,7 +611,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           requestUpdate: () => this.requestUpdate(),
           submitting: this.submission.submitting,
           textareaController: this.submission.composerTextarea,
-          messageLocked: Boolean(this.submission.pendingCloud.sessionKey),
+          messageLocked: Boolean(this.submission.pendingPlacement.sessionKey),
           terminalAction: this.submission.showStartInTerminal()
             ? {
                 canStart: this.submission.canSubmit("terminal"),
@@ -620,7 +620,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
               }
             : undefined,
           onInput: (message) => {
-            if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
+            if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
               this.setMessageFromUser(message);
             }
           },
@@ -628,7 +628,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             this.imageLightbox = item;
           },
           onVisibilityChange: (visibility) => {
-            if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
+            if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
               this.submission.setVisibility(visibility);
             }
           },
@@ -661,13 +661,13 @@ export class NewSessionPage extends OpenClawLightDomElement {
         hello: gateway?.hello ?? null,
       },
       onDraftChange: (next) => {
-        if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
+        if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
           this.setMessageFromUser(next);
         }
       },
       onSend: () => void this.submission.submit(),
       onOpenSession: (sessionKey) => {
-        if (this.submission.submitting || this.submission.pendingCloud.sessionKey) {
+        if (this.submission.submitting || this.submission.pendingPlacement.sessionKey) {
           return;
         }
         const context = this.context;

@@ -2,22 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { cloudSessionRecoveryExactStorageKey } from "../lib/sessions/cloud-recovery-storage-key.ts";
-import {
-  readCloudSessionRecovery,
-  type CloudSessionRecovery,
-  writeCloudSessionRecovery,
-} from "../lib/sessions/cloud-recovery.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
-  createApplicationCloudStartup,
-  type ApplicationCloudStartupStatus,
-  type ApplicationCloudStartupRuntime,
-} from "./cloud-session-startup.ts";
+  readSessionPlacementRecovery,
+  type SessionPlacementRecovery,
+  writeSessionPlacementRecovery,
+} from "../lib/sessions/session-placement-recovery.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
+import {
+  createApplicationPlacementStartup,
+  type ApplicationPlacementStartupStatus,
+  type ApplicationPlacementStartupRuntime,
+} from "./session-placement-startup.ts";
 
-type CloudStartupInput = Parameters<ApplicationCloudStartupRuntime["start"]>[0];
+type PlacementStartupInput = Parameters<ApplicationPlacementStartupRuntime["start"]>[0];
 
 function placement(state: string, generation: number, updatedAtMs = generation) {
   return {
@@ -41,7 +41,7 @@ function placement(state: string, generation: number, updatedAtMs = generation) 
 function harness(
   request: ReturnType<typeof vi.fn>,
   options: {
-    loadRuntime?: Parameters<typeof createApplicationCloudStartup>[1];
+    loadRuntime?: Parameters<typeof createApplicationPlacementStartup>[1];
     recoveryBeforeStartup?: boolean;
   } = {},
 ) {
@@ -65,24 +65,24 @@ function harness(
     refresh: vi.fn(async () => undefined),
     subscribe: vi.fn(() => () => undefined),
   } as unknown as SessionCapability;
-  const recovery: CloudSessionRecovery = {
+  const recovery: SessionPlacementRecovery = {
     sessionKey,
     messageId: "message-stable",
     message: "fix the cloud task",
-    profileId: "aws",
+    target: { kind: "profile", profileId: "aws" },
     agentId: "cloud",
     gatewayUrl: "ws://gateway.example",
     recoveryScope: "principal-a",
     phase: "dispatching",
   };
   if (options.recoveryBeforeStartup) {
-    expect(writeCloudSessionRecovery(recovery)).toBe(true);
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
   }
   const initialUserMessage = createInitialUserMessageHandoff();
   const dependencies = { gateway, sessions, initialUserMessage };
-  const startup = createApplicationCloudStartup(dependencies, options.loadRuntime);
+  const startup = createApplicationPlacementStartup(dependencies, options.loadRuntime);
   if (!options.recoveryBeforeStartup) {
-    expect(writeCloudSessionRecovery(recovery)).toBe(true);
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
   }
   return {
     startup,
@@ -103,16 +103,16 @@ async function flush() {
 }
 
 type RuntimeModule = Awaited<
-  ReturnType<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>
+  ReturnType<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>
 >;
 
 function createFakeRuntime() {
-  let status: ApplicationCloudStartupStatus | null = null;
+  let status: ApplicationPlacementStartupStatus | null = null;
   const listeners = new Set<() => void>();
   const publish = () => listeners.forEach((listener) => listener());
-  const runtime: ApplicationCloudStartupRuntime = {
+  const runtime: ApplicationPlacementStartupRuntime = {
     get: () => status,
-    start: vi.fn((input: CloudStartupInput) => {
+    start: vi.fn((input: PlacementStartupInput) => {
       status = {
         sessionKey: input.recovery.sessionKey,
         phase: "pending",
@@ -129,14 +129,14 @@ function createFakeRuntime() {
   };
   return {
     runtime,
-    setStatus(next: ApplicationCloudStartupStatus) {
+    setStatus(next: ApplicationPlacementStartupStatus) {
       status = next;
       publish();
     },
   };
 }
 
-describe("application cloud startup", () => {
+describe("application session placement startup", () => {
   beforeEach(() => {
     sessionStorage.clear();
   });
@@ -202,7 +202,7 @@ describe("application cloud startup", () => {
     const fake = createFakeRuntime();
     const loader = vi.fn(() => moduleLoad.promise);
     const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
-    const starts: CloudStartupInput[] = [];
+    const starts: PlacementStartupInput[] = [];
     for (let index = 0; index < 32; index += 1) {
       const next = {
         ...input,
@@ -234,7 +234,7 @@ describe("application cloud startup", () => {
   });
 
   it("keeps get and retry inert before any runtime load", async () => {
-    const loader = vi.fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>();
+    const loader = vi.fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>();
     const { startup, input, gateway } = harness(vi.fn(), { loadRuntime: loader });
 
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
@@ -246,7 +246,7 @@ describe("application cloud startup", () => {
 
   it("prewarms the runtime on connection even when recovery storage is empty", async () => {
     const request = vi.fn();
-    const loader = vi.fn(() => import("./cloud-session-startup.runtime.ts"));
+    const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
     const { startup } = harness(request, { loadRuntime: loader });
     sessionStorage.clear();
 
@@ -280,7 +280,7 @@ describe("application cloud startup", () => {
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
     const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>()
+      .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
       .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
       .mockResolvedValueOnce({ default: factory });
     const { startup } = harness(vi.fn(), { loadRuntime: loader });
@@ -300,7 +300,7 @@ describe("application cloud startup", () => {
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
     const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>()
+      .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
       .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
       .mockResolvedValueOnce({ default: factory });
     const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
@@ -321,7 +321,7 @@ describe("application cloud startup", () => {
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
     const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>()
+      .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
       .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
       .mockResolvedValueOnce({ default: factory });
     const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
@@ -359,7 +359,7 @@ describe("application cloud startup", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const loader = vi.fn(() => import("./cloud-session-startup.runtime.ts"));
+    const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
     const { startup, input } = harness(request, {
       loadRuntime: loader,
       recoveryBeforeStartup: true,
@@ -392,32 +392,32 @@ describe("application cloud startup", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const loader = vi.fn(() => import("./cloud-session-startup.runtime.ts"));
+    const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
     const { startup, input } = harness(request, {
       loadRuntime: loader,
       recoveryBeforeStartup: true,
     });
-    const secondRecovery: CloudSessionRecovery = {
+    const secondRecovery: SessionPlacementRecovery = {
       ...input.recovery,
       sessionKey: "agent:cloud:two",
       messageId: "message-two",
       message: "resume another task",
     };
-    expect(writeCloudSessionRecovery(secondRecovery)).toBe(true);
+    expect(writeSessionPlacementRecovery(secondRecovery)).toBe(true);
 
     startup.resumeRecovery();
     await vi.waitFor(() => {
       expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(2);
     });
     expect(
-      readCloudSessionRecovery(
+      readSessionPlacementRecovery(
         input.recovery.gatewayUrl,
         input.recovery.recoveryScope,
         input.recovery.sessionKey,
       ),
     ).toBeNull();
     expect(
-      readCloudSessionRecovery(
+      readSessionPlacementRecovery(
         secondRecovery.gatewayUrl,
         secondRecovery.recoveryScope,
         secondRecovery.sessionKey,
@@ -427,7 +427,7 @@ describe("application cloud startup", () => {
     secondSend.resolve({ messageSeq: 12 });
     await vi.waitFor(() => {
       expect(
-        readCloudSessionRecovery(
+        readSessionPlacementRecovery(
           secondRecovery.gatewayUrl,
           secondRecovery.recoveryScope,
           secondRecovery.sessionKey,
@@ -547,7 +547,7 @@ describe("application cloud startup", () => {
       expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
     });
     expect(
-      readCloudSessionRecovery(
+      readSessionPlacementRecovery(
         "ws://gateway.example",
         "principal-a",
         secondInput.recovery.sessionKey,
@@ -569,7 +569,7 @@ describe("application cloud startup", () => {
       secondInput.recovery.sessionKey,
     ]);
     expect(
-      readCloudSessionRecovery(
+      readSessionPlacementRecovery(
         "ws://gateway.example",
         "principal-a",
         secondInput.recovery.sessionKey,
@@ -681,7 +681,7 @@ describe("application cloud startup", () => {
       expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(2);
     });
     expect(storageRead).toHaveBeenCalledWith(
-      cloudSessionRecoveryExactStorageKey(
+      sessionPlacementRecoveryExactStorageKey(
         "ws://gateway.example",
         "principal-a",
         input.recovery.sessionKey,

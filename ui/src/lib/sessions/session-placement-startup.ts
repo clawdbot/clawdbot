@@ -5,8 +5,9 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { SessionPlacementTarget } from "./session-placement-recovery.ts";
 
-type CloudStartOutcome =
+type SessionPlacementStartOutcome =
   | { status: "started"; messageId: string; messageSeq?: number }
   | { status: "cancelled" }
   | { status: "interrupted" }
@@ -213,7 +214,7 @@ async function resolveActivePlacement(
   };
 }
 
-export async function deleteCloudDraftSession(
+export async function deleteSessionPlacementDraft(
   client: Pick<GatewayBrowserClient, "request"> | null,
   key: string,
   agentId: string,
@@ -234,10 +235,14 @@ export async function deleteCloudDraftSession(
   if (!existing.sessionId) {
     return "cloud draft session identity is unavailable";
   }
-  return archiveAndDeleteCloudDraft(client, { key, agentId, sessionId: existing.sessionId });
+  return archiveAndDeleteSessionPlacementDraft(client, {
+    key,
+    agentId,
+    sessionId: existing.sessionId,
+  });
 }
 
-async function archiveAndDeleteCloudDraft(
+async function archiveAndDeleteSessionPlacementDraft(
   client: Pick<GatewayBrowserClient, "request">,
   params: { key: string; agentId: string; sessionId: string },
 ): Promise<string | undefined> {
@@ -279,7 +284,7 @@ async function archiveAndDeleteCloudDraft(
   }
 }
 
-export async function deleteRecoveredCloudDraftSession(
+export async function deleteRecoveredSessionPlacementDraft(
   client: Pick<GatewayBrowserClient, "request"> | null,
   key: string,
   agentId: string,
@@ -306,16 +311,19 @@ export async function deleteRecoveredCloudDraftSession(
   if (!existing.sessionId) {
     return "cloud draft session identity is unavailable";
   }
-  return archiveAndDeleteCloudDraft(client, { key, agentId, sessionId: existing.sessionId });
+  return archiveAndDeleteSessionPlacementDraft(client, {
+    key,
+    agentId,
+    sessionId: existing.sessionId,
+  });
 }
 
-export async function startCloudInitialTurn(
+export async function startSessionPlacementInitialTurn(
   client: Pick<GatewayBrowserClient, "request">,
   params: {
     key: string;
     agentId: string;
-    profileId: string;
-    machineClass?: string;
+    target: SessionPlacementTarget;
     message: string;
     attachments?: unknown[];
     messageId?: string;
@@ -325,7 +333,7 @@ export async function startCloudInitialTurn(
   },
   isCurrent: () => boolean,
   beforeSend: () => boolean = () => true,
-): Promise<CloudStartOutcome> {
+): Promise<SessionPlacementStartOutcome> {
   const cleanupOnCancellation = params.cleanupOnCancellation !== false;
   let resolution: PlacementResolution | undefined;
   let dispatchError = "";
@@ -354,12 +362,18 @@ export async function startCloudInitialTurn(
     }
   }
   if (!resolution) {
+    const dispatchTarget =
+      params.target.kind === "profile"
+        ? {
+            profileId: params.target.profileId,
+            ...(params.target.machineClass ? { machineClass: params.target.machineClass } : {}),
+          }
+        : { deviceId: params.target.deviceId };
     try {
       const dispatched = await client.request<SessionsDispatchResult>("sessions.dispatch", {
         key: params.key,
         agentId: params.agentId,
-        profileId: params.profileId,
-        ...(params.machineClass ? { machineClass: params.machineClass } : {}),
+        ...dispatchTarget,
       });
       resolution = await resolveActivePlacement(
         client,

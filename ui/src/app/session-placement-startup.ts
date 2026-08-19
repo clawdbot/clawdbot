@@ -1,10 +1,10 @@
 import { formatUiError } from "../lib/format-error.ts";
-import type { CloudSessionRecovery } from "../lib/sessions/cloud-recovery.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import type { SessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 
-export type ApplicationCloudStartupStatus = {
+export type ApplicationPlacementStartupStatus = {
   readonly sessionKey: string;
   readonly phase:
     | "pending"
@@ -20,42 +20,43 @@ export type ApplicationCloudStartupStatus = {
   readonly retryable?: boolean;
 };
 
-type CloudStartupInput = {
-  readonly recovery: CloudSessionRecovery;
+type PlacementStartupInput = {
+  readonly recovery: SessionPlacementRecovery;
   readonly persistRecovery: boolean;
   readonly recovering: boolean;
   readonly createdAt: number;
 };
 
-export type ApplicationCloudStartupDependencies = {
+export type ApplicationPlacementStartupDependencies = {
   gateway: ApplicationGateway;
   sessions: SessionCapability;
   initialUserMessage: ApplicationInitialUserMessageHandoff;
 };
 
-export type ApplicationCloudStartupRuntime = {
-  get: (sessionKey: string) => ApplicationCloudStartupStatus | null;
-  start: (input: CloudStartupInput) => void;
+export type ApplicationPlacementStartupRuntime = {
+  get: (sessionKey: string) => ApplicationPlacementStartupStatus | null;
+  start: (input: PlacementStartupInput) => void;
   retry: (sessionKey: string) => void;
   subscribe: (listener: () => void) => () => void;
   dispose: () => void;
 };
 
-export type ApplicationCloudStartup = Omit<ApplicationCloudStartupRuntime, "start"> & {
-  start: (input: CloudStartupInput) => void;
+export type ApplicationPlacementStartup = Omit<ApplicationPlacementStartupRuntime, "start"> & {
+  start: (input: PlacementStartupInput) => void;
   resumeRecovery: () => void;
 };
 
-type CloudStartupRuntimeModule = typeof import("./cloud-session-startup.runtime.ts");
-type CloudStartupRuntimeLoader = () => Promise<CloudStartupRuntimeModule>;
+type PlacementStartupRuntimeModule = typeof import("./session-placement-startup.runtime.ts");
+type PlacementStartupRuntimeLoader = () => Promise<PlacementStartupRuntimeModule>;
 
-export function createApplicationCloudStartup(
-  dependencies: ApplicationCloudStartupDependencies,
-  loadRuntime: CloudStartupRuntimeLoader = () => import("./cloud-session-startup.runtime.ts"),
-): ApplicationCloudStartup {
-  const preRuntimeEntries = new Map<string, CloudStartupInput>();
-  let activeDependencies: ApplicationCloudStartupDependencies | null = dependencies;
-  let runtime: ApplicationCloudStartupRuntime | undefined;
+export function createApplicationPlacementStartup(
+  dependencies: ApplicationPlacementStartupDependencies,
+  loadRuntime: PlacementStartupRuntimeLoader = () =>
+    import("./session-placement-startup.runtime.ts"),
+): ApplicationPlacementStartup {
+  const preRuntimeEntries = new Map<string, PlacementStartupInput>();
+  let activeDependencies: ApplicationPlacementStartupDependencies | null = dependencies;
+  let runtime: ApplicationPlacementStartupRuntime | undefined;
   let runtimeLoad: Promise<void> | undefined;
   let runtimeError: string | undefined;
   const listeners = new Set<() => void>();
@@ -64,11 +65,11 @@ export function createApplicationCloudStartup(
 
   const ensureRuntime = (): Promise<void> =>
     (runtimeLoad ??= loadRuntime().then(
-      ({ default: createApplicationCloudStartupRuntime }) => {
+      ({ default: createApplicationPlacementStartupRuntime }) => {
         if (!activeDependencies) {
           return;
         }
-        runtime = createApplicationCloudStartupRuntime(activeDependencies);
+        runtime = createApplicationPlacementStartupRuntime(activeDependencies);
         runtime.subscribe(publish);
         // Runtime starts publish synchronously, keeping each delete/start handoff observable.
         for (const [sessionKey, input] of preRuntimeEntries) {
@@ -83,7 +84,7 @@ export function createApplicationCloudStartup(
       },
     ));
 
-  const start = (input: CloudStartupInput) => {
+  const start = (input: PlacementStartupInput) => {
     if (!activeDependencies || runtime) {
       return runtime?.start(input);
     }

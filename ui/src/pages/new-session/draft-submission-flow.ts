@@ -7,18 +7,17 @@ import {
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { openTerminalSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
-import type { CloudSessionRecovery } from "../../lib/sessions/cloud-recovery.ts";
-import { deleteCloudDraftSession } from "../../lib/sessions/cloud-startup.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
+import { deleteSessionPlacementDraft } from "../../lib/sessions/session-placement-startup.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
-import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
+import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
 import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
-import { PendingCloudRecoveryState, type SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
 import { NewSessionComposerTextareaController } from "./composer.ts";
 import {
   buildDraftSessionCreateParams as assembleDraftSessionCreateParams,
@@ -28,11 +27,19 @@ import {
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
+import {
+  projectDraftSessionPlacementRecovery,
+  resolveDraftSessionPlacement,
+} from "./draft-session-placement.ts";
 import type {
   DraftSubmissionCallbacks,
   DraftSubmissionSnapshot,
 } from "./draft-submission-contract.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
+import {
+  PendingSessionPlacementRecoveryState,
+  type SubmissionOutcomeReason,
+} from "./session-placement-recovery-state.ts";
 import { navigateToStartedSession } from "./started-session-navigation.ts";
 import {
   PAGE_RENDERED_GATES,
@@ -49,7 +56,7 @@ export class DraftSubmissionFlow {
   private submissionOutcomeUnknownValue: SubmissionOutcomeReason | null = null;
   error: string | null = null;
   private submitRequestToken = 0;
-  readonly pendingCloud = new PendingCloudRecoveryState();
+  readonly pendingPlacement = new PendingSessionPlacementRecoveryState();
   readonly attachmentDraft: NewSessionAttachmentDraft;
   readonly composerTextarea = new NewSessionComposerTextareaController();
   readonly draftPersistence: NewSessionDraftPersistence;
@@ -150,7 +157,7 @@ export class DraftSubmissionFlow {
   }
 
   markPendingCloudUnavailable(outcome: SubmissionOutcomeReason) {
-    this.pendingCloud.retryAllowed = false;
+    this.pendingPlacement.retryAllowed = false;
     this.submissionOutcomeUnknownValue = outcome;
     this.callbacks.requestUpdate();
   }
@@ -161,12 +168,7 @@ export class DraftSubmissionFlow {
     this.callbacks.requestUpdate();
   }
 
-  /**
-   * Reason to surface near the composer after a blocked submit attempt. Bound
-   * to the gate captured at attempt time, so it disappears on its own once a
-   * transient gate (preference restore, reconnect) lifts and never shows for
-   * gates the user did not trip.
-   */
+  /** Attempt-bound reason that retires when its transient gate lifts. */
   blockedSubmitNotice(): string | undefined {
     const block = this.blockedSubmitGate ? this.submitBlock() : undefined;
     if (!block?.reason || block.gate !== this.blockedSubmitGate) {
@@ -226,24 +228,24 @@ export class DraftSubmissionFlow {
   }
 
   submissionAccess(
-    createParams: Record<string, unknown> = this.pendingCloud.createParams ??
+    createParams: Record<string, unknown> = this.pendingPlacement.createParams ??
       this.buildDraftSessionCreateParams(),
   ): SessionMethodAccess {
     const gateway = this.read().context?.gateway.snapshot;
-    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    const pendingPlacement = Boolean(this.pendingPlacement.sessionKey);
     const remoteProject = this.place.browser.remoteProject;
-    if (!pendingCloud && remoteProject && !remoteProject.projectId) {
+    if (!pendingPlacement && remoteProject && !remoteProject.projectId) {
       return readSessionMethodAccess(gateway, {
         method: "projects.add",
         requiredScope: "operator.write",
       });
     }
-    if (!pendingCloud || this.pendingCloud.phase === "creating") {
+    if (!pendingPlacement || this.pendingPlacement.phase === "creating") {
       const createAccess = readSessionMethodAccess(gateway, {
         method: "sessions.create",
         params: createParams,
       });
-      if (!createAccess.allowed || !this.cloudProfileForSubmission()) {
+      if (!createAccess.allowed || !this.placementForSubmission().cloudProfileId) {
         return createAccess;
       }
     }
@@ -273,17 +275,13 @@ export class DraftSubmissionFlow {
     return this.submitBlock(kind) === undefined;
   }
 
-  /**
-   * The single owner of every submit gate (`submit-gates.ts`). `canSubmit`,
-   * the disabled-reason tooltips, and blocked Enter notices all derive from
-   * that one walk, so a gate cannot block without a user-visible reason.
-   */
+  /** Single owner for submit state, tooltips, and blocked-Enter notices. */
   submitBlock(kind: "session" | "terminal" = "session"): NewSessionSubmitBlock | undefined {
     return resolveNewSessionSubmitBlock(
       {
         gatewayState: this.gateway,
         placeState: this.place,
-        pendingCloud: this.pendingCloud,
+        pendingPlacement: this.pendingPlacement,
         submitting: this.submittingValue,
         message: this.messageValue,
         submissionOutcomeUnknown: this.submissionOutcomeUnknownValue,
@@ -293,7 +291,7 @@ export class DraftSubmissionFlow {
         requiresModelSetup: () => this.requiresModelSetup(),
         submissionAccess: () => this.submissionAccess(),
         terminalStartAccess: () => this.terminalStartAccess(),
-        cloudProfileForSubmission: () => this.cloudProfileForSubmission(),
+        cloudProfileForSubmission: () => this.placementForSubmission().cloudProfileId,
         cloudDisabledReason: () => this.cloudDisabledReason(),
         cloudRuntimeUnsupportedReason: () => this.cloudRuntimeUnsupportedReason(),
       },
@@ -307,7 +305,7 @@ export class DraftSubmissionFlow {
       catalog:
         catalog.isTarget(this.read().data) ||
         Boolean(this.place.cloudProfileId) ||
-        Boolean(this.pendingCloud.sessionKey),
+        Boolean(this.pendingPlacement.sessionKey),
       connected: this.gateway.connected,
       agentsLoaded: this.read().context?.agents.state.agentsList !== null,
       selectedAgentFound: selectedAgent !== undefined,
@@ -339,25 +337,25 @@ export class DraftSubmissionFlow {
   }
 
   resetDraft() {
-    const preservePendingCloud = Boolean(this.pendingCloud.sessionKey);
+    const preservePendingPlacement = Boolean(this.pendingPlacement.sessionKey);
     this.blockedSubmitGate = null;
     this.invalidate();
-    this.submissionOutcomeUnknownValue = preservePendingCloud
+    this.submissionOutcomeUnknownValue = preservePendingPlacement
       ? (this.submissionOutcomeUnknownValue ?? "cloud-interrupted")
       : null;
     this.visibilityValue = "normal";
     this.attachmentDraft.reset({ release: true });
-    if (preservePendingCloud) {
-      if (!this.pendingCloud.restored) {
-        this.pendingCloud.retryAllowed = false;
+    if (preservePendingPlacement) {
+      if (!this.pendingPlacement.restored) {
+        this.pendingPlacement.retryAllowed = false;
       }
-      const recovery = this.pendingCloud.capture();
+      const recovery = this.pendingPlacement.capture();
       if (recovery) {
         this.applyRecoveryDraft(recovery);
       }
-      this.pendingCloud.restored = false;
+      this.pendingPlacement.restored = false;
     } else {
-      this.clearPendingCloudRecovery();
+      this.clearPendingPlacementRecovery();
       this.draftPersistence.noteDraftReplaced();
       this.messageValue = "";
     }
@@ -365,20 +363,20 @@ export class DraftSubmissionFlow {
     this.callbacks.requestUpdate();
   }
 
-  clearPendingCloudRecovery() {
-    this.pendingCloud.clear();
+  clearPendingPlacementRecovery() {
+    this.pendingPlacement.clear();
     this.submissionOutcomeUnknownValue = null;
     this.callbacks.requestUpdate();
   }
 
-  resetPendingCloudWithoutClearingStorage() {
-    this.pendingCloud.reset();
+  releasePendingPlacementOwner() {
+    this.pendingPlacement.reset();
     this.submissionOutcomeUnknownValue = null;
     this.callbacks.requestUpdate();
   }
 
-  restorePendingCloudRecovery(gatewayUrl: string, recoveryScope: string) {
-    const recovery = this.pendingCloud.restore(gatewayUrl, recoveryScope);
+  restorePendingPlacementRecovery(gatewayUrl: string, recoveryScope: string) {
+    const recovery = this.pendingPlacement.restore(gatewayUrl, recoveryScope);
     if (!recovery) {
       return;
     }
@@ -392,24 +390,24 @@ export class DraftSubmissionFlow {
       return;
     }
     this.blockedSubmitGate = null;
-    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
-    const message = pendingCloud ? this.pendingCloud.message : this.messageValue.trim();
+    const pendingPlacement = Boolean(this.pendingPlacement.sessionKey);
+    const message = pendingPlacement ? this.pendingPlacement.message : this.messageValue.trim();
     const attachments = this.attachmentDraft.attachments;
-    const apiAttachments = pendingCloud
-      ? this.pendingCloud.attachments
+    const apiAttachments = pendingPlacement
+      ? this.pendingPlacement.attachments
       : buildChatApiAttachments(attachments);
-    const submissionAgentId = pendingCloud
-      ? this.pendingCloud.agentId
+    const submissionAgentId = pendingPlacement
+      ? this.pendingPlacement.agentId
       : normalizeAgentId(this.place.agentId);
-    const submissionGatewayUrl = pendingCloud
-      ? this.pendingCloud.gatewayUrl
+    const submissionGatewayUrl = pendingPlacement
+      ? this.pendingPlacement.gatewayUrl
       : context.gateway.connection.gatewayUrl;
     const submissionClient = context.gateway.snapshot.client;
     if (!submissionClient || !context.gateway.snapshot.hello) {
       return;
     }
-    const submissionRecoveryScope = pendingCloud
-      ? this.pendingCloud.recoveryScope
+    const submissionRecoveryScope = pendingPlacement
+      ? this.pendingPlacement.recoveryScope
       : submissionClient.recoveryScope;
     const requestId = ++this.submitRequestToken;
     const submittedAt = Date.now();
@@ -419,7 +417,7 @@ export class DraftSubmissionFlow {
     this.callbacks.closeTransientUi();
     this.callbacks.requestUpdate();
     try {
-      const remoteProject = pendingCloud ? null : this.place.browser.remoteProject;
+      const remoteProject = pendingPlacement ? null : this.place.browser.remoteProject;
       if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {
         const project = await submissionClient.request<ProjectsAddResult>(
           "projects.add",
@@ -431,20 +429,19 @@ export class DraftSubmissionFlow {
         }
         this.place.browser.recordRemoteProjectId(remoteProject.cloneUrl, project.id);
       }
-      const cloudProfileId = this.cloudProfileForSubmission();
+      const { target: placementTarget } = this.placementForSubmission();
       const draftRetired = this.visibilityValue === "draft" && !this.canStartAsDraft();
       const createParams = this.buildDraftSessionCreateParams({
-        message: cloudProfileId ? "" : message,
+        message: placementTarget ? "" : message,
         visibility: draftRetired ? "normal" : this.visibilityValue,
-        attachments: cloudProfileId ? undefined : apiAttachments,
+        attachments: placementTarget ? undefined : apiAttachments,
       });
-      const cloudCreateParams = cloudProfileId
-        ? pendingCloud
-          ? this.pendingCloud.createParams
-          : this.pendingCloud.stageCreate({
+      const placementCreateParams = placementTarget
+        ? pendingPlacement
+          ? this.pendingPlacement.createParams
+          : this.pendingPlacement.stageCreate({
               agentId: submissionAgentId,
-              profileId: cloudProfileId,
-              machineClass: this.place.machineClass,
+              target: placementTarget,
               message,
               attachments: apiAttachments,
               gatewayUrl: submissionGatewayUrl,
@@ -453,27 +450,27 @@ export class DraftSubmissionFlow {
               persistent: this.visibilityValue !== "incognito",
             })
         : undefined;
-      const requestAccess = this.submissionAccess(cloudCreateParams ?? createParams);
+      const requestAccess = this.submissionAccess(placementCreateParams ?? createParams);
       if (!requestAccess.allowed) {
         this.error = requestAccess.reason;
         return;
       }
-      if (cloudProfileId && !pendingCloud && !cloudCreateParams) {
+      if (placementTarget && !pendingPlacement && !placementCreateParams) {
         this.error = t("newSession.cloudStartFailed", {
           error: "cloud recovery storage is unavailable",
         });
         return;
       }
-      const submissionCloudRecovery = cloudProfileId ? this.pendingCloud.capture() : null;
-      if (cloudProfileId && !submissionCloudRecovery) {
+      const submissionPlacementRecovery = placementTarget ? this.pendingPlacement.capture() : null;
+      if (placementTarget && !submissionPlacementRecovery) {
         this.error = t("newSession.cloudStartFailed", {
           error: "cloud recovery storage is unavailable",
         });
         return;
       }
-      const recoveryOwnerKey = submissionCloudRecovery?.sessionKey ?? "";
+      const recoveryOwnerKey = submissionPlacementRecovery?.sessionKey ?? "";
       const ownsSubmissionRecovery = () =>
-        this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, recoveryOwnerKey);
+        this.pendingPlacement.owns(submissionGatewayUrl, submissionRecoveryScope, recoveryOwnerKey);
       const isSubmissionLifecycleCurrent = () =>
         this.read().isConnected &&
         submissionClient.recoveryScopeReady &&
@@ -482,12 +479,12 @@ export class DraftSubmissionFlow {
         this.gateway.gatewayUrl === submissionGatewayUrl &&
         this.gateway.recoveryScope === submissionRecoveryScope;
       const result =
-        pendingCloud && this.pendingCloud.phase !== "creating"
-          ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
-          : await context.sessions.createResult(cloudCreateParams ?? createParams, {
+        pendingPlacement && this.pendingPlacement.phase !== "creating"
+          ? { key: this.pendingPlacement.sessionKey, initialRun: { status: "idle" as const } }
+          : await context.sessions.createResult(placementCreateParams ?? createParams, {
               reconciliation: "background",
             });
-      if (requestId !== this.submitRequestToken && !cloudProfileId) {
+      if (requestId !== this.submitRequestToken && !placementTarget) {
         return;
       }
       if (!result) {
@@ -497,39 +494,39 @@ export class DraftSubmissionFlow {
         this.error = context.sessions.state.error ?? t("newSession.createFailed");
         return;
       }
-      if (cloudProfileId && submissionCloudRecovery) {
+      if (placementTarget && submissionPlacementRecovery) {
         if (
-          submissionCloudRecovery.phase === "creating" &&
+          submissionPlacementRecovery.phase === "creating" &&
           (!isSubmissionLifecycleCurrent() || !ownsSubmissionRecovery())
         ) {
-          const cleanupError = await deleteCloudDraftSession(
+          const cleanupError = await deleteSessionPlacementDraft(
             submissionClient,
             result.key,
             submissionAgentId,
           );
           if (cleanupError) {
-            this.pendingCloud.promoteToDispatching(result.key);
-            this.pendingCloud.retryAllowed = true;
+            this.pendingPlacement.promoteToDispatching(result.key);
+            this.pendingPlacement.retryAllowed = true;
             this.error = t("newSession.cloudStartFailed", { error: cleanupError });
             this.callbacks.requestUpdate();
           } else {
-            this.clearPendingCloudRecovery();
+            this.clearPendingPlacementRecovery();
           }
           return;
         }
         if (
-          submissionCloudRecovery.phase === "creating" &&
+          submissionPlacementRecovery.phase === "creating" &&
           isSubmissionLifecycleCurrent() &&
           ownsSubmissionRecovery()
         ) {
-          if (!this.pendingCloud.promoteToDispatching(result.key)) {
+          if (!this.pendingPlacement.promoteToDispatching(result.key)) {
             this.error = t("newSession.cloudStartFailed", {
               error: "cloud recovery storage is unavailable",
             });
             return;
           }
         }
-        const recovery = this.pendingCloud.capture();
+        const recovery = this.pendingPlacement.capture();
         if (!recovery || recovery.phase === "creating") {
           this.error = t("newSession.cloudStartFailed", {
             error: "cloud recovery storage is unavailable",
@@ -539,16 +536,16 @@ export class DraftSubmissionFlow {
         if (requestId !== this.submitRequestToken) {
           return;
         }
-        context.cloudStartup.start({
+        context.placementStartup.start({
           recovery,
-          persistRecovery: this.pendingCloud.persistent,
-          recovering: pendingCloud,
+          persistRecovery: this.pendingPlacement.persistent,
+          recovering: pendingPlacement,
           createdAt: submittedAt,
         });
         if (
           requestId !== this.submitRequestToken ||
           !isSubmissionLifecycleCurrent() ||
-          !this.pendingCloud.owns(
+          !this.pendingPlacement.owns(
             submissionGatewayUrl,
             submissionRecoveryScope,
             recovery.sessionKey,
@@ -560,7 +557,7 @@ export class DraftSubmissionFlow {
         if (
           requestId !== this.submitRequestToken ||
           !isSubmissionLifecycleCurrent() ||
-          !this.pendingCloud.owns(
+          !this.pendingPlacement.owns(
             submissionGatewayUrl,
             submissionRecoveryScope,
             recovery.sessionKey,
@@ -568,7 +565,7 @@ export class DraftSubmissionFlow {
         ) {
           return;
         }
-        this.pendingCloud.reset();
+        this.pendingPlacement.reset();
         this.attachmentDraft.clearAfterSubmit(true);
         selectApplicationSession({
           selection: context.agentSelection,
@@ -721,8 +718,8 @@ export class DraftSubmissionFlow {
     });
   }
 
-  private cloudProfileForSubmission(): string {
-    return this.pendingCloud.sessionKey ? this.pendingCloud.profileId : this.place.cloudProfileId;
+  private placementForSubmission() {
+    return resolveDraftSessionPlacement(this.pendingPlacement, this.place);
   }
 
   private cloudRuntimeUnsupportedReason(): string | undefined {
@@ -735,17 +732,11 @@ export class DraftSubmissionFlow {
       : undefined;
   }
 
-  private applyRecoveryDraft(recovery: CloudSessionRecovery) {
-    this.place.applyPendingCloud({
-      agentId: recovery.agentId,
-      profileId: recovery.profileId,
-      machineClass: recovery.machineClass,
-      cwd: recovery.createParams?.cwd,
-    });
-    this.restoreDraftState({
-      message: recovery.message,
-      attachments: restoreChatApiAttachments(recovery.attachments),
-      visibility: recovery.createParams?.incognito === true ? "incognito" : "normal",
-    });
+  private applyRecoveryDraft(recovery: SessionPlacementRecovery) {
+    const projection = projectDraftSessionPlacementRecovery(recovery);
+    if (projection.cloudPlace) {
+      this.place.applyPendingCloud(projection.cloudPlace);
+    }
+    this.restoreDraftState(projection.draft);
   }
 }

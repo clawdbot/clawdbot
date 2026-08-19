@@ -1,22 +1,23 @@
-import {
-  clearCloudSessionRecovery,
-  listCloudSessionRecoveries,
-  parseCloudSessionCreateParams,
-  promoteCloudSessionRecovery,
-  type CloudSessionCreateParams,
-  type CloudSessionRecovery,
-  writeCloudSessionRecovery,
-} from "../../lib/sessions/cloud-recovery.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+import {
+  clearSessionPlacementRecovery,
+  listSessionPlacementRecoveries,
+  parseSessionPlacementCreateParams,
+  promoteSessionPlacementRecovery,
+  type SessionPlacementCreateParams,
+  type SessionPlacementRecovery,
+  type SessionPlacementTarget,
+  writeSessionPlacementRecovery,
+} from "../../lib/sessions/session-placement-recovery.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 
 export type SubmissionOutcomeReason = "gateway-changed" | "cloud-interrupted";
 
 export function resolveSubmissionOutcomeReason(params: {
   gatewayIdentityChanged: boolean;
-  cloudDraftOwned: boolean;
+  placementDraftOwned: boolean;
 }): SubmissionOutcomeReason {
-  return params.gatewayIdentityChanged || !params.cloudDraftOwned
+  return params.gatewayIdentityChanged || !params.placementDraftOwned
     ? "gateway-changed"
     : "cloud-interrupted";
 }
@@ -37,31 +38,30 @@ export function resolveScope(
   return { next, changed: !firstBind && snapshot.connected && current !== next };
 }
 
-export class PendingCloudRecoveryState {
+export class PendingSessionPlacementRecoveryState {
   sessionKey = "";
   messageId = "";
   message = "";
   attachments: unknown[] | undefined;
-  profileId = "";
-  machineClass = "";
+  target: SessionPlacementTarget | null = null;
   agentId = "";
   gatewayUrl = "";
   recoveryScope = "";
-  phase: CloudSessionRecovery["phase"] = "dispatching";
-  createParams: CloudSessionCreateParams | undefined;
+  phase: SessionPlacementRecovery["phase"] = "dispatching";
+  createParams: SessionPlacementCreateParams | undefined;
   retryAllowed = false;
   restored = false;
   persistent = true;
 
   clear() {
     if (this.persistent) {
-      clearCloudSessionRecovery(this.gatewayUrl, this.recoveryScope, this.sessionKey);
+      clearSessionPlacementRecovery(this.gatewayUrl, this.recoveryScope, this.sessionKey);
     }
     this.reset();
   }
 
   clearFor(gatewayUrl: string, recoveryScope: string, sessionKey: string) {
-    clearCloudSessionRecovery(gatewayUrl, recoveryScope, sessionKey);
+    clearSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey);
     if (this.owns(gatewayUrl, recoveryScope, sessionKey)) {
       this.reset();
     }
@@ -82,8 +82,7 @@ export class PendingCloudRecoveryState {
     this.messageId = "";
     this.message = "";
     this.attachments = undefined;
-    this.profileId = "";
-    this.machineClass = "";
+    this.target = null;
     this.agentId = "";
     this.gatewayUrl = "";
     this.recoveryScope = "";
@@ -94,8 +93,8 @@ export class PendingCloudRecoveryState {
     this.persistent = true;
   }
 
-  restore(gatewayUrl: string, recoveryScope: string): CloudSessionRecovery | null {
-    const recovery = listCloudSessionRecoveries(gatewayUrl, recoveryScope).find(
+  restore(gatewayUrl: string, recoveryScope: string): SessionPlacementRecovery | null {
+    const recovery = listSessionPlacementRecoveries(gatewayUrl, recoveryScope).find(
       (candidate) => candidate.phase === "creating",
     );
     if (!recovery) {
@@ -105,23 +104,22 @@ export class PendingCloudRecoveryState {
     return recovery;
   }
 
-  capture(): CloudSessionRecovery | null {
+  capture(): SessionPlacementRecovery | null {
     return this.snapshot(this.sessionKey, this.phase);
   }
 
   stageCreate(params: {
     agentId: string;
-    profileId: string;
-    machineClass?: string;
+    target: SessionPlacementTarget;
     message: string;
     attachments?: unknown[];
     gatewayUrl: string;
     recoveryScope: string;
     createParams: SessionCreateParams;
     persistent?: boolean;
-  }): CloudSessionCreateParams | null {
+  }): SessionPlacementCreateParams | null {
     const sessionKey = `agent:${params.agentId}:dashboard:${generateUUID()}`;
-    const createParams = parseCloudSessionCreateParams(
+    const createParams = parseSessionPlacementCreateParams(
       { ...params.createParams, key: sessionKey },
       sessionKey,
       params.agentId,
@@ -138,15 +136,14 @@ export class PendingCloudRecoveryState {
       messageId: generateUUID(),
       message: params.message,
       attachments: params.attachments,
-      profileId: params.profileId,
-      ...(params.machineClass ? { machineClass: params.machineClass } : {}),
+      target: params.target,
       agentId: params.agentId,
       gatewayUrl: params.gatewayUrl,
       recoveryScope: params.recoveryScope,
       phase: "creating",
       createParams,
-    } satisfies CloudSessionRecovery;
-    if (persistent && !writeCloudSessionRecovery(recovery)) {
+    } satisfies SessionPlacementRecovery;
+    if (persistent && !writeSessionPlacementRecovery(recovery)) {
       return null;
     }
     this.apply(recovery, false, persistent);
@@ -158,7 +155,7 @@ export class PendingCloudRecoveryState {
     const recovery = this.snapshot(sessionKey, "dispatching");
     if (
       !recovery ||
-      (this.persistent && !promoteCloudSessionRecovery(previousSessionKey, recovery))
+      (this.persistent && !promoteSessionPlacementRecovery(previousSessionKey, recovery))
     ) {
       return false;
     }
@@ -170,12 +167,12 @@ export class PendingCloudRecoveryState {
 
   private snapshot(
     sessionKey: string,
-    phase: CloudSessionRecovery["phase"],
-  ): CloudSessionRecovery | null {
+    phase: SessionPlacementRecovery["phase"],
+  ): SessionPlacementRecovery | null {
     if (
       !this.sessionKey ||
       !this.messageId ||
-      !this.profileId ||
+      !this.target ||
       !this.agentId ||
       (phase === "creating" && !this.createParams)
     ) {
@@ -186,8 +183,7 @@ export class PendingCloudRecoveryState {
       messageId: this.messageId,
       message: this.message,
       attachments: this.attachments ? [...this.attachments] : undefined,
-      profileId: this.profileId,
-      ...(this.machineClass ? { machineClass: this.machineClass } : {}),
+      target: { ...this.target },
       agentId: this.agentId,
       gatewayUrl: this.gatewayUrl,
       recoveryScope: this.recoveryScope,
@@ -198,13 +194,12 @@ export class PendingCloudRecoveryState {
     };
   }
 
-  private apply(recovery: CloudSessionRecovery, restored: boolean, persistent: boolean) {
+  private apply(recovery: SessionPlacementRecovery, restored: boolean, persistent: boolean) {
     this.sessionKey = recovery.sessionKey;
     this.messageId = recovery.messageId;
     this.message = recovery.message;
     this.attachments = recovery.attachments;
-    this.profileId = recovery.profileId;
-    this.machineClass = recovery.machineClass ?? "";
+    this.target = { ...recovery.target };
     this.agentId = recovery.agentId;
     this.gatewayUrl = recovery.gatewayUrl;
     this.recoveryScope = recovery.recoveryScope;

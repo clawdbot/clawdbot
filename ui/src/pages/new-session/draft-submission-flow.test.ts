@@ -2,7 +2,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
-import { writeCloudSessionRecovery } from "../../lib/sessions/cloud-recovery.ts";
+import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
@@ -102,7 +102,11 @@ function createDraftFixture(options: FixtureOptions = {}) {
       canStartAsDraft: flow?.canStartAsDraft() ?? false,
       visibility: flow?.visibility ?? "normal",
       cloudProfileId: place?.cloudProfileId ?? "",
-      pendingCloud: flow?.pendingCloud ?? { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
+      pendingPlacement: flow?.pendingPlacement ?? {
+        sessionKey: "",
+        gatewayUrl: "",
+        recoveryScope: "",
+      },
       agentsHydrated: place?.agentsHydrated ?? false,
     }),
     {
@@ -112,9 +116,9 @@ function createDraftFixture(options: FixtureOptions = {}) {
       onVisibilityRetired: () => flow?.setVisibility("normal"),
       onCloudProfileCleared: () => place?.clearCloudProfile(),
       onCloudState: (error) => flow?.setError(error),
-      onPendingCloudReset: () => flow?.resetPendingCloudWithoutClearingStorage(),
+      onPendingPlacementReset: () => flow?.releasePendingPlacementOwner(),
       onRecoveryReady: (gatewayUrl, recoveryScope) =>
-        flow?.restorePendingCloudRecovery(gatewayUrl, recoveryScope),
+        flow?.restorePendingPlacementRecovery(gatewayUrl, recoveryScope),
       onAdoptAgentDefaults: () => place?.adoptAgentDefaults(),
     },
   );
@@ -145,7 +149,7 @@ function createDraftFixture(options: FixtureOptions = {}) {
       context,
       data: undefined,
       submitting: flow?.submitting ?? false,
-      pendingCloudSessionKey: flow?.pendingCloud.sessionKey ?? "",
+      pendingCloudSessionKey: flow?.pendingPlacement.sessionKey ?? "",
     }),
     {
       requestUpdate: vi.fn(),
@@ -336,7 +340,7 @@ describe("DraftSubmissionFlow", () => {
     requestUpdate.mockClear();
     revokeObjectURL.mockClear();
     expect(
-      writeCloudSessionRecovery({
+      writeSessionPlacementRecovery({
         sessionKey: "agent:main:dashboard:recovery",
         messageId: "message-recovery",
         message: "recovered cloud prompt",
@@ -348,7 +352,7 @@ describe("DraftSubmissionFlow", () => {
             content: "cmVjb3ZlcmVk",
           },
         ],
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         agentId: "main",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -362,7 +366,7 @@ describe("DraftSubmissionFlow", () => {
       }),
     ).toBe(true);
 
-    flow.restorePendingCloudRecovery("ws://gateway.example", "principal-a");
+    flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
 
     expect(revokeObjectURL).toHaveBeenCalledOnce();
     expect(noteUserMutation).not.toHaveBeenCalled();
@@ -432,7 +436,11 @@ describe("DraftSubmissionFlow", () => {
         canStartAsDraft: flow?.canStartAsDraft() ?? false,
         visibility: flow?.visibility ?? "normal",
         cloudProfileId: place?.cloudProfileId ?? "",
-        pendingCloud: flow?.pendingCloud ?? { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
+        pendingPlacement: flow?.pendingPlacement ?? {
+          sessionKey: "",
+          gatewayUrl: "",
+          recoveryScope: "",
+        },
         agentsHydrated: place?.agentsHydrated ?? false,
       }),
       {
@@ -442,9 +450,9 @@ describe("DraftSubmissionFlow", () => {
         onVisibilityRetired: () => flow?.setVisibility("normal"),
         onCloudProfileCleared: () => place?.clearCloudProfile(),
         onCloudState: (error) => flow?.setError(error),
-        onPendingCloudReset: () => flow?.resetPendingCloudWithoutClearingStorage(),
+        onPendingPlacementReset: () => flow?.releasePendingPlacementOwner(),
         onRecoveryReady: (gatewayUrl, recoveryScope) =>
-          flow?.restorePendingCloudRecovery(gatewayUrl, recoveryScope),
+          flow?.restorePendingPlacementRecovery(gatewayUrl, recoveryScope),
         onAdoptAgentDefaults: () => place?.adoptAgentDefaults(),
       },
     );
@@ -475,7 +483,7 @@ describe("DraftSubmissionFlow", () => {
         context,
         data: undefined,
         submitting: flow?.submitting ?? false,
-        pendingCloudSessionKey: flow?.pendingCloud.sessionKey ?? "",
+        pendingCloudSessionKey: flow?.pendingPlacement.sessionKey ?? "",
       }),
       {
         requestUpdate: vi.fn(),
@@ -530,7 +538,7 @@ describe("DraftSubmissionFlow", () => {
       initialRun: { status: "idle" as const },
     }));
     const start = vi.fn(
-      (_input: Parameters<ApplicationContext["cloudStartup"]["start"]>[0]) =>
+      (_input: Parameters<ApplicationContext["placementStartup"]["start"]>[0]) =>
         new Promise<void>(() => {
           // Application-owned startup intentionally outlives this route.
         }),
@@ -591,7 +599,7 @@ describe("DraftSubmissionFlow", () => {
       },
       agentSelection: { state: { selectedId: "cloud" }, set: selectAgent },
       sessions: { state: { result: null }, createResult },
-      cloudStartup: { start },
+      placementStartup: { start },
       config: { current: {} },
       navigateAndWait,
       preload,
@@ -607,7 +615,7 @@ describe("DraftSubmissionFlow", () => {
         canStartAsDraft: flow?.canStartAsDraft() ?? false,
         visibility: flow?.visibility ?? "normal",
         cloudProfileId: place?.cloudProfileId ?? "",
-        pendingCloud: flow?.pendingCloud ?? {
+        pendingPlacement: flow?.pendingPlacement ?? {
           sessionKey: "",
           gatewayUrl: "",
           recoveryScope: "",
@@ -621,9 +629,9 @@ describe("DraftSubmissionFlow", () => {
         onVisibilityRetired: () => flow?.setVisibility("normal"),
         onCloudProfileCleared: () => place?.clearCloudProfile(),
         onCloudState: (error) => flow?.setError(error),
-        onPendingCloudReset: () => flow?.resetPendingCloudWithoutClearingStorage(),
+        onPendingPlacementReset: () => flow?.releasePendingPlacementOwner(),
         onRecoveryReady: (gatewayUrl, recoveryScope) =>
-          flow?.restorePendingCloudRecovery(gatewayUrl, recoveryScope),
+          flow?.restorePendingPlacementRecovery(gatewayUrl, recoveryScope),
         onAdoptAgentDefaults: () => place?.adoptAgentDefaults(),
       },
     );
@@ -654,7 +662,7 @@ describe("DraftSubmissionFlow", () => {
         context,
         data: undefined,
         submitting: flow?.submitting ?? false,
-        pendingCloudSessionKey: flow?.pendingCloud.sessionKey ?? "",
+        pendingCloudSessionKey: flow?.pendingPlacement.sessionKey ?? "",
       }),
       {
         requestUpdate: vi.fn(),
@@ -679,16 +687,16 @@ describe("DraftSubmissionFlow", () => {
       cwd: "/workspace",
       workspace: "/workspace",
     });
-    flow.pendingCloud.stageCreate({
+    flow.pendingPlacement.stageCreate({
       agentId: "cloud",
-      profileId: "aws",
+      target: { kind: "profile", profileId: "aws" },
       message: "keep this cloud task",
       attachments: apiAttachments,
       gatewayUrl: "ws://gateway.example",
       recoveryScope: "principal-a",
       createParams,
     });
-    flow.pendingCloud.retryAllowed = true;
+    flow.pendingPlacement.retryAllowed = true;
     place.applyPendingCloud({ agentId: "cloud", profileId: "aws", cwd: "/workspace" });
     flow.attachmentDraft.replace([
       {
@@ -717,7 +725,7 @@ describe("DraftSubmissionFlow", () => {
       attachments: apiAttachments,
       phase: "dispatching",
     });
-    expect(flow.pendingCloud.capture()).toBeNull();
+    expect(flow.pendingPlacement.capture()).toBeNull();
     expect(flow.attachmentDraft.attachments).toHaveLength(0);
     expect(flow.submitting).toBe(false);
     expect(createResult).toHaveBeenCalledOnce();

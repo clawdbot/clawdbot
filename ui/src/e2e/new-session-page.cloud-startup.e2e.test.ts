@@ -14,8 +14,8 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const CLOUD_STARTUP_RUNTIME_REQUEST =
-  /\/assets\/cloud-session-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
+const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
+  /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
 
 suite.define(() => {
   it("clears cloud placement when the selected agent changes", async () => {
@@ -180,7 +180,7 @@ suite.define(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
           if (
-            key.startsWith("openclaw.new-session.cloud-recovery.v2:") ||
+            key.startsWith("openclaw.new-session.session-placement-recovery.v1:") ||
             key.startsWith("openclaw.control-ui-e2e.")
           ) {
             originalSetItem(key, value);
@@ -211,7 +211,7 @@ suite.define(() => {
 
       const recoveryRuntimeLoad = createDeferred();
       let recoveryRuntimeRequested = false;
-      await page.route(CLOUD_STARTUP_RUNTIME_REQUEST, async (route) => {
+      await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
         recoveryRuntimeRequested = true;
         await recoveryRuntimeLoad.promise;
         await route.continue();
@@ -308,7 +308,12 @@ suite.define(() => {
         const legacyScope = Array.from(new Uint8Array(digest), (byte) =>
           byte.toString(16).padStart(2, "0"),
         ).join("");
-        return { gatewayUrl, legacyScope };
+        const sessionKey = "agent:cloud:offline-recovery";
+        const frame = (value: string) => `${value.length}:${value}`;
+        const storageKey =
+          `openclaw.new-session.session-placement-recovery.v1:${frame(gatewayUrl)}:` +
+          `${frame(legacyScope)}:${frame(sessionKey)}`;
+        return { gatewayUrl, legacyScope, storageKey };
       });
 
       await gateway.setOnline(false);
@@ -322,14 +327,14 @@ suite.define(() => {
           }),
         )
         .toBe(false);
-      await page.evaluate(({ gatewayUrl, legacyScope }) => {
+      await page.evaluate(({ gatewayUrl, legacyScope, storageKey }) => {
         sessionStorage.setItem(
-          `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${legacyScope}`,
+          storageKey,
           JSON.stringify({
             sessionKey: "agent:cloud:offline-recovery",
             messageId: "message-offline-recovery",
             message: "restore after reconnect",
-            profileId: "aws",
+            target: { kind: "profile", profileId: "aws" },
             agentId: "cloud",
             gatewayUrl,
             recoveryScope: legacyScope,
@@ -347,10 +352,7 @@ suite.define(() => {
       });
       expect(
         await page.evaluate(
-          ({ gatewayUrl, legacyScope }) =>
-            sessionStorage.getItem(
-              `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${legacyScope}`,
-            ),
+          ({ storageKey }) => sessionStorage.getItem(storageKey),
           recoveryIdentity,
         ),
       ).toBeNull();

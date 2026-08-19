@@ -147,8 +147,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       agentModel: agentDefaultModel,
     });
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
-    const cloudStartup = this.context.cloudStartup.get(state.sessionKey);
-    const cloudStartupPending = cloudStartup !== null && cloudStartup.phase !== "failed";
+    const placementStartup = this.context.placementStartup.get(state.sessionKey);
+    const placementStartupPending =
+      placementStartup !== null && placementStartup.phase !== "failed";
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
       listLoading: state.sessionsLoading,
@@ -172,7 +173,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
       : sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
-        : cloudStartupPending
+        : placementStartupPending
           ? t("newSession.starting")
           : null;
     const typingEnabled =
@@ -261,13 +262,13 @@ export class ChatPane extends ChatPaneLayoutRender {
       persistCommentary: state.settings.chatPersistCommentary !== false,
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
       sending:
-        cloudStartupPending ||
+        placementStartupPending ||
         state.chatSending ||
         this.recoveringSession ||
         this.sessionSuggestionAddOperation !== undefined,
-      cloudStartup,
-      onRetryCloudStartup: cloudStartup?.retryable
-        ? () => this.context.cloudStartup.retry(state.sessionKey)
+      placementStartup,
+      onRetrySessionPlacementStartup: placementStartup?.retryable
+        ? () => this.context.placementStartup.retry(state.sessionKey)
         : undefined,
       canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
@@ -330,7 +331,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           !selectedSessionArchived &&
           !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&
-          !cloudStartupPending,
+          !placementStartupPending,
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner: this.sessionDisabledBanner({
         catalogDisabledReason,

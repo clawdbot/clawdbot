@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cloudSessionRecoveryExactStorageKey } from "../../lib/sessions/cloud-recovery-storage-key.ts";
+import { sessionPlacementRecoveryExactStorageKey } from "../../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
-  readCloudSessionRecovery,
-  writeCloudSessionRecovery,
-} from "../../lib/sessions/cloud-recovery.ts";
+  readSessionPlacementRecovery,
+  writeSessionPlacementRecovery,
+} from "../../lib/sessions/session-placement-recovery.ts";
 import {
-  PendingCloudRecoveryState,
+  PendingSessionPlacementRecoveryState,
   resolveSubmissionOutcomeReason,
-} from "./cloud-recovery-state.ts";
+} from "./session-placement-recovery-state.ts";
 
-describe("pending cloud recovery state", () => {
+describe("pending session placement recovery state", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => vi.unstubAllGlobals());
 
@@ -17,33 +17,32 @@ describe("pending cloud recovery state", () => {
     {
       name: "a replacement Gateway",
       gatewayIdentityChanged: true,
-      cloudDraftOwned: true,
+      placementDraftOwned: true,
       expected: "gateway-changed",
     },
     {
       name: "a normal local submission",
       gatewayIdentityChanged: false,
-      cloudDraftOwned: false,
+      placementDraftOwned: false,
       expected: "gateway-changed",
     },
     {
       name: "an interrupted cloud draft",
       gatewayIdentityChanged: false,
-      cloudDraftOwned: true,
+      placementDraftOwned: true,
       expected: "cloud-interrupted",
     },
-  ])("classifies $name accurately", ({ expected, gatewayIdentityChanged, cloudDraftOwned }) => {
-    expect(resolveSubmissionOutcomeReason({ gatewayIdentityChanged, cloudDraftOwned })).toBe(
+  ])("classifies $name accurately", ({ expected, gatewayIdentityChanged, placementDraftOwned }) => {
+    expect(resolveSubmissionOutcomeReason({ gatewayIdentityChanged, placementDraftOwned })).toBe(
       expected,
     );
   });
 
   it("stages an idempotent create before the Gateway request", () => {
-    const pending = new PendingCloudRecoveryState();
+    const pending = new PendingSessionPlacementRecoveryState();
     const createParams = pending.stageCreate({
       agentId: "cloud",
-      profileId: "aws",
-      machineClass: "fast",
+      target: { kind: "profile", profileId: "aws", machineClass: "fast" },
       message: "run remotely",
       gatewayUrl: "ws://gateway.example",
       recoveryScope: "principal-a",
@@ -57,10 +56,10 @@ describe("pending cloud recovery state", () => {
       worktree: true,
     });
     expect(
-      readCloudSessionRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
     ).toMatchObject({
       phase: "creating",
-      machineClass: "fast",
+      target: { kind: "profile", profileId: "aws", machineClass: "fast" },
       sessionKey: createParams?.key,
       createParams,
     });
@@ -70,12 +69,11 @@ describe("pending cloud recovery state", () => {
     "rejects an invalid persisted machine class %#",
     (machineClass) => {
       expect(
-        writeCloudSessionRecovery({
+        writeSessionPlacementRecovery({
           sessionKey: "agent:cloud:invalid-machine",
           messageId: "message-invalid-machine",
           message: "run remotely",
-          profileId: "aws",
-          machineClass,
+          target: { kind: "profile", profileId: "aws", machineClass },
           agentId: "cloud",
           gatewayUrl: "ws://gateway.example",
           recoveryScope: "principal-a",
@@ -87,11 +85,11 @@ describe("pending cloud recovery state", () => {
   );
 
   it("promotes the acknowledged server key before dispatch", () => {
-    const pending = new PendingCloudRecoveryState();
+    const pending = new PendingSessionPlacementRecoveryState();
     expect(
       pending.stageCreate({
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "run remotely",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -100,12 +98,12 @@ describe("pending cloud recovery state", () => {
     ).not.toBeNull();
     const provisionalSessionKey = pending.sessionKey;
     const storage = sessionStorage;
-    const provisionalKey = cloudSessionRecoveryExactStorageKey(
+    const provisionalKey = sessionPlacementRecoveryExactStorageKey(
       "ws://gateway.example",
       "principal-a",
       provisionalSessionKey,
     );
-    const canonicalKey = cloudSessionRecoveryExactStorageKey(
+    const canonicalKey = sessionPlacementRecoveryExactStorageKey(
       "ws://gateway.example",
       "principal-a",
       "agent:cloud:dashboard:server-key",
@@ -127,10 +125,10 @@ describe("pending cloud recovery state", () => {
 
     expect(pending.promoteToDispatching("agent:cloud:dashboard:server-key")).toBe(true);
     expect(
-      readCloudSessionRecovery("ws://gateway.example", "principal-a", provisionalSessionKey),
+      readSessionPlacementRecovery("ws://gateway.example", "principal-a", provisionalSessionKey),
     ).toBeNull();
     expect(
-      readCloudSessionRecovery(
+      readSessionPlacementRecovery(
         "ws://gateway.example",
         "principal-a",
         "agent:cloud:dashboard:server-key",
@@ -143,11 +141,11 @@ describe("pending cloud recovery state", () => {
   });
 
   it("restores the provisional row when canonical promotion cannot be written", () => {
-    const pending = new PendingCloudRecoveryState();
+    const pending = new PendingSessionPlacementRecoveryState();
     expect(
       pending.stageCreate({
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "run remotely",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -156,13 +154,13 @@ describe("pending cloud recovery state", () => {
     ).not.toBeNull();
     const storage = sessionStorage;
     const provisionalSessionKey = pending.sessionKey;
-    const provisionalKey = cloudSessionRecoveryExactStorageKey(
+    const provisionalKey = sessionPlacementRecoveryExactStorageKey(
       "ws://gateway.example",
       "principal-a",
       provisionalSessionKey,
     );
     const canonicalSessionKey = "agent:cloud:dashboard:server-key";
-    const canonicalKey = cloudSessionRecoveryExactStorageKey(
+    const canonicalKey = sessionPlacementRecoveryExactStorageKey(
       "ws://gateway.example",
       "principal-a",
       canonicalSessionKey,
@@ -190,10 +188,10 @@ describe("pending cloud recovery state", () => {
   });
 
   it("keeps incognito cloud drafts in memory without writing recovery storage", () => {
-    const pending = new PendingCloudRecoveryState();
+    const pending = new PendingSessionPlacementRecoveryState();
     const createParams = pending.stageCreate({
       agentId: "cloud",
-      profileId: "aws",
+      target: { kind: "profile", profileId: "aws" },
       message: "private remote task",
       gatewayUrl: "ws://gateway.example",
       recoveryScope: "principal-a",
@@ -214,12 +212,12 @@ describe("pending cloud recovery state", () => {
     expect(createParams).not.toHaveProperty("key");
     expect(pending.persistent).toBe(false);
     expect(
-      readCloudSessionRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
     ).toBeNull();
     expect(pending.promoteToDispatching("agent:cloud:dashboard:server-key")).toBe(true);
     expect(pending.sessionKey).toBe("agent:cloud:dashboard:server-key");
     expect(
-      readCloudSessionRecovery(
+      readSessionPlacementRecovery(
         "ws://gateway.example",
         "principal-a",
         "agent:cloud:dashboard:server-key",
@@ -229,12 +227,16 @@ describe("pending cloud recovery state", () => {
 
   it("rejects a persisted recovery record that claims to be incognito", () => {
     sessionStorage.setItem(
-      "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+      sessionPlacementRecoveryExactStorageKey(
+        "ws://gateway.example",
+        "principal-a",
+        "agent:cloud:dashboard:persisted-incognito",
+      ),
       JSON.stringify({
         sessionKey: "agent:cloud:dashboard:persisted-incognito",
         messageId: "message-private",
         message: "private task",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         agentId: "cloud",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -249,17 +251,17 @@ describe("pending cloud recovery state", () => {
       }),
     );
 
-    const pending = new PendingCloudRecoveryState();
+    const pending = new PendingSessionPlacementRecoveryState();
     expect(pending.restore("ws://gateway.example", "principal-a")).toBeNull();
     expect(sessionStorage.length).toBe(0);
   });
 
   it("captures creating recovery without sharing mutable payloads", () => {
-    const pending = new PendingCloudRecoveryState();
+    const pending = new PendingSessionPlacementRecoveryState();
     expect(
       pending.stageCreate({
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "run remotely",
         attachments: [{ type: "image" }],
         gatewayUrl: "ws://gateway.example",
@@ -283,7 +285,7 @@ describe("pending cloud recovery state", () => {
       sessionKey: "agent:cloud:dispatching",
       messageId: "message-dispatching",
       message: "dispatching task",
-      profileId: "aws",
+      target: { kind: "profile" as const, profileId: "aws" },
       agentId: "cloud",
       gatewayUrl: "ws://gateway.example",
       recoveryScope: "principal-a",
@@ -307,24 +309,24 @@ describe("pending cloud recovery state", () => {
         worktree: true as const,
       },
     };
-    expect(writeCloudSessionRecovery(dispatching)).toBe(true);
-    expect(writeCloudSessionRecovery(sending)).toBe(true);
+    expect(writeSessionPlacementRecovery(dispatching)).toBe(true);
+    expect(writeSessionPlacementRecovery(sending)).toBe(true);
 
-    const pending = new PendingCloudRecoveryState();
+    const pending = new PendingSessionPlacementRecoveryState();
     expect(pending.restore("ws://gateway.example", "principal-a")).toBeNull();
     expect(pending.sessionKey).toBe("");
 
-    expect(writeCloudSessionRecovery(creating)).toBe(true);
+    expect(writeSessionPlacementRecovery(creating)).toBe(true);
     expect(pending.restore("ws://gateway.example", "principal-a")).toEqual(creating);
     expect(pending.sessionKey).toBe(creating.sessionKey);
   });
 
   it("neutralizes a stale local owner without clearing newer durable recovery", () => {
-    const pending = new PendingCloudRecoveryState();
+    const pending = new PendingSessionPlacementRecoveryState();
     expect(
       pending.stageCreate({
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "stale task",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -336,19 +338,19 @@ describe("pending cloud recovery state", () => {
       sessionKey: "agent:cloud:newer",
       messageId: "message-newer",
       message: "newer task",
-      profileId: "aws",
+      target: { kind: "profile" as const, profileId: "aws" },
       agentId: "cloud",
       gatewayUrl: "ws://gateway.example",
       recoveryScope: "principal-a",
       phase: "dispatching" as const,
     };
-    expect(writeCloudSessionRecovery(newerRecovery)).toBe(true);
+    expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
 
     pending.clearFor("ws://gateway.example", "principal-a", staleKey);
 
     expect(pending.sessionKey).toBe("");
     expect(
-      readCloudSessionRecovery("ws://gateway.example", "principal-a", newerRecovery.sessionKey),
+      readSessionPlacementRecovery("ws://gateway.example", "principal-a", newerRecovery.sessionKey),
     ).toEqual(newerRecovery);
   });
 });

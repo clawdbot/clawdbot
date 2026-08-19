@@ -9,13 +9,13 @@ import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capab
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
-import type { ApplicationCloudStartup } from "./cloud-session-startup.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
+import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -106,7 +106,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly config: ApplicationConfigCapability;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
-  readonly cloudStartup: ApplicationCloudStartup;
+  readonly placementStartup: ApplicationPlacementStartup;
   readonly workboard: WorkboardCapability;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;

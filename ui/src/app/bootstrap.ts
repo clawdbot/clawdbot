@@ -29,7 +29,6 @@ import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
-import { createApplicationCloudStartup } from "./cloud-session-startup.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationNavigationOptions,
@@ -48,6 +47,7 @@ import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
   loadSettings,
   patchSettings,
@@ -383,7 +383,11 @@ export function bootstrapApplication(
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   const initialUserMessage = createInitialUserMessageHandoff();
-  const cloudStartup = createApplicationCloudStartup({ gateway, sessions, initialUserMessage });
+  const placementStartup = createApplicationPlacementStartup({
+    gateway,
+    sessions,
+    initialUserMessage,
+  });
   const chatAttachmentHandoff = createChatAttachmentHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
@@ -432,7 +436,7 @@ export function bootstrapApplication(
       return;
     }
     lastRecoveryClient = snapshot.client;
-    cloudStartup.resumeRecovery();
+    placementStartup.resumeRecovery();
   });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
@@ -503,7 +507,7 @@ export function bootstrapApplication(
     config,
     runtimeConfig,
     sessions,
-    cloudStartup,
+    placementStartup,
     workboard,
     overlays,
     navigation,
@@ -604,7 +608,7 @@ export function bootstrapApplication(
       stopPostConnect();
       agents.dispose();
       channels.dispose();
-      cloudStartup.dispose();
+      placementStartup.dispose();
       sessions.dispose();
       workboard.dispose();
       stopConfigWriteSuspension();

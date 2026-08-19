@@ -1,39 +1,38 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import { cloudSessionRecoveryExactStorageKey } from "../../lib/sessions/cloud-recovery-storage-key.ts";
+import { sessionPlacementRecoveryExactStorageKey } from "../../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
-  clearCloudSessionRecovery,
-  readCloudSessionRecovery,
-  type CloudSessionRecovery,
-  writeCloudSessionRecovery,
-} from "../../lib/sessions/cloud-recovery.ts";
-import { advanceCloudDraftSession as advanceCloudDraftSessionWithRecovery } from "../../lib/sessions/cloud-submit.ts";
+  clearSessionPlacementRecovery,
+  readSessionPlacementRecovery,
+  type SessionPlacementRecovery,
+  writeSessionPlacementRecovery,
+} from "../../lib/sessions/session-placement-recovery.ts";
+import { advanceSessionPlacementDraft as advanceSessionPlacementDraftWithRecovery } from "../../lib/sessions/session-placement-submit.ts";
 
 type AdvanceParams = Omit<
-  Parameters<typeof advanceCloudDraftSessionWithRecovery>[0],
+  Parameters<typeof advanceSessionPlacementDraftWithRecovery>[0],
   "cleanupOnCancellation" | "recovery"
 > &
-  Omit<CloudSessionRecovery, "sessionKey" | "phase"> & {
+  Omit<SessionPlacementRecovery, "sessionKey" | "phase"> & {
     cleanupOnCancellation?: boolean;
     key: string;
-    recoveryPhase: CloudSessionRecovery["phase"];
+    recoveryPhase: SessionPlacementRecovery["phase"];
   };
 
-function advanceCloudDraftSession(params: AdvanceParams) {
+function advanceSessionPlacementDraft(params: AdvanceParams) {
   const {
     key,
     messageId,
     message,
     attachments,
-    profileId,
-    machineClass,
+    target,
     agentId,
     gatewayUrl,
     recoveryScope,
     recoveryPhase,
     ...options
   } = params;
-  return advanceCloudDraftSessionWithRecovery({
+  return advanceSessionPlacementDraftWithRecovery({
     ...options,
     cleanupOnCancellation: options.cleanupOnCancellation ?? true,
     recovery: {
@@ -41,8 +40,7 @@ function advanceCloudDraftSession(params: AdvanceParams) {
       messageId,
       message,
       attachments,
-      profileId,
-      machineClass,
+      target,
       agentId,
       gatewayUrl,
       recoveryScope,
@@ -56,9 +54,9 @@ function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClien
 }
 
 const recoveryStorageKey = (sessionKey: string) =>
-  cloudSessionRecoveryExactStorageKey("ws://gateway.example", "principal-a", sessionKey);
+  sessionPlacementRecoveryExactStorageKey("ws://gateway.example", "principal-a", sessionKey);
 
-describe("cloud draft advancement", () => {
+describe("session placement draft advancement", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => {
     vi.restoreAllMocks();
@@ -72,7 +70,7 @@ describe("cloud draft advancement", () => {
         sessionKey: "agent:cloud:recovered",
         messageId: "message-recovered",
         message: "resume remotely",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         agentId: "cloud",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -90,11 +88,11 @@ describe("cloud draft advancement", () => {
     const clearRecovery = vi.fn();
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: "agent:cloud:recovered",
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "resume remotely",
         messageId: "message-recovered",
         gatewayUrl: "ws://gateway.example",
@@ -119,11 +117,11 @@ describe("cloud draft advancement", () => {
     const gatewayUrl = "ws://gateway.example";
     const recoveryScope = "principal-a";
     const sessionKey = "agent:cloud:older";
-    const newerRecovery: CloudSessionRecovery = {
+    const newerRecovery: SessionPlacementRecovery = {
       sessionKey: "agent:cloud:newer",
       messageId: "message-newer",
       message: "newer task",
-      profileId: "aws",
+      target: { kind: "profile", profileId: "aws" },
       agentId: "cloud",
       gatewayUrl,
       recoveryScope,
@@ -131,7 +129,7 @@ describe("cloud draft advancement", () => {
     };
     const request = vi.fn((method: string) => {
       if (method === "sessions.dispatch") {
-        expect(writeCloudSessionRecovery(newerRecovery)).toBe(true);
+        expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
         return Promise.resolve({ placement: { state: "active", environmentId: "worker-older" } });
       }
       if (method === "sessions.send") {
@@ -141,15 +139,15 @@ describe("cloud draft advancement", () => {
     });
     const setRecoveryPhase = vi.fn();
     const clearRecovery = vi.fn(() =>
-      clearCloudSessionRecovery(gatewayUrl, recoveryScope, sessionKey),
+      clearSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey),
     );
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: sessionKey,
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "older task",
         messageId: "message-older",
         gatewayUrl,
@@ -163,9 +161,9 @@ describe("cloud draft advancement", () => {
       }),
     ).resolves.toMatchObject({ status: "started", messageId: "message-older" });
     expect(setRecoveryPhase).toHaveBeenCalledWith("sending", true);
-    expect(readCloudSessionRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey)).toEqual(
-      newerRecovery,
-    );
+    expect(
+      readSessionPlacementRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey),
+    ).toEqual(newerRecovery);
     expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
     expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(0);
     expect(clearRecovery).toHaveBeenCalledWith("resolved");
@@ -194,11 +192,11 @@ describe("cloud draft advancement", () => {
     const setRecoveryPhase = vi.fn();
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: "agent:cloud:current",
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "current task",
         messageId: "message-current",
         gatewayUrl: "ws://gateway.example",
@@ -229,7 +227,7 @@ describe("cloud draft advancement", () => {
         sessionKey: "agent:cloud:newer",
         messageId: "message-newer",
         message: "newer task",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         agentId: "cloud",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -244,11 +242,11 @@ describe("cloud draft advancement", () => {
     const clearRecovery = vi.fn();
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: "agent:cloud:stale",
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "stale task",
         messageId: "message-stale",
         gatewayUrl: "ws://gateway.example",
@@ -291,18 +289,18 @@ describe("cloud draft advancement", () => {
       sessionKey: "agent:cloud:newer",
       messageId: "message-newer",
       message: "newer task",
-      profileId: "aws",
+      target: { kind: "profile", profileId: "aws" },
       agentId: "cloud",
       gatewayUrl,
       recoveryScope,
       phase: "dispatching" as const,
-    };
+    } satisfies SessionPlacementRecovery;
     const request = vi
       .fn()
       .mockResolvedValueOnce({ placement: { state: "active", environmentId: "environment-1" } })
       .mockImplementationOnce(async () => {
         if (!recoveryOwned) {
-          expect(writeCloudSessionRecovery(newerRecovery)).toBe(true);
+          expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
         }
         return { runId: "run-stale", status: "started" };
       });
@@ -311,15 +309,15 @@ describe("cloud draft advancement", () => {
     let lifecycleChecks = 0;
     let ownershipChecks = 0;
     const clearRecovery = vi.fn(() =>
-      clearCloudSessionRecovery(gatewayUrl, recoveryScope, sessionKey),
+      clearSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey),
     );
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: sessionKey,
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "interrupted task",
         messageId: "message-interrupted",
         gatewayUrl,
@@ -339,9 +337,9 @@ describe("cloud draft advancement", () => {
       }),
     ).resolves.toEqual({ status });
     expect(clearRecovery).toHaveBeenCalledWith(retirement);
-    expect(readCloudSessionRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey)).toEqual(
-      recoveryOwned ? null : newerRecovery,
-    );
+    expect(
+      readSessionPlacementRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey),
+    ).toEqual(recoveryOwned ? null : newerRecovery);
   });
 
   it("does not persist volatile incognito recovery when submission is cancelled", async () => {
@@ -352,11 +350,11 @@ describe("cloud draft advancement", () => {
       .mockResolvedValueOnce({ ok: true, deleted: true });
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: "agent:cloud:incognito",
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "private task",
         messageId: "message-private",
         gatewayUrl: "ws://gateway.example",
@@ -388,11 +386,11 @@ describe("cloud draft advancement", () => {
     const clearRecovery = vi.fn();
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: "agent:cloud:cancelled",
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "cancelled task",
         messageId: "message-cancelled",
         gatewayUrl: "ws://gateway.example",
@@ -428,8 +426,7 @@ describe("cloud draft advancement", () => {
         sessionKey: "agent:cloud:recovered",
         messageId: "message-recovered",
         message: "possibly accepted task",
-        profileId: "aws",
-        machineClass: "fast",
+        target: { kind: "profile", profileId: "aws", machineClass: "fast" },
         agentId: "cloud",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -445,12 +442,11 @@ describe("cloud draft advancement", () => {
     const clearRecovery = vi.fn();
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: "agent:cloud:recovered",
         agentId: "cloud",
-        profileId: "aws",
-        machineClass: "fast",
+        target: { kind: "profile", profileId: "aws", machineClass: "fast" },
         message: "possibly accepted task",
         messageId: "message-recovered",
         gatewayUrl: "ws://gateway.example",
@@ -489,7 +485,7 @@ describe("cloud draft advancement", () => {
         sessionKey: "agent:cloud:recovered",
         messageId: "message-recovered",
         message: "retry this task",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         agentId: "cloud",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -510,11 +506,11 @@ describe("cloud draft advancement", () => {
     const clearRecovery = vi.fn();
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: "agent:cloud:recovered",
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "retry this task",
         messageId: "message-recovered",
         gatewayUrl: "ws://gateway.example",
@@ -538,7 +534,7 @@ describe("cloud draft advancement", () => {
         sessionKey: "agent:cloud:missing",
         messageId: "message-missing",
         message: "missing task",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         agentId: "cloud",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -549,11 +545,11 @@ describe("cloud draft advancement", () => {
     const clearRecovery = vi.fn();
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: "agent:cloud:missing",
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "missing task",
         messageId: "message-missing",
         gatewayUrl: "ws://gateway.example",
@@ -580,7 +576,7 @@ describe("cloud draft advancement", () => {
         sessionKey: "agent:cloud:pre-send",
         messageId: "message-pre-send",
         message: "not sent yet",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         agentId: "cloud",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -593,11 +589,11 @@ describe("cloud draft advancement", () => {
     const clearRecovery = vi.fn();
 
     await expect(
-      advanceCloudDraftSession({
+      advanceSessionPlacementDraft({
         client: clientWith(request),
         key: "agent:cloud:pre-send",
         agentId: "cloud",
-        profileId: "aws",
+        target: { kind: "profile", profileId: "aws" },
         message: "not sent yet",
         messageId: "message-pre-send",
         gatewayUrl: "ws://gateway.example",

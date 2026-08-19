@@ -122,7 +122,7 @@ export function createdSessionListResult(sessionKey: string) {
   };
 }
 
-export async function expectPendingCloudStartupBeforeRuntime(
+export async function expectPendingSessionPlacementStartupBeforeRuntime(
   page: Page,
   gateway: MockGatewayControls,
   sessionKey: string,

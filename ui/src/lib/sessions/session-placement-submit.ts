@@ -1,17 +1,17 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
-  readCloudSessionRecovery,
-  type CloudSessionRecovery,
-  writeCloudSessionRecovery,
-  writeCloudSessionRecoveryIfAvailable,
-} from "./cloud-recovery.ts";
+  readSessionPlacementRecovery,
+  type SessionPlacementRecovery,
+  writeSessionPlacementRecovery,
+  writeSessionPlacementRecoveryIfAvailable,
+} from "./session-placement-recovery.ts";
 import {
-  deleteCloudDraftSession,
-  deleteRecoveredCloudDraftSession,
-  startCloudInitialTurn,
-} from "./cloud-startup.ts";
+  deleteRecoveredSessionPlacementDraft,
+  deleteSessionPlacementDraft,
+  startSessionPlacementInitialTurn,
+} from "./session-placement-startup.ts";
 
-export type CloudDraftAdvanceResult =
+export type SessionPlacementDraftAdvanceResult =
   | { status: "started"; messageId: string; messageSeq?: number }
   | { status: "send-rejected"; error: string; messageId: string }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
@@ -20,19 +20,19 @@ export type CloudDraftAdvanceResult =
   | { status: "interrupted" }
   | { status: "ownership-lost" };
 
-type CloudRecoveryRetirement = "resolved" | "interrupted";
+type SessionPlacementRecoveryRetirement = "resolved" | "interrupted";
 
-export async function advanceCloudDraftSession(params: {
+export async function advanceSessionPlacementDraft(params: {
   client: Pick<GatewayBrowserClient, "request">;
-  recovery: CloudSessionRecovery;
+  recovery: SessionPlacementRecovery;
   persistRecovery?: boolean;
   cleanupOnCancellation: boolean;
   recovering: boolean;
   isLifecycleCurrent: () => boolean;
   ownsRecovery: () => boolean;
-  clearRecovery: (retirement: CloudRecoveryRetirement) => void;
-  setRecoveryPhase: (phase: CloudSessionRecovery["phase"], durable: boolean) => void;
-}): Promise<CloudDraftAdvanceResult> {
+  clearRecovery: (retirement: SessionPlacementRecoveryRetirement) => void;
+  setRecoveryPhase: (phase: SessionPlacementRecovery["phase"], durable: boolean) => void;
+}): Promise<SessionPlacementDraftAdvanceResult> {
   const persistRecovery = params.persistRecovery !== false;
   const recovery = params.recovery;
   // Dispatch and send require both fences. After accepted delivery, inspect
@@ -40,7 +40,11 @@ export async function advanceCloudDraftSession(params: {
   const isCurrentOwner = () => params.isLifecycleCurrent() && params.ownsRecovery();
   const existingRecovery =
     params.recovering && persistRecovery
-      ? readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey)
+      ? readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        )
       : null;
   if (!isCurrentOwner()) {
     if (!params.cleanupOnCancellation) {
@@ -49,11 +53,15 @@ export async function advanceCloudDraftSession(params: {
     const recoveryPersisted = persistRecovery
       ? params.recovering
         ? existingRecovery?.sessionKey === recovery.sessionKey
-        : writeCloudSessionRecoveryIfAvailable(recovery)
+        : writeSessionPlacementRecoveryIfAvailable(recovery)
       : false;
     const cleanupError = params.recovering
-      ? await deleteRecoveredCloudDraftSession(params.client, recovery.sessionKey, recovery.agentId)
-      : await deleteCloudDraftSession(params.client, recovery.sessionKey, recovery.agentId);
+      ? await deleteRecoveredSessionPlacementDraft(
+          params.client,
+          recovery.sessionKey,
+          recovery.agentId,
+        )
+      : await deleteSessionPlacementDraft(params.client, recovery.sessionKey, recovery.agentId);
     if (!cleanupError) {
       params.clearRecovery("resolved");
     }
@@ -66,7 +74,7 @@ export async function advanceCloudDraftSession(params: {
   const recoveryPersisted = persistRecovery
     ? params.recovering
       ? existingRecovery?.sessionKey === recovery.sessionKey
-      : writeCloudSessionRecovery(recovery)
+      : writeSessionPlacementRecovery(recovery)
     : true;
   if (!isCurrentOwner() || !recoveryPersisted) {
     if (!params.cleanupOnCancellation && !isCurrentOwner()) {
@@ -80,21 +88,24 @@ export async function advanceCloudDraftSession(params: {
       };
     }
     const cleanupError = params.recovering
-      ? await deleteRecoveredCloudDraftSession(params.client, recovery.sessionKey, recovery.agentId)
-      : await deleteCloudDraftSession(params.client, recovery.sessionKey, recovery.agentId);
+      ? await deleteRecoveredSessionPlacementDraft(
+          params.client,
+          recovery.sessionKey,
+          recovery.agentId,
+        )
+      : await deleteSessionPlacementDraft(params.client, recovery.sessionKey, recovery.agentId);
     if (!cleanupError) {
       params.clearRecovery("resolved");
     }
     return { status: "cancelled", cleanupError, recoveryPersisted };
   }
 
-  const cloudStart = await startCloudInitialTurn(
+  const placementStart = await startSessionPlacementInitialTurn(
     params.client,
     {
       key: recovery.sessionKey,
       agentId: recovery.agentId,
-      profileId: recovery.profileId,
-      machineClass: recovery.machineClass,
+      target: recovery.target,
       message: recovery.message,
       attachments: recovery.attachments,
       messageId: recovery.messageId,
@@ -111,7 +122,7 @@ export async function advanceCloudDraftSession(params: {
         params.setRecoveryPhase("sending", false);
         return true;
       }
-      const currentRecovery = readCloudSessionRecovery(
+      const currentRecovery = readSessionPlacementRecovery(
         recovery.gatewayUrl,
         recovery.recoveryScope,
         recovery.sessionKey,
@@ -119,7 +130,7 @@ export async function advanceCloudDraftSession(params: {
       if (currentRecovery && currentRecovery.messageId !== recovery.messageId) {
         return false;
       }
-      const persisted = writeCloudSessionRecovery({ ...recovery, phase: "sending" });
+      const persisted = writeSessionPlacementRecovery({ ...recovery, phase: "sending" });
       if (persisted) {
         params.setRecoveryPhase("sending", true);
       }
@@ -129,11 +140,11 @@ export async function advanceCloudDraftSession(params: {
   if (!params.cleanupOnCancellation && !isCurrentOwner()) {
     return { status: "interrupted" };
   }
-  if (cloudStart.status === "interrupted") {
-    return cloudStart;
+  if (placementStart.status === "interrupted") {
+    return placementStart;
   }
-  if (cloudStart.status === "cancelled") {
-    const cleanupError = await deleteCloudDraftSession(
+  if (placementStart.status === "cancelled") {
+    const cleanupError = await deleteSessionPlacementDraft(
       params.client,
       recovery.sessionKey,
       recovery.agentId,
@@ -143,33 +154,33 @@ export async function advanceCloudDraftSession(params: {
     }
     return { status: "cancelled", cleanupError, recoveryPersisted: persistRecovery };
   }
-  if (cloudStart.status === "cleanup-rejected") {
-    return cloudStart;
+  if (placementStart.status === "cleanup-rejected") {
+    return placementStart;
   }
-  if (cloudStart.status === "send-not-started") {
+  if (placementStart.status === "send-not-started") {
     params.clearRecovery("resolved");
-    return { status: "dispatch-rejected", error: cloudStart.error };
+    return { status: "dispatch-rejected", error: placementStart.error };
   }
-  if (cloudStart.status === "send-definitive-rejected") {
+  if (placementStart.status === "send-definitive-rejected") {
     params.clearRecovery("resolved");
-    return { status: "dispatch-rejected", error: cloudStart.error };
+    return { status: "dispatch-rejected", error: placementStart.error };
   }
-  if (cloudStart.status === "session-missing") {
+  if (placementStart.status === "session-missing") {
     params.clearRecovery("resolved");
-    return { status: "dispatch-rejected", error: cloudStart.error };
+    return { status: "dispatch-rejected", error: placementStart.error };
   }
-  if (cloudStart.status === "dispatch-rejected") {
+  if (placementStart.status === "dispatch-rejected") {
     // The created session is already the visible recovery surface. Dispatch
     // owns worker cleanup; retain the session so a definitive failure cannot
     // turn immediate navigation into a dead route.
     params.clearRecovery("resolved");
     return {
       status: "dispatch-rejected",
-      error: cloudStart.error,
+      error: placementStart.error,
     };
   }
-  if (cloudStart.status === "send-rejected") {
-    return cloudStart;
+  if (placementStart.status === "send-rejected") {
+    return placementStart;
   }
   if (!params.isLifecycleCurrent()) {
     // The page recorded why its lifecycle changed before this accepted send returned.
@@ -184,5 +195,5 @@ export async function advanceCloudDraftSession(params: {
     return { status: "ownership-lost" };
   }
   params.clearRecovery("resolved");
-  return cloudStart;
+  return placementStart;
 }

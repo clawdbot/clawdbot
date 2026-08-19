@@ -153,7 +153,7 @@ suite.define(() => {
     const readRecovery = () =>
       page.evaluate(() => {
         const key = Object.keys(sessionStorage).find((candidate) =>
-          candidate.startsWith("openclaw.new-session.cloud-recovery.v2:"),
+          candidate.startsWith("openclaw.new-session.session-placement-recovery.v1:"),
         );
         return key ? (JSON.parse(sessionStorage.getItem(key) ?? "null") as unknown) : null;
       });
@@ -200,12 +200,16 @@ suite.define(() => {
       await pollLocatorText(
         page.locator(".new-session-page__error").filter({ hasText: "cleanup unavailable" }),
       ).toContain("cleanup unavailable");
-      const stagedIdentity = staged as { messageId: string; profileId: string; agentId: string };
+      const stagedIdentity = staged as {
+        messageId: string;
+        target: { kind: "profile"; profileId: string };
+        agentId: string;
+      };
       expect(await readRecovery()).toMatchObject({
         sessionKey,
         messageId: stagedIdentity.messageId,
         message,
-        profileId: stagedIdentity.profileId,
+        target: stagedIdentity.target,
         agentId: stagedIdentity.agentId,
         phase: "dispatching",
       });
@@ -294,7 +298,7 @@ suite.define(() => {
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
-          if (key.startsWith("openclaw.new-session.cloud-recovery.v2:")) {
+          if (key.startsWith("openclaw.new-session.session-placement-recovery.v1:")) {
             originalSetItem(key, value);
             return;
           }

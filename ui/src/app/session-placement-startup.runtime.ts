@@ -6,27 +6,29 @@ import {
   type GatewayConnectionScope,
 } from "../lib/gateway-connection-lifecycle.ts";
 import { hasVideoMediaFileExtension } from "../lib/media-file-extension.ts";
-import {
-  clearCloudSessionRecovery,
-  listCloudSessionRecoveries,
-  readCloudSessionRecovery,
-  type CloudSessionRecovery,
-} from "../lib/sessions/cloud-recovery.ts";
-import {
-  advanceCloudDraftSession,
-  type CloudDraftAdvanceResult,
-} from "../lib/sessions/cloud-submit.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
-import type {
-  ApplicationCloudStartupRuntime,
-  ApplicationCloudStartupDependencies,
-} from "./cloud-session-startup.ts";
+import {
+  clearSessionPlacementRecovery,
+  listSessionPlacementRecoveries,
+  readSessionPlacementRecovery,
+  type SessionPlacementRecovery,
+} from "../lib/sessions/session-placement-recovery.ts";
+import {
+  advanceSessionPlacementDraft,
+  type SessionPlacementDraftAdvanceResult,
+} from "../lib/sessions/session-placement-submit.ts";
 import type { ApplicationInitialUserMessage } from "./initial-user-message-handoff.ts";
+import type {
+  ApplicationPlacementStartupRuntime,
+  ApplicationPlacementStartupDependencies,
+} from "./session-placement-startup.ts";
 
-type CloudStartupPhase = NonNullable<ReturnType<ApplicationCloudStartupRuntime["get"]>>["phase"];
-type StartupPlacementPhase = Exclude<CloudStartupPhase, "pending" | "sending" | "failed">;
+type PlacementStartupPhase = NonNullable<
+  ReturnType<ApplicationPlacementStartupRuntime["get"]>
+>["phase"];
+type StartupPlacementPhase = Exclude<PlacementStartupPhase, "pending" | "sending" | "failed">;
 
-const STARTUP_PLACEMENT_STATES = new Set<StartupPlacementPhase>([
+const STARTUP_PLACEMENT_STATES: ReadonlySet<string> = new Set<StartupPlacementPhase>([
   "requested",
   "provisioning",
   "syncing",
@@ -35,19 +37,19 @@ const STARTUP_PLACEMENT_STATES = new Set<StartupPlacementPhase>([
 ]);
 
 function isStartupPlacementPhase(value: string): value is StartupPlacementPhase {
-  return STARTUP_PLACEMENT_STATES.has(value as StartupPlacementPhase);
+  return STARTUP_PLACEMENT_STATES.has(value);
 }
 
-type CloudStartupInput = Parameters<ApplicationCloudStartupRuntime["start"]>[0];
+type PlacementStartupInput = Parameters<ApplicationPlacementStartupRuntime["start"]>[0];
 
-type CloudStartupOwner = Pick<
-  CloudSessionRecovery,
+type PlacementStartupOwner = Pick<
+  SessionPlacementRecovery,
   "gatewayUrl" | "messageId" | "recoveryScope" | "sessionKey"
 >;
 
-type CloudStartupEntry = {
-  recovery: CloudSessionRecovery | null;
-  readonly owner: CloudStartupOwner;
+type PlacementStartupEntry = {
+  recovery: SessionPlacementRecovery | null;
+  readonly owner: PlacementStartupOwner;
   persistRecovery: boolean;
   readonly createdAt: number;
   readonly scope: GatewayConnectionScope;
@@ -83,7 +85,7 @@ function readDurableAttachment(value: unknown): DurableAttachment | null {
 }
 
 function buildInitialUserMessage(
-  recovery: CloudSessionRecovery,
+  recovery: SessionPlacementRecovery,
   createdAt: number,
   identity: { messageId: string; messageSeq?: number },
 ): ApplicationInitialUserMessage {
@@ -128,11 +130,11 @@ function buildInitialUserMessage(
   };
 }
 
-export default function createApplicationCloudStartupRuntime(
-  params: ApplicationCloudStartupDependencies,
-): ApplicationCloudStartupRuntime {
+export default function createApplicationPlacementStartupRuntime(
+  params: ApplicationPlacementStartupDependencies,
+): ApplicationPlacementStartupRuntime {
   const listeners = new Set<() => void>();
-  const entries = new Map<string, CloudStartupEntry>();
+  const entries = new Map<string, PlacementStartupEntry>();
   const connection = createGatewayConnectionLifecycle(params.gateway.snapshot);
   let lastRecoveryClient: object | null = null;
   const recoveredFingerprints = new Set<string>();
@@ -153,10 +155,10 @@ export default function createApplicationCloudStartupRuntime(
     return null;
   };
 
-  const ownsEntry = (entry: CloudStartupEntry) =>
+  const ownsEntry = (entry: PlacementStartupEntry) =>
     findEntry(entry.owner.sessionKey)?.entry === entry;
 
-  const lifecycleCurrent = (entry: CloudStartupEntry) => {
+  const lifecycleCurrent = (entry: PlacementStartupEntry) => {
     const snapshot = params.gateway.snapshot;
     return Boolean(
       connection.isCurrent(entry.scope) &&
@@ -167,8 +169,8 @@ export default function createApplicationCloudStartupRuntime(
   };
 
   const setEntryState = (
-    entry: CloudStartupEntry,
-    state: CloudStartupEntry["state"],
+    entry: PlacementStartupEntry,
+    state: PlacementStartupEntry["state"],
     details: { error?: string; retryable?: boolean } = {},
   ) => {
     if (!ownsEntry(entry)) {
@@ -187,7 +189,7 @@ export default function createApplicationCloudStartupRuntime(
     publish();
   };
 
-  const retireEntry = (entry: CloudStartupEntry, notify = true) => {
+  const retireEntry = (entry: PlacementStartupEntry, notify = true) => {
     const found = findEntry(entry.owner.sessionKey);
     if (found?.entry !== entry) {
       return;
@@ -199,9 +201,9 @@ export default function createApplicationCloudStartupRuntime(
   };
 
   const prepareAcceptedMessage = (
-    entry: CloudStartupEntry,
-    recovery: CloudSessionRecovery,
-    result: Extract<CloudDraftAdvanceResult, { status: "started" }>,
+    entry: PlacementStartupEntry,
+    recovery: SessionPlacementRecovery,
+    result: Extract<SessionPlacementDraftAdvanceResult, { status: "started" }>,
   ) => {
     params.initialUserMessage.prepare({
       sessionKey: entry.owner.sessionKey,
@@ -211,17 +213,21 @@ export default function createApplicationCloudStartupRuntime(
     });
   };
 
-  const refreshAfterFailure = (entry: CloudStartupEntry) => {
+  const refreshAfterFailure = (entry: PlacementStartupEntry) => {
     if (!lifecycleCurrent(entry)) {
       return;
     }
     void params.sessions.refresh({ force: true, backgroundHydrate: true }).catch(() => undefined);
   };
 
-  const run = (entry: CloudStartupEntry, recovery: CloudSessionRecovery, recovering: boolean) => {
+  const run = (
+    entry: PlacementStartupEntry,
+    recovery: SessionPlacementRecovery,
+    recovering: boolean,
+  ) => {
     let accepted = false;
     let currentRecovery = recovery;
-    void advanceCloudDraftSession({
+    void advanceSessionPlacementDraft({
       client: entry.scope.client,
       recovery: currentRecovery,
       persistRecovery: entry.persistRecovery,
@@ -230,7 +236,7 @@ export default function createApplicationCloudStartupRuntime(
       isLifecycleCurrent: () => lifecycleCurrent(entry),
       ownsRecovery: () => ownsEntry(entry),
       clearRecovery: () =>
-        clearCloudSessionRecovery(
+        clearSessionPlacementRecovery(
           entry.owner.gatewayUrl,
           entry.owner.recoveryScope,
           entry.owner.sessionKey,
@@ -295,7 +301,7 @@ export default function createApplicationCloudStartupRuntime(
       });
   };
 
-  const start = (input: CloudStartupInput) => {
+  const start = (input: PlacementStartupInput) => {
     if (input.recovery.phase === "creating") {
       return;
     }
@@ -313,13 +319,13 @@ export default function createApplicationCloudStartupRuntime(
     if (!scope) {
       return;
     }
-    const owner: CloudStartupOwner = {
+    const owner: PlacementStartupOwner = {
       sessionKey: input.recovery.sessionKey,
       messageId: input.recovery.messageId,
       gatewayUrl: input.recovery.gatewayUrl,
       recoveryScope: input.recovery.recoveryScope,
     };
-    const entry: CloudStartupEntry = {
+    const entry: PlacementStartupEntry = {
       recovery: input.recovery,
       owner,
       persistRecovery: input.persistRecovery,
@@ -333,7 +339,7 @@ export default function createApplicationCloudStartupRuntime(
   };
 
   const handleGatewaySnapshot = (
-    snapshot: ApplicationCloudStartupDependencies["gateway"]["snapshot"],
+    snapshot: ApplicationPlacementStartupDependencies["gateway"]["snapshot"],
   ) => {
     connection.transition(snapshot);
     if (snapshot.phase !== "connected") {
@@ -344,7 +350,7 @@ export default function createApplicationCloudStartupRuntime(
     if (!snapshot.client?.recoveryScopeReady || !snapshot.client.recoveryScope) {
       return;
     }
-    const recoveries = listCloudSessionRecoveries(
+    const recoveries = listSessionPlacementRecoveries(
       params.gateway.connection.gatewayUrl,
       snapshot.client.recoveryScope,
     ).filter((recovery) => recovery.phase !== "creating");
@@ -382,7 +388,7 @@ export default function createApplicationCloudStartupRuntime(
       if (!entry) {
         return null;
       }
-      let phase: CloudStartupPhase = entry.state;
+      let phase: PlacementStartupPhase = entry.state;
       if (entry.state === "pending") {
         const row = params.sessions.state.result?.sessions.find((candidate: GatewaySessionRow) =>
           areUiSessionKeysEquivalent(candidate.key, entry.owner.sessionKey),
@@ -407,7 +413,7 @@ export default function createApplicationCloudStartupRuntime(
         return;
       }
       const recovery = entry.persistRecovery
-        ? readCloudSessionRecovery(
+        ? readSessionPlacementRecovery(
             entry.owner.gatewayUrl,
             entry.owner.recoveryScope,
             entry.owner.sessionKey,
