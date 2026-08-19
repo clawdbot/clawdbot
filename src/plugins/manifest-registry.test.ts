@@ -2537,6 +2537,27 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("preserves enterprise identity provider contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "enterprise-identity-fixture",
+      contracts: {
+        enterpriseIdentityProviders: [" entra ", "", "okta"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "enterprise-identity-fixture",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      enterpriseIdentityProviders: ["entra", "okta"],
+    });
+  });
+
   it("preserves qa runner descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

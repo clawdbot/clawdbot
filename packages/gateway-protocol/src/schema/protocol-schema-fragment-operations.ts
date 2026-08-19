@@ -2,6 +2,7 @@ import * as auditActivity from "./audit-activity.js";
 import * as auditRun from "./audit-run.js";
 import * as audit from "./audit.js";
 import * as config from "./config.js";
+import * as memoryEnterpriseIdentity from "./memory-enterprise-identity.js";
 import * as openclaw from "./openclaw.js";
 import * as taskSuggestions from "./task-suggestions.js";
 import * as tasks from "./tasks.js";
@@ -55,6 +56,38 @@ export const OperationsProtocolSchemas = {
   ConfigSchemaLookupParams: config.ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponse: config.ConfigSchemaResponseSchema,
   ConfigSchemaLookupResult: config.ConfigSchemaLookupResultSchema,
+  MemoryEnterpriseIdentityAuthorizationStartParams:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityAuthorizationStartParamsSchema,
+  MemoryEnterpriseIdentityAuthorizationStartResult:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityAuthorizationStartResultSchema,
+  MemoryEnterpriseIdentityAuthorizationCompleteParams:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityAuthorizationCompleteParamsSchema,
+  MemoryEnterpriseIdentityAuthorizationCompleteResult:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityAuthorizationCompleteResultSchema,
+  MemoryEnterpriseIdentityAccessAuditListParams:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityAccessAuditListParamsSchema,
+  MemoryEnterpriseIdentityAccessAuditListResult:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityAccessAuditListResultSchema,
+  MemoryEnterpriseIdentityPolicyDriftAlertListParams:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityPolicyDriftAlertListParamsSchema,
+  MemoryEnterpriseIdentityPolicyDriftAlertListResult:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityPolicyDriftAlertListResultSchema,
+  MemoryEnterpriseIdentityEvidenceTransitionListParams:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityEvidenceTransitionListParamsSchema,
+  MemoryEnterpriseIdentityEvidenceTransitionListResult:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityEvidenceTransitionListResultSchema,
+  MemoryEnterpriseIdentityAccessAuditExportParams:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityAccessAuditExportParamsSchema,
+  MemoryEnterpriseIdentityAccessAuditExportResult:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityAccessAuditExportResultSchema,
+  MemoryEnterpriseIdentityUnlinkParams:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityUnlinkParamsSchema,
+  MemoryEnterpriseIdentityUnlinkResult:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityUnlinkResultSchema,
+  MemoryEnterpriseIdentityEvidenceRevokeParams:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityEvidenceRevokeParamsSchema,
+  MemoryEnterpriseIdentityEvidenceRevokeResult:
+    memoryEnterpriseIdentity.MemoryEnterpriseIdentityEvidenceRevokeResultSchema,
   SystemAgentChatParams: openclaw.SystemAgentChatParamsSchema,
   SystemAgentChatResult: openclaw.SystemAgentChatResultSchema,
   SystemAgentChatHistoryParams: openclaw.SystemAgentChatHistoryParamsSchema,

@@ -24,6 +24,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Plugin loader configuration group for specifying filesystem paths where plugins are discovered. Keep load paths explicit and reviewed to avoid accidental untrusted extension loading.",
   "plugins.load.paths":
     "Additional plugin files or directories scanned by the loader beyond built-in defaults. Use dedicated extension directories and avoid broad paths with unrelated executable content.",
+  "plugins.enterpriseIdentityProviders":
+    "Operator-owned startup policy for plugins that contribute enterprise identity verification material. This policy is separate from the plugin-id allowlist and is retained across ordinary plugin reloads.",
+  "plugins.enterpriseIdentityProviders.allow":
+    "Exact provider prefixes that may register enterprise identity verification material at Gateway startup. Omit or leave empty to deny all providers. Restart the Gateway after changing this list; plugin reload does not reopen the sealed authority snapshot.",
   "plugins.slots":
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":

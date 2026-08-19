@@ -49,6 +49,16 @@ type MemoryPreoutputExposureLedgerDatabase = {
     host_facts_revision: string;
     created_at: number;
   };
+  memory_preoutput_exposure_enterprise_membership_sets: {
+    exposure_set_id: string;
+    snapshot_count: number;
+    created_at: number;
+  };
+  memory_preoutput_exposure_enterprise_memberships: {
+    exposure_set_id: string;
+    snapshot_id: string;
+    created_at: number;
+  };
 };
 
 type MemoryExposureLedgerDiagnostic = "hydrate-failed" | "persist-failed";
@@ -335,10 +345,17 @@ function persistMemoryRunExposureInTransaction(params: {
   exposureReceiptIdsJson: string;
   egressReceiptIdsJson: string;
   deliveryAudiencesJson: string;
+  enterpriseMembershipSnapshotIdsJson: string;
   actorEvidenceJson: string;
   delegationSnapshotJson: string;
 }): void {
   const { database, snapshot } = params;
+  if (
+    canonicalStrings(snapshot.enterpriseMembershipSnapshotIds) !==
+    params.enterpriseMembershipSnapshotIdsJson
+  ) {
+    throw new Error("memory exposure enterprise memberships are not canonical");
+  }
   ensureMemoryPreoutputExposureLedgerSchemaInTransaction(database.db);
   const db = getNodeSqliteKysely<MemoryPreoutputExposureLedgerDatabase>(database.db);
   const inserted = executeSqliteQuerySync(
@@ -390,6 +407,38 @@ function persistMemoryRunExposureInTransaction(params: {
   if (factsInserted.numAffectedRows !== 1n) {
     throw new Error("memory exposure revision already has durable authorization facts");
   }
+  const membershipSetInserted = executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("memory_preoutput_exposure_enterprise_membership_sets")
+      .values({
+        exposure_set_id: snapshot.exposureSetId,
+        snapshot_count: snapshot.enterpriseMembershipSnapshotIds.length,
+        created_at: snapshot.createdAt,
+      })
+      .onConflict((conflict) => conflict.column("exposure_set_id").doNothing()),
+  );
+  if (membershipSetInserted.numAffectedRows !== 1n) {
+    throw new Error("memory exposure revision already has durable enterprise membership facts");
+  }
+  if (snapshot.enterpriseMembershipSnapshotIds.length > 0) {
+    const membershipsInserted = executeSqliteQuerySync(
+      database.db,
+      db.insertInto("memory_preoutput_exposure_enterprise_memberships").values(
+        snapshot.enterpriseMembershipSnapshotIds.map((snapshotId) => ({
+          exposure_set_id: snapshot.exposureSetId,
+          snapshot_id: snapshotId,
+          created_at: snapshot.createdAt,
+        })),
+      ),
+    );
+    if (
+      membershipsInserted.numAffectedRows !==
+      BigInt(snapshot.enterpriseMembershipSnapshotIds.length)
+    ) {
+      throw new Error("memory exposure revision already has durable enterprise memberships");
+    }
+  }
 }
 
 /**
@@ -403,6 +452,9 @@ export function persistMemoryRunExposureBeforeContent(
   const exposedResourceRevisionsJson = canonicalStrings(snapshot.exposedResourceRevisions);
   const exposureReceiptIdsJson = canonicalStrings(snapshot.exposureReceiptIds);
   const egressReceiptIdsJson = canonicalStrings(snapshot.egressReceiptIds);
+  const enterpriseMembershipSnapshotIdsJson = canonicalStrings(
+    snapshot.enterpriseMembershipSnapshotIds,
+  );
   const deliveryAudiencesJson = canonicalAudiences(snapshot);
   const actorEvidenceJson = canonicalActorEvidence(snapshot.actorEvidence);
   const delegationSnapshotJson = canonicalDelegationSnapshot(snapshot.delegationSnapshot);
@@ -412,6 +464,7 @@ export function persistMemoryRunExposureBeforeContent(
     !exposedResourceRevisionsJson ||
     !exposureReceiptIdsJson ||
     !egressReceiptIdsJson ||
+    !enterpriseMembershipSnapshotIdsJson ||
     !deliveryAudiencesJson ||
     !actorEvidenceJson ||
     !delegationSnapshotJson
@@ -439,6 +492,9 @@ export function persistMemoryRunExposureBeforeContentInDatabase(params: {
   const exposedResourceRevisionsJson = canonicalStrings(snapshot.exposedResourceRevisions);
   const exposureReceiptIdsJson = canonicalStrings(snapshot.exposureReceiptIds);
   const egressReceiptIdsJson = canonicalStrings(snapshot.egressReceiptIds);
+  const enterpriseMembershipSnapshotIdsJson = canonicalStrings(
+    snapshot.enterpriseMembershipSnapshotIds,
+  );
   const deliveryAudiencesJson = canonicalAudiences(snapshot);
   const actorEvidenceJson = canonicalActorEvidence(snapshot.actorEvidence);
   const delegationSnapshotJson = canonicalDelegationSnapshot(snapshot.delegationSnapshot);
@@ -449,6 +505,7 @@ export function persistMemoryRunExposureBeforeContentInDatabase(params: {
     !exposedResourceRevisionsJson ||
     !exposureReceiptIdsJson ||
     !egressReceiptIdsJson ||
+    !enterpriseMembershipSnapshotIdsJson ||
     !deliveryAudiencesJson ||
     !actorEvidenceJson ||
     !delegationSnapshotJson
@@ -465,6 +522,7 @@ export function persistMemoryRunExposureBeforeContentInDatabase(params: {
         exposureReceiptIdsJson,
         egressReceiptIdsJson,
         deliveryAudiencesJson,
+        enterpriseMembershipSnapshotIdsJson,
         actorEvidenceJson,
         delegationSnapshotJson,
       });
@@ -541,6 +599,26 @@ function readDurableMemoryRunExposureOrThrow(params: {
     const exposureReceiptIds = parseCanonicalStrings(row.exposure_receipt_ids_json);
     const egressReceiptIds = parseCanonicalStrings(row.egress_receipt_ids_json);
     const deliveryAudiences = parseCanonicalAudiences(row.delivery_audiences_json);
+    const enterpriseMembershipRows = executeSqliteQuerySync(
+      params.database.db,
+      db
+        .selectFrom("memory_preoutput_exposure_enterprise_memberships")
+        .select(["snapshot_id", "created_at"])
+        .where("exposure_set_id", "=", row.exposure_set_id)
+        .orderBy("snapshot_id", "asc"),
+    ).rows;
+    const enterpriseMembershipSnapshotIds = enterpriseMembershipRows.map(
+      (membership) => membership.snapshot_id,
+    );
+    const enterpriseMembershipSnapshotIdsJson = canonicalStrings(enterpriseMembershipSnapshotIds);
+    const enterpriseMembershipSet = executeSqliteQueryTakeFirstSync(
+      params.database.db,
+      db
+        .selectFrom("memory_preoutput_exposure_enterprise_membership_sets")
+        .select(["snapshot_count", "created_at"])
+        .where("exposure_set_id", "=", row.exposure_set_id)
+        .limit(1),
+    );
     const facts = executeSqliteQueryTakeFirstSync(
       params.database.db,
       db
@@ -562,6 +640,11 @@ function readDurableMemoryRunExposureOrThrow(params: {
       !exposedResourceRevisions ||
       !exposureReceiptIds ||
       !egressReceiptIds ||
+      !enterpriseMembershipSnapshotIdsJson ||
+      !enterpriseMembershipSet ||
+      enterpriseMembershipSet.snapshot_count !== enterpriseMembershipSnapshotIds.length ||
+      enterpriseMembershipSet.created_at !== row.created_at ||
+      enterpriseMembershipRows.some((membership) => membership.created_at !== row.created_at) ||
       !deliveryAudiences ||
       !actorEvidence ||
       !delegationSnapshot ||
@@ -600,6 +683,7 @@ function readDurableMemoryRunExposureOrThrow(params: {
       exposedResourceRevisions,
       exposureReceiptIds,
       egressReceiptIds,
+      enterpriseMembershipSnapshotIds: Object.freeze(enterpriseMembershipSnapshotIds),
       deliveryAudiences,
       deliveryRevision: row.delivery_revision,
       egressRegistryRevision: row.egress_registry_revision,

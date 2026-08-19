@@ -60,6 +60,7 @@ export type MemoryRunExposureSnapshot = Readonly<{
   exposedResourceRevisions: readonly string[];
   exposureReceiptIds: readonly string[];
   egressReceiptIds: readonly string[];
+  enterpriseMembershipSnapshotIds: readonly string[];
   deliveryAudiences: readonly AudienceRef[];
   deliveryRevision: string;
   egressRegistryRevision: string;
@@ -192,11 +193,15 @@ function captureDelegation(
 export function captureDurableMemoryAuthorizationFacts(context: MemoryAccessContext): Readonly<{
   actorEvidence: DurableMemoryActorEvidence;
   delegationSnapshot: DurableMemoryDelegationSnapshot;
+  enterpriseMembershipSnapshotIds: readonly string[];
   hostFactsRevision: string;
 }> {
   return Object.freeze({
     actorEvidence: captureActorEvidence(context.actor),
     delegationSnapshot: captureDelegation(context.delegation),
+    enterpriseMembershipSnapshotIds: sortedUnique(
+      context.verifiedMemberships.map((membership) => membership.snapshotId),
+    ),
     hostFactsRevision: requireText(context.hostFactsRevision, "hostFactsRevision"),
   });
 }
@@ -215,6 +220,7 @@ export function prepareMemoryRunExposure(facts: MemoryRunExposureFacts): MemoryR
     exposedResourceRevisions: sortedUnique(facts.exposedResourceRevisions),
     exposureReceiptIds: sortedUnique(facts.exposureReceiptIds),
     egressReceiptIds: sortedUnique(facts.egressReceiptIds),
+    enterpriseMembershipSnapshotIds: sortedUnique(facts.enterpriseMembershipSnapshotIds),
     deliveryAudiences: sortedAudiences(facts.deliveryAudiences),
     createdAt: Date.now(),
   }) satisfies MemoryRunExposureSnapshot;

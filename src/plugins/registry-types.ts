@@ -16,6 +16,10 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-state.js";
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
 import type {
+  EnterpriseIdentityProviderAuthorityRegistry,
+  EnterpriseIdentityProviderRegistration,
+} from "./enterprise-identity-provider-authority-registry.js";
+import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
@@ -539,6 +543,9 @@ export type PluginRegistry = {
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
+  /** Core-owned startup snapshot; it is not reset by a plugin registry reload. */
+  enterpriseIdentityProviders: EnterpriseIdentityProviderRegistration[];
+  enterpriseIdentityProviderAuthorityRegistry: EnterpriseIdentityProviderAuthorityRegistry;
   agentHarnesses: PluginAgentHarnessRegistration[];
   pluginRuntimeArtifacts: Map<string, ResolvedPluginRuntimeArtifact>;
   compactionProviders: RegisteredCompactionProvider[];
@@ -589,4 +596,8 @@ export type PluginRegistryParams = {
     cron?: import("../cron/service-contract.js").CronServiceContract;
   };
   activateGlobalSideEffects?: boolean;
+  /** Core-owned startup snapshot; normal plugin registry replacement must reuse it. */
+  enterpriseIdentityProviderAuthorityRegistry?: EnterpriseIdentityProviderAuthorityRegistry;
+  /** Only the Gateway startup registry may make enterprise registration failures boot-fatal. */
+  enterpriseIdentityAuthorityStartup?: boolean;
 };

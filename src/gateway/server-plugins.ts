@@ -534,6 +534,7 @@ export function loadGatewayPlugins(params: {
   const loaderStatsBefore = getPluginModuleLoaderStats();
   const gatewayRuntimeBindings = getGatewayPluginRuntimeBindings();
   const pluginRegistry = loadAndActivateRootPluginRegistry({
+    enterpriseIdentityAuthorityStartup: true,
     config: resolvedConfig,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,

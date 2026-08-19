@@ -66,6 +66,7 @@ import {
 import {
   builtinScopedMemoryAuthorizedRuntime,
   builtinScopedMemoryVirtualView,
+  createBuiltinScopedMemoryAuthorizedRuntime,
   resetBuiltinScopedMemoryAuthorizedRuntimeForTest,
 } from "./scoped-memory-runtime.js";
 import {
@@ -277,6 +278,7 @@ describe("builtin scoped authorized runtime", () => {
       },
       verifiedPrincipals: [
         {
+          snapshotId: "entra-snapshot-1",
           principalId,
           assurance: "gateway-profile",
           evidenceRevision: `binding-${principalId}`,
@@ -510,6 +512,282 @@ describe("builtin scoped authorized runtime", () => {
         handle: { ...hit.resourceHandle, resourceRevision: "forged" },
       }),
     ).rejects.toThrow("unavailable");
+  });
+
+  it("requires current principal-bound evidence before mounting a role store", async () => {
+    const principalId = "alice";
+    const roleStore = createBuiltinScopedMemoryStore({
+      agentId: "main",
+      scopeKind: "role",
+      audienceKind: "role",
+      audienceId: "writers",
+      authorityKind: "role",
+      authorityOwnerId: "writers",
+      defaultCapabilities: ["retrieve", "read"],
+      actor: { kind: "system" },
+      reason: "enterprise role fixture",
+    });
+    createBuiltinScopedMemoryResource({
+      agentId: "main",
+      store: roleStore,
+      logicalLocator: "writers.md",
+      content: "ROLE_WRITERS_CURRENT_EVIDENCE_ONLY",
+      actor: { kind: "system" },
+    });
+    const base = createContext(principalId);
+    const roleContext = {
+      ...base,
+      verifiedPrincipals: [
+        ...base.verifiedPrincipals,
+        {
+          principalId: "enterprise-alice",
+          assurance: "oidc" as const,
+          evidenceRevision: "entra-evidence-1",
+        },
+      ],
+      verifiedMemberships: [
+        {
+          snapshotId: "role-writers-snapshot-1",
+          principalId,
+          sourcePrincipalId: "enterprise-alice",
+          groupId: "writers",
+          provider: "entra",
+          evidenceRevision: "entra-evidence-1",
+          profileLinkRevision: "enterprise-link-1",
+          observedAt: new Date(Date.now() - 1_000).toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      ],
+      delivery: {
+        ...base.delivery,
+        audiences: [...base.delivery.audiences, { kind: "role" as const, id: "writers" }],
+      },
+    } satisfies MemoryContentAccessContext<"read">;
+    const recordRoleAccessDecisions = vi.fn();
+    const auditedRuntime = createBuiltinScopedMemoryAuthorizedRuntime({
+      recordRoleAccessDecisions,
+    });
+    const plan = await auditedRuntime.authorize(roleContext);
+    expect(recordRoleAccessDecisions).toHaveBeenCalledOnce();
+    expect(recordRoleAccessDecisions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: roleContext,
+        decisions: [
+          expect.objectContaining({
+            groupId: "writers",
+            policyId: expect.any(String),
+            decision: "allowed",
+          }),
+        ],
+      }),
+    );
+    await expect(
+      auditedRuntime.searchAuthorized({
+        context: roleContext,
+        plan,
+        query: "ROLE_WRITERS",
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({ value: [{ snippet: "ROLE_WRITERS_CURRENT_EVIDENCE_ONLY" }] });
+
+    const mismatchedUser = {
+      ...roleContext,
+      verifiedMemberships: [{ ...roleContext.verifiedMemberships[0]!, principalId: "bob" }],
+    } satisfies MemoryContentAccessContext<"read">;
+    const deniedPlan = await builtinScopedMemoryAuthorizedRuntime.authorize(mismatchedUser);
+    await expect(
+      builtinScopedMemoryAuthorizedRuntime.searchAuthorized({
+        context: mismatchedUser,
+        plan: deniedPlan,
+        query: "ROLE_WRITERS",
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({ value: [] });
+
+    const mismatchedEnterpriseSource = {
+      ...roleContext,
+      verifiedMemberships: [
+        { ...roleContext.verifiedMemberships[0]!, sourcePrincipalId: "enterprise-bob" },
+      ],
+    } satisfies MemoryContentAccessContext<"read">;
+    const mismatchedSourcePlan = await builtinScopedMemoryAuthorizedRuntime.authorize(
+      mismatchedEnterpriseSource,
+    );
+    await expect(
+      builtinScopedMemoryAuthorizedRuntime.searchAuthorized({
+        context: mismatchedEnterpriseSource,
+        plan: mismatchedSourcePlan,
+        query: "ROLE_WRITERS",
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({ value: [] });
+
+    const expired = {
+      ...roleContext,
+      verifiedMemberships: [
+        {
+          ...roleContext.verifiedMemberships[0]!,
+          expiresAt: new Date(Date.now() - 1).toISOString(),
+        },
+      ],
+    } satisfies MemoryContentAccessContext<"read">;
+    const expiredPlan = await builtinScopedMemoryAuthorizedRuntime.authorize(expired);
+    await expect(
+      builtinScopedMemoryAuthorizedRuntime.searchAuthorized({
+        context: expired,
+        plan: expiredPlan,
+        query: "ROLE_WRITERS",
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({ value: [] });
+  });
+
+  it("keeps thousand-store role and channel fan-out exact through authorization and virtual views", async () => {
+    const fanout = 1_024;
+    const principalId = "fanout-user";
+    const enterprisePrincipalId = "enterprise-fanout-user";
+    const roleIds = Array.from({ length: fanout }, (_unused, index) => `role-${index + 1}`);
+    for (const roleId of roleIds) {
+      const store = createBuiltinScopedMemoryStore({
+        agentId: "main",
+        scopeKind: "role",
+        audienceKind: "role",
+        audienceId: roleId,
+        authorityKind: "role",
+        authorityOwnerId: roleId,
+        defaultCapabilities: ["retrieve", "read"],
+        actor: { kind: "system" },
+        reason: "enterprise fan-out fixture",
+      });
+      createBuiltinScopedMemoryResource({
+        agentId: "main",
+        store,
+        logicalLocator: `${roleId}.md`,
+        content: `ROLE_FANOUT_${roleId}`,
+        actor: { kind: "system" },
+      });
+    }
+    const channelIds = Array.from(
+      { length: fanout },
+      (_unused, index) => `channel-principal-${index + 1}`,
+    );
+    const channelStores = channelIds.map((channelId) =>
+      createBuiltinScopedMemoryStore({
+        agentId: "main",
+        scopeKind: "conversation",
+        audienceKind: "conversation",
+        audienceId: channelId,
+        authorityKind: "conversation",
+        authorityOwnerId: channelId,
+        defaultCapabilities: ["retrieve", "read"],
+        actor: { kind: "unattributed" },
+        reason: "channel fan-out fixture",
+      }),
+    );
+    for (const [index, content] of [
+      "CHANNEL_FANOUT_OWN_ONLY",
+      "CHANNEL_FANOUT_DENIED_NEIGHBOR",
+    ].entries()) {
+      createBuiltinScopedMemoryResource({
+        agentId: "main",
+        store: channelStores[index]!,
+        logicalLocator: `channel-${index + 1}.md`,
+        content,
+        actor: { kind: "unattributed" },
+      });
+    }
+
+    const base = createContext(principalId);
+    const roleContext = {
+      ...base,
+      verifiedPrincipals: [
+        ...base.verifiedPrincipals,
+        {
+          principalId: enterprisePrincipalId,
+          assurance: "oidc" as const,
+          evidenceRevision: "fanout-evidence-1",
+        },
+      ],
+      verifiedMemberships: roleIds.map((groupId) => ({
+        snapshotId: `fanout-snapshot-${groupId}`,
+        principalId,
+        sourcePrincipalId: enterprisePrincipalId,
+        groupId,
+        provider: "entra",
+        evidenceRevision: "fanout-evidence-1",
+        profileLinkRevision: "fanout-link-1",
+        observedAt: new Date(Date.now() - 1_000).toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      })),
+      delivery: {
+        ...base.delivery,
+        audiences: [
+          ...base.delivery.audiences,
+          ...roleIds.map((id) => ({ kind: "role" as const, id })),
+        ],
+      },
+    } satisfies MemoryContentAccessContext<"read">;
+    const plan = await builtinScopedMemoryAuthorizedRuntime.authorize(roleContext);
+    expect(plan.mounts).toHaveLength(fanout);
+    expect(new Set(plan.mounts.map((mount) => mount.mountHandle)).size).toBe(fanout);
+    const view = await builtinScopedMemoryVirtualView.materializeAuthorizedVirtualView({
+      context: roleContext,
+      plan,
+    });
+    expect(view?.roots).toHaveLength(fanout);
+    expect(view?.files).toHaveLength(fanout);
+
+    const revokedContext = {
+      ...roleContext,
+      verifiedMemberships: roleContext.verifiedMemberships.slice(1),
+    } satisfies MemoryContentAccessContext<"read">;
+    await expect(
+      builtinScopedMemoryVirtualView.materializeAuthorizedVirtualView({
+        context: revokedContext,
+        plan,
+      }),
+    ).resolves.toBeUndefined();
+    const revokedPlan = await builtinScopedMemoryAuthorizedRuntime.authorize(revokedContext);
+    expect(revokedPlan.mounts).toHaveLength(fanout - 1);
+
+    const conversationPrincipalId = channelIds[0]!;
+    const channelContext = {
+      ...base,
+      contextId: "channel-fanout-context",
+      contextFingerprint: "channel-fanout-fingerprint",
+      sessionKey: "agent:main:telegram:group:fanout",
+      sessionId: "channel-fanout-session",
+      subject: {
+        version: 1 as const,
+        kind: "conversation" as const,
+        conversationPrincipalId,
+        channel: "telegram",
+        accountId: "default",
+      },
+      actor: {
+        kind: "unattributed" as const,
+        transportAuditRef: "channel-fanout",
+        evidenceRevision: "channel-fanout-evidence",
+      },
+      verifiedPrincipals: [],
+      delivery: {
+        sinkKind: "channel" as const,
+        audiences: [{ kind: "conversation" as const, id: conversationPrincipalId }],
+        egressCapabilityIds: ["reply.final"],
+        egressRegistryRevision: "channel-fanout-egress",
+        deliveryRevision: "channel-fanout-delivery",
+      },
+      verifiedMemberships: [],
+    } satisfies MemoryContentAccessContext<"read">;
+    const channelPlan = await builtinScopedMemoryAuthorizedRuntime.authorize(channelContext);
+    expect(channelPlan.mounts).toHaveLength(1);
+    const channelView = await builtinScopedMemoryVirtualView.materializeAuthorizedVirtualView({
+      context: channelContext,
+      plan: channelPlan,
+    });
+    expect(channelView?.roots).toHaveLength(1);
+    expect(channelView?.files).toHaveLength(1);
+    expect(JSON.stringify(channelView)).not.toContain("CHANNEL_FANOUT_DENIED_NEIGHBOR");
   });
 
   it("projects only from an opaque source handle into a registered non-private target", async () => {
@@ -810,6 +1088,7 @@ describe("builtin scoped authorized runtime", () => {
       exposedResourceRevisions: [source.revisionId],
       exposureReceiptIds: ["compaction-exposure-receipt"],
       egressReceiptIds: ["compaction-egress-receipt"],
+      enterpriseMembershipSnapshotIds: [],
       deliveryAudiences: context.delivery.audiences,
       deliveryRevision: context.delivery.deliveryRevision,
       egressRegistryRevision: context.delivery.egressRegistryRevision,

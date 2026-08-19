@@ -89,10 +89,18 @@ export type MemoryActorEvidence =
     }>;
 
 export type MemoryVerifiedMembership = Readonly<{
+  /** Immutable provider-evidence row used to authorize this membership. */
+  snapshotId: string;
+  /** The Gateway user who is the subject of the role decision. */
   principalId: string;
+  /** The separately verified enterprise principal that supplied the group proof. */
+  sourcePrincipalId: string;
   groupId: string;
   provider: string;
+  /** Current evidence revision of sourcePrincipalId. */
   evidenceRevision: string;
+  /** Current explicit link between sourcePrincipalId and principalId. */
+  profileLinkRevision: string;
   observedAt: string;
   expiresAt: string;
 }>;
@@ -428,11 +436,13 @@ export type AuthorizedTranscriptDerivationPurpose = "flush" | "compaction";
  */
 export type AuthorizedSealedCompactionArtifact = Readonly<{
   resourceRevisionId: string;
-  commitInTransaction(params: Readonly<{
-    database: DatabaseSync;
-    compactionPolicyId: string;
-    eventSeq: number;
-  }>): void;
+  commitInTransaction(
+    params: Readonly<{
+      database: DatabaseSync;
+      compactionPolicyId: string;
+      eventSeq: number;
+    }>,
+  ): void;
 }>;
 
 export type AuthorizedSealedCompactionStageParams = Readonly<{

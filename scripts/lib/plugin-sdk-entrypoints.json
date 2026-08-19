@@ -260,6 +260,7 @@
   "qa-runner-runtime",
   "memory-authorization",
   "memory-authorization-conformance",
+  "memory-enterprise-audit-runtime",
   "memory-postbox-runtime",
   "memory-sharing-control-runtime",
   "memory-core-host-embedding-registry",

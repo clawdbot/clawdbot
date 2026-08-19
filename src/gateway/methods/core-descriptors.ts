@@ -502,6 +502,55 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["secrets.store.list", null, "operator.admin", "2026.8"],
   ["secrets.store.set", null, "operator.admin", "2026.8", { controlPlaneWrite: true }],
   ["secrets.store.delete", null, "operator.admin", "2026.8", { controlPlaneWrite: true }],
+  // Enterprise identity links always bind to the authenticated initiating profile.
+  // Append so every existing advertised method index remains stable for older clients.
+  [
+    "memory.enterpriseIdentity.authorization.start",
+    "memory-enterprise-identity",
+    "operator.write",
+    "2026.8",
+  ],
+  [
+    "memory.enterpriseIdentity.authorization.complete",
+    "memory-enterprise-identity",
+    "operator.write",
+    "2026.8",
+  ],
+  [
+    "memory.enterpriseIdentity.accessAudit.list",
+    "memory-enterprise-identity",
+    "operator.read",
+    "2026.8",
+  ],
+  [
+    "memory.enterpriseIdentity.policyDriftAlerts.list",
+    "memory-enterprise-identity",
+    "operator.read",
+    "2026.8",
+  ],
+  // Lifecycle history is bounded and redacted; object-level ownership is
+  // enforced in the handler before an operator can select another profile.
+  [
+    "memory.enterpriseIdentity.evidenceTransitions.list",
+    "memory-enterprise-identity",
+    "operator.read",
+    "2026.8",
+  ],
+  // Export and lifecycle mutations require write scope before the handler
+  // applies profile ownership or the stronger operator.admin override.
+  [
+    "memory.enterpriseIdentity.accessAudit.export",
+    "memory-enterprise-identity",
+    "operator.write",
+    "2026.8",
+  ],
+  ["memory.enterpriseIdentity.unlink", "memory-enterprise-identity", "operator.write", "2026.8"],
+  [
+    "memory.enterpriseIdentity.evidence.revoke",
+    "memory-enterprise-identity",
+    "operator.write",
+    "2026.8",
+  ],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

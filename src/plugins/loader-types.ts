@@ -43,6 +43,8 @@ export type PluginLoadOptions = {
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
   activate?: boolean;
+  /** Only the Gateway composition root may establish enterprise identity authority. */
+  enterpriseIdentityAuthorityStartup?: boolean;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;

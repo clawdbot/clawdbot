@@ -172,7 +172,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-90 plugins
+93 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -267,6 +267,12 @@ Each entry lists the package, distribution route, and description.
 - **[matrix](/plugins/reference/matrix)** (`@openclaw/matrix`) - ClawHub: `clawhub:@openclaw/matrix`; npm. OpenClaw Matrix channel plugin for rooms and direct messages.
 
 - **[mattermost](/plugins/reference/mattermost)** (`@openclaw/mattermost`) - npm; ClawHub: `clawhub:@openclaw/mattermost`. Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
+
+- **[memory-identity-entra](/plugins/reference/memory-identity-entra)** (`@openclaw/memory-identity-entra`) - npm; ClawHub: `clawhub:@openclaw/memory-identity-entra`. OpenClaw Microsoft Entra ID memory identity plugin.
+
+- **[memory-identity-google-workspace](/plugins/reference/memory-identity-google-workspace)** (`@openclaw/memory-identity-google-workspace`) - npm; ClawHub: `clawhub:@openclaw/memory-identity-google-workspace`. OpenClaw Google Workspace memory identity plugin.
+
+- **[memory-identity-okta](/plugins/reference/memory-identity-okta)** (`@openclaw/memory-identity-okta`) - npm; ClawHub: `clawhub:@openclaw/memory-identity-okta`. OpenClaw Okta memory identity plugin.
 
 - **[memory-lancedb](/plugins/reference/memory-lancedb)** (`@openclaw/memory-lancedb`) - npm; ClawHub. OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.
 

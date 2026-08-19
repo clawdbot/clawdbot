@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
 import { LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES } from "../plugin-sdk/memory-authorization.js";
+import { resolveMemoryEnterpriseAccessAuditReporter } from "../plugin-sdk/memory-enterprise-audit-runtime.js";
 import {
   resolveMemoryCapabilityRegistration,
   resolveSelectedMemoryCapabilityRegistration,
@@ -34,6 +35,39 @@ function requireMemoryRuntime(
 }
 
 describe("dual-kind memory registration gate", () => {
+  it("issues the enterprise audit reporter only to the selected memory-slot owner", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const selected = createPluginRecord({
+      id: "selected-memory",
+      name: "Selected Memory",
+      kind: "memory",
+      memorySlotSelected: true,
+    });
+    const unselected = createPluginRecord({
+      id: "unselected-memory",
+      name: "Unselected Memory",
+      kind: "memory",
+    });
+    const nonMemory = createPluginRecord({
+      id: "not-memory",
+      name: "Not Memory",
+      kind: "context-engine",
+    });
+
+    const selectedReporter = resolveMemoryEnterpriseAccessAuditReporter(
+      registry.createApi(selected, { config }),
+    );
+
+    expect(selectedReporter).toBeDefined();
+    expect(Object.isFrozen(selectedReporter)).toBe(true);
+    expect(
+      resolveMemoryEnterpriseAccessAuditReporter(registry.createApi(unselected, { config })),
+    ).toBeUndefined();
+    expect(
+      resolveMemoryEnterpriseAccessAuditReporter(registry.createApi(nonMemory, { config })),
+    ).toBeUndefined();
+  });
+
   it("blocks memory runtime registration for dual-kind plugins not selected for memory slot", () => {
     const { config, registry } = createPluginRegistryFixture();
 

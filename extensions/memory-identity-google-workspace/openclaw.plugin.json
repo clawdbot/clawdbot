@@ -1,0 +1,59 @@
+{
+  "id": "memory-identity-google-workspace",
+  "name": "Google Workspace Memory Identity",
+  "activation": { "onStartup": false },
+  "contracts": { "enterpriseIdentityProviders": ["google-workspace"] },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "clientSecret", "expected": "string" },
+        { "path": "directoryServiceAccount", "expected": "string" }
+      ]
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["hostedDomain", "clientId", "clientSecret", "redirectUri", "delegatedAdminEmail", "directoryServiceAccount", "roleGroupResourceNames"],
+    "properties": {
+      "hostedDomain": { "type": "string", "minLength": 1 },
+      "clientId": { "type": "string", "minLength": 1 },
+      "clientSecret": {
+        "oneOf": [
+          { "type": "string", "minLength": 1 },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "provider", "id"],
+            "properties": {
+              "source": { "enum": ["env", "file", "exec", "store"] },
+              "provider": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "minLength": 1 }
+            }
+          }
+        ]
+      },
+      "redirectUri": { "type": "string", "format": "uri" },
+      "delegatedAdminEmail": { "type": "string", "minLength": 1 },
+      "directoryServiceAccount": {
+        "oneOf": [
+          { "type": "string", "minLength": 1 },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "provider", "id"],
+            "properties": {
+              "source": { "enum": ["env", "file", "exec", "store"] },
+              "provider": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "minLength": 1 }
+            }
+          }
+        ]
+      },
+      "roleGroupResourceNames": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^groups/[^/\\s]+$" } },
+      "customerId": { "type": "string", "pattern": "^C[\\w-]+$" },
+      "maxAuthenticationAgeMs": { "type": "integer", "minimum": 1000, "maximum": 86400000, "default": 3600000 },
+      "maxSnapshotAgeMs": { "type": "integer", "minimum": 1000, "maximum": 86400000, "default": 3600000 }
+    }
+  }
+}

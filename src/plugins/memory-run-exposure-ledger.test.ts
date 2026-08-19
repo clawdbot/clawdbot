@@ -56,7 +56,7 @@ afterEach(() => {
   database = undefined;
 });
 
-function prepare(sessionId: string) {
+function prepare(sessionId: string, enterpriseMembershipSnapshotIds: readonly string[] = []) {
   return prepareMemoryRunExposure({
     agentId: "main",
     sessionId,
@@ -69,6 +69,7 @@ function prepare(sessionId: string) {
     exposedResourceRevisions: ["revision-1"],
     exposureReceiptIds: ["exposure-1"],
     egressReceiptIds: ["egress-1"],
+    enterpriseMembershipSnapshotIds,
     deliveryAudiences: [{ kind: "user", id: "alice" }],
     deliveryRevision: "delivery-1",
     egressRegistryRevision: "egress-1",
@@ -147,6 +148,33 @@ describe("memory pre-output exposure ledger", () => {
         exposed_resource_revisions_json: '["revision-1"]',
       },
     ]);
+  });
+
+  it("persists opaque enterprise snapshot-to-exposure joins before content release", () => {
+    const snapshot = prepare("session-a", ["snapshot-z", "snapshot-a", "snapshot-z"]);
+    expect(snapshot.enterpriseMembershipSnapshotIds).toEqual(["snapshot-a", "snapshot-z"]);
+    expect(persistMemoryRunExposureBeforeContent(snapshot)).toBe(true);
+
+    const rows = database
+      ?.prepare(
+        `SELECT snapshot_id, created_at
+           FROM memory_preoutput_exposure_enterprise_memberships
+          WHERE exposure_set_id = ?
+          ORDER BY snapshot_id`,
+      )
+      .all(snapshot.exposureSetId);
+    expect(rows).toEqual([
+      { snapshot_id: "snapshot-a", created_at: snapshot.createdAt },
+      { snapshot_id: "snapshot-z", created_at: snapshot.createdAt },
+    ]);
+    clearMemoryRunExposureForTest();
+    expect(
+      readDurableMemoryRunExposure({
+        database: mocks.database as never,
+        sessionId: "session-a",
+        runId: "shared-run-id",
+      }),
+    ).toMatchObject({ enterpriseMembershipSnapshotIds: ["snapshot-a", "snapshot-z"] });
   });
 
   it("persists token-free delegated facts and rehydrates them after restart", () => {
@@ -239,6 +267,23 @@ describe("memory pre-output exposure ledger", () => {
     ).toEqual({ kind: "unavailable" });
   });
 
+  it("fails closed when an immutable enterprise membership mapping is missing", () => {
+    const snapshot = prepare("session-a", ["snapshot-a"]);
+    expect(persistMemoryRunExposureBeforeContent(snapshot)).toBe(true);
+    database?.exec(/* sqlite-allow-raw: test corrupts immutable proof to assert fail-closed read. */ `
+      DROP TRIGGER memory_preoutput_exposure_enterprise_memberships_no_delete;
+      DELETE FROM memory_preoutput_exposure_enterprise_memberships
+       WHERE exposure_set_id = '${snapshot.exposureSetId}';
+    `);
+    expect(
+      readLatestDurableMemoryRunExposure({
+        agentId: "main",
+        sessionId: "session-a",
+        runId: "shared-run-id",
+      }),
+    ).toEqual({ kind: "unavailable" });
+  });
+
   it("rolls back both ledger rows when durable authorization-fact persistence fails", () => {
     database?.exec(/* sqlite-allow-raw: test-only atomicity fault injection. */ `
       CREATE TRIGGER reject_exposure_authorization_facts_for_test
@@ -252,6 +297,28 @@ describe("memory pre-output exposure ledger", () => {
     for (const table of [
       "memory_preoutput_exposure_ledger",
       "memory_preoutput_exposure_authorization_facts",
+    ]) {
+      expect(database?.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
+        count: 0,
+      });
+    }
+  });
+
+  it("rolls back the exposure and authorization facts when membership mapping persistence fails", () => {
+    database?.exec(/* sqlite-allow-raw: test-only atomicity fault injection. */ `
+      CREATE TRIGGER reject_exposure_enterprise_memberships_for_test
+      BEFORE INSERT ON memory_preoutput_exposure_enterprise_memberships
+      BEGIN
+        SELECT RAISE(ABORT, 'test enterprise membership failure');
+      END;
+    `);
+
+    expect(persistMemoryRunExposureBeforeContent(prepare("session-a", ["snapshot-a"]))).toBe(false);
+    for (const table of [
+      "memory_preoutput_exposure_ledger",
+      "memory_preoutput_exposure_authorization_facts",
+      "memory_preoutput_exposure_enterprise_membership_sets",
+      "memory_preoutput_exposure_enterprise_memberships",
     ]) {
       expect(database?.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
         count: 0,

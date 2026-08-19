@@ -818,6 +818,7 @@ describe("memory session subject", () => {
       bindingId: binding.bindingId,
       options: agentOptions,
     });
+    let externalFactsCurrent = true;
     const facts = captureTrustedMemoryAccessFacts({
       requestId: "request-1",
       runId: "run-1",
@@ -844,6 +845,7 @@ describe("memory session subject", () => {
         egressCapabilityIds: ["reply.final"],
         egressRegistryRevision: "egress-1",
       },
+      recheck: () => externalFactsCurrent,
       operation: "read",
       hostFactsRevision: "host-1",
     });
@@ -877,6 +879,9 @@ describe("memory session subject", () => {
         egressCapabilityIds: ["reply.final"],
       },
     });
+    externalFactsCurrent = false;
+    expect(materializeTrustedMemoryAccessContext(result.context)).toBeUndefined();
+    externalFactsCurrent = true;
     const changedHostFacts = createTrustedMemoryAccessContext({
       sessionKey: "agent:main:direct:dm",
       sessionId: "session-1",

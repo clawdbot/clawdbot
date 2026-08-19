@@ -219,8 +219,21 @@ the phase that consumes them.
      flush, dreaming, projection, or postbox writes.
 
 6. **Audit retention and admin inspection**
-   - Define retention, export, deletion, and which admins may inspect resource
-     existence versus only redacted decision metadata.
+   - Initial memory-data retention follows the current memory model: no new
+     scheduled purge or expiry job. Owners use explicit deletion controls;
+     postbox purge remains an explicit owner action. Revocation and expiry
+     deny new reads immediately but do not imply physical deletion.
+   - Dreaming keeps its current model: enabled automatic consolidation with
+     deterministic gates, trust filtering, and a reviewable `DREAMS.md` diary,
+     not a mandatory human approval step. Enforced mode still processes one
+     authorized store at a time and never promotes postbox or quarantine data.
+   - A profile owner may export that profile's redacted audit record.
+     `operator.admin` has full cross-profile administrative control: redacted
+     audit export and inspection, explicit deletion, and revocation. This does
+     not grant direct access to private-memory content.
+   - Do not add a periodic or event-driven access-review workflow in this
+     phase. Evidence expiry, revocation, and policy-drift alerts remain the
+     operational safeguards.
 
 7. **Egress registry scope**
    - Approve whether the run-exposure audience gate lands in Stage 1 or is
@@ -1667,7 +1680,7 @@ postbox items quarantined for review or purge.
 
 ### Phase 4 goal
 
-Add revisioned enterprise identity evidence and operational access review
+Add revisioned enterprise identity evidence and operational observability
 without moving policy authority out of the selected memory plugin.
 
 ### Phase 4 deliverables
@@ -1711,8 +1724,9 @@ provider evidence.
 - audit query/export/retention;
 - policy drift alerts;
 - revocation impact;
-- periodic access review;
-- load tests for hundreds/thousands of stores, roles, and channels.
+- load tests for hundreds/thousands of stores, roles, and channels on the
+  builtin backend. A future alternate backend must pass the same conformance
+  and scale suite before it can be enabled in enforced mode.
 
 If this introduces a new plugin, update `.github/labeler.yml` and create the
 matching GitHub labels as part of the plugin PR.
@@ -1725,34 +1739,36 @@ matching GitHub labels as part of the plugin PR.
 - role removal within documented bound;
 - provider outage does not extend membership indefinitely;
 - audit explanation reveals no unauthorized resource title/existence;
-- collection/mount fan-out benchmarks for builtin and alternate backends.
+- collection/mount fan-out benchmarks for the builtin backend; a future
+  alternate backend must pass the same suite before enforced-mode enablement.
 
 ### Phase 4 definition of done
 
 Phase 4 is complete only when all of the following are demonstrated:
 
-- [ ] Every enabled enterprise adapter is operator-allowlisted, manifest
+- [x] Every enabled enterprise adapter is operator-allowlisted, manifest
       declared, unique for its provider prefix, and registered before the
       registry seals.
-- [ ] Core, not the adapter, validates issuer/audience/signature or registered
+- [x] Core, not the adapter, validates issuer/audience/signature or registered
       attestation, tenant binding, assurance, expiry, and snapshot freshness
       before constructing principals.
-- [ ] Private stores never open for forged, wrong-issuer, wrong-audience,
+- [x] Private stores never open for forged, wrong-issuer, wrong-audience,
       expired, revoked, conflicting, or unbound identities.
 - [ ] Role and native-channel evidence is revisioned, bounded by documented
       staleness, and removed fail-closed during expiry or provider outage.
-- [ ] Existing `session_members` remains authoritative only for Gateway
+- [x] Existing `session_members` remains authoritative only for Gateway
       collaborative sessions; provider membership does not create a competing
       session-sharing store.
-- [ ] Operators can explain allow/deny decisions from redacted revisions,
+- [x] Operators can explain allow/deny decisions from redacted revisions,
       subject/store kinds, collaboration roles, evidence, and rules without
       storing or revealing unauthorized memory content.
-- [ ] Audit retention/export and periodic access-review behavior are approved
-      and implemented.
+- [x] Audit retention/export behavior is approved and implemented: profile
+      owners can export their redacted record, while `operator.admin` has full
+      cross-profile administrative control without direct private-memory reads.
 - [ ] Provider verification, outage/expiry, group removal, registry sealing,
       audit explanation, and scale/fan-out tests pass, including required live
       official-provider proof.
-- [ ] Any new plugin surface has matching labeler paths, GitHub labels, SDK
+- [x] Any new plugin surface has matching labeler paths, GitHub labels, SDK
       contracts, docs, and package ownership metadata.
 
 ### Phase 4 rollback

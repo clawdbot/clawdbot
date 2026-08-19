@@ -1144,6 +1144,52 @@ BEGIN
   SELECT RAISE(ABORT, 'pre-output exposure authorization facts cannot be deleted');
 END;
 
+-- Exact snapshot-to-exposure joins make enterprise revocation impact auditable
+-- without storing groups, provider claims, resource titles, or memory content.
+CREATE TABLE IF NOT EXISTS memory_preoutput_exposure_enterprise_membership_sets (
+  exposure_set_id TEXT NOT NULL PRIMARY KEY,
+  snapshot_count INTEGER NOT NULL CHECK (snapshot_count >= 0),
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (exposure_set_id)
+    REFERENCES memory_preoutput_exposure_ledger(exposure_set_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_enterprise_membership_sets_no_update
+BEFORE UPDATE ON memory_preoutput_exposure_enterprise_membership_sets
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output exposure enterprise membership facts are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_enterprise_membership_sets_no_delete
+BEFORE DELETE ON memory_preoutput_exposure_enterprise_membership_sets
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output exposure enterprise membership facts cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS memory_preoutput_exposure_enterprise_memberships (
+  exposure_set_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (exposure_set_id, snapshot_id),
+  FOREIGN KEY (exposure_set_id)
+    REFERENCES memory_preoutput_exposure_ledger(exposure_set_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_preoutput_exposure_enterprise_memberships_snapshot
+  ON memory_preoutput_exposure_enterprise_memberships(snapshot_id, exposure_set_id);
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_enterprise_memberships_no_update
+BEFORE UPDATE ON memory_preoutput_exposure_enterprise_memberships
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output exposure enterprise memberships are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_enterprise_memberships_no_delete
+BEFORE DELETE ON memory_preoutput_exposure_enterprise_memberships
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output exposure enterprise memberships cannot be deleted');
+END;
+
 CREATE TABLE IF NOT EXISTS transcript_event_memory_policies (
   session_id TEXT NOT NULL,
   event_seq INTEGER NOT NULL,

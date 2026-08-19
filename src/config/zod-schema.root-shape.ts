@@ -480,6 +480,11 @@ export const OpenClawSchemaShape = {
           paths: z.array(z.string()).optional(),
         })
         .optional(),
+      enterpriseIdentityProviders: z
+        .strictObject({
+          allow: z.array(z.string().min(1)).optional(),
+        })
+        .optional(),
       slots: z
         .strictObject({
           memory: z.string().optional(),

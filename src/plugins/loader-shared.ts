@@ -30,7 +30,11 @@ import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import type { PluginRecord, PluginRegistry } from "./registry.js";
+import {
+  sealEnterpriseIdentityProviderRegistry,
+  type PluginRecord,
+  type PluginRegistry,
+} from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
   commitStagedPluginRegistry,
@@ -358,6 +362,9 @@ export function activatePluginRegistry(
     initializeGlobalHookRunner(registry);
     activateContextEngineRegistrations(registry);
     commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
+    // Publish the enterprise authority snapshot only after all activation work
+    // has succeeded; a failed activation must not leave a usable authority.
+    sealEnterpriseIdentityProviderRegistry(registry);
   } catch (error) {
     restoreActivePluginRegistrySnapshot(activeSnapshot);
     if (previousHookRegistry) {

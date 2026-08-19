@@ -327,6 +327,30 @@ export const validateChannelsStatusParams = compile(S.ChannelsStatusParamsSchema
 export const validateChannelsPairingListParams = compile(S.ChannelsPairingListParamsSchema);
 export const validateChannelsPairingApproveParams = compile(S.ChannelsPairingApproveParamsSchema);
 export const validateChannelsPairingDismissParams = compile(S.ChannelsPairingDismissParamsSchema);
+export const validateMemoryEnterpriseIdentityAuthorizationStartParams = compile(
+  S.MemoryEnterpriseIdentityAuthorizationStartParamsSchema,
+);
+export const validateMemoryEnterpriseIdentityAuthorizationCompleteParams = compile(
+  S.MemoryEnterpriseIdentityAuthorizationCompleteParamsSchema,
+);
+export const validateMemoryEnterpriseIdentityAccessAuditListParams = compile(
+  S.MemoryEnterpriseIdentityAccessAuditListParamsSchema,
+);
+export const validateMemoryEnterpriseIdentityPolicyDriftAlertListParams = compile(
+  S.MemoryEnterpriseIdentityPolicyDriftAlertListParamsSchema,
+);
+export const validateMemoryEnterpriseIdentityEvidenceTransitionListParams = compile(
+  S.MemoryEnterpriseIdentityEvidenceTransitionListParamsSchema,
+);
+export const validateMemoryEnterpriseIdentityAccessAuditExportParams = compile(
+  S.MemoryEnterpriseIdentityAccessAuditExportParamsSchema,
+);
+export const validateMemoryEnterpriseIdentityUnlinkParams = compile(
+  S.MemoryEnterpriseIdentityUnlinkParamsSchema,
+);
+export const validateMemoryEnterpriseIdentityEvidenceRevokeParams = compile(
+  S.MemoryEnterpriseIdentityEvidenceRevokeParamsSchema,
+);
 export const validateChannelsStartParams = compile(S.ChannelsStartParamsSchema);
 export const validateChannelsStopParams = compile(S.ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = compile(S.ChannelsLogoutParamsSchema);

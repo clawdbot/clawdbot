@@ -876,6 +876,119 @@ export interface MemoryAccessAudit {
   subject_ref: string;
 }
 
+export interface MemoryEnterpriseAccessDecisions {
+  actor_principal_id: string;
+  decision: string;
+  event_id: string;
+  membership_evidence_revision: string | null;
+  occurred_at: number;
+  operation: string;
+  policy_revision: string;
+  principal_evidence_revision: string;
+  provider_id: string;
+  reason_code: string;
+  received_at: number;
+  rule_ref: string;
+  subject_principal_id: string;
+  tenant_ref: string;
+}
+
+export interface MemoryEnterpriseEvidenceTransitionMemberships {
+  created_at: number;
+  snapshot_id: string;
+  transition_id: string;
+}
+
+export interface MemoryEnterpriseEvidenceTransitionProfileLinks {
+  created_at: number;
+  link_id: string;
+  transition_id: string;
+  user_principal_id: string;
+}
+
+export interface MemoryEnterpriseEvidenceTransitions {
+  created_at: number;
+  kind: string;
+  principal_id: string;
+  provider_id: string;
+  revoked_at: number;
+  transition_id: string;
+}
+
+export interface MemoryEnterpriseIdentityActions {
+  action_id: string;
+  actor_principal_id: string;
+  affected_identity_count: number;
+  affected_snapshot_count: number;
+  kind: string;
+  occurred_at: number;
+  provider_id: string;
+  target_user_principal_id: string;
+}
+
+export interface MemoryEnterpriseMembershipSnapshots {
+  created_at: number;
+  evidence_revision: string;
+  expires_at: number;
+  group_ref: string;
+  observed_at: number;
+  principal_id: string;
+  provider_id: string;
+  revoked_at: number | null;
+  snapshot_id: string;
+  tenant_ref: string;
+}
+
+export interface MemoryEnterprisePolicyDriftAlerts {
+  alert_id: string;
+  decision: string;
+  detected_at: number;
+  operation: string;
+  policy_id: string;
+  policy_revision: string;
+  previous_decision: string;
+  previous_policy_revision: string;
+  provider_id: string;
+  rule_ref: string;
+  subject_principal_id: string;
+  tenant_ref: string;
+}
+
+export interface MemoryEnterprisePrincipalEvidence {
+  assurance: string;
+  evidence_revision: string;
+  expires_at: number;
+  issuer_ref: string;
+  observed_at: number;
+  principal_id: string;
+  provider_id: string;
+  revoked_at: number | null;
+  subject_ref: string;
+  tenant_ref: string;
+}
+
+export interface MemoryEnterpriseProfileLinks {
+  created_at: number;
+  created_by_principal_id: string;
+  enterprise_principal_id: string;
+  link_id: string;
+  revision: string;
+  revoked_at: number | null;
+  user_principal_id: string;
+}
+
+export interface MemoryEnterpriseRolePolicyObservations {
+  decision: string;
+  observed_at: number;
+  operation: string;
+  policy_id: string;
+  policy_revision: string;
+  provider_id: string;
+  rule_ref: string;
+  subject_principal_id: string;
+  tenant_ref: string;
+}
+
 export interface MemoryIdentityBindings {
   account_id: string;
   adapter_id: string;
@@ -1731,6 +1844,16 @@ export interface DB {
   meeting_transcript_summaries: MeetingTranscriptSummaries;
   meeting_transcript_utterances: MeetingTranscriptUtterances;
   memory_access_audit: MemoryAccessAudit;
+  memory_enterprise_access_decisions: MemoryEnterpriseAccessDecisions;
+  memory_enterprise_evidence_transition_memberships: MemoryEnterpriseEvidenceTransitionMemberships;
+  memory_enterprise_evidence_transition_profile_links: MemoryEnterpriseEvidenceTransitionProfileLinks;
+  memory_enterprise_evidence_transitions: MemoryEnterpriseEvidenceTransitions;
+  memory_enterprise_identity_actions: MemoryEnterpriseIdentityActions;
+  memory_enterprise_membership_snapshots: MemoryEnterpriseMembershipSnapshots;
+  memory_enterprise_policy_drift_alerts: MemoryEnterprisePolicyDriftAlerts;
+  memory_enterprise_principal_evidence: MemoryEnterprisePrincipalEvidence;
+  memory_enterprise_profile_links: MemoryEnterpriseProfileLinks;
+  memory_enterprise_role_policy_observations: MemoryEnterpriseRolePolicyObservations;
   memory_identity_bindings: MemoryIdentityBindings;
   memory_pairing_identity_receipts: MemoryPairingIdentityReceipts;
   memory_principals: MemoryPrincipals;

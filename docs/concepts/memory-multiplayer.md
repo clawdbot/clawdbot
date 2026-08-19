@@ -1464,8 +1464,10 @@ than duplicating them:
 | `memory_access_audit`      | batch, request, actor, subject, operation, decision, reason, resource revision, time                       | Redacted decision and exposure history                                                   |
 
 The audit table stores identifiers, revisions, decisions, and hashes, not
-memory text, queries, prompts, or snippets. Retention and export are explicit
-operator policies.
+memory text, queries, prompts, or snippets. Initial memory-data retention
+matches the current memory model: no new scheduled purge or expiry job.
+Audit export and deletion remain explicit operator operations, with authority
+defined separately from retention.
 
 ### Per-agent database
 
@@ -1971,9 +1973,12 @@ and matching rule. It must not reveal the title or existence of a resource the
 admin is not authorized to inspect under the deployment's own admin model.
 
 Retention applies independently to memory content, transcripts, postbox,
-projection copies, lineage, and audit. Expiry is enforced on reads even if
-cleanup is late. Physical cleanup follows a grace period and verified backup
-policy; logical denial does not wait for deletion.
+projection copies, lineage, and audit. The initial policy introduces no
+scheduled retention or physical-purge job: owners use explicit deletion
+controls, and postbox purge remains an explicit owner action. Expiry and
+revocation are enforced on reads immediately; they do not imply physical
+deletion. A future automatic cleanup policy needs a separate owner decision
+and backup contract.
 
 ## Existing solutions preflight
 
@@ -2016,8 +2021,8 @@ These choices require owner agreement before their implementation stage:
    plugins.
 8. **Artifact location and backup:** the exact controlled state path, ownership
    permissions, cross-platform virtual mount, and consistent backup boundary.
-9. **Audit retention:** defaults, export permissions, and compliance deletion
-   behavior.
+9. **Audit operations:** retention has the current no-scheduled-purge model;
+   define export permissions, deletion authority, and compliance behavior.
 10. **Process boundary:** whether Stage 5 uses a Gateway-hosted broker with
     child agents, a separate broker service, or separate Gateway cells only.
 11. **Incognito durability:** whether any future incognito mode may opt into a

@@ -106,6 +106,7 @@
     "!dist/plugin-sdk/llm.d.ts",
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
+    "!dist/plugin-sdk/memory-enterprise-audit-runtime.d.ts",
     "!dist/plugin-sdk/memory-postbox-runtime.d.ts",
     "!dist/plugin-sdk/memory-sharing-control-runtime.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
@@ -301,6 +302,9 @@
     "!dist/extensions/longcat/**",
     "!dist/extensions/mattermost/**",
     "!dist/extensions/memory-lancedb/**",
+    "!dist/extensions/memory-identity-entra/**",
+    "!dist/extensions/memory-identity-google-workspace/**",
+    "!dist/extensions/memory-identity-okta/**",
     "!dist/extensions/meta/**",
     "!dist/extensions/matrix/**",
     "!dist/extensions/mistral/**",
@@ -1237,6 +1241,9 @@
     "./plugin-sdk/memory-authorization-conformance": {
       "types": "./dist/plugin-sdk/memory-authorization-conformance.d.ts",
       "default": "./dist/plugin-sdk/memory-authorization-conformance.js"
+    },
+    "./plugin-sdk/memory-enterprise-audit-runtime": {
+      "default": "./dist/plugin-sdk/memory-enterprise-audit-runtime.js"
     },
     "./plugin-sdk/memory-postbox-runtime": {
       "default": "./dist/plugin-sdk/memory-postbox-runtime.js"

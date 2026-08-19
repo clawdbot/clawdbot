@@ -347,6 +347,7 @@ const MANIFEST_CONTRACT_KEYS = [
   "externalAuthProviders",
   "embeddingProviders",
   "memoryEmbeddingProviders",
+  "enterpriseIdentityProviders",
   "speechProviders",
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",

@@ -1,0 +1,26 @@
+{
+  "name": "@openclaw/memory-identity-google-workspace",
+  "version": "2026.8.1",
+  "description": "OpenClaw Google Workspace memory identity plugin.",
+  "repository": { "type": "git", "url": "https://github.com/openclaw/openclaw" },
+  "type": "module",
+  "dependencies": { "google-auth-library": "10.9.1" },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": { "openclaw": ">=2026.8.1" },
+  "peerDependenciesMeta": { "openclaw": { "optional": true } },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/memory-identity-google-workspace",
+      "npmSpec": "@openclaw/memory-identity-google-workspace",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.8.1"
+    },
+    "compat": { "pluginApi": ">=2026.8.1" },
+    "build": { "openclawVersion": "2026.8.1", "bundledDist": false },
+    "release": { "publishToClawHub": true, "publishToNpm": true }
+  }
+}

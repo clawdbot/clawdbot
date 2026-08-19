@@ -287,6 +287,185 @@ CREATE INDEX IF NOT EXISTS idx_memory_pairing_identity_receipts_pending
   ON memory_pairing_identity_receipts(channel, account_id, request_identity_hmac, expires_at)
   WHERE consumed_at IS NULL;
 
+-- Enterprise verifier evidence is feature-local. Provider identifiers are
+-- manifest ids; every upstream issuer, tenant, subject, and group identifier
+-- is reduced with the installation-local audit HMAC before it reaches SQLite.
+CREATE TABLE IF NOT EXISTS memory_enterprise_principal_evidence (
+  principal_id TEXT NOT NULL PRIMARY KEY,
+  provider_id TEXT NOT NULL,
+  issuer_ref TEXT NOT NULL,
+  tenant_ref TEXT NOT NULL,
+  subject_ref TEXT NOT NULL,
+  assurance TEXT NOT NULL CHECK (assurance IN ('oidc')),
+  evidence_revision TEXT NOT NULL,
+  observed_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  FOREIGN KEY (principal_id) REFERENCES memory_principals(principal_id)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_enterprise_principal_evidence_active_subject
+  ON memory_enterprise_principal_evidence(provider_id, tenant_ref, subject_ref)
+  WHERE revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_memory_enterprise_principal_evidence_principal
+  ON memory_enterprise_principal_evidence(principal_id, revoked_at, expires_at);
+
+-- A membership fact is immutable evidence. A refresh records a new revision;
+-- reads select only an observed, unrevoked, unexpired snapshot.
+CREATE TABLE IF NOT EXISTS memory_enterprise_membership_snapshots (
+  snapshot_id TEXT NOT NULL PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  tenant_ref TEXT NOT NULL,
+  group_ref TEXT NOT NULL,
+  evidence_revision TEXT NOT NULL,
+  observed_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES memory_principals(principal_id),
+  UNIQUE (principal_id, provider_id, tenant_ref, group_ref, evidence_revision)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_enterprise_membership_snapshots_current
+  ON memory_enterprise_membership_snapshots(principal_id, provider_id, tenant_ref, group_ref, expires_at)
+  WHERE revoked_at IS NULL;
+
+-- Refresh and revocation record the exact immutable evidence snapshots they
+-- supersede. This does not infer impact from policy or resource revisions.
+CREATE TABLE IF NOT EXISTS memory_enterprise_evidence_transitions (
+  transition_id TEXT NOT NULL PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('refresh', 'revoke')),
+  revoked_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES memory_principals(principal_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_enterprise_evidence_transitions_principal
+  ON memory_enterprise_evidence_transitions(principal_id, provider_id, revoked_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_evidence_transitions_no_update
+BEFORE UPDATE ON memory_enterprise_evidence_transitions
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise evidence transitions are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_evidence_transitions_no_delete
+BEFORE DELETE ON memory_enterprise_evidence_transitions
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise evidence transitions cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS memory_enterprise_evidence_transition_memberships (
+  transition_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (transition_id, snapshot_id),
+  FOREIGN KEY (transition_id)
+    REFERENCES memory_enterprise_evidence_transitions(transition_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_enterprise_evidence_transition_memberships_snapshot
+  ON memory_enterprise_evidence_transition_memberships(snapshot_id, transition_id);
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_evidence_transition_memberships_no_update
+BEFORE UPDATE ON memory_enterprise_evidence_transition_memberships
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise evidence transition memberships are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_evidence_transition_memberships_no_delete
+BEFORE DELETE ON memory_enterprise_evidence_transition_memberships
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise evidence transition memberships cannot be deleted');
+END;
+
+-- A lifecycle event belongs to the user profile linked at the moment the
+-- event is recorded. It must not follow a later enterprise-profile relink.
+CREATE TABLE IF NOT EXISTS memory_enterprise_evidence_transition_profile_links (
+  transition_id TEXT NOT NULL PRIMARY KEY,
+  link_id TEXT NOT NULL,
+  user_principal_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (transition_id)
+    REFERENCES memory_enterprise_evidence_transitions(transition_id) ON DELETE RESTRICT,
+  FOREIGN KEY (link_id)
+    REFERENCES memory_enterprise_profile_links(link_id) ON DELETE RESTRICT,
+  FOREIGN KEY (user_principal_id) REFERENCES memory_principals(principal_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_enterprise_evidence_transition_profile_links_user
+  ON memory_enterprise_evidence_transition_profile_links(user_principal_id, transition_id);
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_evidence_transition_profile_links_no_update
+BEFORE UPDATE ON memory_enterprise_evidence_transition_profile_links
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise evidence transition profile links are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_evidence_transition_profile_links_no_delete
+BEFORE DELETE ON memory_enterprise_evidence_transition_profile_links
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise evidence transition profile links cannot be deleted');
+END;
+
+-- A Gateway user principal may be explicitly linked to one verified enterprise
+-- principal. The link is an operator-owned association, not a session-member
+-- record and not evidence that either principal is currently authorized.
+CREATE TABLE IF NOT EXISTS memory_enterprise_profile_links (
+  link_id TEXT NOT NULL PRIMARY KEY,
+  enterprise_principal_id TEXT NOT NULL,
+  user_principal_id TEXT NOT NULL,
+  created_by_principal_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  revision TEXT NOT NULL,
+  FOREIGN KEY (enterprise_principal_id) REFERENCES memory_principals(principal_id),
+  FOREIGN KEY (user_principal_id) REFERENCES memory_principals(principal_id),
+  FOREIGN KEY (created_by_principal_id) REFERENCES memory_principals(principal_id),
+  CHECK (enterprise_principal_id <> user_principal_id)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_enterprise_profile_links_active_enterprise
+  ON memory_enterprise_profile_links(enterprise_principal_id)
+  WHERE revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_memory_enterprise_profile_links_current_user
+  ON memory_enterprise_profile_links(user_principal_id, revoked_at);
+
+-- Explicit enterprise identity controls are durable redacted operator evidence.
+-- They retain only canonical principals and counts, never claims, groups, or memory content.
+CREATE TABLE IF NOT EXISTS memory_enterprise_identity_actions (
+  action_id TEXT NOT NULL PRIMARY KEY,
+  target_user_principal_id TEXT NOT NULL,
+  actor_principal_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('unlink', 'revoke')),
+  affected_identity_count INTEGER NOT NULL CHECK (affected_identity_count >= 0),
+  affected_snapshot_count INTEGER NOT NULL CHECK (affected_snapshot_count >= 0),
+  occurred_at INTEGER NOT NULL,
+  FOREIGN KEY (target_user_principal_id) REFERENCES memory_principals(principal_id),
+  FOREIGN KEY (actor_principal_id) REFERENCES memory_principals(principal_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_enterprise_identity_actions_target_time
+  ON memory_enterprise_identity_actions(target_user_principal_id, occurred_at DESC, action_id);
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_identity_actions_no_update
+BEFORE UPDATE ON memory_enterprise_identity_actions
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise identity actions are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_identity_actions_no_delete
+BEFORE DELETE ON memory_enterprise_identity_actions
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise identity actions cannot be deleted');
+END;
+
 -- Redacted shared sink for durable memory decisions. It stores ids and hashes,
 -- never memory content, search terms, sender ids, or raw policy payloads.
 CREATE TABLE IF NOT EXISTS memory_access_audit (
@@ -307,6 +486,78 @@ CREATE TABLE IF NOT EXISTS memory_access_audit (
 
 CREATE INDEX IF NOT EXISTS idx_memory_access_audit_agent_time
   ON memory_access_audit(agent_id, occurred_at DESC, event_id);
+
+-- Redacted enterprise authorization decisions. This keeps durable access
+-- evidence inspectable without retaining upstream claims, group names, or
+-- memory content; tenant and rule references are already HMAC pseudonyms.
+CREATE TABLE IF NOT EXISTS memory_enterprise_access_decisions (
+  event_id TEXT NOT NULL PRIMARY KEY,
+  provider_id TEXT NOT NULL,
+  tenant_ref TEXT NOT NULL,
+  actor_principal_id TEXT NOT NULL,
+  subject_principal_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allowed', 'denied', 'unavailable')),
+  reason_code TEXT NOT NULL,
+  rule_ref TEXT NOT NULL,
+  policy_revision TEXT NOT NULL,
+  principal_evidence_revision TEXT NOT NULL,
+  membership_evidence_revision TEXT,
+  occurred_at INTEGER NOT NULL,
+  received_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_enterprise_access_decisions_subject_time
+  ON memory_enterprise_access_decisions(subject_principal_id, occurred_at DESC, event_id);
+
+-- The selected memory plugin owns the actual policy evaluation. Core retains
+-- only this redacted last-observation baseline and allow/deny revision flips.
+CREATE TABLE IF NOT EXISTS memory_enterprise_role_policy_observations (
+  provider_id TEXT NOT NULL,
+  tenant_ref TEXT NOT NULL,
+  subject_principal_id TEXT NOT NULL,
+  rule_ref TEXT NOT NULL,
+  policy_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  policy_revision TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allowed', 'denied', 'unavailable')),
+  observed_at INTEGER NOT NULL,
+  PRIMARY KEY (provider_id, tenant_ref, subject_principal_id, rule_ref, policy_id, operation)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS memory_enterprise_policy_drift_alerts (
+  alert_id TEXT NOT NULL PRIMARY KEY,
+  provider_id TEXT NOT NULL,
+  tenant_ref TEXT NOT NULL,
+  subject_principal_id TEXT NOT NULL,
+  rule_ref TEXT NOT NULL,
+  policy_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  previous_policy_revision TEXT NOT NULL,
+  previous_decision TEXT NOT NULL CHECK (previous_decision IN ('allowed', 'denied')),
+  policy_revision TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allowed', 'denied')),
+  detected_at INTEGER NOT NULL,
+  UNIQUE (
+    provider_id, tenant_ref, subject_principal_id, rule_ref, policy_id, operation,
+    previous_policy_revision, previous_decision, policy_revision, decision
+  )
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_enterprise_policy_drift_alerts_subject_time
+  ON memory_enterprise_policy_drift_alerts(subject_principal_id, detected_at DESC, alert_id);
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_policy_drift_alerts_no_update
+BEFORE UPDATE ON memory_enterprise_policy_drift_alerts
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise policy drift alerts are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_enterprise_policy_drift_alerts_no_delete
+BEFORE DELETE ON memory_enterprise_policy_drift_alerts
+BEGIN
+  SELECT RAISE(ABORT, 'enterprise policy drift alerts cannot be deleted');
+END;
 
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,

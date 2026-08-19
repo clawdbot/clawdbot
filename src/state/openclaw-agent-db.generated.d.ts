@@ -174,90 +174,6 @@ export interface MemoryCompactionPolicySources {
   source_session_id: string;
 }
 
-export interface MemoryPostboxItems {
-  agent_id: string;
-  content: string;
-  content_hash: string;
-  created_at: number;
-  item_id: string;
-  purged_at: number | null;
-  reviewed_at: number | null;
-  reviewed_by_principal_id: string | null;
-  sender_evidence_ref: string;
-  source_channel_ref: string;
-  source_handle_id: string;
-  state: string;
-  target_store_id: string;
-}
-
-export interface MemoryPostboxRateLimits {
-  agent_id: string;
-  deposit_count: number;
-  source_channel_ref: string;
-  target_store_id: string;
-  updated_at: number;
-  window_started_at: number;
-}
-
-export interface MemoryPostboxReviewedCopies {
-  agent_id: string;
-  created_at: number;
-  item_id: string;
-  resource_id: string;
-  reviewed_content_hash: string;
-  revision_id: string;
-}
-
-export interface MemoryPostboxSettings {
-  agent_id: string;
-  mode: string;
-  updated_at: number;
-  updated_by_principal_id: string;
-}
-
-export interface MemoryPostboxSourceHandles {
-  agent_id: string;
-  created_at: number;
-  expires_at: number;
-  sender_evidence_ref: string;
-  source_channel_ref: string;
-  source_handle_id: string;
-  source_message_ref: string;
-  source_session_id: string;
-  target_store_id: string;
-  used_at: number | null;
-}
-
-export interface MemoryProjectionTargets {
-  agent_id: string;
-  audience_id: string;
-  audience_kind: string;
-  configured_by_principal_id: string;
-  created_at: number;
-  store_id: string;
-}
-
-export interface MemoryProjections {
-  agent_id: string;
-  copy_revision_id: string;
-  created_at: number;
-  expires_at: number | null;
-  expiry_audit_reason: string | null;
-  expiry_kind: string;
-  preview: string;
-  projection_id: string;
-  publisher_principal_id: string;
-  purpose: string;
-  reviewed_by_principal_id: string;
-  revocation_behavior: string;
-  revoked_at: number | null;
-  source_revision_id: string;
-  state: string;
-  target_audience_id: string;
-  target_audience_kind: string;
-  target_store_id: string;
-}
-
 export interface MemoryEmbeddingCache {
   dims: number | null;
   embedding: string;
@@ -313,6 +229,14 @@ export interface MemoryIndexSources {
 export interface MemoryIndexState {
   id: Generated<number>;
   revision: number;
+}
+
+export interface MemoryLineageEdges {
+  child_revision_id: string;
+  created_at: number;
+  parent_id: string;
+  parent_kind: string;
+  relation_kind: string;
 }
 
 export interface MemoryMigrations {
@@ -382,21 +306,79 @@ export interface MemoryPolicySets {
   policy_set_id: string;
 }
 
-export interface MemoryRevisionPolicyRequirements {
+export interface MemoryPostboxItems {
+  agent_id: string;
+  content: string;
+  content_hash: string;
   created_at: number;
-  expected_revision_id: string;
-  expected_revocation_epoch: number;
-  policy_id: string;
-  requirement_kind: string;
+  item_id: string;
+  purged_at: number | null;
+  reviewed_at: number | null;
+  reviewed_by_principal_id: string | null;
+  sender_evidence_ref: string;
+  source_channel_ref: string;
+  source_handle_id: string;
+  state: string;
+  target_store_id: string;
+}
+
+export interface MemoryPostboxRateLimits {
+  agent_id: string;
+  deposit_count: number;
+  source_channel_ref: string;
+  target_store_id: string;
+  updated_at: number;
+  window_started_at: number;
+}
+
+export interface MemoryPostboxReviewedCopies {
+  agent_id: string;
+  created_at: number;
+  item_id: string;
+  resource_id: string;
+  reviewed_content_hash: string;
   revision_id: string;
 }
 
-export interface MemoryLineageEdges {
-  child_revision_id: string;
+export interface MemoryPostboxSettings {
+  agent_id: string;
+  mode: string;
+  target_store_id: string;
+  updated_at: number;
+  updated_by_principal_id: string;
+}
+
+export interface MemoryPostboxSourceHandles {
+  agent_id: string;
   created_at: number;
-  parent_id: string;
-  parent_kind: string;
-  relation_kind: string;
+  expires_at: number;
+  sender_evidence_ref: string;
+  source_channel_ref: string;
+  source_handle_id: string;
+  source_message_ref: string;
+  source_session_id: string;
+  target_store_id: string;
+  used_at: number | null;
+}
+
+export interface MemoryPreoutputExposureAuthorizationFacts {
+  actor_evidence_json: string;
+  created_at: number;
+  delegation_snapshot_json: string;
+  exposure_set_id: string;
+  host_facts_revision: string;
+}
+
+export interface MemoryPreoutputExposureEnterpriseMembershipSets {
+  created_at: number;
+  exposure_set_id: string;
+  snapshot_count: number;
+}
+
+export interface MemoryPreoutputExposureEnterpriseMemberships {
+  created_at: number;
+  exposure_set_id: string;
+  snapshot_id: string;
 }
 
 export interface MemoryPreoutputExposureLedger {
@@ -422,12 +404,34 @@ export interface MemoryPreoutputExposureLedger {
   subject_revision: string;
 }
 
-export interface MemoryPreoutputExposureAuthorizationFacts {
-  actor_evidence_json: string;
+export interface MemoryProjectionTargets {
+  agent_id: string;
+  audience_id: string;
+  audience_kind: string;
+  configured_by_principal_id: string;
   created_at: number;
-  delegation_snapshot_json: string;
-  exposure_set_id: string;
-  host_facts_revision: string;
+  store_id: string;
+}
+
+export interface MemoryProjections {
+  agent_id: string;
+  copy_revision_id: string;
+  created_at: number;
+  expires_at: number | null;
+  expiry_audit_reason: string | null;
+  expiry_kind: string;
+  preview: string;
+  projection_id: string;
+  publisher_principal_id: string;
+  purpose: string;
+  reviewed_by_principal_id: string;
+  revocation_behavior: string;
+  revoked_at: number | null;
+  source_revision_id: string;
+  state: string;
+  target_audience_id: string;
+  target_audience_kind: string;
+  target_store_id: string;
 }
 
 export interface MemoryResourceRevisions {
@@ -465,6 +469,15 @@ export interface MemoryResources {
   resource_id: string;
   source: Generated<string>;
   store_id: string;
+}
+
+export interface MemoryRevisionPolicyRequirements {
+  created_at: number;
+  expected_revision_id: string;
+  expected_revocation_epoch: number;
+  policy_id: string;
+  requirement_kind: string;
+  revision_id: string;
 }
 
 export interface MemoryRunExposureResources {
@@ -919,11 +932,6 @@ export interface DB {
   memory_audit_outbox: MemoryAuditOutbox;
   memory_compaction_policies: MemoryCompactionPolicies;
   memory_compaction_policy_sources: MemoryCompactionPolicySources;
-  memory_postbox_items: MemoryPostboxItems;
-  memory_postbox_rate_limits: MemoryPostboxRateLimits;
-  memory_postbox_reviewed_copies: MemoryPostboxReviewedCopies;
-  memory_postbox_settings: MemoryPostboxSettings;
-  memory_postbox_source_handles: MemoryPostboxSourceHandles;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunk_provenance: MemoryIndexChunkProvenance;
   memory_index_chunk_recall_metadata: MemoryIndexChunkRecallMetadata;
@@ -931,21 +939,28 @@ export interface DB {
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  memory_lineage_edges: MemoryLineageEdges;
   memory_migrations: MemoryMigrations;
   memory_policies: MemoryPolicies;
   memory_policy_entries: MemoryPolicyEntries;
   memory_policy_revisions: MemoryPolicyRevisions;
   memory_policy_set_members: MemoryPolicySetMembers;
   memory_policy_sets: MemoryPolicySets;
+  memory_postbox_items: MemoryPostboxItems;
+  memory_postbox_rate_limits: MemoryPostboxRateLimits;
+  memory_postbox_reviewed_copies: MemoryPostboxReviewedCopies;
+  memory_postbox_settings: MemoryPostboxSettings;
+  memory_postbox_source_handles: MemoryPostboxSourceHandles;
+  memory_preoutput_exposure_authorization_facts: MemoryPreoutputExposureAuthorizationFacts;
+  memory_preoutput_exposure_enterprise_membership_sets: MemoryPreoutputExposureEnterpriseMembershipSets;
+  memory_preoutput_exposure_enterprise_memberships: MemoryPreoutputExposureEnterpriseMemberships;
+  memory_preoutput_exposure_ledger: MemoryPreoutputExposureLedger;
   memory_projection_targets: MemoryProjectionTargets;
   memory_projections: MemoryProjections;
-  memory_revision_policy_requirements: MemoryRevisionPolicyRequirements;
-  memory_lineage_edges: MemoryLineageEdges;
-  memory_preoutput_exposure_authorization_facts: MemoryPreoutputExposureAuthorizationFacts;
-  memory_preoutput_exposure_ledger: MemoryPreoutputExposureLedger;
   memory_resource_revisions: MemoryResourceRevisions;
   memory_resource_subjects: MemoryResourceSubjects;
   memory_resources: MemoryResources;
+  memory_revision_policy_requirements: MemoryRevisionPolicyRequirements;
   memory_run_exposure_resources: MemoryRunExposureResources;
   memory_run_exposures: MemoryRunExposures;
   memory_scoped_chunk_vectors: MemoryScopedChunkVectors;

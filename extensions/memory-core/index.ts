@@ -8,6 +8,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { resolveMemoryEnterpriseAccessAuditReporter } from "openclaw/plugin-sdk/memory-enterprise-audit-runtime";
 import {
   MEMORY_POSTBOX_RUN_ID_BINDING,
   MEMORY_POSTBOX_TURN_CAPABILITY_BINDING,
@@ -29,6 +30,7 @@ import { builtinScopedMemoryConformanceAdapter } from "./src/memory/scoped-memor
 import {
   builtinScopedMemoryAuthorizedRuntime,
   builtinScopedMemoryVirtualView,
+  createBuiltinScopedMemoryAuthorizedRuntime,
 } from "./src/memory/scoped-memory-runtime.js";
 import { registerScopedMemorySharingGatewayMethods } from "./src/memory/scoped-memory-sharing-gateway.js";
 import { buildPromptSection } from "./src/prompt-section.js";
@@ -355,17 +357,23 @@ function resolveMemoryToolOptions(
   };
 }
 
-function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
+function createLazyMemoryRuntime(
+  host: MemoryCoreRuntimeHost,
+  enterpriseAccessAuditReporter: Parameters<typeof createBuiltinScopedMemoryAuthorizedRuntime>[0],
+): MemoryPluginRuntime {
+  const authorizedRuntime = enterpriseAccessAuditReporter
+    ? createBuiltinScopedMemoryAuthorizedRuntime(enterpriseAccessAuditReporter)
+    : builtinScopedMemoryAuthorizedRuntime;
   return {
-    authorize: builtinScopedMemoryAuthorizedRuntime.authorize,
-    searchAuthorized: builtinScopedMemoryAuthorizedRuntime.searchAuthorized,
-    readAuthorized: builtinScopedMemoryAuthorizedRuntime.readAuthorized,
-    writeAuthorized: builtinScopedMemoryAuthorizedRuntime.writeAuthorized,
-    stageSealedCompaction: builtinScopedMemoryAuthorizedRuntime.stageSealedCompaction,
-    importAuthorized: builtinScopedMemoryAuthorizedRuntime.importAuthorized,
-    syncAuthorized: builtinScopedMemoryAuthorizedRuntime.syncAuthorized,
-    exportAuthorized: builtinScopedMemoryAuthorizedRuntime.exportAuthorized,
-    statusAuthorized: builtinScopedMemoryAuthorizedRuntime.statusAuthorized,
+    authorize: authorizedRuntime.authorize,
+    searchAuthorized: authorizedRuntime.searchAuthorized,
+    readAuthorized: authorizedRuntime.readAuthorized,
+    writeAuthorized: authorizedRuntime.writeAuthorized,
+    stageSealedCompaction: authorizedRuntime.stageSealedCompaction,
+    importAuthorized: authorizedRuntime.importAuthorized,
+    syncAuthorized: authorizedRuntime.syncAuthorized,
+    exportAuthorized: authorizedRuntime.exportAuthorized,
+    statusAuthorized: authorizedRuntime.statusAuthorized,
     async getMemorySearchManager(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
       return await createMemoryRuntime(host).getMemorySearchManager(params);
@@ -404,7 +412,10 @@ export default definePluginEntry({
       api.runtime.state.openKeyedStore<T>(options);
     const host = { acquireLocalService, openKeyedStore } satisfies MemoryCoreRuntimeHost;
     configureMemoryCoreDreamingState(openKeyedStore);
-    const memoryRuntime = createLazyMemoryRuntime(host);
+    const memoryRuntime = createLazyMemoryRuntime(
+      host,
+      resolveMemoryEnterpriseAccessAuditReporter(api),
+    );
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
     registerScopedMemorySharingGatewayMethods(api);

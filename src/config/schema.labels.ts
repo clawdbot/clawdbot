@@ -921,6 +921,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.deny": "Plugin Denylist",
   "plugins.load": "Plugin Loader",
   "plugins.load.paths": "Plugin Load Paths",
+  "plugins.enterpriseIdentityProviders": "Enterprise Identity Providers",
+  "plugins.enterpriseIdentityProviders.allow": "Enterprise Identity Provider Allowlist",
   "plugins.slots": "Plugin Slots",
   "plugins.slots.memory": "Memory Plugin",
   "plugins.slots.contextEngine": "Context Engine Plugin",

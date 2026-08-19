@@ -270,6 +270,24 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("publishes every enterprise memory identity provider through the official catalog", () => {
+    const providers = [
+      ["memory-identity-entra", "@openclaw/memory-identity-entra"],
+      ["memory-identity-google-workspace", "@openclaw/memory-identity-google-workspace"],
+      ["memory-identity-okta", "@openclaw/memory-identity-okta"],
+    ] as const;
+
+    for (const [id, npmSpec] of providers) {
+      const entry = expectCatalogEntry(id);
+      expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.8.1",
+      });
+    }
+  });
+
   it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
     const entry = getOfficialExternalPluginCatalogEntryForPackage("@openclaw/fish-audio-speech");
     expect(entry).toBeDefined();

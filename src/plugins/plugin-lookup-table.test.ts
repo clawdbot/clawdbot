@@ -91,6 +91,21 @@ function createIndex(
         agentHarnesses: [],
         configPaths: plugin.activation?.onConfigPaths ?? [],
       },
+      ...(plugin.contracts
+        ? {
+            contributions: {
+              channels: [],
+              channelConfigs: [],
+              providers: [],
+              modelCatalogProviders: [],
+              modelSupportPrefixes: [],
+              modelSupportPatterns: [],
+              autoEnableProviderIds: [],
+              commandAliases: [],
+              contracts: plugin.contracts,
+            },
+          }
+        : {}),
       compat: [],
     })),
   };
@@ -429,6 +444,52 @@ describe("loadPluginLookUpTable", () => {
     expect(table.metrics.manifestPluginCount).toBe(1);
     expect(table.byPluginId.has("telegram")).toBe(false);
     expect(table.startup.pluginIds).toEqual(["openai"]);
+  });
+
+  it("loads an operator-allowlisted enterprise identity adapter before Gateway sealing", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "memory-identity-entra",
+        origin: "bundled",
+        enabledByDefault: true,
+        activation: { onStartup: false },
+        contracts: { enterpriseIdentityProviders: ["entra"] },
+      }),
+      createManifestRecord({
+        id: "memory-identity-okta",
+        origin: "bundled",
+        enabledByDefault: true,
+        activation: { onStartup: false },
+        contracts: { enterpriseIdentityProviders: ["okta"] },
+      }),
+    ];
+    const index = createIndex(plugins);
+    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+      (params: { pluginIds?: readonly string[] }) => ({
+        plugins: params.pluginIds
+          ? plugins.filter((plugin) => params.pluginIds?.includes(plugin.id))
+          : plugins,
+        diagnostics: [],
+      }),
+    );
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const table = loadPluginLookUpTable({
+      config: {
+        plugins: {
+          allow: ["memory-identity-entra"],
+          enterpriseIdentityProviders: { allow: ["entra"] },
+          slots: { memory: "none" },
+        },
+      } as OpenClawConfig,
+      env: {},
+      index,
+    });
+
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
+      pluginIds: ["memory-identity-entra"],
+    });
+    expect(table.startup.pluginIds).toEqual(["memory-identity-entra"]);
   });
 
   it("keeps config-path startup activation owners in scoped manifest reconstruction", async () => {

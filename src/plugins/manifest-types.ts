@@ -450,6 +450,8 @@ export type PluginManifestContracts = {
   externalAuthProviders?: string[];
   embeddingProviders?: string[];
   memoryEmbeddingProviders?: string[];
+  /** Provider prefixes allowed to register enterprise identity material. */
+  enterpriseIdentityProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];

@@ -84,6 +84,7 @@ type BuildPluginApiParams = {
       | "registerMemoryPromptPreparation"
       | "registerMemoryCorpusSupplement"
       | "registerMemoryEmbeddingProvider"
+      | "registerEnterpriseIdentityProvider"
       | "on"
     >
   >;
@@ -181,6 +182,8 @@ const noopRegisterMemoryPromptPreparation: OpenClawPluginApi["registerMemoryProm
 const noopRegisterMemoryCorpusSupplement: OpenClawPluginApi["registerMemoryCorpusSupplement"] =
   () => {};
 const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbeddingProvider"] =
+  () => {};
+const noopRegisterEnterpriseIdentityProvider: OpenClawPluginApi["registerEnterpriseIdentityProvider"] =
   () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
 
@@ -294,6 +297,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerMemoryCorpusSupplement ?? noopRegisterMemoryCorpusSupplement,
     registerMemoryEmbeddingProvider:
       handlers.registerMemoryEmbeddingProvider ?? noopRegisterMemoryEmbeddingProvider,
+    registerEnterpriseIdentityProvider:
+      handlers.registerEnterpriseIdentityProvider ?? noopRegisterEnterpriseIdentityProvider,
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
   };

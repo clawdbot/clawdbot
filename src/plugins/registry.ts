@@ -18,6 +18,13 @@ export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistrati
 export type { PluginRecord, PluginRegistry } from "./registry-types.js";
 export { createEmptyPluginRegistry } from "./registry-empty.js";
 
+/** Seal enterprise identity registrations once the startup registry is complete. */
+export function sealEnterpriseIdentityProviderRegistry(
+  registry: import("./registry-types.js").PluginRegistry,
+): void {
+  registry.enterpriseIdentityProviderAuthorityRegistry.seal(registry.enterpriseIdentityProviders);
+}
+
 function clonePluginRecord(record: RegistryPluginRecord): RegistryPluginRecord {
   return Object.fromEntries(
     Object.entries(record).map(([key, value]) => [key, Array.isArray(value) ? [...value] : value]),
@@ -157,5 +164,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerSessionAction: registrars.registerSessionAction,
     registerHook: registrars.registerHook,
     registerTypedHook: registrars.registerTypedHook,
+    registerEnterpriseIdentityProvider: registrars.registerEnterpriseIdentityProvider,
+    sealEnterpriseIdentityProviderRegistry: () =>
+      sealEnterpriseIdentityProviderRegistry(state.registry),
   };
 }

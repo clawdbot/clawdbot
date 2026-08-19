@@ -110,6 +110,9 @@ const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddin
 const getManagedMediaAttachmentsModule = createLazyRuntimeModule(
   () => import("./managed-image-attachments.js"),
 );
+const getMemoryEnterpriseOidcCallbackHttpModule = createLazyRuntimeModule(
+  () => import("./memory-enterprise-oidc-callback-http.js"),
+);
 const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-app-standalone.js"));
 const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
@@ -486,6 +489,18 @@ export function createGatewayHttpServer(opts: {
         enabled: boolean,
         run: GatewayHttpRequestStage["run"],
       ) => addRequestStage(name, enabled, run, true);
+
+      // This public endpoint is receipt-bound, not browser-authenticated. It
+      // must run before plugins so a provider redirect cannot be claimed by a
+      // mutable plugin route or expose its opaque authorization parameters.
+      addAdmittedStage(
+        "memory-enterprise-oidc-callback",
+        scopedRequestPath === "/memory/oidc/callback",
+        async () =>
+          (
+            await getMemoryEnterpriseOidcCallbackHttpModule()
+          ).handleMemoryEnterpriseOidcCallbackHttpRequest(req, res),
+      );
 
       addAdmittedStage(
         "watch-node",

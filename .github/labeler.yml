@@ -374,6 +374,24 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-core/**"
+"extensions: memory-identity-entra":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-identity-entra/**"
+          - "docs/plugins/manifest.md"
+          - "docs/plugins/memory-enterprise-identity.md"
+"extensions: memory-identity-google-workspace":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-identity-google-workspace/**"
+          - "docs/plugins/manifest.md"
+          - "docs/plugins/memory-enterprise-identity.md"
+"extensions: memory-identity-okta":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-identity-okta/**"
+          - "docs/plugins/manifest.md"
+          - "docs/plugins/memory-enterprise-identity.md"
 "extensions: memory-lancedb":
   - changed-files:
       - any-glob-to-any-file:

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readAuthorizedTranscriptDerivation } from "../config/sessions/session-transcript-memory-policy.js";
 import type {
   AuthorizedMemoryVirtualView,
   AuthorizedSealedCompactionArtifact,
@@ -7,7 +8,6 @@ import type {
   MemoryAccessContext,
   MemoryActorEvidence,
 } from "../memory-host-sdk/host/authorization.js";
-import { readAuthorizedTranscriptDerivation } from "../config/sessions/session-transcript-memory-policy.js";
 import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
 import {
   MEMORY_INVOCATION_UNAVAILABLE,
@@ -28,6 +28,7 @@ import {
   createTrustedMemoryAccessContext,
   type TrustedMemoryAccessContext,
 } from "../state/memory-access-context.js";
+import { readCurrentEnterpriseMemoryFactsForUser } from "../state/memory-enterprise-admission.js";
 import { recheckMemoryIdentityBinding } from "../state/memory-identity.js";
 import {
   createCurrentMemorySessionContext,
@@ -50,7 +51,9 @@ export type AuthorizedMemoryVirtualFileBroker = Readonly<{
 /** Core-private sealed compaction capability; plugins never receive this host. */
 export type AuthorizedSealedCompactionHost = Readonly<{
   source: AuthorizedTranscriptDerivationSource;
-  stage: (content: string) => Promise<AuthorizedSealedCompactionArtifact | typeof MEMORY_INVOCATION_UNAVAILABLE>;
+  stage: (
+    content: string,
+  ) => Promise<AuthorizedSealedCompactionArtifact | typeof MEMORY_INVOCATION_UNAVAILABLE>;
 }>;
 
 type AuthorizedMemoryReadHostWithVirtualBroker = AuthorizedMemoryReadHost &
@@ -93,6 +96,37 @@ function deliveryFacts(params: {
       egressCapabilityIds: ["reply.final"],
       egressRegistryRevision: facts.egressRegistryRevision,
     }
+  );
+}
+
+function hasCurrentEnterpriseMemoryFacts(params: {
+  userPrincipalId: string;
+  verifiedPrincipals: ReadonlyArray<MemoryAccessContext["verifiedPrincipals"][number]>;
+  verifiedMemberships: ReadonlyArray<MemoryAccessContext["verifiedMemberships"][number]>;
+}): boolean {
+  const current = readCurrentEnterpriseMemoryFactsForUser({
+    userPrincipalId: params.userPrincipalId,
+  });
+  const currentPrincipals = new Set(
+    current.verifiedPrincipals.map(
+      (principal) => `${principal.principalId}\u0000${principal.evidenceRevision}`,
+    ),
+  );
+  const currentMemberships = new Set(
+    current.verifiedMemberships.map(
+      (membership) =>
+        `${membership.snapshotId}\u0000${membership.principalId}\u0000${membership.sourcePrincipalId}\u0000${membership.groupId}\u0000${membership.provider}\u0000${membership.evidenceRevision}\u0000${membership.profileLinkRevision}`,
+    ),
+  );
+  return (
+    params.verifiedPrincipals.every((principal) =>
+      currentPrincipals.has(`${principal.principalId}\u0000${principal.evidenceRevision}`),
+    ) &&
+    params.verifiedMemberships.every((membership) =>
+      currentMemberships.has(
+        `${membership.snapshotId}\u0000${membership.principalId}\u0000${membership.sourcePrincipalId}\u0000${membership.groupId}\u0000${membership.provider}\u0000${membership.evidenceRevision}\u0000${membership.profileLinkRevision}`,
+      ),
+    )
   );
 }
 
@@ -141,12 +175,7 @@ function createTrustedMemoryHostContext(
     return undefined;
   }
   let actor: MemoryActorEvidence;
-  let verifiedPrincipals: Array<{
-    principalId: string;
-    assurance: "gateway-profile" | "service";
-    evidenceRevision: string;
-    expiresAt?: string;
-  }> = [];
+  let verifiedPrincipals: Array<MemoryAccessContext["verifiedPrincipals"][number]> = [];
   if (context.subject.kind === "user" && context.bindingId) {
     const binding = recheckMemoryIdentityBinding({ bindingId: context.bindingId });
     if (binding.kind !== "current" || binding.binding.principalId !== context.principalId) {
@@ -172,6 +201,45 @@ function createTrustedMemoryHostContext(
         ...(expiresAt ? { expiresAt } : {}),
       },
     ];
+    const enterprise = readCurrentEnterpriseMemoryFactsForUser({
+      userPrincipalId: context.principalId,
+    });
+    verifiedPrincipals = [...verifiedPrincipals, ...enterprise.verifiedPrincipals];
+    const verifiedMemberships = enterprise.verifiedMemberships;
+    const facts = captureTrustedMemoryAccessFacts({
+      requestId: randomUUID(),
+      runId: params.runId?.trim() || `session:${context.sessionId}`,
+      actor,
+      verifiedPrincipals,
+      collaboration: { kind: "not-applicable" },
+      verifiedMemberships,
+      recheck: () =>
+        hasCurrentEnterpriseMemoryFacts({
+          userPrincipalId: context.principalId,
+          verifiedPrincipals: enterprise.verifiedPrincipals,
+          verifiedMemberships,
+        }),
+      delivery,
+      operation: params.operation,
+      hostFactsRevision: `mhf1_${hash({
+        session: context.fingerprint,
+        delivery: delivery.routeRevision,
+        egress: delivery.egressRegistryRevision,
+        memberships: verifiedMemberships.map((membership) => [
+          membership.snapshotId,
+          membership.sourcePrincipalId,
+          membership.evidenceRevision,
+          membership.profileLinkRevision,
+        ]),
+      })}`,
+    });
+    const trusted = createTrustedMemoryAccessContext({
+      sessionKey: context.sessionKey,
+      sessionId: context.sessionId,
+      options: { agentId: context.agentId },
+      facts,
+    });
+    return trusted.kind === "current" ? trusted.context : undefined;
   } else if (context.subject.kind === "conversation") {
     actor = {
       kind: "unattributed" as const,
@@ -206,8 +274,8 @@ function createTrustedMemoryHostContext(
     actor,
     verifiedPrincipals,
     collaboration: { kind: "not-applicable" },
-    // Role membership is intentionally absent until a trusted membership resolver exists. This
-    // keeps a group actor from selecting a role store merely because they sent the latest message.
+    // Only Gateway-user contexts can receive independently rechecked enterprise memberships.
+    // Group actors can never select a role store merely because they sent the latest message.
     verifiedMemberships: [],
     delivery,
     operation: params.operation,
@@ -330,7 +398,8 @@ export async function admitAuthorizedMemoryDerivation(
  * substitute a session, event list, policy set, or delivery audience.
  */
 export async function prepareAuthorizedTranscriptDerivationHost(
-  params: AuthorizedMemoryHostParams & Readonly<{ derivationPurpose?: AuthorizedTranscriptDerivationPurpose }>,
+  params: AuthorizedMemoryHostParams &
+    Readonly<{ derivationPurpose?: AuthorizedTranscriptDerivationPurpose }>,
 ): Promise<AuthorizedMemoryWriteHost | undefined> {
   const sessionId = params.sessionId?.trim();
   const trusted = createTrustedMemoryHostContext({ ...params, operation: "derive" });
@@ -399,12 +468,12 @@ export async function prepareAuthorizedSealedCompactionHost(
     return undefined;
   }
   const sealedSource = Object.freeze({
-      kind: "transcript",
-      sessionId,
-      eventSeqs: transcriptSource.eventSeqs,
-      sourcePolicySetId: transcriptSource.sourcePolicySetId,
-      deliveryAudiencesJson: transcriptSource.deliveryAudiencesJson,
-    });
+    kind: "transcript",
+    sessionId,
+    eventSeqs: transcriptSource.eventSeqs,
+    sourcePolicySetId: transcriptSource.sourcePolicySetId,
+    deliveryAudiencesJson: transcriptSource.deliveryAudiencesJson,
+  });
   return Object.freeze({
     source: sealedSource,
     async stage(content) {

@@ -242,6 +242,22 @@ export function shouldConsiderForGatewayStartup(params: {
   return params.memorySlotStartupPluginId === params.plugin.pluginId;
 }
 
+/**
+ * Enterprise identity material is loaded only when its provider prefix is an
+ * explicit operator choice. This keeps adapters out of normal startup while
+ * ensuring a selected provider registers before the Gateway snapshot seals.
+ */
+export function declaresAllowedEnterpriseIdentityProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  operatorAllowlist: ReadonlySet<string>;
+}): boolean {
+  return Boolean(
+    params.manifest?.contracts?.enterpriseIdentityProviders?.some((prefix) =>
+      params.operatorAllowlist.has(prefix),
+    ),
+  );
+}
+
 export function hasConfiguredStartupChannel(params: {
   plugin: InstalledPluginIndexRecord;
   manifestLookup: ManifestRegistryLookup;

@@ -14,6 +14,7 @@ import {
 } from "./gateway-startup-plugin-activation.js";
 import {
   hasConfiguredStartupChannel,
+  declaresAllowedEnterpriseIdentityProvider,
   listPotentialEnabledChannelIds,
   resolveAuthorizedGatewayStartupDreamingPluginIds,
   resolveContextEngineSlotStartupPluginId,
@@ -126,6 +127,9 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     activationSourcePlugins,
     normalizePluginId,
   });
+  const enterpriseIdentityProviderAllowlist = new Set(
+    params.config.plugins?.enterpriseIdentityProviders?.allow ?? [],
+  );
   const pluginIds: string[] = [];
   for (const plugin of params.index.plugins) {
     const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
@@ -185,6 +189,31 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       })
     ) {
       pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      declaresAllowedEnterpriseIdentityProvider({
+        manifest,
+        operatorAllowlist: enterpriseIdentityProviderAllowlist,
+      })
+    ) {
+      const isSourceExternalPlugin =
+        plugin.origin === "bundled" && plugin.packageBuild?.bundledDist === false;
+      const startupPolicyOrigin = isSourceExternalPlugin ? "workspace" : plugin.origin;
+      const activationState = resolveEffectivePluginActivationState({
+        id: plugin.pluginId,
+        origin: startupPolicyOrigin,
+        config: pluginsConfig,
+        rootConfig: params.config,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),
+        activationSource,
+      });
+      if (
+        activationState.enabled &&
+        (startupPolicyOrigin === "bundled" || activationState.explicitlyEnabled)
+      ) {
+        pluginIds.push(plugin.pluginId);
+      }
       continue;
     }
     if (

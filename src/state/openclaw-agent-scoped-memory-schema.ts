@@ -24,6 +24,8 @@ export const AGENT_SCOPED_MEMORY_TABLES = [
   "memory_run_exposure_resources",
   "memory_preoutput_exposure_ledger",
   "memory_preoutput_exposure_authorization_facts",
+  "memory_preoutput_exposure_enterprise_membership_sets",
+  "memory_preoutput_exposure_enterprise_memberships",
   "transcript_event_memory_policies",
   "transcript_event_memory_policy_details",
   "transcript_event_memory_policy_transitions",

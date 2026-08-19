@@ -420,6 +420,60 @@
       }
     },
     {
+      "name": "@openclaw/memory-identity-entra",
+      "description": "OpenClaw Microsoft Entra ID memory identity plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "memory-identity-entra",
+          "label": "Microsoft Entra ID Memory Identity"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/memory-identity-entra",
+          "npmSpec": "@openclaw/memory-identity-entra",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.8.1"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/memory-identity-google-workspace",
+      "description": "OpenClaw Google Workspace memory identity plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "memory-identity-google-workspace",
+          "label": "Google Workspace Memory Identity"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/memory-identity-google-workspace",
+          "npmSpec": "@openclaw/memory-identity-google-workspace",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.8.1"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/memory-identity-okta",
+      "description": "OpenClaw Okta memory identity plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "memory-identity-okta",
+          "label": "Okta Memory Identity"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/memory-identity-okta",
+          "npmSpec": "@openclaw/memory-identity-okta",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.8.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/memory-lancedb",
       "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
       "source": "official",

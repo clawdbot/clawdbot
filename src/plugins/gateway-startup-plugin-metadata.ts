@@ -59,6 +59,19 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   const scope = new Set<string>([...pluginsConfig.allow, ...activationSourcePlugins.allow]);
   addPluginConfigEntryIds(scope, pluginsConfig);
   addPluginConfigEntryIds(scope, activationSourcePlugins);
+  const enterpriseIdentityProviderAllowlist = new Set(
+    params.config.plugins?.enterpriseIdentityProviders?.allow ?? [],
+  );
+  for (const plugin of params.index.plugins) {
+    if (
+      (pluginsConfig.allow.length === 0 || pluginsConfig.allow.includes(plugin.pluginId)) &&
+      plugin.contributions?.contracts.enterpriseIdentityProviders?.some((prefix) =>
+        enterpriseIdentityProviderAllowlist.has(prefix),
+      )
+    ) {
+      scope.add(plugin.pluginId);
+    }
+  }
 
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,

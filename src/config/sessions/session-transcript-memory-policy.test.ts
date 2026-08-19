@@ -170,6 +170,7 @@ function recordExposure(params: {
     exposedResourceRevisions: ["resource-revision-1"],
     exposureReceiptIds: ["exposure-receipt-1"],
     egressReceiptIds: ["egress-receipt-1"],
+    enterpriseMembershipSnapshotIds: [],
     deliveryAudiences: [{ kind: "user", id: "alice" }],
     deliveryRevision: "delivery-revision-1",
     egressRegistryRevision: "egress-registry-revision-1",
@@ -344,9 +345,7 @@ describe("transcript memory policy companions", () => {
       ),
     ).toThrow("source policy is unavailable");
     expect(
-      database.db
-        .prepare("SELECT count(*) AS count FROM memory_compaction_policies")
-        .get(),
+      database.db.prepare("SELECT count(*) AS count FROM memory_compaction_policies").get(),
     ).toEqual({ count: 1 });
   });
 
@@ -425,7 +424,10 @@ describe("transcript memory policy companions", () => {
     await expect(commit()).resolves.toMatchObject({
       compactionPolicy: { compactionPolicyId: "sealed-compaction-policy" },
     });
-    expect(committed).toEqual({ eventSeq: expect.any(Number), policyId: "sealed-compaction-policy" });
+    expect(committed).toEqual({
+      eventSeq: expect.any(Number),
+      policyId: "sealed-compaction-policy",
+    });
     const committedEventSeq = expectDefined(
       committed?.eventSeq,
       "committed sealed compaction event sequence",
@@ -436,9 +438,7 @@ describe("transcript memory policy companions", () => {
       ),
     ).toEqual(["sealed-compaction-checkpoint"]);
     expect(
-      database.db
-        .prepare("SELECT count(*) AS count FROM memory_compaction_policies")
-        .get(),
+      database.db.prepare("SELECT count(*) AS count FROM memory_compaction_policies").get(),
     ).toEqual({ count: 1 });
     expect(
       database.db
@@ -513,9 +513,7 @@ describe("transcript memory policy companions", () => {
       ),
     ).rejects.toThrow("derived state failed");
     expect(
-      database.db
-        .prepare("SELECT count(*) AS count FROM memory_compaction_policies")
-        .get(),
+      database.db.prepare("SELECT count(*) AS count FROM memory_compaction_policies").get(),
     ).toEqual({ count: 1 });
     expect(
       loadSqliteTranscriptEventsSync(scope(env)).some(
@@ -584,12 +582,12 @@ describe("transcript memory policy companions", () => {
     expect(readSessionEntryRow(database, SESSION_KEY)?.entry.compactionCheckpoints).toHaveLength(
       25,
     );
-    expect(readSessionEntryRow(database, SESSION_KEY)?.entry.compactionCheckpoints?.[0]).toMatchObject(
-      { checkpointId: "retained-checkpoint-1" },
-    );
-    expect(readSessionEntryRow(database, SESSION_KEY)?.entry.compactionCheckpoints?.at(-1)).toMatchObject(
-      { checkpointId: "checkpoint-cap-newest" },
-    );
+    expect(
+      readSessionEntryRow(database, SESSION_KEY)?.entry.compactionCheckpoints?.[0],
+    ).toMatchObject({ checkpointId: "retained-checkpoint-1" });
+    expect(
+      readSessionEntryRow(database, SESSION_KEY)?.entry.compactionCheckpoints?.at(-1),
+    ).toMatchObject({ checkpointId: "checkpoint-cap-newest" });
   });
 
   it("enforces Doctor shadow-read-only companion persistence for only its bound subject", async () => {
@@ -660,6 +658,7 @@ describe("transcript memory policy companions", () => {
       exposedResourceRevisions: ["resource-revision-1"],
       exposureReceiptIds: ["exposure-receipt-1"],
       egressReceiptIds: ["egress-receipt-1"],
+      enterpriseMembershipSnapshotIds: [],
       deliveryAudiences: [{ kind: "agent", id: aliceContext.context.principalId }],
       deliveryRevision: "delivery-revision-1",
       egressRegistryRevision: "egress-registry-revision-1",

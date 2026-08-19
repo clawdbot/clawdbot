@@ -1,3 +1,4 @@
+import { createEnterpriseIdentityProviderAuthorityRegistry } from "./enterprise-identity-provider-authority-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -58,6 +59,12 @@ export function resolveTypedHookTimeoutMs(params: {
 
 export function createPluginRegistryState(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
+  const enterpriseIdentityProviderAuthorityRegistry =
+    registryParams.enterpriseIdentityProviderAuthorityRegistry ??
+    createEnterpriseIdentityProviderAuthorityRegistry();
+  registry.enterpriseIdentityProviderAuthorityRegistry =
+    enterpriseIdentityProviderAuthorityRegistry;
+  registry.enterpriseIdentityProviders = [...enterpriseIdentityProviderAuthorityRegistry.providers];
   bindPluginRegistryRuntime(registry, registryParams.runtime);
   const coreGatewayMethodNames = Array.from(
     new Set([
@@ -78,6 +85,7 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
   return {
     registry,
     registryParams,
+    enterpriseIdentityProviderAuthorityRegistry,
     coreGatewayMethods: new Set(coreGatewayMethodNames),
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
