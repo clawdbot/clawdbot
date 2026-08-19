@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
@@ -8,7 +9,6 @@ import { icons } from "../../components/icons.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { listAssignableSessionOwners } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
-import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { hasSessionPresenceViewers, projectPresencePayload } from "../../lib/presence-users.ts";
@@ -57,7 +57,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       password: gateway.connection.password,
     });
     return {
-      routeUrl: workspaceIconRouteUrl(this.context.resourceBasePath, sessionKey),
+      routeUrl: buildControlUiResourcePath(
+        "workspaceIcon",
+        this.context.resourceBasePath,
+        sessionKey,
+      ),
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };

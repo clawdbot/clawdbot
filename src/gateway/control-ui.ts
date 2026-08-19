@@ -45,9 +45,14 @@ import { buildAssistantMediaContentDisposition } from "./assistant-media-content
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
+  buildControlUiResourcePath,
+  buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+  isControlUiRootPublicAsset,
+  parseControlUiResourcePath,
   type ControlUiBootstrapConfig,
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
@@ -62,11 +67,7 @@ import {
   isControlUiApprovalDocumentPath,
   isControlUiFocusDocumentPath,
 } from "./control-ui-routing.js";
-import {
-  buildControlUiAvatarUrl,
-  CONTROL_UI_AVATAR_PREFIX,
-  normalizeControlUiBasePath,
-} from "./control-ui-shared.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
   isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
@@ -117,15 +118,6 @@ export type ControlUiRootState =
   | { kind: "missing" };
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
-const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
-  "apple-touch-icon.png",
-  "favicon-32.png",
-  "favicon.ico",
-  "favicon.svg",
-  "manifest.webmanifest",
-  "sw.js",
-]);
-
 /** Anchors bundled assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
@@ -133,7 +125,7 @@ function rewriteControlUiIndexHtmlAssetHrefs(html: string, basePath: string): st
     .replaceAll('src="./assets/', `src="${normalized}/assets/`)
     .replaceAll('href="./assets/', `href="${normalized}/assets/`);
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-    const assetHref = `href="${normalized}/${asset}"`;
+    const assetHref = `href="${buildControlUiRootAssetPath(normalized, asset)}"`;
     // Vite's portable ./ base emits relative hrefs, which the browser starts
     // resolving against a nested route before the UI can correct them.
     next = next.replaceAll(`href="./${asset}"`, assetHref);
@@ -583,17 +575,14 @@ export async function handleControlUiAvatarRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts.basePath);
   const pathname = url.pathname;
-  const pathWithBase = basePath
-    ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/`
-    : `${CONTROL_UI_AVATAR_PREFIX}/`;
-  if (!pathname.startsWith(pathWithBase)) {
+  const parsed = parseControlUiResourcePath("agentAvatar", pathname, basePath);
+  if (!parsed.matched) {
     return false;
   }
 
   applyControlUiSecurityHeaders(res);
-  const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
-  const agentId = agentIdParts[0] ?? "";
-  if (agentIdParts.length !== 1 || !agentId || !isValidAgentPathSegment(agentId)) {
+  const agentId = parsed.value;
+  if (!agentId || !isValidAgentPathSegment(agentId)) {
     respondControlUiNotFound(res);
     return true;
   }
@@ -620,7 +609,7 @@ export async function handleControlUiAvatarRequest(
       const meta = controlUiAvatarResolutionMeta(resolved);
       const avatarUrl =
         resolved?.kind === "local"
-          ? buildControlUiAvatarUrl(basePath, agentId)
+          ? buildControlUiResourcePath("agentAvatar", basePath, agentId)
           : resolved?.kind === "remote" || resolved?.kind === "data"
             ? resolved.url
             : null;
@@ -971,7 +960,7 @@ export async function handleControlUiHttpRequest(
     }
     if (uiPath.startsWith(CONTROL_UI_NAMESPACE_PREFIX)) {
       const namespacedRel = uiPath.slice(CONTROL_UI_NAMESPACE_PREFIX.length);
-      if (CONTROL_UI_ROOT_PUBLIC_ASSETS.has(namespacedRel)) {
+      if (isControlUiRootPublicAsset(namespacedRel)) {
         return namespacedRel;
       }
     }

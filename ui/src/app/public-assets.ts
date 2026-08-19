@@ -1,14 +1,14 @@
+import {
+  buildControlUiRootAssetPath,
+  isControlUiRootPublicAsset,
+  type ControlUiRootPublicAsset,
+} from "../../../src/gateway/control-ui-contract.js";
 // Control UI module implements public assets behavior.
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 
 type ControlUiPublicAsset =
-  | "apple-touch-icon.png"
-  | "favicon-32.png"
-  | "favicon.ico"
-  | "favicon.svg"
-  | "manifest.webmanifest"
-  | "sw.js"
+  | ControlUiRootPublicAsset
   | `provider-icons/ProviderIcon-${string}.svg`
   | `plugin-art/${string}.webp`
   | `app-art/${string}.webp`;
@@ -18,6 +18,9 @@ export function controlUiPublicAssetPath(
   resourceBasePath: string | null | undefined,
 ): string {
   const base = normalizeBasePath(resourceBasePath ?? "");
+  if (isControlUiRootPublicAsset(asset)) {
+    return buildControlUiRootAssetPath(base, asset);
+  }
   return base ? `${base}/${asset}` : `/${asset}`;
 }
 

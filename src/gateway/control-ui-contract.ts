@@ -1,27 +1,172 @@
 // Control UI bootstrap contract served by the gateway and consumed by the
 // browser app before it knows runtime branding, media roots, or embed policy.
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
+
+/** Root files emitted by the Control UI build and served under any configured mount. */
+export const CONTROL_UI_ROOT_PUBLIC_ASSETS = [
+  "apple-touch-icon.png",
+  "favicon-32.png",
+  "favicon.ico",
+  "favicon.svg",
+  "manifest.webmanifest",
+  "sw.js",
+] as const;
+export type ControlUiRootPublicAsset = (typeof CONTROL_UI_ROOT_PUBLIC_ASSETS)[number];
+
+export function isControlUiRootPublicAsset(value: string): value is ControlUiRootPublicAsset {
+  return CONTROL_UI_ROOT_PUBLIC_ASSETS.some((asset) => asset === value);
+}
+
+export function buildControlUiRootAssetPath(
+  basePath: string | null | undefined,
+  asset: ControlUiRootPublicAsset,
+): string {
+  return `${normalizeControlUiBasePath(basePath)}/${asset}`;
+}
 
 /** Fragment marker selecting the host-authorized browser-owner bootstrap profile. */
 export const CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM = "bootstrapProfile";
 export const CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT = "owner";
 export type ControlUiBootstrapProfileHint = typeof CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT;
 
-/** Authenticated same-origin prefix for plugin manifest/catalog icon bytes. */
-export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
+const CONTROL_UI_RESOURCE_ROUTES = {
+  agentAvatar: { prefix: "/avatar", suffix: "" },
+  catalogIcon: { prefix: "/__openclaw__/catalog-icon", suffix: "" },
+  channelAvatar: { prefix: "/__openclaw__/channel-avatar", suffix: "" },
+  linkFavicon: { prefix: "/__openclaw__/link-favicon", suffix: "" },
+  pluginIcon: { prefix: "/__openclaw__/plugin-icon", suffix: "" },
+  userAvatar: { prefix: "/api/users", suffix: "/avatar" },
+  workspaceIcon: { prefix: "/__openclaw__/workspace-icon", suffix: "" },
+} as const;
 
-/** Authenticated same-origin prefix for allowlisted catalog icon bytes. */
-export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
+export type ControlUiResourceRoute = keyof typeof CONTROL_UI_RESOURCE_ROUTES;
+type ControlUiResourcePathMatch = { matched: false } | { matched: true; value: string | null };
 
-/** Authenticated same-origin prefix for SSRF-guarded public-site favicons. */
-export const CONTROL_UI_LINK_FAVICON_PATH_PREFIX = "/__openclaw__/link-favicon";
+/** Builds one canonical, encoded Control UI resource path. */
+export function buildControlUiResourcePath(
+  route: ControlUiResourceRoute,
+  basePath: string | null | undefined,
+  value: string,
+): string {
+  const definition = CONTROL_UI_RESOURCE_ROUTES[route];
+  return `${normalizeControlUiBasePath(basePath)}${definition.prefix}/${encodeURIComponent(value)}${definition.suffix}`;
+}
 
-/** Authenticated same-origin prefix for a session workspace's own project icon. */
-export const CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX = "/__openclaw__/workspace-icon";
+/** Parses one exact encoded route segment while retaining malformed-route ownership. */
+export function parseControlUiResourcePath(
+  route: ControlUiResourceRoute,
+  pathname: string | null | undefined,
+  basePath?: string | null,
+): ControlUiResourcePathMatch {
+  if (!pathname) {
+    return { matched: false };
+  }
+  const definition = CONTROL_UI_RESOURCE_ROUTES[route];
+  const prefix = `${normalizeControlUiBasePath(basePath)}${definition.prefix}/`;
+  if (!pathname.startsWith(prefix)) {
+    return { matched: false };
+  }
+  const remainder = pathname.slice(prefix.length);
+  if (!remainder.endsWith(definition.suffix)) {
+    return { matched: true, value: null };
+  }
+  const encoded = definition.suffix ? remainder.slice(0, -definition.suffix.length) : remainder;
+  if (!encoded || encoded.includes("/")) {
+    return { matched: true, value: null };
+  }
+  try {
+    return { matched: true, value: decodeURIComponent(encoded) || null };
+  } catch {
+    return { matched: true, value: null };
+  }
+}
 
-/** Authenticated same-origin prefix for a channel conversation's stored image. */
-export const CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX = "/__openclaw__/channel-avatar";
+/** Matches one valid Control UI resource path and returns its decoded route value. */
+function matchControlUiResourcePath(
+  route: ControlUiResourceRoute,
+  pathname: string | null | undefined,
+  basePath?: string | null,
+): string | undefined {
+  const parsed = parseControlUiResourcePath(route, pathname, basePath);
+  return parsed.matched && parsed.value ? parsed.value : undefined;
+}
+
+export function buildControlUiUserAvatarPath(
+  profileId: string,
+  revision?: string | number,
+  basePath?: string | null,
+): string {
+  const path = buildControlUiResourcePath("userAvatar", basePath, profileId);
+  return revision === undefined ? path : `${path}?v=${encodeURIComponent(String(revision))}`;
+}
+
+/** Builds the authenticated conversation-avatar URL for a session. */
+export function buildControlUiChannelAvatarUrl(
+  basePath: string,
+  sessionKey: string,
+  revision: string,
+): string {
+  // The revision keys client-side blob/404 caches: a replaced or restored
+  // backing image must change the URL or mounted rows stay stale forever.
+  const path = buildControlUiResourcePath("channelAvatar", basePath, sessionKey);
+  return `${path}?v=${encodeURIComponent(revision)}`;
+}
+
+export function parseControlUiUserAvatarPath(
+  pathname: string,
+  basePath: string,
+): ControlUiResourcePathMatch {
+  const canonical = parseControlUiResourcePath("userAvatar", pathname);
+  if (canonical.matched) {
+    return canonical;
+  }
+  return normalizeControlUiBasePath(basePath)
+    ? parseControlUiResourcePath("userAvatar", pathname, basePath)
+    : canonical;
+}
+
+export function canonicalizeControlUiUserAvatarPath(
+  pathname: string,
+  basePath: string,
+): string | undefined {
+  const parsed = parseControlUiUserAvatarPath(pathname, basePath);
+  return !parsed.matched || !parsed.value
+    ? undefined
+    : buildControlUiResourcePath("userAvatar", "", parsed.value);
+}
+
+type ControlUiResourceUrlMatch = {
+  value: string;
+  search: string;
+  hash: string;
+};
+
+/** Matches an exact root-relative same-origin resource URL without parser reinterpretation. */
+export function matchControlUiResourceUrl(
+  route: ControlUiResourceRoute,
+  value: string,
+  basePath?: string | null,
+): ControlUiResourceUrlMatch | undefined {
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
+    return undefined;
+  }
+  try {
+    const origin = "http://openclaw.invalid";
+    const parsed = new URL(value, origin);
+    if (parsed.origin !== origin || `${parsed.pathname}${parsed.search}${parsed.hash}` !== value) {
+      return undefined;
+    }
+    const routeValue = matchControlUiResourcePath(route, parsed.pathname, basePath);
+    return routeValue === undefined
+      ? undefined
+      : { value: routeValue, search: parsed.search, hash: parsed.hash };
+  } catch {
+    return undefined;
+  }
+}
 
 /** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
 export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;

@@ -1,7 +1,7 @@
 // Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import { normalizeBasePath } from "../../app-route-paths.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import {
   resolveLocalUserAvatarText,
@@ -272,9 +272,7 @@ function shouldApplyChatAvatarResult(
 }
 
 function buildAvatarMetaUrl(resourceBasePath: string, agentId: string): string {
-  const base = normalizeBasePath(resourceBasePath);
-  const encoded = encodeURIComponent(agentId);
-  return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
+  return `${buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)}?meta=1`;
 }
 
 function clearChatAvatarUrl(host: ChatAvatarHost) {

@@ -3,6 +3,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
 
 const mocks = vi.hoisted(() => ({
@@ -99,7 +100,7 @@ describe("handleChannelAvatarHttpRequest", () => {
   });
 
   const avatarRoute = (sessionKey: string) =>
-    `http://127.0.0.1:${port}/__openclaw__/channel-avatar/${encodeURIComponent(sessionKey)}`;
+    `http://127.0.0.1:${port}${buildControlUiChannelAvatarUrl("", sessionKey, "test-revision")}`;
 
   it("serves managed conversation bytes with sandboxed image headers", async () => {
     const response = await fetch(avatarRoute("agent:main:discord:direct:user-1"));

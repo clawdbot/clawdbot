@@ -1,3 +1,7 @@
+import {
+  buildControlUiUserAvatarPath,
+  canonicalizeControlUiUserAvatarPath,
+} from "../../../src/gateway/control-ui-contract.js";
 import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
@@ -94,10 +98,6 @@ export function setAvatarGatewayOrigin(
   appGatewayAuthHeader = nextAuthHeader;
 }
 
-// Mirrors the server's user-profiles-http-path matcher. Sender metadata may
-// point only at this image route, never another gateway endpoint.
-const USER_AVATAR_PATHNAME = /^\/api\/users\/[^/]+\/avatar$/u;
-
 /**
  * Returns a browser-safe avatar URL, or null. Only the canonical
  * /api/users/<id>/avatar route is trusted (pathname pinned, fragment dropped).
@@ -110,12 +110,11 @@ function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string
   try {
     const parsed = new URL(value, ORIGIN_PROBE);
     const relativeRoute = parsed.origin === ORIGIN_PROBE;
-    const canonicalPathname = relativeRoute
-      ? parsed.pathname
-      : appGatewayResourceBasePath && parsed.pathname.startsWith(`${appGatewayResourceBasePath}/`)
-        ? parsed.pathname.slice(appGatewayResourceBasePath.length)
-        : parsed.pathname;
-    if (!USER_AVATAR_PATHNAME.test(canonicalPathname)) {
+    const canonicalPathname = canonicalizeControlUiUserAvatarPath(
+      parsed.pathname,
+      relativeRoute ? "" : appGatewayResourceBasePath,
+    );
+    if (!canonicalPathname) {
       return null;
     }
     const suffix = `${appGatewayResourceBasePath}${canonicalPathname}${parsed.search}`;
@@ -275,10 +274,7 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
   // canonical gateway avatar (upload → Gravatar proxy → 404-to-initials).
   const id = input.id?.trim();
   if (id && PROFILE_ID_RE.test(id)) {
-    const trusted = toTrustedAvatarUrl(
-      `/api/users/${encodeURIComponent(id)}/avatar`,
-      gatewayOrigin,
-    );
+    const trusted = toTrustedAvatarUrl(buildControlUiUserAvatarPath(id), gatewayOrigin);
     if (trusted) {
       return { kind: "profile", url: trusted };
     }
