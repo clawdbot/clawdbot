@@ -30,7 +30,7 @@ index a4ca427b95288e70c782ce303013cd644893dcec..ec249e1df2c6d26562e7202336506ce9
 +    if (this.isDisposed || A.isComposing || A.keyCode === 229)
        return;
 +    if (this.isComposing) {
-+      this.pendingKeyAfterComposition = A.key, A.preventDefault();
++      this.pendingKeyAfterComposition = A, A.preventDefault();
 +      return;
 +    }
 +    if (this.compositionJustEnded) {
@@ -98,7 +98,7 @@ index a4ca427b95288e70c782ce303013cd644893dcec..ec249e1df2c6d26562e7202336506ce9
 +  processPendingKeyAfterComposition() {
 +    if (this.pendingKeyAfterComposition) {
 +      const A = this.pendingKeyAfterComposition;
-+      this.pendingKeyAfterComposition = null, this.onDataCallback(A);
++      this.pendingKeyAfterComposition = null, this.handleKeyDown(A);
 +    }
    }
    /**
