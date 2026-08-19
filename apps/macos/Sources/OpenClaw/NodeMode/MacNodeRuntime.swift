@@ -197,6 +197,12 @@ actor MacNodeRuntime {
     /// One branch per advertised native command keeps command ownership explicit.
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
+        if command.hasPrefix("canvas."), !Self.canvasCommands.contains(command) {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: unknown command")
+        }
         if Self.canvasCommands.contains(command), !Self.canvasEnabled() {
             return BridgeInvokeResponse(
                 id: req.id,
