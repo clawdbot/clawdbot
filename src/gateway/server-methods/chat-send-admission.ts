@@ -11,6 +11,7 @@ import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main
 import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
@@ -396,6 +397,11 @@ export async function admitChatSend(params: {
     });
     return { ok: false as const };
   }
+  // Reserved here, while the request's root is provably live, rather than after the ACK: the
+  // detached dispatch must keep that root until terminal persistence settles or restart drain
+  // completes early and loses the session's terminal state. Callers outside a Gateway request
+  // envelope (internal chat entries) hold no root, so there is nothing to extend for them.
+  const releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? (() => {});
   if (params.onAdmissionOwned) {
     let proceed: boolean;
     try {
@@ -403,11 +409,13 @@ export async function admitChatSend(params: {
     } catch (error) {
       activeRunAbort.cleanup({ force: true });
       gatewayWorkAdmission.release();
+      releaseGatewayRootContinuation();
       throw error;
     }
     if (!proceed) {
       activeRunAbort.cleanup({ force: true });
       gatewayWorkAdmission.release();
+      releaseGatewayRootContinuation();
       return { ok: false as const };
     }
   }
@@ -445,7 +453,6 @@ export async function admitChatSend(params: {
       releaseGatewayWorkAdmission();
     };
   };
-  let releaseGatewayRootContinuation: (() => void) | undefined;
   // Prepared inbound media has no transcript reference until the user turn
   // persists; every abandonment exit funnels through cleanupAdmittedRun, so
   // the armed discard here is the single custody owner for that window. The
@@ -455,8 +462,7 @@ export async function admitChatSend(params: {
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
     activeRunAbort.cleanup(options);
     releaseInitialGatewayWorkAdmission();
-    releaseGatewayRootContinuation?.();
-    releaseGatewayRootContinuation = undefined;
+    releaseGatewayRootContinuation();
     discardAbandonedPreparedMedia?.();
     discardAbandonedPreparedMedia = undefined;
   };
@@ -501,9 +507,6 @@ export async function admitChatSend(params: {
       restartSafeAdmission,
       setDiscardAbandonedPreparedMedia: (discard: (() => void) | undefined) => {
         discardAbandonedPreparedMedia = discard;
-      },
-      setReleaseGatewayRootContinuation: (release: (() => void) | undefined) => {
-        releaseGatewayRootContinuation = release;
       },
     },
   };
