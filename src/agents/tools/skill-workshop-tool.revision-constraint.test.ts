@@ -99,11 +99,12 @@ describe("skill_workshop operator revision constraint", () => {
     await expect(
       foregroundTool.execute("inspect-current", { action: "inspect", proposal_id: reviewed.id }),
     ).resolves.toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining("Third draft") }],
       details: {
         id: reviewed.id,
         status: "pending",
         revisionHash: current.revisionHash,
-        proposalContent: expect.stringContaining("Third draft"),
+        inspect: { contentIncluded: true },
       },
     });
   });
