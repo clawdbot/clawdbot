@@ -454,7 +454,11 @@ export function createWorkerSessionToolExecutor(params: {
         agentSessionKey: operation.source.sessionKey,
         expectedTargetSessionId: operation.target.sessionId,
         handoffContext: {
-          inheritedToolPolicy: { version: 1, allow: authorizedTools, deny: [] },
+          inheritedToolPolicy: {
+            version: 1,
+            allow: authorizedTools,
+            deny: WORKER_TOOL_NAMES.filter((name) => !authorizedTools.includes(name)),
+          },
           requester: workerIdentity.sessionHandoffRequester,
         },
         idempotencyKey: operation.idempotencyKey,

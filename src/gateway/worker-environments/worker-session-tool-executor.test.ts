@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
@@ -872,11 +873,41 @@ describe("worker session tool topology", () => {
             inheritedToolPolicy: {
               version: 1,
               allow: ["sessions_spawn", "sessions_send"],
-              deny: [],
+              deny: WORKER_TOOL_NAMES.filter(
+                (name) => name !== "sessions_spawn" && name !== "sessions_send",
+              ),
             },
             requester: { messageProvider: "whatsapp", senderId: "guest" },
           },
           idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
+        }),
+      }),
+    );
+  });
+
+  it("preserves excluded worker tool names as session handoff denies", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    setEntry(TARGET.sessionKey, TARGET.sessionId, {
+      sessionKey: SOURCE.sessionKey,
+      sessionId: SOURCE.sessionId,
+    });
+    placements.authorizeWorkerTurnTools(sourceClaim, ["write", "sessions_send"]);
+
+    await expect(send("worker-source-deny")).resolves.toBeDefined();
+
+    expect(delivered).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          handoffContext: {
+            inheritedToolPolicy: {
+              version: 1,
+              allow: ["write", "sessions_send"],
+              deny: WORKER_TOOL_NAMES.filter(
+                (name) => name !== "write" && name !== "sessions_send",
+              ),
+            },
+            requester: { messageProvider: "whatsapp", senderId: "guest" },
+          },
         }),
       }),
     );
