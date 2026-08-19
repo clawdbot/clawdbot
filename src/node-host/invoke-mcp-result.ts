@@ -2,10 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { boundedJsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
-export const MCP_TEXT_CONTENT_MAX_BYTES = 1024 * 1024;
+const MCP_TEXT_CONTENT_MAX_BYTES = 1024 * 1024;
 const MCP_TEXT_TRUNCATION_MARKER = "\n[truncated: MCP text content exceeded 1 MB]";
 
-export const MCP_INVOKE_PAYLOAD_MAX_BYTES = 20 * 1024 * 1024;
+const MCP_INVOKE_PAYLOAD_MAX_BYTES = 20 * 1024 * 1024;
 const MCP_PAYLOAD_TRUNCATION_MARKER = "[truncated: MCP result exceeded 20 MB]";
 
 type McpInvokeContentBlock = Record<string, unknown>;
