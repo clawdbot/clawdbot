@@ -23,6 +23,7 @@ scenario:
     - src/mcp/channel-bridge.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
     summary: Starts the real MCP client before a delayed real Gateway becomes ready and captures retry, connect-frame, and negotiated-protocol evidence.
     args:

@@ -3,18 +3,23 @@
 // detail history tab.
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { CronRunLogEntry } from "../../api/types.ts";
-import type { CronDeliveryStatus, CronRunsStatusValue, CronSortDir } from "../../api/types.ts";
+import type {
+  CronRunLogEntry,
+  CronDeliveryStatus,
+  CronRunsStatusValue,
+  CronSortDir,
+} from "../../api/types.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
   formatDurationCompact,
   formatDurationHuman,
   formatRelativeTimestamp,
   formatMs,
-  formatTokens,
+  formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -170,6 +175,8 @@ export function renderRunsSection(props: CronRunsSectionProps) {
     .map((option) => option.label);
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
+  // The sort select's .value binding commits before its options exist;
+  // selected attributes preserve non-first values.
   return html`
     <div class="cron-runs">
       <div class="cron-run-filters">
@@ -227,8 +234,12 @@ export function renderRunsSection(props: CronRunsSectionProps) {
               cronRunsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
             })}
         >
-          <option value="desc">${t("cron.runs.newestFirst")}</option>
-          <option value="asc">${t("cron.runs.oldestFirst")}</option>
+          <option value="desc" ?selected=${props.runsSortDir === "desc"}>
+            ${t("cron.runs.newestFirst")}
+          </option>
+          <option value="asc" ?selected=${props.runsSortDir === "asc"}>
+            ${t("cron.runs.oldestFirst")}
+          </option>
         </select>
       </div>
       ${runs.length === 0
@@ -313,11 +324,12 @@ function renderRun(
   const usage = entry.usage;
   const usageSummary =
     usage && typeof usage.total_tokens === "number"
-      ? `${formatTokens(usage.total_tokens)} ${t("usage.metrics.tokens")}`
+      ? `${formatCompactTokenCount(usage.total_tokens)} ${t("usage.metrics.tokens")}`
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
-        ? `${formatTokens(usage.input_tokens)} in / ${formatTokens(usage.output_tokens)} out`
+        ? `${formatCompactTokenCount(usage.input_tokens)} in / ${formatCompactTokenCount(usage.output_tokens)} out`
         : null;
-  const bodySource = entry.summary || entry.error || t("cron.runEntry.noSummary");
+  const bodySource =
+    entry.summary || formatUiExternalText(entry.error) || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
   const facts = [delivery, entry.model, entry.provider, usageSummary].filter(Boolean);
   return html`
@@ -337,7 +349,7 @@ function renderRun(
             : nothing}
           <div class="muted">
             ${typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
-              ? (formatDurationCompact(entry.durationMs, { spaced: true }) ??
+              ? (formatDurationCompact(entry.durationMs) ??
                 formatDurationHuman(entry.durationMs, t("common.na")))
               : t("common.na")}
           </div>
@@ -362,8 +374,12 @@ function renderRun(
                 >
               </div>`
             : nothing}
-          ${showErrorInMeta ? html`<div class="muted">${entry.error}</div>` : nothing}
-          ${entry.deliveryError ? html`<div class="muted">${entry.deliveryError}</div>` : nothing}
+          ${showErrorInMeta
+            ? html`<div class="muted">${formatUiExternalText(entry.error)}</div>`
+            : nothing}
+          ${entry.deliveryError
+            ? html`<div class="muted">${formatUiExternalText(entry.deliveryError)}</div>`
+            : nothing}
         </div>
       </div>
       <div class="cron-run-entry__body chat-text">

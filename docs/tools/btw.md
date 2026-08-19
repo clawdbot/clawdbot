@@ -11,7 +11,7 @@ session** without adding it to conversation history. It is modeled after
 Claude Code's `/btw`, adapted to OpenClaw's Gateway and multi-channel
 architecture.
 
-The two side-question contracts are deliberately separate. BTW is a one-shot question on the session's actual model, preserving harness behavior and Codex thread-fork continuity for channel ingress (WhatsApp, Telegram, and Discord), the TUI, and embedded `tui --local`; the TUI stays on BTW by design. The companion is a persistent, read-only RPC thread for Control UI-class clients. Channels cannot use the companion because they do not have an RPC connection.
+The two side-question contracts are deliberately separate. BTW is a one-shot question on the session's actual model, preserving harness behavior and Codex thread-fork continuity for channel ingress (WhatsApp, Telegram, and Discord), the TUI, and embedded `tui --local`; the TUI stays on BTW by design. The companion is a persistent, read-only RPC thread for Control UI-class clients. Its first question lazily prepares bounded visible context from the selected session; a temporary history failure remains retryable and does not run as an empty session. Channels cannot use the companion because they do not have an RPC connection.
 
 ```text
 /btw what changed?
@@ -61,11 +61,11 @@ session companion RPCs and renders their bounded exchange state in the rail.
 
 ## Surface behavior
 
-| Surface           | Behavior                                                                                                                                                                                                        |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                       |
-| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                     |
-| Control UI / web  | Routes `/btw` and `/side` to the expanded session rail companion. The read-only thread is keyed by session, rehydrates from Gateway memory, and can be cleared with the trash button. `Esc` collapses the rail. |
+| Surface           | Behavior                                                                                                                                                                                                                                                  |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                                 |
+| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                               |
+| Control UI / web  | Routes `/btw` and `/side` to the expanded session rail companion. The read-only thread is keyed by session, rehydrates from Gateway memory, and preserves a failed question for Retry. It can be cleared with the trash button. `Esc` collapses the rail. |
 
 ## Selection popup (Control UI)
 

@@ -533,7 +533,7 @@ vi.mock("../channels/config-presence.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  getActiveMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
+  getActiveMemorySearchManagerCore: vi.fn(async ({ agentId }: { agentId: string }) => ({
     manager: {
       probeVectorAvailability: vi.fn(async () => true),
       status: () => ({
@@ -566,10 +566,10 @@ vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: mocks.resolveMainSessionKey,
 }));
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: (opts?: { storePath?: string }) =>
+  listSessionEntriesCore: (opts?: { storePath?: string }) =>
     Object.entries(mocks.loadSessionStore(opts?.storePath)).map(([sessionKey, entry]) => ({
       sessionKey,
       entry,
@@ -753,6 +753,7 @@ vi.mock("../daemon/node-service.js", () => ({
 }));
 vi.mock("../node-host/config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
+  loadNodeHostConfigReadOnly: mocks.loadNodeHostConfig,
 }));
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,

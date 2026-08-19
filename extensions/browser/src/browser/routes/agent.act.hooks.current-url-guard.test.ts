@@ -36,25 +36,33 @@ vi.mock("../pw-ai-module.js", () => ({
 
 const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js");
 
-function createProfileContext() {
+function createProfileContext(options?: {
+  attachOnly?: boolean;
+  driver?: "openclaw" | "extension";
+  tabUrl?: string;
+}) {
   return {
     profile: {
+      attachOnly: options?.attachOnly ?? false,
       cdpIsLoopback: true,
       cdpUrl: "http://127.0.0.1:9222",
-      driver: "openclaw" as const,
+      driver: options?.driver ?? ("openclaw" as const),
       name: "default",
     },
     ensureTabAvailable: vi.fn(async () => ({
       targetId: "tab-1",
       title: "Internal Admin",
-      url: "http://127.0.0.1:8080/admin",
+      url: options?.tabUrl ?? "http://127.0.0.1:8080/admin",
       type: "page",
     })),
     listTabs: vi.fn(async () => []),
   };
 }
 
-function createRouteContext(profileCtx: ReturnType<typeof createProfileContext>) {
+function createRouteContext(
+  profileCtx: ReturnType<typeof createProfileContext>,
+  options?: { allowPrivateNetwork?: boolean },
+) {
   return {
     forProfile: () => profileCtx,
     mapTabError: vi.fn(toBrowserErrorResponse),
@@ -62,7 +70,9 @@ function createRouteContext(profileCtx: ReturnType<typeof createProfileContext>)
       resolved: {
         actionTimeoutMs: 60_000,
         extraArgs: [],
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: options?.allowPrivateNetwork === true,
+        },
       },
     }),
   };
@@ -72,9 +82,15 @@ async function callHook(params: {
   path: "/hooks/file-chooser" | "/hooks/dialog";
   body: Record<string, unknown>;
   profileCtx: ReturnType<typeof createProfileContext>;
+  allowPrivateNetwork?: boolean;
 }) {
   const { app, postHandlers } = createBrowserRouteApp();
-  registerBrowserAgentActHookRoutes(app, createRouteContext(params.profileCtx) as never);
+  registerBrowserAgentActHookRoutes(
+    app,
+    createRouteContext(params.profileCtx, {
+      allowPrivateNetwork: params.allowPrivateNetwork,
+    }) as never,
+  );
   const handler = postHandlers.get(params.path);
   expect(handler).toBeTypeOf("function");
 
@@ -144,4 +160,52 @@ describe("agent act hook current URL guard", () => {
       }
     },
   );
+
+  it("keeps file chooser path handoff local for extension-backed profiles", async () => {
+    const profileCtx = createProfileContext({
+      driver: "extension",
+      tabUrl: "http://127.0.0.1:8080/upload",
+    });
+
+    const response = await callHook({
+      path: "/hooks/file-chooser",
+      body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
+      profileCtx,
+      allowPrivateNetwork: true,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browserFilesystemLocal: true,
+        ref: "upload-button",
+        paths: ["/tmp/upload.txt"],
+      }),
+    );
+  });
+
+  it("sends loopback attach-only uploads as payloads for a separate browser filesystem", async () => {
+    const profileCtx = createProfileContext({
+      attachOnly: true,
+      tabUrl: "http://127.0.0.1:8080/upload",
+    });
+
+    const response = await callHook({
+      path: "/hooks/file-chooser",
+      body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
+      profileCtx,
+      allowPrivateNetwork: true,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browserFilesystemLocal: false,
+        ref: "upload-button",
+        paths: ["/tmp/upload.txt"],
+      }),
+    );
+  });
 });

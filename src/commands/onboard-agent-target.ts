@@ -2,8 +2,9 @@
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  resolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
@@ -11,9 +12,11 @@ import {
 } from "../config/model-input.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { shortenHomePath } from "../utils.js";
 import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 
 export type OnboardingAgentTarget = {
@@ -26,12 +29,19 @@ export function resolveOnboardingAgentTarget(
   config: OpenClawConfig,
   explicitAgentId?: string,
 ): OnboardingAgentTarget {
-  const agentId = normalizeAgentId(explicitAgentId ?? resolveDefaultAgentId(config));
+  const agentId = normalizeAgentId(
+    explicitAgentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveSoleAgentId(config),
+  );
   return {
     agentId,
     agentDir: resolveAgentDir(config, agentId),
     workspaceDir: resolveAgentWorkspaceDir(config, agentId),
   };
+}
+
+/** Resolve the configured System Agent as the owner of onboarding effects. */
+export function resolveSystemAgentOnboardingTarget(config: OpenClawConfig): OnboardingAgentTarget {
+  return resolveOnboardingAgentTarget(config, config.agents?.defaults?.systemAgent?.agentId);
 }
 
 export async function ensureOnboardingAgentWorkspace(
@@ -42,10 +52,17 @@ export async function ensureOnboardingAgentWorkspace(
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   },
 ): Promise<{ bootstrapPending: boolean }> {
-  return ensureWorkspaceAndSessions(target.workspaceDir, runtime, {
-    ...options,
-    agentId: target.agentId,
-  });
+  try {
+    return await ensureWorkspaceAndSessions(target.workspaceDir, runtime, {
+      ...options,
+      agentId: target.agentId,
+    });
+  } catch (error) {
+    throw new Error(
+      `Workspace provisioning for agent "${target.agentId}" at ${shortenHomePath(target.workspaceDir)} failed: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 export function applyOnboardingPrimaryModel(
@@ -53,7 +70,10 @@ export function applyOnboardingPrimaryModel(
   target: OnboardingAgentTarget,
   model: string,
 ): OpenClawConfig {
-  const entry = config.agents?.entries?.[target.agentId];
+  const authoredEntryKey = Object.keys(config.agents?.entries ?? {}).find(
+    (key) => normalizeAgentId(key) === target.agentId,
+  );
+  const entry = authoredEntryKey ? config.agents?.entries?.[authoredEntryKey] : undefined;
   if (entry?.model === undefined) {
     return applyPrimaryModel(config, model);
   }
@@ -69,7 +89,7 @@ export function applyOnboardingPrimaryModel(
       ...config.agents,
       entries: {
         ...config.agents?.entries,
-        [target.agentId]: {
+        [authoredEntryKey ?? target.agentId]: {
           ...entry,
           model: {
             ...(fallbackValues.length > 0 ? { fallbacks: fallbackValues } : {}),

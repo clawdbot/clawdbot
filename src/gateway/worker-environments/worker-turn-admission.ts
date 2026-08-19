@@ -20,6 +20,33 @@ type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "act
 const PREVIOUS_RESULT_RECONCILING_MESSAGE =
   "The previous cloud turn's workspace result is still reconciling; it retries automatically — try again shortly.";
 
+export async function rejectPendingWorkerResult(params: {
+  placements: WorkerSessionPlacementStore;
+  sessionId: string;
+  signal?: AbortSignal;
+}): Promise<never> {
+  try {
+    await params.placements.waitForTurnClaimRelease(params.sessionId, {
+      timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+  } catch (error) {
+    if (params.signal?.aborted) {
+      throw error;
+    }
+    throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE, { cause: error });
+  }
+  throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE);
+}
+const CURRENT_WORKER_BUILD_REMEDIATION =
+  "redispatch the session so its worker can bootstrap the current build before retrying.";
+
+function withCurrentWorkerBuildRemediation(reason: string): string {
+  return reason.endsWith(CURRENT_WORKER_BUILD_REMEDIATION)
+    ? reason
+    : `${reason}; ${CURRENT_WORKER_BUILD_REMEDIATION}`;
+}
+
 function required(value: string | undefined, field: string): string {
   const normalized = value?.trim();
   if (!normalized) {
@@ -105,21 +132,28 @@ export function resolvePlacementIdentity(
 export function requireActivePlacement(
   placement: WorkerSessionPlacementRecord,
 ): ActiveWorkerPlacement {
+  const failureDetail =
+    placement.state === "failed"
+      ? `: ${withCurrentWorkerBuildRemediation(placement.terminalReason ?? placement.recoveryError)}`
+      : "";
   if (
     placement.state !== "active" ||
     !placement.remoteWorkspaceDir ||
     !placement.workerBundleHash
   ) {
-    throw new Error(`Worker turn rejected in placement ${placement.state}`);
+    throw new Error(`Worker turn rejected in placement ${placement.state}${failureDetail}`);
   }
   return placement;
 }
 
-export function releaseClaimIfOwned(
+export async function releaseClaimIfOwned(
   placements: WorkerSessionPlacementStore,
   turnClaim: WorkerSessionTurnClaim,
-): void {
+): Promise<void> {
   if (placements.validateTurnClaim(turnClaim)) {
+    if (turnClaim.owner.kind === "worker") {
+      await placements.closeWorkerTurnToolState(turnClaim);
+    }
     placements.releaseTurn(turnClaim);
   }
 }

@@ -3,16 +3,17 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { GatewayClient, type GatewayClientOptions } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { createDeferred } from "../src/test-utils/deferred.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
+import { createDeferred } from "./helpers/promise.js";
 
 type FirstResponseKind = "final" | "sequential-tools" | "tool";
 type ModelRequest = { body: Record<string, unknown> };
@@ -44,6 +45,7 @@ type SteeringToolsFixture = {
   releasePath: string;
   tracePath: string;
 };
+type SteeringGateMode = "preflight" | "execute";
 
 const TEST_TIMEOUT_MS = 180_000;
 const WAIT_OPTS = { timeout: 30_000, interval: 20 } as const;
@@ -306,10 +308,32 @@ async function startMockModelServer(): Promise<MockModelServer> {
   };
 }
 
-async function writeSteeringToolsPlugin(fixtureDir: string): Promise<SteeringToolsFixture> {
+async function writeSteeringToolsPlugin(
+  fixtureDir: string,
+  gateMode: SteeringGateMode,
+): Promise<SteeringToolsFixture> {
   const pluginDir = path.join(fixtureDir, "steering-tools-plugin");
   const releasePath = path.join(fixtureDir, "steering-gate.release");
   const tracePath = path.join(fixtureDir, "steering-tools.trace");
+  const preflightLines =
+    gateMode === "preflight"
+      ? [
+          '    api.on("before_tool_call", async (event) => {',
+          `      if (event.toolName !== ${JSON.stringify(STEERING_GATE_TOOL)}) return;`,
+          `      await appendFile(${JSON.stringify(tracePath)}, "preflight-start\\n", "utf8");`,
+          "      await waitForRelease();",
+          `      await appendFile(${JSON.stringify(tracePath)}, "preflight-end\\n", "utf8");`,
+          "    });",
+        ]
+      : [];
+  const gateExecutionLines =
+    gateMode === "execute"
+      ? [
+          `        await appendFile(${JSON.stringify(tracePath)}, "gate-execute-start\\n", "utf8");`,
+          "        await waitForRelease();",
+          `        await appendFile(${JSON.stringify(tracePath)}, "gate-execute-end\\n", "utf8");`,
+        ]
+      : [`        await appendFile(${JSON.stringify(tracePath)}, "gate-executed\\n", "utf8");`];
   await mkdir(pluginDir, { recursive: true });
   await Promise.all([
     writeFile(
@@ -344,12 +368,7 @@ async function writeSteeringToolsPlugin(fixtureDir: string): Promise<SteeringToo
         "export default {",
         `  id: ${JSON.stringify(STEERING_PLUGIN_ID)},`,
         "  register(api) {",
-        '    api.on("before_tool_call", async (event) => {',
-        `      if (event.toolName !== ${JSON.stringify(STEERING_GATE_TOOL)}) return;`,
-        `      await appendFile(${JSON.stringify(tracePath)}, "preflight-start\\n", "utf8");`,
-        "      await waitForRelease();",
-        `      await appendFile(${JSON.stringify(tracePath)}, "preflight-end\\n", "utf8");`,
-        "    });",
+        ...preflightLines,
         "    api.registerTool({",
         `      name: ${JSON.stringify(STEERING_GATE_TOOL)},`,
         '      label: "Steering Gate",',
@@ -357,7 +376,7 @@ async function writeSteeringToolsPlugin(fixtureDir: string): Promise<SteeringToo
         '      parameters: { type: "object", properties: {}, additionalProperties: false },',
         '      executionMode: "sequential",',
         "      async execute() {",
-        `        await appendFile(${JSON.stringify(tracePath)}, "gate-executed\\n", "utf8");`,
+        ...gateExecutionLines,
         '        return { content: [{ type: "text", text: "steering gate completed" }], details: {} };',
         "      },",
         "    });",
@@ -467,6 +486,12 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
     mode: GATEWAY_CLIENT_MODES.UI,
     role: "operator",
     scopes: ["operator.admin", "operator.read", "operator.write"],
+    caps: [
+      GATEWAY_CLIENT_CAPS.AGENT_KIND,
+      GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
+      GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+    ],
     platform: process.platform,
     requestTimeoutMs: 30_000,
     onHelloOk: resolveHello,
@@ -482,12 +507,12 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
 
 async function createGatewayFixture(
   name: string,
-  options: { withSteeringTools?: boolean } = {},
+  options: { withSteeringTools?: boolean; steeringGateMode?: SteeringGateMode } = {},
 ): Promise<GatewayFixture> {
   const fixtureDir = await mkdtemp(path.join(tmpdir(), `openclaw-${name}-`));
   cleanupDirs.push(fixtureDir);
   const steeringTools = options.withSteeringTools
-    ? await writeSteeringToolsPlugin(fixtureDir)
+    ? await writeSteeringToolsPlugin(fixtureDir, options.steeringGateMode ?? "preflight")
     : undefined;
   const modelServer = await startMockModelServer();
   modelServers.push(modelServer);
@@ -839,6 +864,95 @@ describe("Gateway steer FIFO", () => {
       ]);
       expect(fixture.modelServer.requests).toHaveLength(2);
       expect(fixture.chatErrors).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "finishes a running tool, skips its sequential tail, and injects a UI steer once",
+    async () => {
+      const fixture = await createGatewayFixture("steer-running-tool-tail", {
+        withSteeringTools: true,
+        steeringGateMode: "execute",
+      });
+      const steeringTools = fixture.steeringTools;
+      if (!steeringTools) {
+        throw new Error("steering tool fixture was not configured");
+      }
+      const first = await sendHeldTurn(fixture);
+      const steerMarker = "STEER_DURING_RUNNING_TOOL";
+
+      try {
+        fixture.modelServer.releaseFirst("sequential-tools");
+        await vi.waitFor(async () => {
+          expect(await readTrace(steeringTools.tracePath)).toEqual(["gate-execute-start"]);
+          expect(fixture.modelServer.requests).toHaveLength(1);
+        }, WAIT_OPTS);
+        const steerRunId = `run-${steerMarker.toLowerCase()}`;
+        const steerResult = await fixture.diagnosticsClient.request<{
+          runId?: string;
+          status?: string;
+        }>("chat.send", {
+          sessionKey: fixture.sessionKey,
+          message: steerMarker,
+          deliver: false,
+          queueMode: "steer",
+          idempotencyKey: steerRunId,
+        });
+        expect(steerResult).toMatchObject({ runId: steerRunId, status: "started" });
+        expect(fixture.modelServer.requests).toHaveLength(1);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(fixture.chatFinalRunIds).not.toContain(steerRunId);
+      } finally {
+        await writeFile(steeringTools.releasePath, "release\n", "utf8");
+      }
+
+      await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
+      await waitForRunTerminal(fixture, first.runId);
+      await vi.waitFor(
+        async () =>
+          expect(await readTrace(steeringTools.tracePath)).toEqual([
+            "gate-execute-start",
+            "gate-execute-end",
+          ]),
+        WAIT_OPTS,
+      );
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      const nextRequest = fixture.modelServer.requests[1];
+      const inputItems = responseInputItems(nextRequest);
+      const gateOutputIndex = inputItems.findIndex(
+        (item) => item.type === "function_call_output" && item.call_id === "call_steering_gate",
+      );
+      const tailOutputIndex = inputItems.findIndex(
+        (item) => item.type === "function_call_output" && item.call_id === "call_steering_tail",
+      );
+      const steerIndex = inputItems.findIndex(
+        (item) => item.role === "user" && contentText(item.content).includes(steerMarker),
+      );
+
+      expect(gateOutputIndex).toBeGreaterThanOrEqual(0);
+      expect(tailOutputIndex).toBeGreaterThan(gateOutputIndex);
+      expect(steerIndex).toBeGreaterThan(tailOutputIndex);
+      expect(contentText(inputItems[gateOutputIndex]?.output)).toContain("steering gate completed");
+      expect(contentText(inputItems[gateOutputIndex]?.output)).not.toContain(
+        "Skipped due to queued user message.",
+      );
+      expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
+        "Skipped due to queued user message.",
+      );
+      expect(
+        fixture.modelServer.requests
+          .flatMap((request) => userInputs(request))
+          .filter((input) => input.includes(steerMarker)),
+      ).toHaveLength(1);
+      expect(fixture.modelServer.requests).toHaveLength(2);
+      expect(fixture.chatErrors).toEqual([]);
+      expect(redactedFixtureLogs(fixture.instance)).not.toContain("active run changed");
     },
     TEST_TIMEOUT_MS,
   );

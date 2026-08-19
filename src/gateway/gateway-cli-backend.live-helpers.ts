@@ -15,11 +15,8 @@ import {
   publicKeyRawBase64UrlFromPem,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -317,7 +314,7 @@ export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: stri
   return next;
 }
 
-export async function getFreeGatewayPort(): Promise<number> {
+export async function getCliBackendPortBlock(): Promise<number> {
   return await getFreePortBlockWithPermissionFallback({
     offsets: [0, 1, 2, 4],
     fallbackBase: 40_000,

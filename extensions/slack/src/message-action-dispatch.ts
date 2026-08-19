@@ -31,6 +31,12 @@ type SlackActionInvoke = (
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
 
+function readSlackForceDocument(params: Record<string, unknown>): boolean {
+  return (
+    readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false
+  );
+}
+
 function resolveSlackPresentationText(
   content: string | undefined,
   presentation: ReturnType<typeof normalizeMessagePresentation>,
@@ -131,6 +137,7 @@ export async function handleSlackMessageAction(params: {
         to,
         content: content ?? "",
         mediaUrl: mediaUrl ?? undefined,
+        ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
         ...(topLevel ? { topLevel: true } : {}),
@@ -351,10 +358,15 @@ export async function handleSlackMessageAction(params: {
         initialComment:
           readStringParam(actionParams, "initialComment", { allowEmpty: true }) ??
           readStringParam(actionParams, "message", { allowEmpty: true }) ??
+          // `media` is accepted as an alias for the file, so a send-shaped call
+          // arrives with its text in `caption`; without this alias that text is
+          // silently dropped instead of becoming the upload's first comment.
+          readStringParam(actionParams, "caption", { allowEmpty: true }) ??
           "",
         filename: readStringParam(actionParams, "filename"),
         title: readStringParam(actionParams, "title"),
         threadTs: threadId ?? undefined,
+        ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         ...(topLevel ? { topLevel: true } : {}),
         accountId,
       },

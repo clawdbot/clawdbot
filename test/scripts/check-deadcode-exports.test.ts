@@ -11,7 +11,7 @@ import {
   checkUnusedExports,
   parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
-} from "../../scripts/check-deadcode-exports.mjs";
+} from "../../scripts/check-deadcode-exports.mts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
@@ -46,7 +46,7 @@ function listQaScenarioExecutionPaths(dir = "qa/scenarios"): string[] {
 describe("check-deadcode-exports", () => {
   it("requests every unused-export issue class from Knip", () => {
     const script = fs.readFileSync(
-      new URL("../../scripts/check-deadcode-exports.mjs", import.meta.url),
+      new URL("../../scripts/check-deadcode-exports.mts", import.meta.url),
       "utf8",
     );
     expect(script).toContain('"exports,nsExports,types,nsTypes,enumMembers,namespaceMembers"');
@@ -121,7 +121,6 @@ describe("check-deadcode-exports", () => {
       expect.arrayContaining([
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-        ".github/actions/register-bind-mount-cleanup/main.cjs!",
         "apps/android/scripts/build-release-artifacts.ts!",
         "security/opengrep/check-rule-metadata.mjs!",
         "skills/meme-maker/scripts/meme.mjs!",
@@ -221,7 +220,7 @@ describe("check-deadcode-exports", () => {
   it("models non-imported runtime and build entrypoints explicitly", () => {
     expect(knipConfig.workspaces["."].entry).toEqual(
       expect.arrayContaining([
-        "src/agents/subagent-registry.runtime.ts!",
+        "src/agents/subagents/registry/subagent-registry.runtime.ts!",
         "src/mcp/plugin-tools-serve.ts!",
         "src/plugins/build-smoke-entry.ts!",
         "src/config/doc-baseline.ts!",
@@ -256,7 +255,6 @@ describe("check-deadcode-exports", () => {
         "browser-control-auth.ts!",
         "browser-config.ts!",
         "browser-doctor.ts!",
-        "browser-host-inspection.ts!",
         "browser-maintenance.ts!",
         "browser-profiles.ts!",
       ]),
@@ -346,11 +344,11 @@ src/noise.ts: src/noise.ts
   it("keeps findings from dot-directories and root entry files", () => {
     expect(
       parseKnipCompactUnusedExports(`Unused exports (2)
-.agents/skills/example/scripts/check.mjs: checkExample
+.agents/skills/example/scripts/check.mts: checkExample
 tsdown.ai.config.ts: default
 `),
     ).toEqual([
-      ".agents/skills/example/scripts/check.mjs: checkExample",
+      ".agents/skills/example/scripts/check.mts: checkExample",
       "tsdown.ai.config.ts: default",
     ]);
   });

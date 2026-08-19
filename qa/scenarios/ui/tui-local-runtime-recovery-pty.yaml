@@ -19,6 +19,7 @@ scenario:
   codeRefs: [src/tui/tui-pty-local.e2e.test.ts]
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
     timeoutMs: 720000
     args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]

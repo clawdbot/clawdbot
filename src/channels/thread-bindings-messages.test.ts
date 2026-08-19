@@ -6,6 +6,29 @@ import {
 } from "./thread-bindings-messages.js";
 
 describe("thread-binding names", () => {
+  it("includes lifecycle details in intro text", () => {
+    const intro = resolveThreadBindingIntroText({
+      agentId: "main",
+      label: "worker",
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 48 * 60 * 60 * 1000,
+    });
+
+    expect(intro).toContain("idle auto-unfocus after 24h inactivity");
+    expect(intro).toContain("max age 48h");
+  });
+
+  it("places the working directory before session details", () => {
+    const intro = resolveThreadBindingIntroText({
+      agentId: "codex",
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      sessionCwd: "/home/bob/clawd",
+      sessionDetails: ["session ids: pending (available after the first reply)"],
+    });
+
+    expect(intro).toContain("\ncwd: /home/bob/clawd\nsession ids: pending");
+  });
+
   it("does not split surrogate pairs at native name limits", () => {
     const threadName = resolveThreadBindingThreadName({
       label: `${"x".repeat(96)}🚀tail`,

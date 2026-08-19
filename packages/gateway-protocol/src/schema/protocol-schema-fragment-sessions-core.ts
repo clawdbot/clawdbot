@@ -2,6 +2,7 @@ import * as sessionsCatalog from "./sessions-catalog.js";
 import * as sessions from "./sessions.js";
 
 export const SessionCoreProtocolSchemas = {
+  SessionPermissionMode: sessions.SessionPermissionModeSchema,
   SessionsListParams: sessions.SessionsListParamsSchema,
   SessionCatalogCapabilities: sessionsCatalog.SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptor: sessionsCatalog.SessionCatalogDescriptorSchema,
@@ -18,6 +19,8 @@ export const SessionCoreProtocolSchemas = {
   SessionsCatalogContinueResult: sessionsCatalog.SessionsCatalogContinueResultSchema,
   SessionsCatalogArchiveParams: sessionsCatalog.SessionsCatalogArchiveParamsSchema,
   SessionsCatalogArchiveResult: sessionsCatalog.SessionsCatalogArchiveResultSchema,
+  SessionsCatalogStartTerminalParams: sessionsCatalog.SessionsCatalogStartTerminalParamsSchema,
+  SessionsCatalogStartTerminalResult: sessionsCatalog.SessionsCatalogStartTerminalResultSchema,
   SessionsCleanupParams: sessions.SessionsCleanupParamsSchema,
   SessionsPreviewParams: sessions.SessionsPreviewParamsSchema,
   SessionsDescribeParams: sessions.SessionsDescribeParamsSchema,
@@ -28,6 +31,7 @@ export const SessionCoreProtocolSchemas = {
   SessionCompactionCheckpoint: sessions.SessionCompactionCheckpointSchema,
   SessionOperationEvent: sessions.SessionOperationEventSchema,
   SessionCreatedActor: sessions.SessionCreatedActorSchema,
+  SessionOwner: sessions.SessionOwnerSchema,
   SessionObserverHealth: sessions.SessionObserverHealthSchema,
   SessionObserverPlanProgress: sessions.SessionObserverPlanProgressSchema,
   SessionObserverDigest: sessions.SessionObserverDigestSchema,

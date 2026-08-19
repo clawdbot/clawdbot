@@ -1,11 +1,19 @@
 import os from "node:os";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { decodeNodePtyResumeParams, runNodePtyCommand } from "./pty-command.js";
+
+const { nodePtySpawn } = vi.hoisted(() => ({ nodePtySpawn: vi.fn() }));
+
+vi.mock("@lydell/node-pty", () => ({ spawn: nodePtySpawn }));
 
 type TerminalPtyHandle = Awaited<ReturnType<NonNullable<Parameters<typeof runNodePtyCommand>[2]>>>;
 
 describe("node PTY command", () => {
+  afterEach(() => {
+    nodePtySpawn.mockReset();
+  });
+
   it("validates closed resume params", () => {
     const validate = (value: unknown) => {
       if (typeof value !== "string" || !value) {
@@ -143,4 +151,64 @@ describe("node PTY command", () => {
     expect(pty.write).not.toHaveBeenCalled();
     expect(pty.resize).not.toHaveBeenCalled();
   });
+
+  it.runIf(process.platform === "win32")(
+    "uses a configured COMSPEC override for Windows batch commands",
+    async () => {
+      const previousComSpec = process.env.ComSpec;
+      const ambientComSpec = "C:\\Windows\\System32\\ambient-cmd.exe";
+      const configuredComSpec = "C:\\Windows\\System32\\configured-cmd.exe";
+      process.env.ComSpec = ambientComSpec;
+      try {
+        nodePtySpawn.mockReturnValueOnce({
+          pid: 42,
+          write: vi.fn(),
+          resize: vi.fn(),
+          pause: vi.fn(),
+          resume: vi.fn(),
+          kill: vi.fn(),
+          onData: vi.fn(),
+          onExit: (callback: (event: { exitCode: number }) => void) => {
+            queueMicrotask(() => callback({ exitCode: 0 }));
+          },
+        });
+        const io: OpenClawPluginNodeHostCommandIo = {
+          signal: new AbortController().signal,
+          emitChunk: vi.fn(async () => {}),
+          onInput: vi.fn(),
+        };
+
+        await expect(
+          runNodePtyCommand(
+            {
+              file: "C:\\tools\\catalog-command.cmd",
+              args: ["resume", "thread title"],
+              env: { COMSPEC: configuredComSpec },
+              cols: 80,
+              rows: 24,
+            },
+            io,
+          ),
+        ).resolves.toEqual({ exitCode: 0 });
+
+        expect(nodePtySpawn).toHaveBeenCalledWith(
+          configuredComSpec,
+          ["/d", "/s", "/c", 'C:\\tools\\catalog-command.cmd resume "thread title"'],
+          expect.objectContaining({
+            env: expect.objectContaining({ COMSPEC: configuredComSpec }),
+          }),
+        );
+        const spawnedEnv = nodePtySpawn.mock.calls[0]?.[2]?.env as Record<string, string>;
+        expect(Object.keys(spawnedEnv).filter((key) => key.toUpperCase() === "COMSPEC")).toEqual([
+          "COMSPEC",
+        ]);
+      } finally {
+        if (previousComSpec === undefined) {
+          delete process.env.ComSpec;
+        } else {
+          process.env.ComSpec = previousComSpec;
+        }
+      }
+    },
+  );
 });

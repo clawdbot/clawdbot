@@ -3,6 +3,10 @@
  * runtime rows so parent sessions can observe child progress.
  */
 import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import {
+  normalizeOptionalString,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
@@ -101,13 +105,13 @@ export class CodexNativeSubagentTaskMirror {
     }
     const threadId = thread.id.trim();
     const label =
-      trimOptional(spawn.agent_nickname) ??
-      trimOptional(thread.agentNickname) ??
-      trimOptional(spawn.agent_role) ??
-      trimOptional(thread.agentRole) ??
+      normalizeOptionalString(spawn.agent_nickname) ??
+      normalizeOptionalString(thread.agentNickname) ??
+      normalizeOptionalString(spawn.agent_role) ??
+      normalizeOptionalString(thread.agentRole) ??
       "Codex subagent";
     const task =
-      trimOptional(thread.preview) ??
+      normalizeOptionalString(thread.preview) ??
       `Codex native subagent${label === "Codex subagent" ? "" : ` ${label}`}`;
     const createdAt = secondsToMillis(thread.createdAt) ?? this.now();
     if (
@@ -257,13 +261,16 @@ export class CodexNativeSubagentTaskMirror {
     ) {
       return;
     }
-    const threadId = trimOptional(readString(item, "agentThreadId"));
+    const threadId = normalizeOptionalString(readString(item, "agentThreadId"));
     const kind = normalizeSubagentActivityKind(readString(item, "kind"));
     if (!threadId || !kind) {
       return;
     }
     if (kind === "started") {
-      this.createTaskFromSubagentActivity(threadId, trimOptional(readString(item, "agentPath")));
+      this.createTaskFromSubagentActivity(
+        threadId,
+        normalizeOptionalString(readString(item, "agentPath")),
+      );
       return;
     }
     if (this.mirrorStateByThreadId.get(threadId) !== "mirrored") {
@@ -292,7 +299,7 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   private createTaskFromCollabSpawnItem(threadId: string, item: JsonObject): void {
-    const prompt = trimOptional(readString(item, "prompt"));
+    const prompt = normalizeOptionalString(readString(item, "prompt"));
     const createdAt = this.now();
     this.createRunningTask({
       threadId,
@@ -365,7 +372,7 @@ export class CodexNativeSubagentTaskMirror {
         runId,
         lastEventAt: eventAt,
         progressSummary:
-          trimOptional(message) ??
+          normalizeOptionalString(message) ??
           (normalizedStatus === "pendingInit"
             ? "Codex native subagent is initializing."
             : normalizedStatus === "interrupted"
@@ -376,7 +383,7 @@ export class CodexNativeSubagentTaskMirror {
     }
     if (normalizedStatus === "completed") {
       this.terminalRunIds.add(runId);
-      const summary = trimOptional(message) ?? "Codex native subagent completed.";
+      const summary = normalizeOptionalString(message) ?? "Codex native subagent completed.";
       if (this.expectedAuthoritativeRunIds.has(runId)) {
         this.runtime.recordTaskRunProgressByRunId({
           runId,
@@ -404,8 +411,8 @@ export class CodexNativeSubagentTaskMirror {
         status: "succeeded",
         endedAt: eventAt,
         lastEventAt: eventAt,
-        progressSummary: trimOptional(message) ?? "Codex native subagent blocked.",
-        terminalSummary: trimOptional(message) ?? "Codex native subagent blocked.",
+        progressSummary: normalizeOptionalString(message) ?? "Codex native subagent blocked.",
+        terminalSummary: normalizeOptionalString(message) ?? "Codex native subagent blocked.",
         terminalOutcome: "blocked",
       });
       return;
@@ -416,9 +423,12 @@ export class CodexNativeSubagentTaskMirror {
       status: normalizedStatus === "shutdown" ? "cancelled" : "failed",
       endedAt: eventAt,
       lastEventAt: eventAt,
-      error: trimOptional(message) ?? `Codex native subagent status: ${normalizedStatus}`,
-      progressSummary: trimOptional(message) ?? `Codex native subagent ${normalizedStatus}.`,
-      terminalSummary: trimOptional(message) ?? "Codex native subagent did not complete.",
+      error:
+        normalizeOptionalString(message) ?? `Codex native subagent status: ${normalizedStatus}`,
+      progressSummary:
+        normalizeOptionalString(message) ?? `Codex native subagent ${normalizedStatus}.`,
+      terminalSummary:
+        normalizeOptionalString(message) ?? "Codex native subagent did not complete.",
     });
   }
 }
@@ -502,11 +512,6 @@ function readStringArray(value: JsonValue | undefined): string[] {
   return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
 }
 
-function readString(value: JsonObject, key: string): string | undefined {
-  const entry = value[key];
-  return typeof entry === "string" ? entry : undefined;
-}
-
 function readNullableString(value: JsonObject, key: string): string | null | undefined {
   const entry = value[key];
   return typeof entry === "string" || entry === null ? entry : undefined;
@@ -583,9 +588,4 @@ function secondsToMillis(value: number | null | undefined): number | undefined {
     return undefined;
   }
   return value * 1000;
-}
-
-function trimOptional(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }

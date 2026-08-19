@@ -154,6 +154,31 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
 });
 
 describe("createNativeApprovalChannelRouteGates", () => {
+  it("reports each eligible account as a raw candidate for unbound session routes", () => {
+    const cfg = {
+      approvals: { exec: { enabled: true, mode: "session" } },
+    } satisfies OpenClawConfig;
+    const request = {
+      ...matrixExecRequest,
+      request: { ...matrixExecRequest.request, turnSourceAccountId: undefined },
+    };
+
+    for (const accountId of ["default", "ops"]) {
+      expect(
+        createMatrixRouteGates({
+          accountIds: ["default", "ops"],
+          enabledAccounts: ["default", "ops"],
+        }).shouldHandleApprovalRequest({ cfg, accountId, request }),
+      ).toBe(true);
+    }
+    expect(
+      createMatrixRouteGates({
+        accountIds: ["default", "ops"],
+        enabledAccounts: ["ops"],
+      }).shouldHandleApprovalRequest({ cfg, accountId: "ops", request }),
+    ).toBe(true);
+  });
+
   it("separates session-native and explicit target routing by approval family", () => {
     const gates = createMatrixRouteGates();
     const cfg = {
@@ -249,7 +274,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
     ).toBe(false);
   });
 
-  it("uses default and single-enabled account fallback for unscoped targets", () => {
+  it("maps unscoped targets only to the default account", () => {
     const cfg = {
       approvals: {
         exec: {
@@ -285,7 +310,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
         request: matrixExecRequest,
         target,
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       createMatrixRouteGates({

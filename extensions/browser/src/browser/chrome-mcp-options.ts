@@ -12,11 +12,6 @@ import {
   type NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 
-function normalizeChromeMcpUserDataDir(userDataDir?: string): string | undefined {
-  const trimmed = userDataDir?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function normalizeChromeMcpStringList(values?: string[]): string[] {
   return Array.isArray(values)
     ? values.filter(
@@ -35,7 +30,7 @@ export function normalizeChromeMcpOptions(
   const command = normalizeOptionalString(options.mcpCommand) ?? DEFAULT_CHROME_MCP_COMMAND;
   return {
     command,
-    userDataDir: normalizeChromeMcpUserDataDir(options.userDataDir),
+    userDataDir: normalizeOptionalString(options.userDataDir),
     browserUrl: normalizeOptionalString(options.cdpUrl),
     extraArgs: normalizeChromeMcpStringList(options.mcpArgs),
   };

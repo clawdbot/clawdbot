@@ -5,7 +5,7 @@ import {
   formatFastModeAutoProgressText,
   resolveAgentRunAbortLifecycleFields,
   resolveFastModeForElapsed,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { reportCodexExecutionNotification } from "./attempt-notification-state.js";
 import {
@@ -73,9 +73,8 @@ export function createCodexAttemptLifecycleController(
     // Interrupt drops accepted pending input. Reject unconsumed steering first so
     // completion delivery can use its fallback path instead of reporting success.
     turnRuntime.steeringQueueRef.current?.cancel();
-    void turnRuntime
-      .interruptTurn(value.call.turnId, { locallyCompleted: true })
-      .then(turnRuntime.completeTurn);
+    void turnRuntime.interruptTurn(value.call.turnId, { locallyCompleted: true });
+    turnRuntime.completeTurn();
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {
     if (

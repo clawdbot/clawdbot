@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "../../scripts/check-docs-i18n-glossary.mjs";
+import { parseArgs } from "../../scripts/check-docs-i18n-glossary.mts";
 
 describe("check-docs-i18n-glossary", () => {
   it("parses explicit diff refs", () => {

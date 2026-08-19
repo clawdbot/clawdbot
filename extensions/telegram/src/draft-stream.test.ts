@@ -41,7 +41,7 @@ function createForumDraftStream(api: ReturnType<typeof createMockDraftApi>) {
 
 function createThreadedDraftStream(
   api: ReturnType<typeof createMockDraftApi>,
-  thread: { id: number; scope: "forum" | "dm" },
+  thread: { id: number; scope: "direct-messages" | "dm" | "forum" },
 ) {
   return createDraftStream(api, { thread });
 }
@@ -194,7 +194,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createDraftStream(api, { validateProviderMessage });
 
     stream.update("First preview");
-    await expect(stream.flush()).rejects.toBe(validationError);
+    await expect(stream.waitForInFlight()).rejects.toBe(validationError);
     stream.update("Second preview");
     await expect(stream.flush()).rejects.toBe(validationError);
 
@@ -277,7 +277,7 @@ describe("createTelegramDraftStream", () => {
     await vi.waitFor(() => expectPreviewSend(api, "Hello"));
   });
 
-  it("uses text send/edit for dm thread previews", async () => {
+  it("uses message_thread_id for bot-private topic previews", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
@@ -291,9 +291,28 @@ describe("createTelegramDraftStream", () => {
     expectPreviewEdit(api, "Hello again");
   });
 
-  it.each(["forum", "dm"] as const)(
-    "does not retry %s message preview sends without the topic id",
-    async (scope) => {
+  it("uses direct_messages_topic_id only for channel Direct Messages previews", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 77, scope: "direct-messages" });
+
+    stream.update("Hello");
+    await vi.waitFor(() => expectPreviewSend(api, "Hello", { direct_messages_topic_id: 77 }));
+    expect(api.editMessageText).not.toHaveBeenCalled();
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expectPreviewEdit(api, "Hello again");
+    expect(api.editMessageText.mock.calls[0]?.[3]).toBeUndefined();
+  });
+
+  it.each([
+    { scope: "forum" as const, expected: { message_thread_id: 42 } },
+    { scope: "dm" as const, expected: { message_thread_id: 42 } },
+    { scope: "direct-messages" as const, expected: { direct_messages_topic_id: 42 } },
+  ])(
+    "does not retry $scope message preview sends without the topic id",
+    async ({ scope, expected }) => {
       const api = createMockDraftApi();
       api.sendMessage.mockRejectedValueOnce(
         new Error("400: Bad Request: message thread not found"),
@@ -308,7 +327,7 @@ describe("createTelegramDraftStream", () => {
       await stream.flush();
 
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
-      expectPreviewSend(api, "Hello", { message_thread_id: 42 });
+      expectPreviewSend(api, "Hello", expected);
       expect(warn).toHaveBeenCalledWith(
         "telegram stream preview failed: 400: Bad Request: message thread not found",
       );
@@ -1301,6 +1320,34 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("falls back to plain preview text when an HTML edit renders empty", async () => {
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
+
+    stream.updatePreview({ text: "<b>Working</b>", parseMode: "HTML" });
+    await stream.flush();
+
+    api.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: message text is empty"))
+      .mockResolvedValueOnce(true);
+    stream.updatePreview({ text: "<b>Done &lt;&amp;&gt;</b>", parseMode: "HTML" });
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenNthCalledWith(1, 123, 17, "<b>Done &lt;&amp;&gt;</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "Done <&>");
+    expect(stream.currentMessageSnapshot?.()).toEqual({
+      text: "Done <&>",
+      sourceText: "Done &lt;&amp;&gt;",
+      sourceTextMode: "html",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview edit degrade=plain-fallback:empty-content: 400: Bad Request: message text is empty",
+    );
+  });
+
   it("uses rich send and edit for previews when explicitly enabled", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true });
@@ -1343,7 +1390,7 @@ describe("createTelegramDraftStream", () => {
     expect(plain).toContain("Rank");
     expect(plain).toContain("Claude Opus");
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
+      "telegram stream preview degrade=plain-fallback:rich-entity-invalid: 400: Bad Request: RICH_MESSAGE_URL_INVALID",
     );
   });
 
@@ -1528,7 +1575,7 @@ describe("createTelegramDraftStream", () => {
       // Plain-fallback parity: each page must carry the durable funnel's plainText
       // projection so an HTML-parse 400 degrades both funnels to identical text.
       expect([...retainedPageTexts, stream.currentMessageSnapshot?.()?.text]).toEqual(
-        expectedChunks.map((chunk) => chunk.text),
+        expectedChunks.map((chunk) => telegramHtmlToPlainTextFallback(chunk.html)),
       );
     },
   );

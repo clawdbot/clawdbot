@@ -47,7 +47,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "",
@@ -79,7 +79,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "",
@@ -110,7 +110,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "cp",
@@ -149,7 +149,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "mcp",
@@ -205,7 +205,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "infrastructure",
@@ -254,7 +254,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "agent defaults",
@@ -274,6 +274,42 @@ describe("settings sidebar search", () => {
     expect(result?.textContent?.trim()).toBe("Agent Defaults");
   });
 
+  it("excludes admin-only pages and config blocks from non-admin search", () => {
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "appearance",
+        offline: false,
+        lastError: null,
+        gatewayVersion: "",
+        updateAvailable: null,
+        updateBusy: false,
+        onUpdate: vi.fn(),
+        ...inactiveRefresh,
+        canAdmin: false,
+        searchQuery: "security",
+        searchBlockMatches: [
+          {
+            routeId: "security",
+            label: "Security policy",
+            hash: "#config-section-security",
+          },
+        ],
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector('a[href="/settings/security"]')).toBeNull();
+    expect(container.querySelector('a[href$="#config-section-security"]')).toBeNull();
+    expect(container.querySelector('a[href="/settings/approvals"]')).not.toBeNull();
+  });
+
   it("keeps Memory search results on the canonical Settings tab path", () => {
     const onNavigate = vi.fn();
     render(
@@ -286,7 +322,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "backend",
@@ -332,7 +368,7 @@ describe("settings sidebar search", () => {
           lastError: null,
           gatewayVersion: "",
           updateAvailable: null,
-          updateRunning: false,
+          updateBusy: false,
           onUpdate: vi.fn(),
           ...inactiveRefresh,
           searchQuery,
@@ -378,7 +414,14 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Talk", "Devices"]);
+    expect(labels()).toEqual([
+      "Gateway",
+      "Channels",
+      "Communications",
+      "Talk",
+      "Devices",
+      "Cloud workers",
+    ]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
@@ -415,7 +458,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "",
@@ -453,7 +496,7 @@ describe("settings sidebar search", () => {
           latestVersion: "2.0.0",
           channel: "stable",
         },
-        updateRunning: false,
+        updateBusy: false,
         canUpdate: true,
         onUpdate,
         refreshRequired: true,
@@ -504,7 +547,7 @@ describe("settings sidebar search", () => {
           lastError,
           gatewayVersion: "1.0.0",
           updateAvailable: null,
-          updateRunning: false,
+          updateBusy: false,
           onUpdate: vi.fn(),
           ...inactiveRefresh,
           searchQuery: "",

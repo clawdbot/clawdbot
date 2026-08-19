@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { runWithImageModelFallback } from "../../agents/model-fallback-image.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
@@ -40,6 +40,7 @@ import {
   providerHasGenericConfig,
   providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
 } from "./shared.js";
@@ -63,13 +64,15 @@ async function runImageGenerate(params: {
   file?: string[];
   output?: string;
   timeoutMs?: number;
+  agent?: string;
 }) {
   requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
+  const agentDir = resolveAgentDir(cfg, agentId);
   const inputImages =
     params.file && params.file.length > 0
       ? await Promise.all(
@@ -143,12 +146,14 @@ async function runImageDescribe(params: {
   model?: string;
   prompt?: string;
   timeoutMs?: number;
+  agent?: string;
 }) {
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, `infer ${params.capability}`);
+  const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(
@@ -301,6 +306,10 @@ function addImageGenerationOptions(command: Command): Command {
     .option("--quality <value>", "Quality hint: low, medium, high, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
+    .option(
+      "--agent <id>",
+      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false);
 }
 
@@ -321,6 +330,7 @@ function resolveImageGenerationOptions(opts: Record<string, unknown>) {
     quality: normalizeImageQuality(opts.quality as string | undefined),
     timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs as string | number | undefined),
     output: opts.output as string | undefined,
+    agent: typeof opts.agent === "string" ? opts.agent : undefined,
   };
 }
 
@@ -369,6 +379,10 @@ export function registerImageCapabilityCommands(capability: Command): void {
     .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
+    .option(
+      "--agent <id>",
+      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -378,6 +392,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+          agent: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -390,6 +405,10 @@ export function registerImageCapabilityCommands(capability: Command): void {
     .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
+    .option(
+      "--agent <id>",
+      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -399,6 +418,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+          agent: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -407,10 +427,12 @@ export function registerImageCapabilityCommands(capability: Command): void {
   image
     .command("providers")
     .description("List image generation providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
+        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
         const selectedProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
         );
@@ -418,7 +440,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
           available: true,
           configured:
             selectedProvider === provider.id ||
-            providerHasGenericConfig({ cfg, providerId: provider.id }),
+            providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
           selected: selectedProvider === provider.id,
           id: provider.id,
           label: provider.label,

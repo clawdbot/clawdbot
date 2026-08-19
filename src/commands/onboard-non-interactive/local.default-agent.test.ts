@@ -173,8 +173,32 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
     );
+    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ firstAgent: { name: "main" } }),
+    );
     expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(
       mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("passes an explicit first-agent name into the single creation step", async () => {
+    await runNonInteractiveLocalSetup({
+      opts: {
+        nonInteractive: true,
+        mode: "local",
+        agentName: "robby",
+        authChoice: "skip",
+        skipHooks: true,
+        skipSkills: true,
+        skipHealth: true,
+      },
+      runtime,
+      baseConfig: {},
+    });
+
+    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
+    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ firstAgent: { name: "robby" } }),
     );
   });
 
@@ -200,6 +224,28 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.ensureOnboardingAgent).not.toHaveBeenCalled();
     expect(mocks.commitConfig).not.toHaveBeenCalled();
     expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
+  });
+
+  it("does not publish config when the existing agent workspace cannot be provisioned", async () => {
+    mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));
+
+    await expect(
+      runNonInteractiveLocalSetup({
+        opts: {
+          nonInteractive: true,
+          mode: "local",
+          authChoice: "skip",
+          skipHooks: true,
+          skipSkills: true,
+          skipHealth: true,
+        },
+        runtime,
+        baseConfig: { agents: { entries: { ops: { default: true } } } },
+      }),
+    ).rejects.toThrow("workspace is unwritable");
+
+    expect(mocks.commitConfig).not.toHaveBeenCalled();
+    expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
   });
 
   it("provisions and reports the keyed default agent while preserving the global workspace", async () => {

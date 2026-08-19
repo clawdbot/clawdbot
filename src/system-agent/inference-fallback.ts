@@ -1,5 +1,6 @@
 // Provider-neutral live inference ladder for OpenClaw sessions.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,7 +8,6 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
-  resolveSystemAgentTargetAgentId,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import { verifySetupInference, type BoundVerifySetupInferenceResult } from "./setup-inference.js";
@@ -142,8 +142,8 @@ export async function verifySystemAgentInferenceWithFallback(params: {
   return (
     lastFailure ?? {
       ok: false,
-      status: "unavailable",
-      error: "No configured authenticated inference provider is available.",
+      status: "unknown",
+      error: "OpenClaw could not verify a usable inference route. Check model setup and try again.",
     }
   );
 }

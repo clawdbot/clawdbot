@@ -3,6 +3,7 @@
  * Sanitizes background task completion events into protected runtime-context
  * blocks or plain prompt text.
  */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,
@@ -10,6 +11,7 @@ import {
 } from "./generated-attachments.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+  hasGeneratedMediaCompletionEvent,
   type AgentInternalEventSource,
   type AgentInternalEventStatus,
 } from "./internal-event-contract.js";
@@ -38,8 +40,60 @@ type AgentTaskCompletionInternalEvent = {
 
 type TaskCompletionPromptMode = "plain" | "protected";
 
+const MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS = 6_000;
+const TASK_COMPLETION_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
+
 /** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
+
+/** Collect ordered media descriptors and per-reference trust from internal events. */
+export function collectAgentInternalEventMedia(events: AgentInternalEvent[] | undefined): {
+  mediaUrls: string[];
+  attachments: NonNullable<AgentInternalEvent["attachments"]>;
+  trustByUrl: Map<string, boolean>;
+} {
+  if (!events?.length) {
+    return { mediaUrls: [], attachments: [], trustByUrl: new Map() };
+  }
+  const mediaUrls: string[] = [];
+  const attachments: NonNullable<AgentInternalEvent["attachments"]> = [];
+  const indexByUrl = new Map<string, number>();
+  const trustByUrl = new Map<string, boolean>();
+  for (const event of events) {
+    const generatedMediaEvent = hasGeneratedMediaCompletionEvent([event]);
+    const attachmentByUrl = new Map(
+      (event.attachments ?? []).flatMap((attachment) => {
+        const reference = normalizeOptionalString(
+          attachment.path ?? attachment.url ?? attachment.mediaUrl ?? attachment.filePath,
+        );
+        return reference ? [[reference, attachment] as const] : [];
+      }),
+    );
+    for (const mediaUrl of [
+      ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
+      ...mediaUrlsFromGeneratedAttachments(event.attachments),
+    ]) {
+      const normalized = normalizeOptionalString(mediaUrl);
+      if (!normalized) {
+        continue;
+      }
+      const metadata = attachmentByUrl.get(normalized);
+      const existingIndex = indexByUrl.get(normalized);
+      if (existingIndex !== undefined) {
+        trustByUrl.set(normalized, trustByUrl.get(normalized) === true || generatedMediaEvent);
+        if (metadata && Object.keys(attachments[existingIndex] ?? {}).length === 0) {
+          attachments[existingIndex] = metadata;
+        }
+        continue;
+      }
+      indexByUrl.set(normalized, mediaUrls.length);
+      trustByUrl.set(normalized, generatedMediaEvent);
+      mediaUrls.push(normalized);
+      attachments.push(metadata ?? {});
+    }
+  }
+  return { mediaUrls, attachments, trustByUrl };
+}
 
 function sanitizeSingleLineField(value: string, fallback: string): string {
   const sanitized = escapeInternalRuntimeContextDelimiters(value)
@@ -64,10 +118,14 @@ function sanitizeMediaDirectiveValue(value: string): string | null {
 }
 
 function formatChildResultDataBlock(value: string): string {
+  // The event retains the authoritative full result; only model-visible
+  // projections share this escaped-output budget.
   return (
     wrapPromptDataBlock({
       label: "Child result",
       text: value,
+      maxEscapedChars: MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS,
+      truncationMarker: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }

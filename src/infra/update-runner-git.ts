@@ -40,7 +40,7 @@ import type {
   UpdateStepResult,
 } from "./update-runner-types.js";
 
-export async function runGitUpdate(params: {
+export async function updateGitCheckout(params: {
   opts: UpdateRunnerOptions;
   gitRoot: string;
   runCommand: CommandRunner;
@@ -68,9 +68,10 @@ export async function runGitUpdate(params: {
   const beforeSha = beforeShaResult.stdout.trim() || null;
   const beforeVersion = await readPackageVersion(gitRoot);
   const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
-  const hasDevTargetRef = channel === "dev" && Boolean(opts.devTargetRef?.trim());
-  const needsCheckoutMain = channel === "dev" && !hasDevTargetRef && branch !== DEV_BRANCH;
-  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+  const devTarget = channel === "dev" ? opts.devTarget : undefined;
+  const hasDevTarget = devTarget !== undefined;
+  const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
+  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
   let stepIndex = 0;
   const step = (
@@ -95,12 +96,10 @@ export async function runGitUpdate(params: {
   let allowGatewayActivation = opts.allowGatewayActivation === true;
   let mutationPrepared = false;
   let createdDevBranchDuringUpdate = false;
+  let devPreflight: Awaited<ReturnType<typeof runGitDevPreflight>> | undefined;
   let liveBuildStarted = false;
   let recovery: UpdateRunResult["recovery"];
   const prepareMutation = async (revision: string) => {
-    if (mutationPrepared) {
-      return;
-    }
     const preparation = await prepareGitMutation({
       runCommand,
       root: gitRoot,
@@ -108,12 +107,8 @@ export async function runGitUpdate(params: {
       timeoutMs,
       beforeGitMutation: opts.beforeGitMutation,
     });
-    if (typeof preparation.allowGatewayServiceRepair === "boolean") {
-      allowGatewayServiceRepair = preparation.allowGatewayServiceRepair;
-    }
-    if (typeof preparation.allowGatewayActivation === "boolean") {
-      allowGatewayActivation = preparation.allowGatewayActivation;
-    }
+    allowGatewayServiceRepair = preparation.allowGatewayServiceRepair ?? allowGatewayServiceRepair;
+    allowGatewayActivation = preparation.allowGatewayActivation ?? allowGatewayActivation;
     mutationPrepared = true;
   };
   const buildError = (reason: string, status: "error" | "skipped" = "error"): UpdateRunResult => ({
@@ -283,9 +278,9 @@ export async function runGitUpdate(params: {
     if (fetchFailure) {
       return fetchFailure;
     }
-    const preflight = await runGitDevPreflight({
+    devPreflight = await runGitDevPreflight({
       gitRoot,
-      devTargetRef: opts.devTargetRef,
+      devTarget,
       needsCheckoutMain,
       runCommand,
       timeoutMs,
@@ -293,11 +288,12 @@ export async function runGitUpdate(params: {
       steps,
       step,
     });
+    const preflight = devPreflight;
     if (preflight.status !== "ok") {
       return buildError(preflight.reason, preflight.status);
     }
     await prepareMutation(preflight.selectedSha);
-    if (hasDevTargetRef) {
+    if (hasDevTarget) {
       const failure = await runRequiredStep(
         `git checkout ${preflight.selectedSha}`,
         ["git", "-C", gitRoot, "checkout", "--detach", preflight.selectedSha],
@@ -553,6 +549,13 @@ export async function runGitUpdate(params: {
     const afterShaStep = await runStep(
       step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );
+    if (
+      devTarget?.mode === "tracked" &&
+      devPreflight?.status === "ok" &&
+      afterShaStep.stdoutTail?.trim() !== devPreflight.selectedSha
+    ) {
+      return await rollbackError("target-sha-mismatch");
+    }
     return {
       status: failedStep ? "error" : "ok",
       mode: "git",
@@ -562,6 +565,9 @@ export async function runGitUpdate(params: {
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,
         version: await readPackageVersion(gitRoot),
+        ...(!failedStep && devTarget?.mode === "tracked"
+          ? { upstreamRef: devTarget.upstreamRef }
+          : {}),
       },
       steps,
       durationMs: Date.now() - startedAt,

@@ -67,6 +67,34 @@ export function terminalEligibility(
   };
 }
 
+export async function startClaudeCatalogTerminal(params: {
+  cwd: string;
+  initialMessage?: string;
+  nodeId?: string;
+}): Promise<SessionCatalogTerminalPlan> {
+  if (params.nodeId) {
+    throw new ClaudeCatalogParamsError(
+      "Paired-node Claude terminal start is unavailable; omit hostId to start on the gateway host",
+    );
+  }
+  const resolution = resolveClaudeTerminalExecutable();
+  if (!resolution) {
+    throw new ClaudeCatalogParamsError(
+      "Claude CLI is unavailable; install Claude Code or add claude to PATH, then restart the gateway",
+    );
+  }
+  return {
+    kind: "local",
+    argv: [
+      resolution.executable,
+      ...(params.initialMessage !== undefined ? ["--", params.initialMessage] : []),
+    ],
+    cwd: params.cwd,
+    ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
+    title: "claude",
+  };
+}
+
 export async function openClaudeCatalogTerminal(
   params: {
     api: OpenClawPluginApi;

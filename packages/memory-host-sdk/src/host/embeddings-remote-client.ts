@@ -2,9 +2,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
+import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
 
 // Builds authenticated remote embedding HTTP clients from agent memory config.
 

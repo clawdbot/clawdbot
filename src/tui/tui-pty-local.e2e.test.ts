@@ -4,21 +4,25 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, type TestFunction } from "vitest";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { runExec } from "../process/exec.js";
-import { createDeferred } from "../test-utils/deferred.js";
+import { sleep } from "../utils/sleep.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
+import { startGatewayRpcDelayProxy } from "./tui-gateway-delay-proxy-test-support.js";
+import { buildTuiLastSessionScopeKey, writeTuiLastSessionKey } from "./tui-last-session.js";
 import {
   synchronizedFrameRows,
   waitForSynchronizedFrameRows,
@@ -32,7 +36,7 @@ import {
   registerIdempotentCleanup,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
-import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
+import { startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 type MockModelServer = {
   baseUrl: string;
@@ -899,7 +903,11 @@ async function startGatewayModeTui(
     timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
     read: () => {
       const screen = synchronizedFrameRows(run.output(), run)[0]?.join("\n") ?? "";
-      return screen.includes(sessionAcknowledgement) && screen.includes("| idle") ? true : null;
+      return screen.includes(sessionAcknowledgement) &&
+        screen.includes(scenario.modelId) &&
+        screen.includes("| idle")
+        ? true
+        : null;
     },
     onTimeout: () => new Error("adopted Gateway session did not reach an idle final screen"),
   });
@@ -931,8 +939,15 @@ async function startIsolatedGatewayPty(params: {
   sessionKey?: string;
   token?: string;
   clientStateDir?: string;
+  url?: string;
 }) {
-  const { gateway, registerCleanup, sessionKey, token = gateway.gatewayToken } = params;
+  const {
+    gateway,
+    registerCleanup,
+    sessionKey,
+    token = gateway.gatewayToken,
+    url = gateway.url,
+  } = params;
   const ownsClientStateDir = !params.clientStateDir;
   const tempDir =
     params.clientStateDir ??
@@ -940,7 +955,7 @@ async function startIsolatedGatewayPty(params: {
   let run: PtyRun;
   try {
     await writeFile(path.join(tempDir, "openclaw.json"), "{}\n", "utf8");
-    const cliArgs = ["tui", "--url", gateway.url, "--token", token];
+    const cliArgs = ["tui", "--url", url, "--token", token];
     if (sessionKey) {
       cliArgs.push("--session", sessionKey);
     }
@@ -979,6 +994,7 @@ async function startIsolatedGatewayPty(params: {
   registerCleanup(cleanup);
   return { run, cleanup };
 }
+
 type GatewayHistory = { messages: unknown[]; sessionInfo?: Record<string, unknown> };
 function findOrderedTurn(messages: unknown[], userText: string, assistantText: string, after = -1) {
   const exact = (message: unknown, role: "assistant" | "user", text: string) =>
@@ -1211,9 +1227,12 @@ describe("TUI PTY real backends", () => {
         const newOutput = fixture.run.visibleOutput().slice(newOffset);
         const createdKey = newOutput.match(/new session: (agent:main:tui-\S+)/)?.[1];
         expect(createdKey).toBeDefined();
-        const screen =
-          synchronizedFrameRows(fixture.run.output(), fixture.run)[0]?.join("\n") ?? "";
-        expect(screen).toContain(`session ${createdKey!.split(":").at(-1)}`);
+        const sessionLabel = `session ${createdKey!.split(":").at(-1)}`;
+        await waitForSynchronizedFrameRows(
+          fixture.run,
+          (rows) => rows.some((row) => row.includes(sessionLabel)),
+          LOCAL_OUTPUT_TIMEOUT_MS,
+        );
         const afterOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("T03_LIFECYCLE_AFTER\r");
         await waitForOutputAfter(fixture.run, reply, afterOffset);
@@ -1789,7 +1808,7 @@ export default {
     LOCAL_TEST_TIMEOUT_MS,
   );
   registerGatewayTest(
-    "restores the remembered Gateway session and history after a real TUI relaunch",
+    "gates input while a real Gateway restores the remembered session and history",
     async ({ onTestFinished }) => {
       const shared = await requireSharedGatewayFixture();
       const scenario = GATEWAY_SCENARIOS.resume;
@@ -1881,28 +1900,97 @@ export default {
       } finally {
         await first.cleanup();
       }
-      const resumed = await startIsolatedGatewayPty(ptyParams);
+      const proxy = await startGatewayRpcDelayProxy(shared.gateway.url, [
+        "sessions.list",
+        "chat.history",
+      ]);
+      const cleanupProxy = registerIdempotentCleanup(onTestFinished, proxy.stop);
+      await writeTuiLastSessionKey({
+        scopeKey: buildTuiLastSessionScopeKey({
+          connectionUrl: proxy.url,
+          agentId,
+          sessionScope: "per-sender",
+        }),
+        sessionKey,
+        stateDir: clientStateDir,
+      });
+      const resumed = await startIsolatedGatewayPty({ ...ptyParams, url: proxy.url });
       try {
+        await proxy.waitForRequest("sessions.list");
+        const outputOffset = resumed.run.visibleOutput().length;
+        await resumed.run.write(`${next[0]}\r`, { delay: false });
+        const decision = await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => {
+            const sends = proxy.requests.filter(
+              (request) => request.method === "chat.send" && request.params?.message === next[0],
+            );
+            const output = resumed.run.visibleOutput().slice(outputOffset);
+            return sends.length > 0 ||
+              output.includes("not connected to gateway — message not sent")
+              ? { sends, output }
+              : null;
+          },
+          onTimeout: () => new Error("startup followup was neither blocked nor sent"),
+        });
+        expect(decision.sends.map((request) => request.params)).toEqual([]);
+        expect(decision.output).toContain("not connected to gateway — message not sent");
+
+        proxy.release("sessions.list");
+        await proxy.waitForRequest("chat.history");
+        proxy.release("chat.history");
         await resumed.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
-        await waitForSynchronizedFrameRows(
+        const restoredFrame = await waitForSynchronizedFrameRows(
           resumed.run,
-          (rows) => restoredMarkers.every((marker) => rows.some((row) => row.includes(marker))),
+          (rows) =>
+            [...restoredMarkers, next[0]].every((marker) =>
+              rows.some((row) => row.includes(marker)),
+            ),
           LOCAL_OUTPUT_TIMEOUT_MS,
         );
-        await resumed.run.write(`${next[0]}\r`);
+        expect(restoredFrame.join("\n")).toContain(next[0]);
+        await resumed.run.write("\r", { delay: false });
         await resumed.run.waitForOutput(scenario.followupReplyText, LOCAL_OUTPUT_TIMEOUT_MS);
         await waitForCheckpoint(terminalUpdatedAt, [initial, next]);
+        const sends = proxy.requests.filter(
+          (request) => request.method === "chat.send" && request.params?.message === next[0],
+        );
+        expect(sends.map((request) => request.params?.sessionKey)).toEqual([sessionKey]);
+        const db = new DatabaseSync(
+          path.join(shared.gateway.stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+          { readOnly: true },
+        );
+        const sqliteRows = db
+          .prepare(
+            `SELECT node.session_key AS sessionKey, COUNT(*) AS eventCount
+             FROM session_nodes AS node
+             JOIN transcript_events AS event ON event.session_id = node.current_session_id
+             WHERE event.event_json LIKE ?
+             GROUP BY node.session_key
+             ORDER BY node.session_key`,
+          )
+          .all(`%${next[0]}%`);
+        db.close();
+        expect(sqliteRows).toEqual([{ sessionKey, eventCount: 1 }]);
         const requests = shared.mockModel.requests(scenario.modelId).slice(requestOffset);
         expect(requests).toHaveLength(2);
         const secondRequestBody = JSON.stringify(requests[1]?.body);
         expect(secondRequestBody).toContain(initial[0]);
         expect(secondRequestBody).toContain(scenario.replyText);
         expect(secondRequestBody).toContain(next[0]);
+        console.log(
+          `[behavior-evidence] tui-startup-session-gate ${JSON.stringify({
+            sentKey: sessionKey,
+            headerSession: sessionKey,
+            sqliteRows,
+          })}`,
+        );
         await resumed.run.write("/exit\r", { delay: false });
         expect((await resumed.run.waitForExit()).exitCode).toBe(0);
       } finally {
         await cleanup();
         await resumed.cleanup();
+        await cleanupProxy();
       }
     },
     LOCAL_TEST_TIMEOUT_MS,

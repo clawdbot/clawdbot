@@ -120,7 +120,7 @@ function ensureMemoryRuntime(params?: {
 }
 
 /** Returns the active plugin-backed memory search manager for an agent. */
-export async function getActiveMemorySearchManager(params: {
+export async function getActiveMemorySearchManagerCore(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: "default" | "status" | "cli";
@@ -165,7 +165,7 @@ export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; 
 }
 
 /** Closes all active plugin-backed memory search managers. */
-export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {
+export async function closeActiveMemorySearchManagersCore(cfg?: OpenClawConfig): Promise<void> {
   void cfg;
   await Promise.all(
     listCurrentMemoryRuntimeOwners().map((owner) =>
@@ -179,7 +179,7 @@ export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Pro
 }
 
 /** Closes the plugin-backed memory search manager for one agent. */
-export async function closeActiveMemorySearchManager(params: {
+export async function closeActiveMemorySearchManagerCore(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {

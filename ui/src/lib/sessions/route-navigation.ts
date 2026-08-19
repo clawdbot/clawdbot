@@ -1,9 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../board/settings.ts";
-import { normalizeOptionalString } from "../string-coerce.ts";
 import { catalogSessionSearch, parseCatalogSessionKey } from "./catalog-key.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -35,7 +35,9 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   row?: never;
   mainKey?: never;
   shortIdLength?: number;
+  exactKey?: boolean;
   preferenceDerivedFace?: boolean;
+  focusComposer?: boolean;
   navigationKey?: string;
 };
 
@@ -48,8 +50,10 @@ type ExplicitSessionNavigationTargetParams = {
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
   mainKey?: string | null;
   shortIdLength?: number;
+  exactKey?: boolean;
   agentId?: never;
   preferenceDerivedFace?: boolean;
+  focusComposer?: boolean;
   navigationKey?: string;
 };
 
@@ -115,6 +119,7 @@ function pathForNonCatalogSessionKey(params: {
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
   mainKey?: string | null;
   shortIdLength?: number;
+  exactKey?: boolean;
 }): string {
   const key = params.row?.key ?? params.sessionKey;
   const agentId =
@@ -125,6 +130,7 @@ function pathForNonCatalogSessionKey(params: {
   return (
     pathForSession(params.face, normalizeAgentId(agentId), key, params.basePath, {
       displayName: params.row?.displayName,
+      exactKey: params.exactKey,
       mainKey: params.mainKey,
       shortIdLength: params.shortIdLength,
     }) ?? pathForRoute(params.face, params.basePath)
@@ -166,6 +172,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
     fallbackAgentId,
     basePath,
     shortIdLength: params.shortIdLength,
+    exactKey: params.exactKey,
     ...(catalogKey ? { mainKey } : { row, mainKey }),
   });
   const search = catalogKey ? catalogSessionSearch(catalogKey) : undefined;
@@ -182,6 +189,9 @@ export function sessionNavigationTarget<TRouteId extends string>(
   const navigationParams = new URLSearchParams(search ?? "");
   if (params.preferenceDerivedFace && !row) {
     navigationParams.set(SESSION_FACE_PREFERENCE_PARAM, "1");
+  }
+  if (params.focusComposer) {
+    navigationParams.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
   const navigationKey = params.navigationKey?.trim() || row?.key;
   if (navigationKey && SESSION_KEY_UUID_SUFFIX_RE.test(navigationKey)) {

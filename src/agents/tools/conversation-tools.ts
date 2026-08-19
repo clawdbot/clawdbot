@@ -11,17 +11,20 @@ import {
   type ConversationTurnResult,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -60,11 +63,11 @@ type ConversationToolOptions = {
 };
 
 type ConversationToolDeps = {
-  callGateway: typeof callGateway;
+  callGateway: AgentToolGatewayRequestCaller;
 };
 
 const defaultDeps: ConversationToolDeps = {
-  callGateway,
+  callGateway: callAgentToolGatewayRequest,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
@@ -119,8 +122,8 @@ export function createConversationsListTool(
       requireOwner(options);
       const params = args as Record<string, unknown>;
       const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 50, 100);
-      const channel = readStringParam(params, "channel");
-      const query = readStringParam(params, "query");
+      const channel = readToolStringParam(params, "channel");
+      const query = readToolStringParam(params, "query");
       const result = await deps.callGateway<ConversationListResult>({
         method: "conversations.list",
         params: {
@@ -153,9 +156,9 @@ export function createConversationsSendTool(
       requireOwner(options);
       const params = args as Record<string, unknown>;
       const conversationRef = readConversationRef(
-        readStringParam(params, "conversationRef", { required: true }),
+        readToolStringParam(params, "conversationRef", { required: true }),
       );
-      const message = readStringParam(params, "message", { required: true });
+      const message = readToolStringParam(params, "message", { required: true });
       const operationId = buildConversationOperationId({
         options,
         toolCallId,
@@ -196,9 +199,9 @@ export function createConversationsTurnTool(
       requireOwner(options);
       const params = args as Record<string, unknown>;
       const conversationRef = readConversationRef(
-        readStringParam(params, "conversationRef", { required: true }),
+        readToolStringParam(params, "conversationRef", { required: true }),
       );
-      const message = readStringParam(params, "message", { required: true });
+      const message = readToolStringParam(params, "message", { required: true });
       const timeoutSeconds = readPositiveIntegerParam(params, "timeoutSeconds") ?? 30;
       const timeoutMs = timeoutSeconds * 1_000;
       const agentId = resolveToolAgentId(options);

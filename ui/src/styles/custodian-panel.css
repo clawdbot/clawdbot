@@ -2,7 +2,7 @@ openclaw-custodian-panel {
   position: fixed;
   z-index: 60;
   color: var(--text);
-  font-family: var(--font-sans);
+  font-family: var(--font-body);
 }
 
 .cp {
@@ -19,14 +19,12 @@ openclaw-custodian-panel {
   right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
   bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
   left: var(--shell-nav-width, 0);
-  border-top: 1px solid var(--border);
 }
 
 .cp--right {
   top: var(--shell-topbar-height, 0);
   right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
   bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
-  border-left: 1px solid var(--border);
 }
 
 .cp-resizer {
@@ -35,36 +33,56 @@ openclaw-custodian-panel {
   background: transparent;
 }
 
-.cp-resizer:hover {
-  background: var(--accent);
-  opacity: 0.5;
+.cp-resizer::after {
+  position: absolute;
+  content: "";
+  background: var(--rail-divider-color);
+  transition:
+    background 150ms ease-out,
+    width 150ms ease-out,
+    height 150ms ease-out;
 }
 
 .cp-resizer--bottom {
   top: 0;
   right: 0;
   left: 0;
-  height: 5px;
+  height: var(--rail-resizer-size);
   cursor: ns-resize;
+}
+
+.cp-resizer--bottom::after {
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: var(--rail-divider-size);
+  transform: translateY(-50%);
 }
 
 .cp-resizer--right {
   top: 0;
   bottom: 0;
   left: 0;
-  width: 5px;
+  width: var(--rail-resizer-size);
   cursor: ew-resize;
 }
 
-.cp-header {
-  display: flex;
-  min-height: 38px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 6px 0 8px;
-  border-bottom: 1px solid var(--border);
+.cp-resizer--right::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: var(--rail-divider-size);
+  transform: translateX(-50%);
+}
+
+.cp-resizer--bottom:hover::after {
+  height: var(--rail-divider-active-size);
+  background: var(--accent);
+}
+
+.cp-resizer--right:hover::after {
+  width: var(--rail-divider-active-size);
+  background: var(--accent);
 }
 
 .cp-title,
@@ -81,30 +99,11 @@ openclaw-custodian-panel {
 }
 
 .cp-actions {
-  gap: 2px;
+  gap: var(--rail-header-action-gap);
 }
 
 .cp-icon {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-}
-
-.cp-icon:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.cp-icon svg {
-  width: 15px;
-  height: 15px;
+  flex: 0 0 auto;
 }
 
 .cp > openclaw-custodian-surface {
@@ -128,7 +127,7 @@ openclaw-custodian-panel {
   margin-left: 42px;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .cp--right {
     top: var(--shell-topbar-height, 0);
     right: 0;

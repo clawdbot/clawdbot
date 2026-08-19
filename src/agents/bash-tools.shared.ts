@@ -231,7 +231,7 @@ function stripQuotes(value: string): string {
 }
 
 /** Right-pads a string for aligned plain-text process output. */
-export function pad(str: string, width: number) {
+export function padProcessStatus(str: string, width: number) {
   if (str.length >= width) {
     return str;
   }

@@ -7,7 +7,7 @@ import { createWebFetchTool } from "../src/agents/tools/web-fetch.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { LookupFn } from "../src/infra/net/ssrf.js";
 import { extractReadableContent } from "../src/web-fetch/content-extractors.runtime.js";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 
 type BenchmarkCaseId =
   | "tool-create"

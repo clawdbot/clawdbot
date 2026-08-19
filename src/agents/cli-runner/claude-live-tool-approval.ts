@@ -7,6 +7,11 @@ import {
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   truncatePluginApprovalDetail,
 } from "../../infra/plugin-approvals.js";
+import {
+  prepareSystemRunMutableFileBinding,
+  revalidateSystemRunMutableFileBinding,
+  type SystemRunMutableFileBinding,
+} from "../../infra/system-run-approval-binding.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { callGatewayTool } from "../tools/gateway.js";
 
@@ -14,7 +19,11 @@ type ClaudeNativeToolApprovalPlan = "allow" | "deny" | "prompt";
 type ClaudeNativeToolApprovalDecision = "allow-once" | "allow-always" | "deny";
 type ClaudeNativeToolApprovalOutcome =
   | { kind: "allow"; grantAlways: boolean }
-  | { kind: "deny"; reason: "policy-oversized" | "user" | "unavailable" };
+  | {
+      kind: "deny";
+      reason: "operand-binding" | "policy-oversized" | "user" | "unavailable";
+      message?: string;
+    };
 
 const CLAUDE_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS = 300;
 const CLAUDE_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS = 80;
@@ -147,6 +156,7 @@ export async function requestClaudeNativeToolApproval(params: {
   sessionKey?: string;
   agentId?: string;
   toolCallId?: string;
+  cwd?: string;
   abortSignal?: AbortSignal;
   ask: ExecAsk;
 }): Promise<ClaudeNativeToolApprovalOutcome> {
@@ -183,6 +193,24 @@ export async function requestClaudeNativeToolApproval(params: {
           Array.from(summarySanitization.text).length > PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH))
     ) {
       return { kind: "deny", reason: "policy-oversized" };
+    }
+    const bashCommand =
+      params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL &&
+      typeof params.toolInput.command === "string"
+        ? params.toolInput.command
+        : undefined;
+    let mutableFileBinding: SystemRunMutableFileBinding | undefined;
+    if (params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL) {
+      // Bind script bytes before the out-of-band approval wait. Text-identical
+      // Bash input can otherwise execute a rewritten file after approval.
+      const prepared = await prepareSystemRunMutableFileBinding({
+        command: { kind: "shell", text: bashCommand ?? "" },
+        cwd: params.cwd,
+      });
+      if (!prepared.ok) {
+        return { kind: "deny", reason: "operand-binding", message: prepared.message };
+      }
+      mutableFileBinding = prepared.binding.operands.length > 0 ? prepared.binding : undefined;
     }
     const allowedDecisions = resolveClaudeNativeToolAllowedDecisions({
       ask: params.ask,
@@ -231,6 +259,17 @@ export async function requestClaudeNativeToolApproval(params: {
     }
     if (params.abortSignal?.aborted) {
       return { kind: "deny", reason: "unavailable" };
+    }
+    if ((decision === "allow-once" || decision === "allow-always") && mutableFileBinding) {
+      // This control response is OpenClaw's last boundary before Claude owns
+      // spawn, so reject bytes that changed during the approval wait.
+      const binding = await revalidateSystemRunMutableFileBinding({
+        binding: mutableFileBinding,
+        cwd: params.cwd,
+      });
+      if (!binding.ok) {
+        return { kind: "deny", reason: "operand-binding", message: binding.message };
+      }
     }
     if (decision === "allow-once") {
       return { kind: "allow", grantAlways: false };

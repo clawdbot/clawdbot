@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
+// The picker's spec: every seeded surprise must come from this fixed rotation.
 const SURPRISE_CLASSES = [
   "chat-reading-indicator--southpaw",
   "chat-reading-indicator--flurry",
@@ -12,6 +13,10 @@ const SURPRISE_CLASSES = [
   "chat-reading-indicator--zen",
   "chat-reading-indicator--drummer",
   "chat-reading-indicator--peekaboo",
+  "chat-reading-indicator--nodoff",
+  "chat-reading-indicator--curious",
+  "chat-reading-indicator--omnom",
+  "chat-reading-indicator--fakeout",
 ] as const;
 
 // The keyed sample is deterministic for a fixed salt, so the rarity and spread
@@ -33,9 +38,9 @@ describe("selectWorkingClawSurprise", () => {
   it("keeps surprises rare, deterministic, and spread across every move", () => {
     const surprises = sampleDecisions.filter(Boolean);
 
-    // ~3% target: SURPRISE_CHANCE_PER_THOUSAND=30 over 10k keys lands near 300.
-    expect(surprises.length).toBeGreaterThan(200);
-    expect(surprises.length).toBeLessThan(400);
+    // ~5% target: SURPRISE_CHANCE_PER_THOUSAND=50 over 10k keys lands near 500.
+    expect(surprises.length).toBeGreaterThan(400);
+    expect(surprises.length).toBeLessThan(600);
     expect(selectWorkingClawSurprise("run:42", { salt: SAMPLE_SALT })).toBe(
       selectWorkingClawSurprise("run:42", { salt: SAMPLE_SALT }),
     );

@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   installSessionPlacementAdmissionProvider,
-  installSessionPlacementResetGuard,
-  resolveSessionPlacementResetBlock,
   type LocalTurnPlacementClaim,
   type SessionPlacementAdmissionProvider,
   withLocalSessionPlacementTurnAdmission,
@@ -10,7 +9,6 @@ import {
 } from "./session-placement-admission.js";
 
 let uninstallProvider: (() => void) | undefined;
-let uninstallResetGuard: (() => void) | undefined;
 const executeLocalTurn: SessionPlacementAdmissionProvider["executeLocalTurn"] = async (
   _claim,
   runLocal,
@@ -19,12 +17,11 @@ const executeLocalTurn: SessionPlacementAdmissionProvider["executeLocalTurn"] = 
 afterEach(() => {
   uninstallProvider?.();
   uninstallProvider = undefined;
-  uninstallResetGuard?.();
-  uninstallResetGuard = undefined;
 });
 
 describe("local turn placement admission", () => {
   const turnParams = {
+    admittedRunContext: createTestAdmittedRunContext("run-1"),
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
     workspaceDir: "/tmp/workspace",
@@ -213,27 +210,5 @@ describe("local turn placement admission", () => {
 
     expect(result).toEqual({ kind: "cli", code: 0 });
     expect(events).toEqual(["claim", "turn", "release"]);
-  });
-});
-
-describe("session placement reset guard", () => {
-  it("returns the installed reset block", () => {
-    uninstallResetGuard = installSessionPlacementResetGuard((sessionId) =>
-      sessionId === "session-worker" ? "cloud worker placement is active" : undefined,
-    );
-
-    expect(resolveSessionPlacementResetBlock("session-worker")).toBe(
-      "cloud worker placement is active",
-    );
-    expect(resolveSessionPlacementResetBlock("session-local")).toBeUndefined();
-  });
-
-  it("does not clear a replacement reset guard during stale uninstall", () => {
-    const uninstallFirst = installSessionPlacementResetGuard(() => "first");
-    uninstallResetGuard = installSessionPlacementResetGuard(() => "second");
-
-    uninstallFirst();
-
-    expect(resolveSessionPlacementResetBlock("session-worker")).toBe("second");
   });
 });

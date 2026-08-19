@@ -56,9 +56,9 @@ final class CLIInstallPrompter {
             if Self.hasPendingManagedRestart() { return }
         }
         guard !status.isReady else { return }
-        let lastPrompt = UserDefaults.standard.string(forKey: cliInstallPromptedVersionKey)
+        let lastPrompt = AppDefaults.standard.string(forKey: cliInstallPromptedVersionKey)
         guard lastPrompt != version else { return }
-        UserDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
+        AppDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
 
         if let target = self.installTargetForCurrentBuild(confirmStable: true) {
             Task { _ = await self.installCLI(target: target) }
@@ -224,15 +224,15 @@ final class CLIInstallPrompter {
     }
 
     static func hasPendingManagedRestart() -> Bool {
-        UserDefaults.standard.bool(forKey: cliManagedRestartPendingKey)
+        AppDefaults.standard.bool(forKey: cliManagedRestartPendingKey)
     }
 
     static func setPendingManagedRestart() {
-        UserDefaults.standard.set(true, forKey: cliManagedRestartPendingKey)
+        AppDefaults.standard.set(true, forKey: cliManagedRestartPendingKey)
     }
 
     static func clearPendingManagedRestart() {
-        UserDefaults.standard.removeObject(forKey: cliManagedRestartPendingKey)
+        AppDefaults.standard.removeObject(forKey: cliManagedRestartPendingKey)
     }
 
     static func shouldManageCLI(connectionMode: AppState.ConnectionMode) -> Bool {

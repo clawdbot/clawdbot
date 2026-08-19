@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mjs";
-import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
+import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mts";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const itUnix = process.platform === "win32" ? it.skip : it;

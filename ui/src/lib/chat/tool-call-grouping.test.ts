@@ -86,7 +86,7 @@ describe("summarizeToolGroup", () => {
           },
         },
       ],
-      "Edited 2 files",
+      "Edited a file, created a file",
     ],
     [
       "structured Codex change targets",
@@ -101,7 +101,19 @@ describe("summarizeToolGroup", () => {
           },
         },
       ],
-      "Edited 2 files",
+      "Edited a file, created a file",
+    ],
+    [
+      "deleted Codex targets",
+      [
+        {
+          name: "apply_patch",
+          args: {
+            changes: [{ path: "src/obsolete.ts", kind: { type: "delete" } }],
+          },
+        },
+      ],
+      "Deleted a file",
     ],
     ["one generic tool by name", [{ name: "mcp__linear" }], "Used mcp__linear"],
     [

@@ -2,11 +2,14 @@
 // backoff, and Chrome tab-group color mapping. No chrome.* usage here so the
 // repo's vitest suite can exercise the logic directly.
 
-/** Tab group shown to the user; membership == what the agent may touch. */
+/** Tab group shown to the user; an ACL in selected mode and an ownership marker in all mode. */
 export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
+export const ACCESS_MODE_ALL = "all";
+export const ACCESS_MODE_SELECTED = "selected";
 const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay.v2";
 const RELAY_SECRET_PATTERN = /^[0-9a-f]{64}$/;
 const PAIRING_STORAGE_KEYS = ["relayUrl", "gatewayUrl", "token", "authVersion"];
+const ACCESS_MODE_KEY = "accessMode";
 const PAIRING_STATUS_KEY = "pairingStatus";
 const UNSUPPORTED_PROXY_PREFIX_STATUS = "proxy-prefix-unsupported";
 const UNSUPPORTED_PROXY_PREFIX_HINT =
@@ -152,7 +155,8 @@ function validatePairingFields(relayUrl, token, gatewayUrl) {
 
 /**
  * Parse a pairing string printed by `openclaw browser extension pair`.
- * Shape: ws://127.0.0.1:<port>/extension?gateway=<url>#<token>
+ * Native local and direct-remote pairings use the Gateway route; local manual,
+ * browser-node, and legacy local pairings use the host relay route.
  * The additive gateway hint is not a credential; old extensions safely pass
  * it through to the relay while new extensions remove it before connecting.
  */
@@ -225,6 +229,7 @@ export function createPairingConfigStore(storage) {
       run(async () => {
         const stored = await storage.get([
           ...PAIRING_STORAGE_KEYS,
+          ACCESS_MODE_KEY,
           PAIRING_STATUS_KEY,
           "groupColor",
         ]);
@@ -250,8 +255,22 @@ export function createPairingConfigStore(storage) {
           }
         } else {
           invalidObserved = false;
-          if (pairing && stored.authVersion === undefined) {
-            await storage.set({ authVersion: 2 });
+          if (pairing) {
+            const repairs = {};
+            if (stored.authVersion === undefined) {
+              repairs.authVersion = 2;
+            }
+            // Pairings created before access modes promised group-only access.
+            // Unknown future/corrupt values fail closed without discarding the key.
+            if (
+              stored[ACCESS_MODE_KEY] !== ACCESS_MODE_ALL &&
+              stored[ACCESS_MODE_KEY] !== ACCESS_MODE_SELECTED
+            ) {
+              repairs[ACCESS_MODE_KEY] = ACCESS_MODE_SELECTED;
+            }
+            if (Object.keys(repairs).length > 0) {
+              await storage.set(repairs);
+            }
           }
           if (pairing && pairingStatus) {
             pairingStatus = "";
@@ -263,23 +282,40 @@ export function createPairingConfigStore(storage) {
           token: pairing?.token ?? "",
           gatewayUrl: pairing?.gatewayUrl ?? "",
           authVersion: pairing ? 2 : undefined,
+          accessMode: pairing
+            ? stored[ACCESS_MODE_KEY] === ACCESS_MODE_ALL
+              ? ACCESS_MODE_ALL
+              : ACCESS_MODE_SELECTED
+            : ACCESS_MODE_SELECTED,
           groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
           pairingStatusHint:
             pairingStatus === UNSUPPORTED_PROXY_PREFIX_STATUS ? UNSUPPORTED_PROXY_PREFIX_HINT : "",
         };
       }),
-    save: (pairing, groupColor) =>
+    save: (pairing, groupColor, accessMode = ACCESS_MODE_ALL) =>
       run(async () => {
         await storage.set({
           relayUrl: pairing.relayUrl,
           token: pairing.token,
           gatewayUrl: pairing.gatewayUrl ?? "",
           authVersion: 2,
+          accessMode: accessMode === ACCESS_MODE_SELECTED ? ACCESS_MODE_SELECTED : ACCESS_MODE_ALL,
           groupColor,
         });
         await storage.remove([PAIRING_STATUS_KEY]);
       }),
-    clear: () => run(() => storage.remove([...PAIRING_STORAGE_KEYS, PAIRING_STATUS_KEY])),
+    setAccessMode: (accessMode) =>
+      run(async () => {
+        const stored = await storage.get(PAIRING_STORAGE_KEYS);
+        if (!parseStoredPairing(stored)) {
+          throw new Error("Pair the extension first.");
+        }
+        const normalized = accessMode === ACCESS_MODE_ALL ? ACCESS_MODE_ALL : ACCESS_MODE_SELECTED;
+        await storage.set({ [ACCESS_MODE_KEY]: normalized });
+        return normalized;
+      }),
+    clear: () =>
+      run(() => storage.remove([...PAIRING_STORAGE_KEYS, ACCESS_MODE_KEY, PAIRING_STATUS_KEY])),
   };
 }
 

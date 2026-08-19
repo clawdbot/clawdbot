@@ -47,7 +47,13 @@ vi.mock("./progress.js", () => ({
 
 vi.mock("../infra/device-pairing.js", () => ({
   listDevicePairing: mocks.listDevicePairing,
+}));
+
+vi.mock("../infra/device-pairing-approval.js", () => ({
   approveDevicePairing: mocks.approveDevicePairing,
+}));
+
+vi.mock("../infra/device-pairing-tokens.js", () => ({
   summarizeDeviceTokens: mocks.summarizeDeviceTokens,
 }));
 
@@ -105,14 +111,15 @@ function pairedDevice(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function primeGatewayPairing(pending: unknown[], paired: unknown[] = []) {
+  return callGateway.mockResolvedValueOnce({ pending, paired });
+}
+
 function mockGatewayPairingList(
   pendingOverrides: Record<string, unknown> = {},
   pairedOverrides: Record<string, unknown> = {},
 ) {
-  callGateway.mockResolvedValueOnce({
-    pending: [pendingDevice(pendingOverrides)],
-    paired: [pairedDevice(pairedOverrides)],
-  });
+  primeGatewayPairing([pendingDevice(pendingOverrides)], [pairedDevice(pairedOverrides)]);
 }
 
 function rejectGatewayForLocalFallback(message = "gateway closed (1008): pairing required") {
@@ -200,17 +207,14 @@ function hasGatewayMethod(method: string): boolean {
 
 describe("devices cli approve", () => {
   it("uses admin scope when approving an admin-scope request", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [pendingDevice({ requestId: "req-123", scopes: ["operator.admin"] })],
-        paired: [],
-      })
-      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+    primeGatewayPairing([
+      pendingDevice({ requestId: "req-123", scopes: ["operator.admin"] }),
+    ]).mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 
     await runDevicesApprove(["req-123"]);
 
     expect(callGateway).toHaveBeenCalledTimes(2);
-    expectGatewayCall(0, { method: "device.pair.list" });
+    expectGatewayCall(0, { method: "device.pair.list", scopes: ["operator.pairing"] });
     expectGatewayCall(1, {
       method: "device.pair.approve",
       params: { requestId: "req-123" },
@@ -219,17 +223,12 @@ describe("devices cli approve", () => {
   });
 
   it("keeps pairing scope for non-admin device approvals", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [
-          pendingDevice({
-            requestId: "req-pairing",
-            scopes: ["operator.pairing"],
-          }),
-        ],
-        paired: [],
-      })
-      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+    primeGatewayPairing([
+      pendingDevice({
+        requestId: "req-pairing",
+        scopes: ["operator.pairing"],
+      }),
+    ]).mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 
     await runDevicesApprove(["req-pairing"]);
 
@@ -241,11 +240,7 @@ describe("devices cli approve", () => {
   });
 
   it("retries explicit approval with admin scope when a paired-device session is ownership-denied", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [],
-      })
+    primeGatewayPairing([])
       .mockRejectedValueOnce(new Error("GatewayClientRequestError: device pairing approval denied"))
       .mockResolvedValueOnce({ device: { deviceId: "device-2" } });
 
@@ -265,21 +260,19 @@ describe("devices cli approve", () => {
   });
 
   it("uses admin scope when a repair approval would inherit an admin token", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [
-          pendingDevice({
-            requestId: "req-repair",
-            scopes: [],
-          }),
-        ],
-        paired: [
-          pairedDevice({
-            tokens: [{ role: "operator", scopes: ["operator.admin"] }],
-          }),
-        ],
-      })
-      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+    primeGatewayPairing(
+      [
+        pendingDevice({
+          requestId: "req-repair",
+          scopes: [],
+        }),
+      ],
+      [
+        pairedDevice({
+          tokens: [{ role: "operator", scopes: ["operator.admin"] }],
+        }),
+      ],
+    ).mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 
     await runDevicesApprove(["req-repair"]);
 
@@ -291,21 +284,19 @@ describe("devices cli approve", () => {
   });
 
   it("inherits non-admin operator token scopes when a repair approval omits explicit scopes", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [
-          pendingDevice({
-            requestId: "req-read-repair",
-            scopes: [],
-          }),
-        ],
-        paired: [
-          pairedDevice({
-            tokens: [{ role: "operator", scopes: ["operator.read"] }],
-          }),
-        ],
-      })
-      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+    primeGatewayPairing(
+      [
+        pendingDevice({
+          requestId: "req-read-repair",
+          scopes: [],
+        }),
+      ],
+      [
+        pairedDevice({
+          tokens: [{ role: "operator", scopes: ["operator.read"] }],
+        }),
+      ],
+    ).mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 
     await runDevicesApprove(["req-read-repair"]);
 
@@ -317,21 +308,19 @@ describe("devices cli approve", () => {
   });
 
   it("falls back to paired scopes when a repair approval omits explicit scopes and no operator token is stored", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [
-          pendingDevice({
-            requestId: "req-read-repair-scopes",
-            scopes: [],
-          }),
-        ],
-        paired: [
-          pairedDevice({
-            scopes: ["operator.read"],
-          }),
-        ],
-      })
-      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+    primeGatewayPairing(
+      [
+        pendingDevice({
+          requestId: "req-read-repair-scopes",
+          scopes: [],
+        }),
+      ],
+      [
+        pairedDevice({
+          scopes: ["operator.read"],
+        }),
+      ],
+    ).mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 
     await runDevicesApprove(["req-read-repair-scopes"]);
 
@@ -533,32 +522,23 @@ describe("devices cli approve", () => {
             displayName: "Colin's S25",
             remoteIp: "192.168.0.202",
             roles: ["node"],
+            nodeSurface: {
+              displayName: "Colin's S25",
+              createdAtMs: 1,
+              approvedAtMs: 1,
+            },
+            pendingNodeSurface: {
+              requestId: "node-req-1",
+              revision: "revision-1",
+              displayName: "Colin's S25",
+              remoteIp: "192.168.0.202",
+              ts: 2,
+            },
           }),
         ],
       })
       .mockRejectedValueOnce(new Error("device pairing approval denied"))
-      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "android-node",
-            displayName: "Colin's S25",
-            approvalState: "pending-reapproval",
-            pendingRequestId: "node-req-1",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "android-node",
-            displayName: "Colin's S25",
-            remoteIp: "192.168.0.202",
-            roles: ["node"],
-          }),
-        ],
-      });
+      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" });
 
     await runDevicesApprove([
       "192.168.0.202",
@@ -568,8 +548,7 @@ describe("devices cli approve", () => {
       "secret-token",
     ]);
 
-    expectGatewayCall(3, { method: "node.list" });
-    expectGatewayCall(4, { method: "device.pair.list" });
+    expect(callGateway).toHaveBeenCalledTimes(3);
     const errorOutput = readRuntimeErrorOutput();
     expect(errorOutput).toContain("No pending device request matches");
     expect(errorOutput).toContain("Node reapproval pending for Colin's S25");
@@ -598,34 +577,11 @@ describe("devices cli approve", () => {
         ],
       })
       .mockRejectedValueOnce(new Error("device pairing approval denied"))
-      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "unrelated-node",
-            displayName: "Shared Phone",
-            remoteIp: "10.0.0.50",
-            approvalState: "pending-reapproval",
-            pendingRequestId: "node-req-unrelated",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "android-node",
-            displayName: "Shared Phone",
-            remoteIp: "192.168.0.202",
-            roles: ["node"],
-          }),
-        ],
-      });
+      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" });
 
     await runDevicesApprove(["192.168.0.202"]);
 
-    expectGatewayCall(3, { method: "node.list" });
-    expectGatewayCall(4, { method: "device.pair.list" });
+    expect(callGateway).toHaveBeenCalledTimes(3);
     const errorOutput = readRuntimeErrorOutput();
     expect(errorOutput).toContain("No pending device request matches");
     expect(errorOutput).not.toContain("node-req-unrelated");
@@ -641,35 +597,20 @@ describe("devices cli approve", () => {
             deviceId: "paired-node",
             displayName: "Shared Phone",
             roles: ["node"],
+            pendingNodeSurface: {
+              requestId: "node-req-display-name",
+              revision: "revision-1",
+              displayName: "Shared Phone",
+              ts: 2,
+            },
           }),
         ],
       })
-      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "paired-node",
-            displayName: "Shared Phone",
-            approvalState: "pending-approval",
-            pendingRequestId: "node-req-display-name",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "paired-node",
-            displayName: "Shared Phone",
-            roles: ["node"],
-          }),
-        ],
-      });
+      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" });
 
     await runDevicesApprove(["Shared Phone"]);
 
-    expectGatewayCall(2, { method: "node.list" });
-    expectGatewayCall(3, { method: "device.pair.list" });
+    expect(callGateway).toHaveBeenCalledTimes(2);
     const errorOutput = readRuntimeErrorOutput();
     expect(errorOutput).toContain("No pending device request matches");
     expect(errorOutput).not.toContain("node-req-display-name");
@@ -1009,7 +950,7 @@ describe("devices cli local fallback", () => {
     expect(readRuntimeOutput()).toContain(fallbackNotice);
   });
 
-  it("refuses local fallback when the gateway request is absent from local pairing state", async () => {
+  it("points at the current pending request when the gateway request id went stale", async () => {
     rejectGatewayForLocalFallback("scope upgrade pending approval (requestId: req-profile)");
     listDevicePairing.mockResolvedValueOnce({
       pending: [{ requestId: "req-default", deviceId: "device-1", publicKey: "pk", ts: 1 }],
@@ -1017,9 +958,18 @@ describe("devices cli local fallback", () => {
     });
     summarizeDeviceTokens.mockReturnValue(undefined);
 
-    await expect(runDevicesCommand(["list"])).rejects.toThrow(
-      "different OPENCLAW_PROFILE or OPENCLAW_STATE_DIR",
+    // A populated shared pending list means supersession, not a foreign state
+    // dir — the recovery is the current id, never profile or shared-auth flags.
+    const failure = await runDevicesCommand(["list"]).then(
+      () => {
+        throw new Error("expected devices list to fail");
+      },
+      (error: unknown) => String(error),
     );
+    expect(failure).toContain("superseded by a newer pending request");
+    expect(failure).toContain("openclaw devices approve req-default");
+    expect(failure).not.toContain("OPENCLAW_PROFILE");
+    expect(failure).not.toContain("--token");
     expect(readRuntimeOutput()).not.toContain(fallbackNotice);
   });
 
@@ -1082,30 +1032,30 @@ describe("devices cli list", () => {
   });
 
   it("shows pending node approval commands for paired node devices", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "android-node",
+    callGateway.mockResolvedValueOnce({
+      pending: [],
+      paired: [
+        pairedDevice({
+          deviceId: "android-node",
+          displayName: "Colin's S25",
+          remoteIp: "192.168.0.202",
+          role: "node",
+          roles: [],
+          nodeSurface: {
             displayName: "Colin's S25",
-            remoteIp: "192.168.0.202",
-            role: "node",
-            roles: [],
-          }),
-        ],
-      })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "android-node",
-            displayName: "Colin's S25",
-            remoteIp: "192.168.0.202",
-            approvalState: "pending-reapproval",
-            pendingRequestId: "node-req-1",
+            createdAtMs: 1,
+            approvedAtMs: 1,
           },
-        ],
-      });
+          pendingNodeSurface: {
+            requestId: "node-req-1",
+            revision: "revision-1",
+            displayName: "Colin's S25",
+            remoteIp: "192.168.0.202",
+            ts: 2,
+          },
+        }),
+      ],
+    });
 
     await runDevicesCommand([
       "list",
@@ -1115,7 +1065,7 @@ describe("devices cli list", () => {
       "secret-token",
     ]);
 
-    expectGatewayCall(1, { method: "node.list" });
+    expect(callGateway).toHaveBeenCalledOnce();
     const output = readRuntimeOutput();
     expect(output).toContain("Node reapproval pending for Colin's S25");
     expect(output).toContain("openclaw nodes approve node-req-1");
@@ -1127,34 +1077,22 @@ describe("devices cli list", () => {
   });
 
   it("does not show node approval commands for paired node devices when only display names match", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [],
-        paired: [
-          pairedDevice({
-            deviceId: "android-node",
-            displayName: "Shared Phone",
-            remoteIp: "192.168.0.202",
-            role: "node",
-            roles: [],
-          }),
-        ],
-      })
-      .mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "unrelated-node",
-            displayName: "Shared Phone",
-            remoteIp: "10.0.0.50",
-            approvalState: "pending-reapproval",
-            pendingRequestId: "node-req-unrelated",
-          },
-        ],
-      });
+    callGateway.mockResolvedValueOnce({
+      pending: [],
+      paired: [
+        pairedDevice({
+          deviceId: "android-node",
+          displayName: "Shared Phone",
+          remoteIp: "192.168.0.202",
+          role: "node",
+          roles: [],
+        }),
+      ],
+    });
 
     await runDevicesCommand(["list"]);
 
-    expectGatewayCall(1, { method: "node.list" });
+    expect(callGateway).toHaveBeenCalledOnce();
     const output = readRuntimeOutput();
     expect(output).not.toContain("node-req-unrelated");
     expect(output).not.toContain("openclaw nodes approve");
@@ -1308,6 +1246,24 @@ describe("devices cli rename", () => {
       params: { deviceId: "device-1", label: "Kitchen Mac" },
     });
     expect(stripAnsi(readRuntimeOutput())).toContain("Kitchen Mac");
+  });
+});
+
+describe("devices cli join-code", () => {
+  it("mints with admin scope and prints the pasteable command", async () => {
+    const joinUrl = `https://gateway.example/j/${"a".repeat(22)}`;
+    callGateway.mockResolvedValueOnce({ joinUrl, setupCode: "opaque" });
+
+    await runDevicesCommand(["join-code"]);
+
+    expectGatewayCall(0, {
+      method: "device.pair.setupCode",
+      params: { bootstrapProfile: "node", includeQr: false, joinUrl: true },
+      scopes: ["operator.admin"],
+    });
+    expect(readRuntimeOutput()).toContain(joinUrl);
+    expect(readRuntimeOutput()).toContain(`npx openclaw connect ${joinUrl}`);
+    expect(readRuntimeOutput()).not.toContain("opaque");
   });
 });
 

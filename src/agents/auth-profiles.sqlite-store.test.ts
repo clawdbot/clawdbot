@@ -9,6 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as kyselySync from "../infra/kysely-sync.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -20,13 +23,17 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "./auth-profiles/runtime-snapshots.js";
+import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  getRuntimeAuthProfileStoreSnapshotRevision,
   saveAuthProfileStore,
 } from "./auth-profiles/store.js";
 import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js";
@@ -77,6 +84,7 @@ async function withAgentDirEnv(prefix: string, run: (agentDir: string) => void |
       async () => await run(agentDir),
     );
   } finally {
+    clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     fs.rmSync(root, { recursive: true, force: true });
@@ -115,6 +123,33 @@ describe("auth profile sqlite store", () => {
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
       expect(fs.existsSync(path.join(agentDir, "auth-state.json"))).toBe(false);
       expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(true);
+    });
+  });
+
+  it("persists the relocated shared store through the shared-state adapter", async () => {
+    await withAgentDirEnv("openclaw-auth-shared-state-", () => {
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      saveAuthProfileStore({
+        ...apiKeyStore("sk-shared"),
+        order: { openai: ["openai:default"] },
+      });
+
+      expect(ensureAuthProfileStore(undefined, { syncExternalCli: false })).toMatchObject({
+        profiles: { "openai:default": { key: "sk-shared" } },
+        order: { openai: ["openai:default"] },
+      });
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      expect(
+        database
+          .prepare("SELECT store_key FROM auth_profile_stores WHERE store_key = 'shared'")
+          .get(),
+      ).toEqual({ store_key: "shared" });
+      expect(
+        database
+          .prepare("SELECT store_key FROM auth_profile_state WHERE store_key = 'shared'")
+          .get(),
+      ).toEqual({ store_key: "shared" });
+      database.close();
     });
   });
 
@@ -239,6 +274,87 @@ describe("auth profile sqlite store", () => {
 
       expect(loaded?.profiles["openai:default"]).toMatchObject({ key: "sk-test" });
       expect(fs.existsSync(stateDbPath)).toBe(false);
+    });
+  });
+
+  it("reuses path-keyed read handles until the runtime snapshot revision changes", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-read-reuse-", (agentDir) => {
+      const secondaryAgentDir = path.join(
+        path.dirname(path.dirname(agentDir)),
+        "secondary",
+        "agent",
+      );
+      saveAuthProfileStore(apiKeyStore("sk-test"), agentDir);
+      saveAuthProfileStore(apiKeyStore("sk-secondary"), secondaryAgentDir);
+      closeOpenClawAgentDatabasesForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      const openSpy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      const statementCacheSpy = vi.spyOn(kyselySync, "enableNodeSqliteKyselyStatementCache");
+      try {
+        const initialRevision = getRuntimeAuthProfileStoreSnapshotRevision(agentDir);
+        expect(loadPersistedAuthProfileStore(agentDir)).not.toBeNull();
+        expect(loadPersistedAuthProfileStore(secondaryAgentDir)).not.toBeNull();
+        expect(loadPersistedAuthProfileStore(agentDir)).not.toBeNull();
+        expect(loadPersistedAuthProfileStore(secondaryAgentDir)).not.toBeNull();
+        expect(openSpy.mock.calls.filter(([, options]) => options?.readOnly === true)).toHaveLength(
+          2,
+        );
+        expect(statementCacheSpy).toHaveBeenCalledTimes(2);
+        const firstDatabase = openSpy.mock.results[0]?.value as DatabaseSync | undefined;
+        const secondDatabase = openSpy.mock.results[1]?.value as DatabaseSync | undefined;
+        expect(firstDatabase?.isOpen).toBe(true);
+        expect(secondDatabase?.isOpen).toBe(true);
+
+        replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: apiKeyStore("sk-test") }]);
+
+        expect(getRuntimeAuthProfileStoreSnapshotRevision(agentDir)).toBeGreaterThan(
+          initialRevision,
+        );
+        expect(firstDatabase?.isOpen).toBe(false);
+        expect(secondDatabase?.isOpen).toBe(false);
+        expect(loadPersistedAuthProfileStore(agentDir)).not.toBeNull();
+        expect(openSpy.mock.calls.filter(([, options]) => options?.readOnly === true)).toHaveLength(
+          3,
+        );
+        expect(statementCacheSpy).toHaveBeenCalledTimes(3);
+      } finally {
+        statementCacheSpy.mockRestore();
+        openSpy.mockRestore();
+      }
+    });
+  });
+
+  it("reuses the transaction database while filtering multiple inherited OAuth profiles", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-save-reuse-", (mainAgentDir) => {
+      const customAgentDir = path.join(path.dirname(path.dirname(mainAgentDir)), "custom", "agent");
+      const profiles = Object.fromEntries(
+        Array.from({ length: 3 }, (_, index) => [
+          `openai:profile-${index}`,
+          {
+            type: "oauth" as const,
+            provider: "openai",
+            access: `access-${index}`,
+            refresh: `refresh-${index}`,
+            expires: Date.now() + 60_000,
+          },
+        ]),
+      );
+      const store: AuthProfileStore = { version: 1, profiles };
+      saveAuthProfileStore(store, mainAgentDir);
+      closeOpenClawAgentDatabasesForTest();
+      const openSpy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      try {
+        saveAuthProfileStore(store, customAgentDir);
+        const readOnlyOpens = openSpy.mock.calls.filter(
+          ([, options]) => options?.readOnly === true,
+        );
+        expect(readOnlyOpens).toHaveLength(1);
+        expect(path.resolve(String(readOnlyOpens[0]?.[0]))).toBe(
+          path.resolve(resolveAuthProfileDatabasePath(mainAgentDir)),
+        );
+      } finally {
+        openSpy.mockRestore();
+      }
     });
   });
 

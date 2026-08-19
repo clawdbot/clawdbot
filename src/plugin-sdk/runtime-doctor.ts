@@ -1,54 +1,16 @@
 /**
- * Runtime SDK subpath for plugin doctor migrations, compat checks, and uninstall helpers.
- *
- * This barrel value-loads the state DB and plugin state store graphs. Doctor
- * contract closures (`doctor-contract-api.ts` and its imports) must use the
- * dependency-light `runtime-doctor-migrations` subpath instead so doctor
- * enumeration stays cheap; enumeration cold-loads those closures per plugin.
+ * @deprecated Package-only compatibility for pre-split official plugin doctor artifacts.
+ * Current source must import `runtime-doctor-migrations` directly.
  */
-export {
-  archiveLegacyStateSource,
-  asObjectRecord,
-  collectChannelAccountScopes,
-  collectProviderDangerousNameMatchingScopes,
-  defineChannelAliasMigration,
-  defineKeyMoveMigration,
-  defineLegacyJsonStateMigration,
-  hasLegacyAccountStreamingAliases,
-  hasLegacyStreamingAliases,
-  legacyStateFileExists,
-  materializeInheritedAccountStreaming,
-  normalizeChannelAccounts,
-  normalizeChannelConfigEntries,
-  normalizeLegacyChannelAliases,
-  normalizeLegacyDmAliases,
-  normalizeLegacyStreamingAliases,
-  resolveLegacyAliasStreamingMode,
-  stripRetiredChannelKeys,
-} from "./runtime-doctor-migrations.js";
-export type {
-  ChannelAliasMigrationSpec,
-  CompatMutationResult,
-  DoctorSessionRouteStateOwner,
-  LegacyStreamingAliasOptions,
-  NormalizeChannelConfigEntryParams,
-  NormalizeLegacyChannelAccountParams,
-  OpenKeyedStoreOptions,
-  PluginDoctorStateMigration,
-  PluginDoctorStateMigrationContext,
-  PluginStateKeyedStore,
-  RetiredChannelKeyRemoval,
-  StreamingAliasMode,
-} from "./runtime-doctor-migrations.js";
-
-export {
-  detectPluginInstallPathIssue,
-  formatPluginInstallPathIssue,
-} from "../infra/plugin-install-path-warnings.js";
+export * from "./runtime-doctor-migrations.js";
+/**
+ * @deprecated Load-only bridge: published pre-split doctor artifacts
+ * (voice-call/matrix 2026.7.2-beta.7 and earlier) import these repair names
+ * from this subpath; without them the contract module fails to load and the
+ * plugin's doctor migrations silently never run. Remove once managed releases
+ * have replaced the old npm latest/extended-stable packages and their upgrade
+ * window has closed. Current source imports `doctor-repair-runtime` (heavy)
+ * and `plugin-state-store-runtime` directly.
+ */
+export * from "./doctor-repair-runtime.js";
 export { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
-export {
-  detectOpenClawStateDatabaseSchemaMigrations,
-  repairOpenClawStateDatabaseSchema,
-} from "../state/openclaw-state-db.js";
-export type { OpenClawStateDatabaseSchemaMigration } from "../state/openclaw-state-db.js";
-export { removePluginFromConfig } from "../plugins/uninstall-config.js";

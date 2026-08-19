@@ -109,6 +109,14 @@ openclaw-custodian-page {
   gap: 8px;
 }
 
+/* Onboarding: the thread already introduces the mascot, so the header keeps
+   only its actions as a quiet top-right row. */
+.custodian__header--minimal {
+  justify-content: flex-end;
+  padding-bottom: 8px;
+  border-bottom: 0;
+}
+
 .custodian__identity {
   display: flex;
   align-items: center;
@@ -209,7 +217,7 @@ openclaw-custodian-page {
 .custodian__nudge-action {
   padding: 5px 2px;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .custodian__nudge-action:disabled {
@@ -225,7 +233,7 @@ openclaw-custodian-page {
   place-items: center;
   border-radius: 50%;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .custodian__nudge-action:focus-visible,
@@ -252,14 +260,15 @@ openclaw-custodian-page {
 
 .custodian__option-card {
   /* Left offset = avatar column (36px) + group gap (10px) so cards align with
-     the message text column, not the avatar gutter. */
-  margin: -12px 16px 14px 46px;
+     the message text column, not the avatar gutter. No negative top margin:
+     it overlays the preceding message's sender/timestamp row. */
+  margin: 4px 16px 14px 46px;
 }
 
 .custodian__wizard-step {
   display: grid;
   gap: 12px;
-  margin: -12px 16px 14px 46px;
+  margin: 4px 16px 14px 46px;
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -269,6 +278,37 @@ openclaw-custodian-page {
 .custodian__wizard-title {
   color: var(--text-strong);
   font-size: 14px;
+}
+
+.custodian__wizard-step .btn {
+  min-height: 44px;
+}
+
+.custodian__wizard-step .btn:disabled:hover {
+  border-color: var(--border);
+  background: var(--bg-elevated);
+  box-shadow: none;
+}
+
+.custodian__wizard-step .btn.primary:disabled:hover {
+  border-color: var(--accent);
+  background: var(--primary);
+  box-shadow: 0 1px 3px var(--accent-subtle);
+}
+
+.custodian__wizard-step .custodian__wizard-cancel:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.custodian__wizard-cancel:not(:disabled) {
+  color: var(--text);
+}
+
+.custodian__wizard-cancel {
+  margin-right: auto;
 }
 
 .custodian__thinking {
@@ -418,7 +458,7 @@ openclaw-custodian-page {
 
 .custodian__change-paths summary {
   width: fit-content;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .custodian__change-paths ul {
@@ -451,7 +491,7 @@ openclaw-custodian-page {
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .custodian {
     padding-inline: 12px;
   }
@@ -477,7 +517,8 @@ openclaw-custodian-page {
 }
 
 @media (max-width: 400px) {
-  .custodian__option-card {
+  .custodian__option-card,
+  .custodian__wizard-step {
     margin-left: 0;
   }
 }

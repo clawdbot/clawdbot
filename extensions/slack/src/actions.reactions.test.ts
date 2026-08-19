@@ -2,6 +2,7 @@
 import type { WebClient } from "@slack/web-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reactSlackMessage, removeOwnSlackReactions, removeSlackReaction } from "./actions.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
 
@@ -53,18 +54,34 @@ describe("reactSlackMessage", () => {
   it("uses a workspace-scoped write client for Enterprise Grid reactions", async () => {
     const client = createClient();
     getSlackWriteClientMock.mockReturnValue(client);
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await reactSlackMessage("C1", "123.456", "✅", {
+        teamId: "T1",
+        token: "xoxb-test",
+      });
 
-    await reactSlackMessage("C1", "123.456", "✅", {
-      teamId: "T1",
-      token: "xoxb-test",
-    });
+      expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T1" });
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: "C1",
+        timestamp: "123.456",
+        name: "white_check_mark",
+      });
+    } finally {
+      installationState.release();
+    }
+  });
 
-    expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T1" });
-    expect(client.reactions.add).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "123.456",
-      name: "white_check_mark",
-    });
+  it("rejects an unscoped exported Enterprise Grid reaction", async () => {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        reactSlackMessage("C1", "123.456", "✅", { token: "xoxb-test" }),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(getSlackWriteClientMock).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
   });
 
   it("treats already_reacted as idempotent success", async () => {

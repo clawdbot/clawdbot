@@ -92,6 +92,7 @@ function useScriptedClaudeCliBackend() {
 
 function createClaudeCliFollowupRun() {
   const followupRun = createFollowupRun();
+  followupRun.run.agentId = "agent";
   followupRun.run.provider = "claude-cli";
   followupRun.run.model = "claude-opus-4-6";
   followupRun.run.skillsSnapshot = { prompt: "", skills: [], version: 0 };

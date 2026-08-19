@@ -11,12 +11,13 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { normalizeTlsFingerprint } from "../../../../packages/gateway-client/src/client-address-utils.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { normalizeFingerprint } from "../../../../src/infra/tls/fingerprint.js";
 import { loadGatewayTlsRuntime } from "../../../../src/infra/tls/gateway.js";
+import { createDeferred } from "../../../helpers/promise.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "gateway-tls-pinning";
@@ -139,7 +140,7 @@ async function readAdvertisedFingerprint(advertisementPath: string): Promise<str
   if (typeof fingerprint !== "string") {
     throw new Error("Gateway discovery publisher did not advertise a TLS fingerprint");
   }
-  const normalized = normalizeFingerprint(fingerprint);
+  const normalized = normalizeTlsFingerprint(fingerprint);
   if (!normalized) {
     throw new Error("Gateway discovery publisher advertised an invalid TLS fingerprint");
   }
@@ -178,7 +179,7 @@ async function waitForPeerFingerprint(port: number): Promise<string> {
     timer.unref?.();
     const cleanup = () => clearTimeout(timer);
     socket.once("secureConnect", () => {
-      const fingerprint = normalizeFingerprint(socket.getPeerCertificate().fingerprint256 ?? "");
+      const fingerprint = normalizeTlsFingerprint(socket.getPeerCertificate().fingerprint256 ?? "");
       cleanup();
       socket.end();
       if (!fingerprint) {
@@ -206,22 +207,12 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
         clearTimeout(timer);
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         clearTimeout(timer);
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
   });
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 async function connectWithExactPin(url: string, tlsFingerprint: string): Promise<boolean> {
@@ -235,7 +226,7 @@ async function connectWithExactPin(url: string, tlsFingerprint: string): Promise
   try {
     client.start();
     await withTimeout(hello.promise, "Gateway exact-pin hello");
-    const health = await client.request<Record<string, unknown>>("health", {});
+    const health = await client.request("health", {});
     return health !== null && typeof health === "object";
   } finally {
     await client.stopAndWait().catch(() => undefined);

@@ -1,6 +1,7 @@
 // Outbound channel bootstrap lazily loads runtime plugins for selected channels
 // when only setup-shell metadata is active.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,23 +11,30 @@ import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
-import type { DeliverableMessageChannel } from "../../utils/message-channel.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { pruneMapToMaxSize } from "../map-size.js";
 
 const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
+const MAX_BOOTSTRAP_CHANNEL_OUTCOMES_PER_CONFIG = 64;
 let bootstrapRegistryGeneration: string | undefined;
-const bootstrapRegistriesByConfig = new Map<
-  string,
-  Map<DeliverableMessageChannel, PluginRegistry | null>
->();
+const bootstrapRegistriesByConfig = new Map<string, Map<string, PluginRegistry | null>>();
+
+function cacheBootstrapOutcome(
+  registries: Map<string, PluginRegistry | null>,
+  key: string,
+  outcome: PluginRegistry | null,
+): void {
+  // Reinsert every outcome, including null, so reads and writes share LRU ordering.
+  registries.delete(key);
+  registries.set(key, outcome);
+  pruneMapToMaxSize(registries, MAX_BOOTSTRAP_CHANNEL_OUTCOMES_PER_CONFIG);
+}
 
 function resolveBootstrapRegistryGeneration(): string {
   return String(getActivePluginRegistryVersion());
 }
 
-function resolveBootstrapRegistries(
-  cfg: OpenClawConfig,
-): Map<DeliverableMessageChannel, PluginRegistry | null> {
+function resolveBootstrapRegistries(cfg: OpenClawConfig): Map<string, PluginRegistry | null> {
   const registryGeneration = resolveBootstrapRegistryGeneration();
   if (registryGeneration !== bootstrapRegistryGeneration) {
     bootstrapRegistryGeneration = registryGeneration;
@@ -42,7 +50,7 @@ function resolveBootstrapRegistries(
   // Agent-scoped configs may interleave within one registry generation. Keep a
   // bounded LRU so one caller cannot evict another on every delivery attempt.
   pruneMapToMaxSize(bootstrapRegistriesByConfig, MAX_BOOTSTRAP_CONFIG_GENERATIONS - 1);
-  const registries = new Map<DeliverableMessageChannel, PluginRegistry | null>();
+  const registries = new Map<string, PluginRegistry | null>();
   bootstrapRegistriesByConfig.set(configKey, registries);
   return registries;
 }
@@ -59,14 +67,14 @@ function channelEntryCanSend(entry: PluginChannelRegistration | undefined): bool
 
 function findChannelEntry(
   registry: ReturnType<typeof getActivePluginRegistry>,
-  channel: DeliverableMessageChannel,
+  channel: string,
 ): PluginChannelRegistration | undefined {
   return registry?.channels?.find((entry) => entry?.plugin?.id === channel);
 }
 
 function resolveSendCapableRegistry(
   registry: PluginRegistry | null | undefined,
-  channel: DeliverableMessageChannel,
+  channel: string,
 ): PluginRegistry | undefined {
   return registry && channelEntryCanSend(findChannelEntry(registry, channel))
     ? registry
@@ -75,8 +83,9 @@ function resolveSendCapableRegistry(
 
 /** Loads runtime plugins on demand when a selected outbound channel has only a setup shell. */
 export function bootstrapOutboundChannelPlugin(params: {
-  channel: DeliverableMessageChannel;
+  channel: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): PluginRegistry | undefined {
   const cfg = params.cfg;
   if (!cfg) {
@@ -89,14 +98,21 @@ export function bootstrapOutboundChannelPlugin(params: {
     return activeSendRegistry;
   }
 
+  // Outbound callers already know the admitted run owner. Preserve it here so
+  // explicit fleets do not fall back to forbidden ambient-agent selection.
+  const agentId = params.agentId?.trim()
+    ? normalizeAgentId(params.agentId)
+    : (tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg));
+  const outcomeKey = `${agentId}\0${params.channel}`;
   const registries = resolveBootstrapRegistries(cfg);
-  if (registries.has(params.channel)) {
-    return resolveSendCapableRegistry(registries.get(params.channel), params.channel);
+  const cachedRegistry = registries.get(outcomeKey);
+  if (cachedRegistry !== undefined) {
+    cacheBootstrapOutcome(registries, outcomeKey, cachedRegistry);
+    return resolveSendCapableRegistry(cachedRegistry, params.channel);
   }
 
   const autoEnabled = applyPluginAutoEnable({ config: cfg });
-  const defaultAgentId = resolveDefaultAgentId(autoEnabled.config);
-  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled.config, defaultAgentId);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const pluginIds = resolveDiscoverableScopedChannelPluginIds({
     config: autoEnabled.config,
     activationSourceConfig: cfg,
@@ -107,6 +123,7 @@ export function bootstrapOutboundChannelPlugin(params: {
   const activatedConfig =
     withActivatedPluginIds({ config: autoEnabled.config, pluginIds }) ?? autoEnabled.config;
   const activatedSourceConfig = withActivatedPluginIds({ config: cfg, pluginIds }) ?? cfg;
+  let sendRegistry: PluginRegistry | undefined;
   try {
     const registry = loadPluginRegistryHandle({
       config: activatedConfig,
@@ -118,12 +135,10 @@ export function bootstrapOutboundChannelPlugin(params: {
         allowGatewaySubagentBinding: true,
       },
     });
-    const sendRegistry = resolveSendCapableRegistry(registry, params.channel);
-    registries.set(params.channel, sendRegistry ?? null);
-    return sendRegistry;
+    sendRegistry = resolveSendCapableRegistry(registry, params.channel);
   } catch {
     // Best-effort bootstrap; the caller reports the unavailable channel.
-    registries.set(params.channel, null);
-    return undefined;
   }
+  cacheBootstrapOutcome(registries, outcomeKey, sendRegistry ?? null);
+  return sendRegistry;
 }

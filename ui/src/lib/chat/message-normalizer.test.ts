@@ -347,7 +347,7 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("preserves a canvas preview sandbox ceiling from history", () => {
+    it("preserves canvas dashboard identity and sandbox ceiling from history", () => {
       const result = normalizeMessage({
         role: "assistant",
         content: [
@@ -359,6 +359,7 @@ describe("message-normalizer", () => {
               render: "url",
               url: "/__openclaw__/canvas/documents/cv_widget/index.html",
               sandbox: "scripts",
+              boardWidgetName: "release-status",
             },
           },
         ],
@@ -366,8 +367,29 @@ describe("message-normalizer", () => {
 
       expect(result.content[0]).toMatchObject({
         type: "canvas",
-        preview: { sandbox: "scripts" },
+        preview: { sandbox: "scripts", boardWidgetName: "release-status" },
       });
+    });
+
+    it("drops invalid canvas dashboard identity from history", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              url: "/__openclaw__/canvas/documents/cv_widget/index.html",
+              boardWidgetName: "Invalid widget name",
+            },
+          },
+        ],
+      });
+
+      expect(result.content[0]).toMatchObject({ type: "canvas" });
+      expect(result.content[0]).not.toHaveProperty("preview.boardWidgetName");
     });
 
     it("ignores [embed] shortcodes inside fenced code blocks", () => {
@@ -398,11 +420,12 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("extracts MEDIA attachments and reply metadata from assistant text", () => {
+    it("extracts MEDIA attachments and reads persisted delivery facts", () => {
       const result = normalizeMessage({
         role: "assistant",
         content:
-          "[[reply_to:thread-123]]Intro\nMEDIA:https://example.com/image.png\nOutro\nMEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
+          "Intro\nMEDIA:https://example.com/image.png\nOutro\nMEDIA:https://example.com/voice.ogg",
+        openclawDelivery: { audioAsVoice: true, replyToId: "thread-123" },
       });
 
       expect(result.replyTarget).toEqual({ kind: "id", id: "thread-123" });
@@ -488,7 +511,7 @@ describe("message-normalizer", () => {
       },
     );
 
-    it("preserves canonical code fences after removing reply and audio directives", () => {
+    it("preserves canonical code fences with structured delivery facts", () => {
       const code = ["```python", "value = 'a  b'", "``` not a close", "other = 'c  d'", "```"].join(
         "\n",
       );
@@ -496,7 +519,8 @@ describe("message-normalizer", () => {
       expect(
         normalizeMessage({
           role: "assistant",
-          content: `[[reply_to_current]]\n[[audio_as_voice]]\n${code}\nMEDIA:https://example.com/image.png`,
+          content: `${code}\nMEDIA:https://example.com/image.png`,
+          openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
         }).content,
       ).toEqual([
         { type: "text", text: code },
@@ -512,10 +536,11 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("marks media-only audio attachments as voice notes when audio_as_voice is present", () => {
+    it("marks media-only audio attachments as voice notes from delivery facts", () => {
       const result = normalizeMessage({
         role: "assistant",
-        content: "MEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
+        content: "MEDIA:https://example.com/voice.ogg",
+        openclawDelivery: { audioAsVoice: true },
       });
 
       expect(result.audioAsVoice).toBe(true);
@@ -577,6 +602,36 @@ describe("message-normalizer", () => {
             kind: "video",
             label: "clip%2Emp4",
             mimeType: "video/mp4",
+          },
+        },
+      ]);
+    });
+
+    it("classifies signed same-origin MEDIA image and audio routes", () => {
+      const imageUrl = "/media/inbound/photo.png?mediaTicket=signed#preview";
+      const audioUrl = "/__openclaw__/media/voice%2Eogg?mediaTicket=signed";
+      const result = normalizeMessage({
+        role: "assistant",
+        content: `MEDIA:${imageUrl}\nMEDIA:${audioUrl}`,
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: imageUrl,
+            kind: "image",
+            label: "photo.png?mediaTicket=signed#preview",
+            mimeType: "image/png",
+          },
+        },
+        {
+          type: "attachment",
+          attachment: {
+            url: audioUrl,
+            kind: "audio",
+            label: "voice%2Eogg?mediaTicket=signed",
+            mimeType: "audio/ogg",
           },
         },
       ]);
@@ -709,24 +764,34 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("strips reply_to_current without rendering a quoted preview", () => {
+    it("uses persisted delivery facts for the current-message reply target", () => {
       const result = normalizeMessage({
         role: "assistant",
-        content: "[[reply_to_current]]\nReply body",
+        content: "Reply body",
+        openclawDelivery: { replyToCurrent: true },
       });
 
       expect(result.replyTarget).toEqual({ kind: "current" });
       expect(result.content).toEqual([{ type: "text", text: "Reply body" }]);
     });
 
-    it("does not restore stripped reply tags when no visible text remains", () => {
+    it("keeps a fact-only current-message reply target", () => {
       const result = normalizeMessage({
         role: "assistant",
-        content: "[[reply_to_current]]",
+        content: "",
+        openclawDelivery: { replyToCurrent: true },
       });
 
       expect(result.replyTarget).toEqual({ kind: "current" });
       expect(result.content).toStrictEqual([]);
+    });
+
+    it("renders quoted delivery and TTS markers verbatim", () => {
+      const text = "Use `[[reply_to_current]]` and `[[tts]]` literally.";
+      const result = normalizeMessage({ role: "assistant", content: text });
+
+      expect(result.replyTarget).toBeUndefined();
+      expect(result.content).toEqual([{ type: "text", text }]);
     });
 
     it("preserves structured attachment content items", () => {

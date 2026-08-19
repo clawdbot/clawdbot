@@ -24,7 +24,11 @@ import { VERSION } from "../version.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+  GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+  GATEWAY_HEALTH_RATE_LIMITED_TITLE,
+  gatewayConnectErrorWasRateLimited,
   gatewayProbeResultSawGateway,
+  gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { formatTelemetryExporterSummary } from "./telemetry-exporter-summary.js";
@@ -156,9 +160,21 @@ export async function checkGatewayHealth(params: {
       if (exporterSummary) {
         note(exporterSummary.lines.join("\n"), exporterSummary.title);
       }
+    } else {
+      note(
+        [
+          `Exporter diagnostics failed: ${sanitizeTerminalText(formatErrorMessage(exporterResult.reason))}`,
+          `Retry: ${formatCliCommand("openclaw gateway stability --type telemetry.exporter")}`,
+        ].join("\n"),
+        "Telemetry exporters",
+      );
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {
+    if (gatewayConnectErrorWasRateLimited(err)) {
+      note(GATEWAY_HEALTH_RATE_LIMITED_MESSAGE, GATEWAY_HEALTH_RATE_LIMITED_TITLE);
+      return { healthOk: true, authenticated: false };
+    }
     if (isGatewayHealthAuthUnavailableError(err)) {
       const probeDetails = await buildGatewayProbeConnectionDetails({ config: params.cfg });
       const probe = await probeGatewayStatus({
@@ -170,23 +186,22 @@ export async function checkGatewayHealth(params: {
         json: true,
       });
       if (gatewayProbeResultSawGateway(probe)) {
-        note(
-          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
-          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
-        );
+        if (gatewayProbeResultWasRateLimited(probe)) {
+          note(GATEWAY_HEALTH_RATE_LIMITED_MESSAGE, GATEWAY_HEALTH_RATE_LIMITED_TITLE);
+        } else {
+          note(
+            GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+            GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+          );
+        }
         healthOk = true;
         return { healthOk, authenticated: false };
       }
     }
-    const message = String(err);
-    if (message.includes("gateway closed")) {
+    const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+    if (closedDiagnostic) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
-      const closedDiagnostic = formatGatewayClosedDiagnostic(err);
-      if (closedDiagnostic) {
-        note(closedDiagnostic, "Gateway");
-      } else {
-        note("Gateway not running.", "Gateway");
-      }
+      note(closedDiagnostic, "Gateway");
       note(gatewayDetails.message, "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));

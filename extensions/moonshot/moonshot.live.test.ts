@@ -1,9 +1,11 @@
 // Moonshot tests cover moonshot plugin behavior.
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   streamSimple,
   type AssistantMessage,
   type Context,
   type Model,
+  type ProviderContext,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -17,10 +19,31 @@ import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 const KIMI_SEARCH_KEY =
   process.env.KIMI_API_KEY?.trim() || process.env.MOONSHOT_API_KEY?.trim() || "";
 const MOONSHOT_API_KEY = process.env.MOONSHOT_API_KEY?.trim() || "";
+const MOONSHOT_CN_API_KEY = process.env.MOONSHOT_CN_API_KEY?.trim() || "";
 const describeLive = isLiveTestEnabled() && KIMI_SEARCH_KEY.length > 0 ? describe : describe.skip;
 const describeModelLive =
   isLiveTestEnabled() && MOONSHOT_API_KEY.length > 0 ? describe : describe.skip;
 const KIMI_LIVE_SEARCH_TIMEOUT_SECONDS = 60;
+const itInternationalVideoLive = isLiveTestEnabled() && MOONSHOT_API_KEY.length > 0 ? it : it.skip;
+const itChinaVideoLive = isLiveTestEnabled() && MOONSHOT_CN_API_KEY.length > 0 ? it : it.skip;
+// Two 64x64 solid-red H.264 frames keep regional native-video proof deterministic.
+const KIMI_K3_LIVE_RED_VIDEO_BASE64 = [
+  "AAAAJGZ0eXBpc29tAAACAGlzb21pc282aXNvMmF2YzFtcDQxAAAC5m1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAAA+gAAAAA",
+  "AAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "AAAAAAAAAAIAAAHodHJhawAAAFx0a2hkAAAAAwAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAA",
+  "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAABAAAAAQAAAAAABhG1kaWEAAAAgbWRoZAAAAAAAAAAAAAAAAAAAQAAAAAAA",
+  "VcQAAAAAAC1oZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAVmlkZW9IYW5kbGVyAAAAAS9taW5mAAAAFHZtaGQAAAABAAAA",
+  "AAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAADvc3RibAAAAKNzdHNkAAAAAAAAAAEAAACTYXZj",
+  "MQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAABAAEAASAAAAEgAAAAAAAAAARVMYXZjNjIuMjguMTAyIGxpYngyNjQAAAAAAAAA",
+  "AAAAABj//wAAAC1hdmNDAULACv/hABZnQsAK2hCbARAAAAMAEAAAAwAo8SJqAQAEaM4PyAAAABBwYXNwAAAAAQAAAAEAAAAQ",
+  "c3R0cwAAAAAAAAAAAAAAEHN0c2MAAAAAAAAAAAAAABRzdHN6AAAAAAAAAAAAAAAAAAAAEHN0Y28AAAAAAAAAAAAAAChtdmV4",
+  "AAAAIHRyZXgAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGly",
+  "YXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYyLjEyLjEwMgAAAHhtb29mAAAAEG1m",
+  "aGQAAAAAAAAAAQAAAGB0cmFmAAAAJHRmaGQAAAA5AAAAAQAAAAAAAAMKAABAAAAAACMBAQAAAAAAFHRmZHQBAAAAAAAAAAAA",
+  "AAAAAAAgdHJ1bgAAAgUAAAACAAAAgAIAAAAAAAAjAAAACgAAADVtZGF0AAAAH2WIhDoRigACGPHAAED2OAAIeUnJyddddddd",
+  "dddddeAAAAAGQZogF6CMAAAAQ21mcmEAAAArdGZyYQEAAAAAAAABAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAMKAQEBAAAAEG1m",
+  "cm8AAAAAAAAAQw==",
+].join("");
 
 function isTransientKimiSearchError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -139,6 +162,75 @@ async function collectDoneMessage(
   }
   return doneMessage;
 }
+
+async function proveK3NativeVideoRegion(baseUrl: string, apiKey: string) {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const catalog = buildMoonshotProvider();
+  const definition = catalog.models.find((model) => model.id === "kimi-k3");
+  if (!definition) {
+    throw new Error("Moonshot catalog does not include kimi-k3");
+  }
+  const model = provider.normalizeResolvedModel?.({
+    provider: "moonshot",
+    modelId: "kimi-k3",
+    model: {
+      ...definition,
+      provider: "moonshot",
+      api: "openai-completions",
+      baseUrl,
+    },
+  } as never) as Model<"openai-completions"> | undefined;
+  const wrapped = provider.wrapStreamFn?.({
+    provider: "moonshot",
+    modelId: "kimi-k3",
+    thinkingLevel: "max",
+    streamFn: streamSimple,
+  } as never);
+  if (!model?.input.includes("video" as never) || !wrapped) {
+    throw new Error("registered Moonshot provider did not prepare K3 native video");
+  }
+  const context: ProviderContext = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "What single color fills this video? Reply with exactly RED, BLUE, or GREEN.",
+          },
+          { type: "video", mimeType: "video/mp4", data: KIMI_K3_LIVE_RED_VIDEO_BASE64 },
+        ],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+  const response = await collectDoneMessage(
+    (await wrapped(model, context as never, { apiKey, maxTokens: 128 })) as AsyncIterable<{
+      type: string;
+      message?: AssistantMessage;
+      error?: AssistantMessage;
+    }>,
+  );
+  const answer = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join(" ");
+  expect(answer).toMatch(/\bRED\b/iu);
+}
+
+describe("moonshot K3 native video live", () => {
+  itInternationalVideoLive(
+    "independently understands red video on api.moonshot.ai",
+    async () => await proveK3NativeVideoRegion("https://api.moonshot.ai/v1", MOONSHOT_API_KEY),
+    120_000,
+  );
+
+  itChinaVideoLive(
+    "independently understands red video on api.moonshot.cn",
+    async () => await proveK3NativeVideoRegion(MOONSHOT_CN_BASE_URL, MOONSHOT_CN_API_KEY),
+    120_000,
+  );
+});
 
 describeModelLive("moonshot K2.6 replay live", () => {
   it("accepts a cross-model tool-call replay after backfilling reasoning_content", async () => {
@@ -438,17 +530,3 @@ describeModelLive("moonshot K3 live", () => {
     throw toLintErrorObject(lastAuthError, "Moonshot K3 rejected the API key in both regions");
   }, 180_000);
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

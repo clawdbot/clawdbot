@@ -11,6 +11,7 @@ import {
   validateSkillsInstallParams,
   validateSkillsProposalActionParams,
   validateSkillsProposalCreateParams,
+  validateSkillsProposalDecisionParams,
   validateSkillsProposalEvaluateParams,
   validateSkillsProposalEventsListParams,
   validateSkillsProposalInspectParams,
@@ -24,16 +25,18 @@ import {
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { tryResolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
-import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
+import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
 import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
   installSkillFromClawHub,
   readLocalSkillCardContentSync,
@@ -42,7 +45,7 @@ import {
 } from "../../skills/lifecycle/clawhub.js";
 import { installSkill } from "../../skills/lifecycle/install.js";
 import { installUploadedSkillArchive } from "../../skills/lifecycle/upload-install.js";
-import { loadWorkspaceSkillEntries } from "../../skills/loading/workspace.js";
+import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import {
   collectClawHubVerdictTargets,
@@ -54,6 +57,7 @@ import {
   restoreCuratedSkill,
   unpinCuratedSkill,
 } from "../../skills/workshop/curator.js";
+import { assertExpectedRevisionHash } from "../../skills/workshop/service-evaluation.js";
 import {
   applySkillProposal,
   evaluateSkillProposal,
@@ -124,10 +128,7 @@ function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): stri
     .filter((warning): warning is string => Boolean(warning));
 }
 
-function buildRevisionAgentInstruction(
-  proposal: Awaited<ReturnType<typeof inspectSkillProposal>>,
-  expectedRevisionHash: string,
-) {
+function buildRevisionAgentInstruction(proposal: Awaited<ReturnType<typeof inspectSkillProposal>>) {
   if (!proposal) {
     return "";
   }
@@ -135,7 +136,7 @@ function buildRevisionAgentInstruction(
     `Revise Skill Workshop proposal \`${proposal.record.id}\` (${proposal.record.target.skillKey}).`,
     "",
     "Use `skill_workshop` with `action=inspect` first, then `action=revise` for that pending proposal.",
-    `Pass \`expected_revision_hash=${expectedRevisionHash}\` to reject stale proposal revisions.`,
+    "The proposal ID and expected revision hash are bound by this run; do not substitute them.",
     "Do not apply, approve, reject, quarantine, or install the proposal.",
     "",
     "Requested changes:",
@@ -150,30 +151,38 @@ async function forwardSkillWorkshopRevisionToChatSend(
     instructions: string;
     proposal: NonNullable<Awaited<ReturnType<typeof inspectSkillProposal>>>;
     expectedRevisionHash: string;
+    workspaceDir: string;
     sessionId?: string;
     sessionKey: string;
     targetAgentId?: string;
   },
 ): Promise<void> {
-  const { handleChatSend } = await import("./chat-send-handler.js");
+  const { handleChatSendWithSkillWorkshopProposalRevision } =
+    await import("./chat-send-handler.js");
   const chatParams = {
     sessionKey: params.sessionKey,
     agentId: params.targetAgentId ?? params.agentId,
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     message: params.instructions,
     deliver: false,
-    systemProvenanceReceipt: buildRevisionAgentInstruction(
-      params.proposal,
-      params.expectedRevisionHash,
-    ),
+    queueMode: "followup" as const,
+    systemProvenanceReceipt: buildRevisionAgentInstruction(params.proposal),
     suppressCommandInterpretation: true,
     idempotencyKey: params.idempotencyKey,
   };
-  await handleChatSend({
-    ...opts,
-    req: { ...opts.req, method: "chat.send", params: chatParams },
-    params: chatParams,
-  });
+  await handleChatSendWithSkillWorkshopProposalRevision(
+    {
+      ...opts,
+      req: { ...opts.req, method: "chat.send", params: chatParams },
+      params: chatParams,
+    },
+    {
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      proposalId: params.proposal.record.id,
+      expectedRevisionHash: params.expectedRevisionHash,
+    },
+  );
 }
 
 /** Gateway request handlers for skill status, catalogs, installs, updates, and workshop proposals. */
@@ -184,7 +193,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSkillsStatusParams, "skills.status", respond)) {
       return;
     }
-    const resolved = resolveSkillsAgentWorkspace(params, context);
+    const agentId =
+      params.agentId ?? tryResolveSystemAgentTargetAgentId(context.getRuntimeConfig());
+    const resolved = resolveSkillsAgentWorkspace({ ...params, agentId }, context);
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
       return;
@@ -272,7 +283,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const workspaceDirs = listAgentWorkspaceDirs(cfg);
     const bins = new Set<string>();
     for (const workspaceDir of workspaceDirs) {
-      const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
+      const entries = loadWorkspaceSkills(workspaceDir, { config: cfg });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
       }
@@ -298,8 +309,26 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      // Same reference grammar as skills.install, so a client cannot review one publisher's
+      // card and then install another's.
+      const requested = parseRequestedClawHubSkillRef((params as { slug: string }).slug);
+      if (requested.requestedReference) {
+        // ClawHub has no source-qualified read endpoint, so reading this by bare slug would
+        // show a same-slug registry skill while install resolves the external artifact.
+        // Refusing keeps review and install on one identity until that contract exists.
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `ClawHub cannot return details for ${requested.requestedReference}; external skill sources are install-only. Install it directly, or run "openclaw skills install ${requested.requestedReference}".`,
+          ),
+        );
+        return;
+      }
       const detail = await fetchClawHubSkillDetail({
-        slug: (params as { slug: string }).slug,
+        slug: requested.slug,
+        ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
       });
       respond(true, detail, undefined);
     } catch (err) {
@@ -513,6 +542,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       context,
       validate: validateSkillsProposalRequestRevisionParams,
       run: async (parsedParams, resolved) => {
+        const expectedRevisionHash = parsedParams.expectedRevisionHash;
         const proposal = await inspectSkillProposal(parsedParams.proposalId, {
           agentId: resolved.agentId,
           workspaceDir: resolved.workspaceDir,
@@ -539,26 +569,14 @@ export const skillsHandlers: GatewayRequestHandlers = {
           );
           return SKILL_PROPOSAL_RESPONSE_HANDLED;
         }
-        if (
-          parsedParams.expectedRevisionHash &&
-          parsedParams.expectedRevisionHash !== proposal.revisionHash
-        ) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Skill proposal revision changed: ${parsedParams.proposalId}`,
-            ),
-          );
-          return SKILL_PROPOSAL_RESPONSE_HANDLED;
-        }
+        assertExpectedRevisionHash(proposal.revisionHash, expectedRevisionHash);
         await forwardSkillWorkshopRevisionToChatSend(opts, {
           agentId: resolved.agentId,
-          expectedRevisionHash: parsedParams.expectedRevisionHash ?? proposal.revisionHash,
+          expectedRevisionHash,
           idempotencyKey: parsedParams.idempotencyKey,
           instructions: parsedParams.instructions,
           proposal,
+          workspaceDir: resolved.workspaceDir,
           sessionId: parsedParams.sessionId,
           sessionKey: parsedParams.sessionKey,
           targetAgentId: parsedParams.targetAgentId
@@ -575,7 +593,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       rawParams: params,
       respond,
       context,
-      validate: validateSkillsProposalActionParams,
+      validate: validateSkillsProposalDecisionParams,
       run: (parsedParams, resolved) =>
         applySkillProposal({
           workspaceDir: resolved.workspaceDir,
@@ -595,7 +613,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       rawParams: params,
       respond,
       context,
-      validate: validateSkillsProposalActionParams,
+      validate: validateSkillsProposalDecisionParams,
       run: (parsedParams, resolved) =>
         rejectSkillProposal({
           workspaceDir: resolved.workspaceDir,

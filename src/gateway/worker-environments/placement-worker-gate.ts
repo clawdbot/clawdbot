@@ -1,63 +1,84 @@
-import type {
-  WorkerSessionPlacementRecord,
-  WorkerSessionPlacementStore,
-  WorkerSessionTurnClaim,
-} from "./placement-store.js";
-import type { WorkerPlacementTurnBinding, WorkerSessionPlacementGate } from "./service.js";
+import {
+  projectWorkerSessionTurnClaim,
+  serializeWorkerSessionTurnClaim,
+  type WorkerSessionPlacementRecord,
+  type WorkerSessionTurnClaim,
+} from "./placement-record.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
+
+type WorkerPlacementBinding = Readonly<{
+  sessionId: string;
+  environmentId: string;
+  ownerEpoch: number;
+}>;
+
+export type WorkerSessionPlacementGate = {
+  /** Credential verification only; this does not grant operational worker authority. */
+  readWorkerTurnClaim(binding: WorkerPlacementBinding): WorkerSessionTurnClaim | undefined;
+  validateWorkerTurn(claim: WorkerSessionTurnClaim): boolean;
+  isWorkerTurnToolAuthorized(claim: WorkerSessionTurnClaim, toolName: string): boolean;
+  updateAckCursors(input: {
+    claim: WorkerSessionTurnClaim;
+    transcriptSeq?: number;
+    liveSeq?: number;
+  }): void;
+  registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void;
+};
 
 function claimForBinding(
   record: WorkerSessionPlacementRecord | undefined,
-  binding: WorkerPlacementTurnBinding,
+  binding: WorkerPlacementBinding,
 ): WorkerSessionTurnClaim | undefined {
-  const persisted = record?.turnClaim;
-  if (
-    !record ||
-    (record.state !== "active" && record.state !== "draining") ||
-    record.environmentId !== binding.environmentId ||
-    record.activeOwnerEpoch !== binding.ownerEpoch ||
-    persisted?.owner !== "worker" ||
-    persisted.runId !== binding.runId ||
-    persisted.ownerEpoch !== binding.ownerEpoch
-  ) {
-    return undefined;
-  }
-  return {
-    sessionId: binding.sessionId,
-    claimId: persisted.claimId,
-    runId: persisted.runId,
-    placementGeneration: persisted.generation,
-    owner: {
-      kind: "worker",
-      environmentId: binding.environmentId,
-      ownerEpoch: binding.ownerEpoch,
-    },
-  };
+  const claim = record ? projectWorkerSessionTurnClaim(record) : undefined;
+  return claim?.sessionId === binding.sessionId &&
+    claim.owner.environmentId === binding.environmentId &&
+    claim.owner.ownerEpoch === binding.ownerEpoch
+    ? claim
+    : undefined;
 }
 
 export function createWorkerSessionPlacementGate(
   store: WorkerSessionPlacementStore,
+  options: { rejectExistingWorkerClaims?: boolean } = {},
 ): WorkerSessionPlacementGate {
-  const validateWorkerTurn = (binding: WorkerPlacementTurnBinding): boolean => {
+  const recoveryOnlyClaims = new Set(
+    options.rejectExistingWorkerClaims
+      ? store.list().flatMap((record) => {
+          const claim = projectWorkerSessionTurnClaim(record);
+          return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
+        })
+      : [],
+  );
+  const isOperational = (claim: WorkerSessionTurnClaim) =>
+    !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)) &&
+    store.validateTurnClaim(claim);
+
+  const readWorkerTurnClaim = (binding: WorkerPlacementBinding) => {
     const claim = claimForBinding(store.get(binding.sessionId), binding);
-    return claim ? store.validateTurnClaim(claim) : false;
+    return claim && store.validateTurnClaim(claim) ? claim : undefined;
   };
 
+  const validateWorkerTurn = (claim: WorkerSessionTurnClaim) => isOperational(claim);
+
   return {
+    readWorkerTurnClaim,
     validateWorkerTurn,
 
-    updateAckCursors(binding): void {
-      const claim = claimForBinding(store.get(binding.sessionId), binding);
-      if (!claim) {
-        throw new Error(`Cannot ACK stale worker turn for session ${binding.sessionId}`);
+    isWorkerTurnToolAuthorized(claim, toolName): boolean {
+      return validateWorkerTurn(claim) && store.isWorkerTurnToolAuthorized(claim, toolName);
+    },
+
+    updateAckCursors(input): void {
+      if (!validateWorkerTurn(input.claim)) {
+        throw new Error(`Cannot ACK stale worker turn for session ${input.claim.sessionId}`);
       }
       store.updateAckCursors({
-        claim,
-        ...(binding.transcriptSeq === undefined ? {} : { transcript: binding.transcriptSeq }),
-        ...(binding.liveSeq === undefined ? {} : { liveEvent: binding.liveSeq }),
-        ...(binding.workspaceResultPending === undefined
-          ? {}
-          : { workspaceResultPending: binding.workspaceResultPending }),
+        claim: input.claim,
+        ...(input.transcriptSeq === undefined ? {} : { transcript: input.transcriptSeq }),
+        ...(input.liveSeq === undefined ? {} : { liveEvent: input.liveSeq }),
       });
     },
+
+    registerTurnClaimClosedHandler: (handler) => store.registerTurnClaimClosedHandler(handler),
   };
 }

@@ -376,6 +376,74 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
+  it("removes an earlier heartbeat acknowledgement from a substantive final result", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "HEARTBEAT_OK" }, { text: "Critical deployment failure" }],
+      finalAssistantVisibleText: "Critical deployment failure",
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "Critical deployment failure" }]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("uses producer-owned terminal text when trailing empty payloads follow a result", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Critical deployment failure" }, { text: "  " }],
+      finalAssistantVisibleText: "Critical deployment failure",
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "Critical deployment failure" }]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("keeps a terminal heartbeat acknowledgement intentionally quiet", () => {
+    const payloads = [{ text: "Checked inbox and calendar." }, { text: "HEARTBEAT_OK" }];
+    const result = resolveCronPayloadOutcome({
+      payloads,
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryPayloads).toEqual(payloads);
+    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: false });
+  });
+
+  it("records a pure heartbeat acknowledgement as a control-only terminal", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: true });
+  });
+
+  it("preserves structured output while removing a sibling heartbeat acknowledgement", () => {
+    const mediaPayload = {
+      text: "Here's the report",
+      mediaUrl: "https://example.com/report.png",
+    };
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "HEARTBEAT_OK" }, mediaPayload],
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryPayloads).toEqual([mediaPayload]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("keeps a heartbeat-labelled payload when the same payload carries media", () => {
+    const mediaPayload = {
+      text: "HEARTBEAT_OK",
+      mediaUrl: "https://example.com/report.png",
+    };
+    const result = resolveCronPayloadOutcome({
+      payloads: [mediaPayload],
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryPayloads).toEqual([mediaPayload]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
   it("does not promote narrated denial markers in summary text to fatal errors", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

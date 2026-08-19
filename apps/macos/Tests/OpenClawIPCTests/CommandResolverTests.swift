@@ -224,6 +224,68 @@ import Testing
         #expect(validatedManagedIndex < validatedPackageManagerIndex)
     }
 
+    @Test func `managed paths follow the app profile`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager().removeItem(at: home) }
+        let hostBase = home.appendingPathComponent(".openclaw")
+        let profileBase = home.appendingPathComponent(".openclaw-onboardtest")
+        for base in [hostBase, profileBase] {
+            try makeExecutableForTests(at: base.appendingPathComponent("bin/openclaw"))
+            try FileManager().createDirectory(
+                at: base.appendingPathComponent("tools/node/bin"),
+                withIntermediateDirectories: true)
+        }
+
+        let cases = [
+            (AppProfile(environment: [:]), hostBase, profileBase),
+            (AppProfile(environment: ["OPENCLAW_PROFILE": "onboardtest"]), profileBase, hostBase),
+        ]
+        for (profile, expectedBase, excludedBase) in cases {
+            let paths = CommandResolver.preferredPaths(
+                home: home,
+                current: [],
+                projectRoot: home,
+                profile: profile)
+            #expect(paths.contains(expectedBase.appendingPathComponent("bin").path))
+            #expect(paths.contains(expectedBase.appendingPathComponent("tools/node/bin").path))
+            #expect(!paths.contains(excludedBase.appendingPathComponent("bin").path))
+            #expect(!paths.contains(excludedBase.appendingPathComponent("tools/node/bin").path))
+        }
+
+        let namedProfile = AppProfile(environment: ["OPENCLAW_PROFILE": "onboardtest"])
+        let staleCases = [
+            (namedProfile, hostBase),
+            (AppProfile(environment: [:]), profileBase),
+        ]
+        for (profile, staleBase) in staleCases {
+            // Stale validation and inherited shell PATH both leak foreign managed dirs.
+            let paths = CommandResolver.preferredPaths(
+                home: home,
+                current: [staleBase.appendingPathComponent("bin").path, "/usr/bin"],
+                projectRoot: home,
+                validatedExecutable: staleBase.appendingPathComponent("bin/openclaw").path,
+                profile: profile)
+            #expect(!paths.contains(staleBase.appendingPathComponent("bin").path))
+            #expect(paths.contains("/usr/bin"))
+        }
+
+        // ~/.openclaw2 is a lookalike, not the managed profile namespace; validation must survive.
+        for external in ["custom/bin/openclaw", ".openclaw2/bin/openclaw"] {
+            let customExecutable = home.appendingPathComponent(external)
+            try makeExecutableForTests(at: customExecutable)
+            let externalPaths = CommandResolver.preferredPaths(
+                home: home,
+                current: [],
+                projectRoot: home,
+                validatedExecutable: customExecutable.path,
+                profile: namedProfile)
+            let customBin = customExecutable.deletingLastPathComponent().path
+            let customIndex = try #require(externalPaths.firstIndex(of: customBin))
+            let homebrewIndex = try #require(externalPaths.firstIndex(of: "/opt/homebrew/bin"))
+            #expect(customIndex < homebrewIndex)
+        }
+    }
+
     @Test func `node manager runtimes precede system runtimes`() throws {
         let home = try makeTempDirForTests()
         let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v22.22.3/bin")

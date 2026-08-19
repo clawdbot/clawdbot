@@ -6,7 +6,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
+import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 
 const anthropicModel = {
   api: "anthropic-messages",

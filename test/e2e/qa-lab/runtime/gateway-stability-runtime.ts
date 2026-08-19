@@ -23,17 +23,16 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
+import {
+  type GatewayStabilityRuntimeOptions,
+  parseGatewayStabilityRuntimeOptions,
+} from "./gateway-stability-runtime-contract.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-stability-runtime.ts";
 const SCENARIO_ID = "gateway-stability-runtime";
 const SYNTHETIC_EVENT_COUNT = 1_205;
 const PRIVATE_CHAT_ID = "qa-private-stability-chat";
-
-export type GatewayStabilityRuntimeOptions = {
-  artifactBase: string;
-  repoRoot: string;
-};
 
 type StabilitySnapshot = {
   capacity: number;
@@ -71,29 +70,10 @@ type GatewayStabilitySummary = {
   supportBytes: number;
 };
 
-function parseOptions(argv: string[], repoRoot = process.cwd()): GatewayStabilityRuntimeOptions {
-  let artifactBase: string | undefined;
-  for (let index = 0; index < argv.length; index += 1) {
-    const option = argv[index];
-    const value = argv[index + 1];
-    if (option !== "--artifact-base") {
-      throw new Error(`unknown argument: ${option}`);
-    }
-    if (!value || value.startsWith("--")) {
-      throw new Error("--artifact-base requires a value");
-    }
-    artifactBase = value;
-    index += 1;
-  }
-  if (!artifactBase) {
-    throw new Error("--artifact-base is required");
-  }
-  return { artifactBase: path.resolve(repoRoot, artifactBase), repoRoot };
-}
-
 function parseCliJson<T>(
   label: string,
   result: Awaited<ReturnType<OpenClawTestInstance["cli"]>>,
+  parse: (value: unknown) => T = (value) => value as T,
 ): T {
   if (result.code !== 0) {
     throw new Error(
@@ -101,7 +81,7 @@ function parseCliJson<T>(
     );
   }
   try {
-    return JSON.parse(result.stdout) as T;
+    return parse(JSON.parse(result.stdout) as unknown);
   } catch (error) {
     throw new Error(
       `${label} returned invalid JSON: ${formatErrorMessage(error)}\n${result.stdout}`,
@@ -321,7 +301,7 @@ export async function runGatewayStabilityRuntime(options: GatewayStabilityRuntim
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  runGatewayStabilityRuntime(parseOptions(process.argv.slice(2)))
+  runGatewayStabilityRuntime(parseGatewayStabilityRuntimeOptions(process.argv.slice(2)))
     .then((evidence) => {
       const status = evidence.entries[0]?.result.status;
       process.stdout.write(`gateway-stability-runtime: ${status}\n`);

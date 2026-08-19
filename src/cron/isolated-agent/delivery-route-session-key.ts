@@ -1,5 +1,5 @@
 import {
-  stripTargetKindPrefix,
+  stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
 } from "../../infra/outbound/channel-target-prefix.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -28,7 +28,7 @@ export function selectCronRouteCurrentSessionKey(
   const conversation = /^([^:]+):(direct|group|channel):([^:]+)(?::thread:[^:]+)?$/i.exec(
     parsedBound.rest,
   );
-  const targetPeerId = stripTargetKindPrefix(
+  const targetPeerId = stripOutboundTargetKindPrefix(
     stripTargetProviderPrefix(deliveryTarget, deliveryProvider),
   );
   if (

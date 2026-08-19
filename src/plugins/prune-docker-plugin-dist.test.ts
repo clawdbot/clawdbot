@@ -1,12 +1,14 @@
 /** Verifies Docker packaging prunes plugin dist artifacts to the supported runtime surface. */
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   parseDockerPluginKeepList,
   pruneDockerPluginDist,
 } from "../../scripts/prune-docker-plugin-dist.mjs";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 
@@ -33,8 +35,9 @@ function writeNodePackage(
   repoRoot: string,
   packageName: string,
   packageJson: Record<string, unknown> = {},
+  importerDir = repoRoot,
 ) {
-  const packageDir = path.join(repoRoot, "node_modules", ...packageName.split("/"));
+  const packageDir = path.join(importerDir, "node_modules", ...packageName.split("/"));
   fs.mkdirSync(packageDir, { recursive: true });
   writeJsonFile(path.join(packageDir, "package.json"), {
     name: packageName,
@@ -148,8 +151,25 @@ describe("pruneDockerPluginDist", () => {
       optionalDependencies: {
         "@zed-industries/codex-acp-linux-x64": "0.0.0",
       },
+      peerDependencies: {
+        vitest: "0.0.0",
+      },
+      peerDependenciesMeta: {
+        vitest: { optional: true },
+      },
     });
     writeNodePackage(repoRoot, "@zed-industries/codex-acp-linux-x64");
+    writeNodePackage(repoRoot, "vitest", {
+      dependencies: {
+        vite: "0.0.0",
+      },
+    });
+    writeNodePackage(repoRoot, "vite", {
+      dependencies: {
+        postcss: "0.0.0",
+      },
+    });
+    writeNodePackage(repoRoot, "postcss");
 
     const removed = pruneDockerPluginDist({
       repoRoot,
@@ -160,6 +180,9 @@ describe("pruneDockerPluginDist", () => {
       "node_modules/@openclaw/acpx",
       "node_modules/@zed-industries/codex-acp",
       "node_modules/@zed-industries/codex-acp-linux-x64",
+      "node_modules/postcss",
+      "node_modules/vite",
+      "node_modules/vitest",
       "extensions/acpx",
     ]);
     expect(fs.existsSync(path.join(repoRoot, "node_modules", "zod"))).toBe(true);
@@ -168,6 +191,139 @@ describe("pruneDockerPluginDist", () => {
       true,
     );
     expect(fs.existsSync(path.join(repoRoot, "node_modules", "@zed-industries"))).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, "node_modules", "vitest"))).toBe(false);
     expect(fs.existsSync(path.join(repoRoot, "extensions", "codex"))).toBe(true);
+  });
+
+  it("keeps root-hoisted transitives used through a kept plugin's nested dependency", () => {
+    const repoRoot = makeRepoRoot("openclaw-docker-plugin-workspace-importer-");
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      files: ["dist/**", "!dist/extensions/omitted-client/**"],
+      dependencies: {
+        "shared-client": "1.0.0",
+      },
+    });
+    const keptPluginDir = path.join(repoRoot, "extensions", "kept-client");
+    writeJsonFile(path.join(keptPluginDir, "package.json"), {
+      name: "@openclaw/kept-client",
+      version: "0.0.0",
+      dependencies: {
+        "shared-client": "2.0.0",
+      },
+    });
+    writeJsonFile(path.join(repoRoot, "extensions", "omitted-client", "package.json"), {
+      name: "@openclaw/omitted-client",
+      version: "0.0.0",
+      dependencies: {
+        "kept-transitive": "1.0.0",
+      },
+    });
+
+    writeNodePackage(repoRoot, "shared-client", { version: "1.0.0" });
+    writeNodePackage(
+      repoRoot,
+      "shared-client",
+      {
+        version: "2.0.0",
+        dependencies: { "kept-transitive": "1.0.0" },
+      },
+      keptPluginDir,
+    );
+    writeNodePackage(repoRoot, "kept-transitive", { version: "1.0.0" });
+    fs.writeFileSync(
+      path.join(keptPluginDir, "index.js"),
+      'module.exports = require("shared-client");\n',
+    );
+    fs.writeFileSync(
+      path.join(keptPluginDir, "node_modules", "shared-client", "index.js"),
+      'module.exports = require("kept-transitive");\n',
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "node_modules", "kept-transitive", "index.js"),
+      "module.exports = {};\n",
+    );
+
+    const removed = pruneDockerPluginDist({ repoRoot, env: {} as NodeJS.ProcessEnv });
+
+    expect(removed).toEqual(["extensions/omitted-client"]);
+    const requireFromKeptPlugin = createRequire(path.join(keptPluginDir, "package.json"));
+    expect(() => requireFromKeptPlugin("./index.js")).not.toThrow();
+  });
+
+  it("keeps transitive dependencies resolved through nested package versions", () => {
+    const repoRoot = makeRepoRoot("openclaw-docker-plugin-nested-dependencies-");
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      files: ["dist/**", "!dist/extensions/optional-client/**"],
+      dependencies: {
+        grammy: "1.45.1",
+        "modern-client": "1.0.0",
+      },
+    });
+    writeJsonFile(path.join(repoRoot, "extensions", "optional-client", "package.json"), {
+      name: "@openclaw/optional-client",
+      version: "0.0.0",
+      dependencies: {
+        "whatwg-url": "16.0.1",
+      },
+    });
+
+    writeNodePackage(repoRoot, "grammy", {
+      dependencies: { "node-fetch": "2.7.0" },
+    });
+    writeNodePackage(repoRoot, "modern-client", {
+      dependencies: { "node-fetch": "3.3.2" },
+    });
+    writeNodePackage(repoRoot, "node-fetch", { version: "3.3.2" });
+    writeNodePackage(repoRoot, "whatwg-url", {
+      version: "16.0.1",
+      dependencies: { tr46: "6.0.0" },
+    });
+    writeNodePackage(repoRoot, "tr46", { version: "0.0.3" });
+
+    const grammyDir = path.join(repoRoot, "node_modules", "grammy");
+    writeNodePackage(
+      repoRoot,
+      "node-fetch",
+      {
+        version: "2.7.0",
+        dependencies: { "whatwg-url": "5.0.0" },
+      },
+      grammyDir,
+    );
+    writeNodePackage(
+      repoRoot,
+      "whatwg-url",
+      {
+        version: "5.0.0",
+        dependencies: { tr46: "0.0.3" },
+      },
+      grammyDir,
+    );
+    writeNodePackage(
+      repoRoot,
+      "tr46",
+      { version: "6.0.0" },
+      path.join(repoRoot, "node_modules", "whatwg-url"),
+    );
+    fs.writeFileSync(path.join(grammyDir, "index.js"), 'module.exports = require("node-fetch");\n');
+    fs.writeFileSync(
+      path.join(grammyDir, "node_modules", "node-fetch", "index.js"),
+      'module.exports = require("whatwg-url");\n',
+    );
+    fs.writeFileSync(
+      path.join(grammyDir, "node_modules", "whatwg-url", "index.js"),
+      'module.exports = require("tr46");\n',
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "node_modules", "tr46", "index.js"),
+      "module.exports = {};\n",
+    );
+
+    const removed = pruneDockerPluginDist({ repoRoot, env: {} as NodeJS.ProcessEnv });
+
+    expect(removed).toEqual(["node_modules/whatwg-url", "extensions/optional-client"]);
+    expect(fs.existsSync(path.join(repoRoot, "node_modules", "tr46"))).toBe(true);
+    const requireFromRepo = createRequire(path.join(repoRoot, "package.json"));
+    expect(() => requireFromRepo("grammy")).not.toThrow();
   });
 });

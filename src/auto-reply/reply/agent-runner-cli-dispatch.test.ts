@@ -2,6 +2,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -16,10 +17,18 @@ import {
   clearCliSessionBindingForRun,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
-  runCliAgentWithLifecycle,
+  runCliAgentWithLifecycle as runCliAgentWithLifecycleProduction,
 } from "./agent-runner-cli-dispatch.js";
 
-type RunCliAgentWithLifecycleParams = Parameters<typeof runCliAgentWithLifecycle>[0];
+type ProductionLifecycleParams = Parameters<typeof runCliAgentWithLifecycleProduction>[0];
+type RunCliAgentWithLifecycleParams = Omit<ProductionLifecycleParams, "runParams"> & {
+  runParams: Omit<ProductionLifecycleParams["runParams"], "admittedRunContext">;
+};
+const runCliAgentWithLifecycle = (params: RunCliAgentWithLifecycleParams) =>
+  runCliAgentWithLifecycleProduction({
+    ...params,
+    runParams: withTestAdmittedRunContext(params.runParams),
+  });
 type ReasoningTextPayload = Parameters<
   NonNullable<RunCliAgentWithLifecycleParams["onReasoningText"]>
 >[0];
@@ -734,25 +743,32 @@ describe("createCliToolSummaryTracker", () => {
     result: { content: [{ type: "text", text: "Wed Jun 10 2026" }] },
   };
 
-  it("delivers a tool summary for a result using meta captured at start", async () => {
-    const deliver = vi.fn();
-    const tracker = createCliToolSummaryTracker({
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      deliver,
-    });
-    await tracker.noteToolEvent(startEvent);
-    await tracker.noteToolEvent(resultEvent);
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const payload = deliver.mock.calls[0]?.[0] as { text: string; isError?: boolean };
-    expect(payload.text).toContain("date -u");
-    expect(payload.text).not.toContain("Wed Jun 10 2026");
-    expect(payload.isError).toBeUndefined();
-  });
+  it.each(["exec", "server.exec"])(
+    "delivers a safe %s summary using metadata captured at start",
+    async (name) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: false,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        deliver,
+      });
+      await tracker.noteToolEvent({ ...startEvent, name });
+      const commandBearing = await tracker.noteToolEvent({ ...resultEvent, name });
+      expect(commandBearing).toBe(true);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      const payload = deliver.mock.calls[0]?.[0] as { text: string; isError?: boolean };
+      expect(payload.text).toContain(name === "exec" ? "Exec" : "Server.exec");
+      expect(payload.text).not.toContain("date -u");
+      expect(payload.text).not.toContain("Wed Jun 10 2026");
+      expect(payload.isError).toBeUndefined();
+    },
+  );
 
   it("appends the tool output block when full verbose output is enabled", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => true,
       deliver,
@@ -767,6 +783,7 @@ describe("createCliToolSummaryTracker", () => {
   it("renders top-level structured CLI results in full verbose output", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => true,
       deliver,
@@ -785,6 +802,7 @@ describe("createCliToolSummaryTracker", () => {
   it("emits nothing while tool summaries are disabled", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => false,
       shouldEmitToolOutput: () => false,
       deliver,
@@ -797,6 +815,7 @@ describe("createCliToolSummaryTracker", () => {
   it("propagates tool errors on the summary payload", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       deliver,
@@ -810,6 +829,7 @@ describe("createCliToolSummaryTracker", () => {
   it("summarizes results without a tracked start event", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       deliver,

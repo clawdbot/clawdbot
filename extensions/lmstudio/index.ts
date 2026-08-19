@@ -1,6 +1,8 @@
+import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 // Lmstudio plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
+  type OpenClawConfig,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthMethod,
@@ -8,7 +10,6 @@ import {
   type ProviderAuthResult,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   normalizeOptionalSecretInput,
@@ -152,7 +153,9 @@ export default definePluginEntry({
   name: "LM Studio Provider",
   description: "Bundled LM Studio provider plugin",
   register(api: OpenClawPluginApi) {
-    api.registerMemoryEmbeddingProvider(lmstudioMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(
+      adaptMemoryEmbeddingProviderAdapter(lmstudioMemoryEmbeddingProviderAdapter),
+    );
     api.registerProvider({
       id: PROVIDER_ID,
       label: "LM Studio",
@@ -187,6 +190,7 @@ export default definePluginEntry({
             return await providerSetup.promptAndConfigureLmstudioInteractive({
               config: ctx.config,
               agentDir: ctx.agentDir,
+              workspaceDir: ctx.workspaceDir,
               prompter: ctx.prompter,
               secretInputMode: ctx.secretInputMode,
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,

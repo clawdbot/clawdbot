@@ -1,9 +1,13 @@
 import {
   prepareHarnessNativeMcpAppPreview,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type McpToolCatalog,
   type SessionMcpRuntime,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
 import type { CodexMcpServerStatus, CodexThreadItem, JsonObject, JsonValue } from "./protocol.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
@@ -15,28 +19,20 @@ type NativeMcpCallToolResult = {
   _meta?: JsonValue;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readMcpAppResourceUri(item: CodexThreadItem): string | undefined {
-  const appContext = asRecord(item.appContext);
-  const uri = readString(appContext?.resourceUri) ?? readString(item.mcpAppResourceUri);
+  const appContext = asOptionalRecord(item.appContext);
+  const uri =
+    normalizeOptionalString(appContext?.resourceUri) ??
+    normalizeOptionalString(item.mcpAppResourceUri);
   return uri?.startsWith("ui://") ? uri : undefined;
 }
 
 function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResult | undefined {
-  const result = asRecord(item.result);
+  const result = asOptionalRecord(item.result);
   if (!result || !Array.isArray(result.content)) {
     return undefined;
   }
-  const resultMeta = asRecord(result["_meta"]);
+  const resultMeta = asOptionalRecord(result["_meta"]);
   return {
     content: result.content as JsonValue[],
     ...(result.structuredContent !== undefined
@@ -52,7 +48,7 @@ function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResult | und
 
 function statusTools(status: CodexMcpServerStatus): Array<Record<string, unknown>> {
   return Object.entries(status.tools).map(([name, value]) =>
-    Object.assign({}, asRecord(value), { name }),
+    Object.assign({}, asOptionalRecord(value) ?? {}, { name }),
   );
 }
 
@@ -100,8 +96,8 @@ function createNativeMcpRuntime(params: {
           serverName: status.name,
           safeServerName: status.name,
           toolName: String(tool.name),
-          inputSchema: (asRecord(tool.inputSchema) ?? { type: "object" }) as never,
-          fallbackDescription: readString(tool.description) ?? String(tool.name),
+          inputSchema: (asOptionalRecord(tool.inputSchema) ?? { type: "object" }) as never,
+          fallbackDescription: normalizeOptionalString(tool.description) ?? String(tool.name),
         })),
       ),
     };
@@ -128,7 +124,7 @@ function createNativeMcpRuntime(params: {
         threadId: params.threadId,
         server: serverName,
         tool: toolName,
-        arguments: (asRecord(input) ?? {}) as JsonObject,
+        arguments: (asOptionalRecord(input) ?? {}) as JsonObject,
       })) as never,
     listTools: async (serverName) => {
       const status = (await loadStatuses()).find((entry) => entry.name === serverName);
@@ -163,8 +159,8 @@ export function createCodexNativeMcpAppResultDetailsPreparer(params: {
   }
   const runtime = createNativeMcpRuntime(params);
   return async (item) => {
-    const serverName = readString(item.server);
-    const toolName = readString(item.tool);
+    const serverName = normalizeOptionalString(item.server);
+    const toolName = normalizeOptionalString(item.tool);
     const uiResourceUri = readMcpAppResourceUri(item);
     const toolResult = readMcpToolResult(item);
     if (!serverName || !toolName || !uiResourceUri || !toolResult) {

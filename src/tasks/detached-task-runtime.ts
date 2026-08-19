@@ -11,14 +11,14 @@ import type {
 import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import { cancelTaskById as cancelDetachedTaskRunByIdInCore } from "./runtime-internal.js";
 import {
-  completeTaskRunByRunId as completeTaskRunByRunIdFromExecutor,
-  createQueuedTaskRun as createQueuedTaskRunFromExecutor,
-  createRunningTaskRun as createRunningTaskRunFromExecutor,
-  failTaskRunByRunId as failTaskRunByRunIdFromExecutor,
-  finalizeTaskRunByRunId as finalizeTaskRunByRunIdFromExecutor,
-  recordTaskRunProgressByRunId as recordTaskRunProgressByRunIdFromExecutor,
-  setDetachedTaskDeliveryStatusByRunId as setDetachedTaskDeliveryStatusByRunIdFromExecutor,
-  startTaskRunByRunId as startTaskRunByRunIdFromExecutor,
+  completeTaskRunByRunIdCore,
+  createQueuedTaskRunCore,
+  createRunningTaskRunCore,
+  failTaskRunByRunIdCore,
+  finalizeTaskRunByRunIdCore,
+  recordTaskRunProgressByRunIdCore,
+  setDetachedTaskDeliveryStatusByRunIdCore,
+  startTaskRunByRunIdCore,
 } from "./task-executor.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { findTaskByRunIdForStatus, listTasksForSessionKeyForStatus } from "./task-status-access.js";
@@ -54,14 +54,14 @@ function findCoreTaskRun(params: DetachedTaskFindParams): TaskRecord | undefined
 
 // Default runtime keeps detached task APIs usable before plugins install custom lifecycle hooks.
 const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
-  createQueuedTaskRun: createQueuedTaskRunFromExecutor,
-  createRunningTaskRun: createRunningTaskRunFromExecutor,
-  startTaskRunByRunId: startTaskRunByRunIdFromExecutor,
-  recordTaskRunProgressByRunId: recordTaskRunProgressByRunIdFromExecutor,
-  finalizeTaskRunByRunId: finalizeTaskRunByRunIdFromExecutor,
-  completeTaskRunByRunId: completeTaskRunByRunIdFromExecutor,
-  failTaskRunByRunId: failTaskRunByRunIdFromExecutor,
-  setDetachedTaskDeliveryStatusByRunId: setDetachedTaskDeliveryStatusByRunIdFromExecutor,
+  createQueuedTaskRun: createQueuedTaskRunCore,
+  createRunningTaskRun: createRunningTaskRunCore,
+  startTaskRunByRunId: startTaskRunByRunIdCore,
+  recordTaskRunProgressByRunId: recordTaskRunProgressByRunIdCore,
+  finalizeTaskRunByRunId: finalizeTaskRunByRunIdCore,
+  completeTaskRunByRunId: completeTaskRunByRunIdCore,
+  failTaskRunByRunId: failTaskRunByRunIdCore,
+  setDetachedTaskDeliveryStatusByRunId: setDetachedTaskDeliveryStatusByRunIdCore,
   findTaskRun: findCoreTaskRun,
   cancelDetachedTaskRunById: cancelDetachedTaskRunByIdInCore,
 };

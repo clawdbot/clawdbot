@@ -91,7 +91,7 @@
   align-items: start;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1100px) {
   .logbook__layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -275,7 +275,7 @@
   background: color-mix(in oklab, var(--warn) 12%, transparent);
 }
 
-@media (max-width: 700px) {
+@media (max-width: 768px) {
   .logbook-card__header {
     grid-template-columns: 4px minmax(0, 1fr);
   }

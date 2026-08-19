@@ -133,7 +133,7 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard"]);
 
     expect(setupWizardOptions().installDaemon).toBeUndefined();
-    expect(setupWizardOptions().tailscaleResetOnExit).toBeUndefined();
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("sets installDaemon from explicit install flags and prioritizes --skip-daemon", async () => {
@@ -158,7 +158,7 @@ describe("registerOnboardCommand", () => {
       await runCli(["onboard", "--gateway-port", gatewayPort]);
 
       expect(runtime.error).toHaveBeenCalledWith(
-        "Error: --gateway-port must be an integer between 1 and 65535.",
+        "--gateway-port must be an integer between 1 and 65535.",
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(setupWizardCommandMock).not.toHaveBeenCalled();
@@ -177,14 +177,20 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().skipBootstrap).toBe(true);
   });
 
-  it("forwards explicit --tailscale-reset-on-exit", async () => {
-    await runCli(["onboard", "--tailscale-reset-on-exit"]);
-    expect(setupWizardOptions().tailscaleResetOnExit).toBe(true);
+  it("forwards --agent-name to onboarding", async () => {
+    await runCli(["onboard", "--agent-name", "robby"]);
+    expect(setupWizardOptions().agentName).toBe("robby");
   });
 
-  it("forwards explicit --no-tailscale-reset-on-exit", async () => {
+  it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
+    await runCli(["onboard", "--tailscale-reset-on-exit"]);
+
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
+  });
+
+  it("accepts retired --no-tailscale-reset-on-exit as a no-op", async () => {
     await runCli(["onboard", "--no-tailscale-reset-on-exit"]);
-    expect(setupWizardOptions().tailscaleResetOnExit).toBe(false);
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("forwards remote seed flags to setup wizard options", async () => {
@@ -264,7 +270,7 @@ describe("registerOnboardCommand", () => {
 
     await runCli(["onboard"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: setup failed");
+    expect(runtime.error).toHaveBeenCalledWith("setup failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

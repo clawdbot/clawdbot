@@ -111,7 +111,7 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./manifest-registry.js")>();
   return {
     ...actual,
-    loadPluginManifestRegistry: loadPluginManifestRegistryMock,
+    loadPluginManifestRegistryCore: loadPluginManifestRegistryMock,
   };
 });
 

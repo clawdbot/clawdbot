@@ -1,5 +1,6 @@
 // Codex plugin module implements source behavior.
 import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   defaultCodexAppInventoryCache,
@@ -155,7 +156,7 @@ async function discoverInstalledCuratedPlugins(
   } catch (error) {
     return {
       plugins: [],
-      error: error instanceof Error ? error.message : String(error),
+      error: coerceErrorMessage(error),
     };
   }
 }
@@ -297,7 +298,7 @@ async function withPluginMigrationEligibility(params: {
       sourceAccountError = "Codex app-server did not report an authenticated source account.";
     }
   } catch (error) {
-    sourceAccountError = error instanceof Error ? error.message : String(error);
+    sourceAccountError = coerceErrorMessage(error);
   }
   if (sourceAccountError && !params.verifyPluginApps) {
     for (const { plugin, apps } of pending) {
@@ -335,7 +336,7 @@ async function withPluginMigrationEligibility(params: {
 
   const snapshot = await refreshSourceAppInventory(params.requestOptions).catch(
     (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       for (const { plugin, apps } of pending) {
         evaluated.push({
           ...plugin,
@@ -427,7 +428,7 @@ async function readPluginDetail(
     });
     return { ok: true, detail: response.plugin };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, error: coerceErrorMessage(error) };
   }
 }
 

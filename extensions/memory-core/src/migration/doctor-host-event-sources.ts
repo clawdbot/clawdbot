@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
-import { resolveMemoryHostEventLogPath } from "openclaw/plugin-sdk/memory-host-events";
+// Doctor enumeration cold-loads this closure; memory-host-events pulls the
+// event-store/kysely graph, so the path resolver loads lazily in async bodies.
 import { resolveConfiguredWorkspaces } from "./doctor-workspaces.js";
 
 export type LegacyMemoryHostEventSource =
@@ -45,6 +46,7 @@ export async function collectLegacyMemoryHostEventSources(
   config: unknown,
   env: NodeJS.ProcessEnv,
 ): Promise<LegacyMemoryHostEventSource[]> {
+  const { resolveMemoryHostEventLogPath } = await import("openclaw/plugin-sdk/memory-host-events");
   const sources: LegacyMemoryHostEventSource[] = [];
   const seenWorkspaces = new Set<string>();
   for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
@@ -154,6 +156,7 @@ export async function collectLegacyMemoryHostEventSources(
 export async function resolveMemoryHostEventArchivePath(
   source: ReadyLegacyMemoryHostEventSource,
 ): Promise<{ archiveRelativePath: string; claimRelativePath: string; generationKey: string }> {
+  const { resolveMemoryHostEventLogPath } = await import("openclaw/plugin-sdk/memory-host-events");
   const activeRelativePath = path.relative(
     source.workspaceDir,
     resolveMemoryHostEventLogPath(source.workspaceDir),

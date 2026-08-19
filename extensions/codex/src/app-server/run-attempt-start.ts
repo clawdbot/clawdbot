@@ -18,8 +18,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     trajectoryRecorder,
     activateNativePreToolUseFailureFallback,
     releaseSandboxExecEnvironment,
-    releaseSharedClientLeaseOnce,
+    releaseSharedClientLeaseAndRetireOneShotClient,
     releaseCurrentRoute,
+    runCleanupStep,
     startupTimeoutMs,
     buildNativeHookRelayFinalConfigPatch,
   } = resources;
@@ -41,6 +42,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,
+    effectiveRuntimeModelId,
     sandboxExecServerEnabled,
   } = runtime;
   const { toolBridge, toolState } = attemptTools;
@@ -92,7 +94,12 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       startupEnvApiKeyCacheKey,
       agentDir,
       config: params.config,
+      shellEnvironment: connection.shellEnvironment,
+      disableLoginShell: connection.disableLoginShell,
       buildAttemptParams: buildActiveRunAttemptParams,
+      ...(effectiveRuntimeModelId !== runtimeParams.modelId
+        ? { runtimeModelId: effectiveRuntimeModelId }
+        : {}),
       sessionAgentId,
       effectiveWorkspace,
       effectiveCwd,
@@ -100,6 +107,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
@@ -114,6 +122,15 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       spawnedBy: params.spawnedBy,
     });
     state.client = startupResult.client;
+    state.thread = startupResult.thread;
+    state.runtimeArtifact = startupResult.runtimeArtifact;
+    state.turnRouter = startupResult.turnRouter;
+    state.turnRoute = startupResult.turnRoute;
+    // Adopt cleanup ownership before any fallible validation of the started thread.
+    state.sandboxExecEnvironmentAcquired = Boolean(startupResult.sandboxEnvironment);
+    state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
+    state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
+    pluginAppServer = startupResult.pluginAppServer;
     toolBridge.setRemoteWorkspaceFileReader?.(
       ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
         readBoundedCodexRemoteWorkspaceFile({
@@ -125,15 +142,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
           timeoutMs,
         }),
     );
-    state.thread = startupResult.thread;
-    state.runtimeArtifact = startupResult.runtimeArtifact;
-    state.turnRouter = startupResult.turnRouter;
-    state.turnRoute = startupResult.turnRoute;
-    // Adopt cleanup ownership before any fallible validation of the started thread.
-    state.sandboxExecEnvironmentAcquired = Boolean(startupResult.sandboxEnvironment);
-    state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
-    state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
-    pluginAppServer = startupResult.pluginAppServer;
     if (
       usesSupervisionConnection &&
       (state.thread.connectionScope !== "supervision" ||
@@ -184,34 +192,46 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         clientId: state.client.getInstanceId(),
       },
     });
+    if (applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)) {
+      await rebuildCodexTurnPromptTextFromCurrentProjection();
+    }
+    trajectoryRecorder?.recordEvent("session.started", {
+      sessionFile: params.sessionFile,
+      threadId: state.thread.threadId,
+      authProfileId: startupAuthProfileId,
+      workspaceDir: effectiveWorkspace,
+      toolCount: flattenCodexDynamicToolFunctions(toolBridge.specs).length,
+    });
+    recordCodexTrajectoryContext(trajectoryRecorder, {
+      attempt: params,
+      cwd: effectiveCwd,
+      developerInstructions: joinPresentSections(
+        buildRenderedCodexDeveloperInstructions(),
+        attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+      ),
+      prompt: turnState.codexTurnPromptText,
+      tools: toolBridge.availableSpecs,
+    });
+    connection.mutable.pluginAppServer = pluginAppServer;
   } catch (error) {
-    activateNativePreToolUseFailureFallback();
-    releaseCurrentRoute();
-    state.nativeHookRelay?.unregister();
-    await releaseSandboxExecEnvironment();
-    releaseSharedClientLeaseOnce();
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    await runCleanupStep(
+      "codex-start-failure-hook-fallback",
+      activateNativePreToolUseFailureFallback,
+    );
+    await runCleanupStep("codex-start-failure-route-release", releaseCurrentRoute);
+    const nativeHookRelay = state.nativeHookRelay;
+    state.nativeHookRelay = undefined;
+    await runCleanupStep("codex-start-failure-native-hook-relay", () =>
+      nativeHookRelay?.unregister(),
+    );
+    await runCleanupStep("codex-start-failure-sandbox-release", releaseSandboxExecEnvironment);
+    await runCleanupStep(
+      "codex-start-failure-shared-client-release",
+      releaseSharedClientLeaseAndRetireOneShotClient,
+    );
+    await runCleanupStep("codex-start-failure-abort-listener", () =>
+      params.abortSignal?.removeEventListener("abort", abortFromUpstream),
+    );
     throw error;
   }
-  if (applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)) {
-    await rebuildCodexTurnPromptTextFromCurrentProjection();
-  }
-  trajectoryRecorder?.recordEvent("session.started", {
-    sessionFile: params.sessionFile,
-    threadId: state.thread.threadId,
-    authProfileId: startupAuthProfileId,
-    workspaceDir: effectiveWorkspace,
-    toolCount: flattenCodexDynamicToolFunctions(toolBridge.specs).length,
-  });
-  recordCodexTrajectoryContext(trajectoryRecorder, {
-    attempt: params,
-    cwd: effectiveCwd,
-    developerInstructions: joinPresentSections(
-      buildRenderedCodexDeveloperInstructions(),
-      attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
-    ),
-    prompt: turnState.codexTurnPromptText,
-    tools: toolBridge.availableSpecs,
-  });
-  connection.mutable.pluginAppServer = pluginAppServer;
 }

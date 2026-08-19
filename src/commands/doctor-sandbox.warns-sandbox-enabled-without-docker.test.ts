@@ -37,7 +37,7 @@ vi.mock("../agents/sandbox/docker.js", () => ({
   validateSandboxContainerEngineTarget,
 }));
 
-vi.mock("../agents/sandbox/registry.js", () => ({
+vi.mock("./doctor-sandbox-legacy-registry.js", () => ({
   inspectLegacySandboxRegistryFiles,
   migrateLegacySandboxRegistryFiles,
 }));
@@ -302,8 +302,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     inspectLegacySandboxRegistryFiles.mockResolvedValue([
       {
         kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
+        path: "/tmp/openclaw/sandbox/containers.json",
         source: "monolithic",
         exists: true,
         valid: true,
@@ -328,8 +327,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     inspectLegacySandboxRegistryFiles.mockResolvedValue([
       {
         kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
+        path: "/tmp/openclaw/sandbox/containers.json",
         source: "monolithic",
         exists: true,
         valid: true,
@@ -339,8 +337,6 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     migrateLegacySandboxRegistryFiles.mockResolvedValue([
       {
         kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
         status: "migrated",
         entries: 2,
       },
@@ -361,8 +357,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
   it("maps legacy registry files to structured findings and dry-run effects", () => {
     const monolithicFile = {
       kind: "containers",
-      registryPath: "/tmp/openclaw/sandbox/containers.json",
-      shardedDir: "/tmp/openclaw/sandbox/containers",
+      path: "/tmp/openclaw/sandbox/containers.json",
       source: "monolithic",
       exists: true,
       valid: true,
@@ -370,6 +365,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     } as const;
     const shardedFile = {
       ...monolithicFile,
+      path: "/tmp/openclaw/sandbox/containers",
       source: "sharded",
     } as const;
 
@@ -406,8 +402,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     expect(
       legacySandboxRegistryInspectionToRepairEffect({
         kind: "browsers",
-        registryPath: "/tmp/openclaw/sandbox/browsers.json",
-        shardedDir: "/tmp/openclaw/sandbox/browsers",
+        path: "/tmp/openclaw/sandbox/browsers.json",
         source: "monolithic",
         exists: true,
         valid: false,
@@ -425,8 +420,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     expect(
       legacySandboxRegistryInspectionToRepairEffect({
         kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
+        path: "/tmp/openclaw/sandbox/containers.json",
         source: "monolithic",
         exists: true,
         valid: true,

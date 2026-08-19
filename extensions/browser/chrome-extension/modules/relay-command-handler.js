@@ -1,5 +1,3 @@
-import { requireSharedTab } from "./relay-tab-groups.js";
-
 /** Build the authenticated application-command dispatcher for the relay socket. */
 export function createRelayCommandHandler({
   send,
@@ -8,6 +6,8 @@ export function createRelayCommandHandler({
   addTabToOpenClawGroup,
   focusWindowForTab,
   scheduleTabsSync,
+  captureAccess,
+  requireAccessibleTab,
 }) {
   return async (message) => {
     const { seq } = message;
@@ -24,7 +24,8 @@ export function createRelayCommandHandler({
           send({ type: "result", seq, result: {} });
           return;
         case "cdp": {
-          await requireSharedTab(message.tabId);
+          const epoch = captureAccess(message.tabId);
+          await requireAccessibleTab(message.tabId, epoch);
           const target = message.sessionId
             ? { tabId: message.tabId, sessionId: message.sessionId }
             : { tabId: message.tabId };
@@ -33,6 +34,7 @@ export function createRelayCommandHandler({
             message.method,
             message.params ?? {},
           );
+          await requireAccessibleTab(message.tabId, epoch);
           send({ type: "result", seq, result: result ?? {} });
           return;
         }
@@ -49,18 +51,22 @@ export function createRelayCommandHandler({
           send({ type: "result", seq, result: { tabId: tab.id } });
           return;
         }
-        case "closeTab":
-          await requireSharedTab(message.tabId);
+        case "closeTab": {
+          const epoch = captureAccess(message.tabId);
+          await requireAccessibleTab(message.tabId, epoch);
           await detachDebugger(message.tabId);
-          await requireSharedTab(message.tabId);
+          await requireAccessibleTab(message.tabId, epoch);
           await chrome.tabs.remove(message.tabId);
           send({ type: "result", seq, result: {} });
           return;
+        }
         case "activateTab": {
-          const tab = await requireSharedTab(message.tabId);
+          const epoch = captureAccess(message.tabId);
+          const tab = await requireAccessibleTab(message.tabId, epoch);
           await chrome.tabs.update(message.tabId, { active: true });
-          await requireSharedTab(message.tabId);
+          await requireAccessibleTab(message.tabId, epoch);
           await focusWindowForTab(tab);
+          await requireAccessibleTab(message.tabId, epoch);
           send({ type: "result", seq, result: {} });
           return;
         }

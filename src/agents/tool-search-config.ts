@@ -22,7 +22,7 @@ function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> 
   return isRecord(toolSearch) ? toolSearch : {};
 }
 
-function readBoolean(value: unknown, fallback: boolean): boolean {
+function resolveBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
@@ -57,7 +57,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     Math.min(MAX_TOOL_SEARCH_RESULTS, readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT)),
   );
   return {
-    enabled: readBoolean(raw.enabled, configured),
+    enabled: resolveBoolean(raw.enabled, configured),
     mode,
     codeTimeoutMs: Math.max(
       resolveMinCodeTimeoutMs(),

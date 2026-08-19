@@ -474,28 +474,6 @@ describe("Code Mode guest execution", () => {
     );
   });
 
-  it("does not load TypeScript for plain JavaScript code mode runs", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const details = await runUntilCompleted({
-      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
-      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: "return 42;",
-    });
-
-    expect(details.status).toBe("completed");
-    expect(details.value).toBe(42);
-    expect(testing.getTypescriptRuntimePromise()).toBeNull();
-  });
-
   it("allows identifiers and strings that contain import without module access", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({

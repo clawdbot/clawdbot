@@ -75,18 +75,22 @@ async function loadCatalogForBrowse<T>(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   view?: ModelCatalogBrowseView;
-  loadCatalog: (params: { readOnly: boolean }) => Promise<T>;
+  preparedOnly?: boolean;
+  refresh?: boolean;
+  loadCatalog: (params: { readOnly: boolean; refresh?: boolean }) => Promise<T>;
   empty: T;
   timeoutFullDiscovery?: boolean;
   timeoutMs?: number;
   onTimeout?: (timeoutMs: number) => void;
 }): Promise<T> {
   const view = params.view ?? "default";
-  const requiresFullDiscovery = modelCatalogBrowseRequiresFullDiscovery({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    view,
-  });
+  const requiresFullDiscovery =
+    params.preparedOnly !== true &&
+    modelCatalogBrowseRequiresFullDiscovery({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      view,
+    });
   // Provider-policy wildcards newly escalate ordinary inventory views to live discovery.
   // Keep those implicit loads within the browse deadline; explicit all/configured loads retain
   // their existing completion semantics unless the caller requests a timeout.
@@ -94,12 +98,18 @@ async function loadCatalogForBrowse<T>(params: {
     params.timeoutFullDiscovery ||
     (requiresFullDiscovery && (view === "default" || view === "provider-config"));
   if (requiresFullDiscovery && !shouldTimeoutFullDiscovery) {
-    return await params.loadCatalog({ readOnly: false });
+    return await params.loadCatalog({
+      readOnly: false,
+      ...(params.refresh ? { refresh: true } : {}),
+    });
   }
 
   let timeout: NodeJS.Timeout | undefined;
   const timeoutMs = resolveModelCatalogBrowseTimeoutMs(params.timeoutMs);
-  const catalogPromise = params.loadCatalog({ readOnly: !requiresFullDiscovery });
+  const catalogPromise = params.loadCatalog({
+    readOnly: !requiresFullDiscovery,
+    ...(requiresFullDiscovery && params.refresh ? { refresh: true } : {}),
+  });
   const catalogResult = catalogPromise.then((value) => ({ kind: "catalog" as const, value }));
   const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
     timeout = globalThis.setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
@@ -127,7 +137,11 @@ export function loadPreparedModelCatalogSnapshotForBrowse(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   view?: ModelCatalogBrowseView;
-  loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogSnapshot>;
+  /** Never starts provider discovery; a completed generation cache may still be reused. */
+  preparedOnly?: boolean;
+  /** Replaces the completed generation cache when discovery is otherwise required. */
+  refresh?: boolean;
+  loadCatalog: (params: { readOnly: boolean; refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
   timeoutFullDiscovery?: boolean;
   timeoutMs?: number;
   onTimeout?: (timeoutMs: number) => void;

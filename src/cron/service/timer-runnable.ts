@@ -8,7 +8,7 @@ import {
   isJobEnabled,
   resolveJobErrorBackoffUntilMs,
   resolveJobLastRunStatus,
-} from "./jobs.js";
+} from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
 import { isScheduledTerminalOneShotRetry } from "./timer-trigger.js";
 

@@ -150,6 +150,7 @@ describe("thread-level session keys", () => {
         sessionKey: "agent:main:slack:channel:c123",
         mainSessionKey: "agent:main:main",
         dmScope: "main",
+        groupScope: "per-group",
         lastRoutePolicy: "session",
         matchedBy: "default",
       },

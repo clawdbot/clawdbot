@@ -91,8 +91,9 @@ afterEach(() => {
 });
 
 describe("openclaw-router-outlet chat ownership", () => {
-  it("retains the exact subtree while the same thread switches presentation face", async () => {
+  it("retains the exact subtree across session and presentation switches", async () => {
     const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const nextSessionKey = "agent:main:dashboard:abcdef12-3456-7890-abcd-ef1234567890";
     const row = { key: sessionKey, displayName: "Retained board" };
     const chatTarget = sessionNavigationTarget({
       face: "chat",
@@ -102,9 +103,9 @@ describe("openclaw-router-outlet chat ownership", () => {
     });
     const dashboardTarget = sessionNavigationTarget({
       face: "dashboard",
-      sessionKey,
+      sessionKey: nextSessionKey,
       fallbackAgentId: "main",
-      row,
+      row: { key: nextSessionKey, displayName: "Next retained board" },
     });
     const nextData = deferred<ChatRouteData>();
     const teardown = vi.fn(async () => undefined);
@@ -143,7 +144,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     expect(outlet.querySelector('[data-testid="route-value"]')?.textContent).toBe("chat");
     expect(teardown).not.toHaveBeenCalled();
 
-    nextData.resolve(sessionData(sessionKey, "dashboard"));
+    nextData.resolve(sessionData(nextSessionKey, "dashboard"));
     await navigation;
     await settleOutlet(outlet);
     expect(outlet.querySelector("mcp-app-view")).toBe(appView);
@@ -200,7 +201,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     router.stop();
   });
 
-  it("does not retain a colliding short path when its full-key hint changes", async () => {
+  it("retains the chat page when a colliding short path's full-key hint changes", async () => {
     const firstKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
     const secondKey = "agent:main:dashboard:12345678-0bbb-4000-8000-000000000002";
     const pathname = "/chat/main/deploy-monitor-12345678";
@@ -235,17 +236,19 @@ describe("openclaw-router-outlet chat ownership", () => {
       undefined,
       location(pathname, `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(secondKey)}`),
     );
-    await expect.poll(() => outlet.querySelector("mcp-app-view")).toBeNull();
-    expect(teardown).toHaveBeenCalledOnce();
+    await settleOutlet(outlet);
+    expect(outlet.querySelector("mcp-app-view")).toBe(firstView);
+    expect(teardown).not.toHaveBeenCalled();
 
     nextData.resolve(sessionData(secondKey, "chat"));
     await navigation;
     await settleOutlet(outlet);
-    expect(outlet.querySelector("mcp-app-view")).not.toBe(firstView);
+    expect(outlet.querySelector("mcp-app-view")).toBe(firstView);
+    expect(teardown).not.toHaveBeenCalled();
     router.stop();
   });
 
-  it("replaces the old owner for a clean unresolved route and its ambiguous result", async () => {
+  it("retains an unresolved route until an ambiguous result replaces it", async () => {
     const sessionKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
     const nextData = deferred<ChatRouteData>();
     let loadCount = 0;
@@ -265,10 +268,12 @@ describe("openclaw-router-outlet chat ownership", () => {
     const outlet = createOutlet(router);
     await router.navigate("chat", {}, undefined, location("/chat/main/alpha-12345678"));
     await settleOutlet(outlet);
+    const firstView = outlet.querySelector("mcp-app-view");
 
     const navigation = router.navigate("chat", {}, undefined, location("/chat/main/beta-12345678"));
-    await expect.poll(() => outlet.querySelector("mcp-app-view")).toBeNull();
-    expect(teardown).toHaveBeenCalledOnce();
+    await settleOutlet(outlet);
+    expect(outlet.querySelector("mcp-app-view")).toBe(firstView);
+    expect(teardown).not.toHaveBeenCalled();
 
     nextData.resolve({
       kind: "ambiguous",
@@ -280,7 +285,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     await navigation;
     await settleOutlet(outlet);
     expect(outlet.querySelector('[data-testid="route-value"]')?.textContent).toBe("chooser");
-    expect(outlet.querySelector("mcp-app-view")).not.toBeNull();
+    expect(teardown).toHaveBeenCalledOnce();
     router.stop();
   });
 });

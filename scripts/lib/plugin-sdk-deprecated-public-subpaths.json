@@ -1,21 +1,12 @@
 [
   "agent-media-payload",
-  "agent-config-primitives",
   "channel-lifecycle",
-  "channel-logging",
   "channel-message",
   "channel-reply-pipeline",
-  "channel-secret-runtime",
-  "channel-streaming",
   "command-auth",
   "config-runtime",
   "discord",
-  "group-access",
   "inbound-reply-dispatch",
   "infra-runtime",
-  "matrix",
-  "messaging-targets",
-  "telegram-account",
-  "text-runtime",
-  "zod"
+  "telegram-account"
 ]

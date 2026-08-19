@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { GitHubSetupHandleSchema } from "./secrets.js";
 
 /**
  * Agent, model, skill, and tool catalog schemas.
@@ -17,6 +18,8 @@ import { NonEmptyString } from "./primitives.js";
 const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
+  cloudPlacementSupported: Type.Optional(Type.Boolean()),
+  devicePlacementSupported: Type.Optional(Type.Boolean()),
   source: Type.Union([
     Type.Literal("env"),
     Type.Literal("agent"),
@@ -29,14 +32,22 @@ const GatewayAgentRuntimeSchema = closedObject({
   ]),
 });
 
+const GatewayThinkingLevelOptionSchema = closedObject({
+  id: NonEmptyString,
+  label: NonEmptyString,
+});
+
 export const ModelChoiceSchema = closedObject({
   id: NonEmptyString,
   name: NonEmptyString,
   provider: NonEmptyString,
   alias: Type.Optional(NonEmptyString),
+  tags: Type.Optional(Type.Array(NonEmptyString)),
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
+  thinkingDefault: Type.Optional(NonEmptyString),
   supportsTools: Type.Optional(Type.Boolean()),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
@@ -56,10 +67,19 @@ export const ModelChoiceSchema = closedObject({
 /** Semantic owner of an agent roster entry. */
 export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("system")]);
 
+const AgentCreatedViaSchema = Type.Union([
+  Type.Literal("operator"),
+  Type.Literal("agent"),
+  Type.Literal("claw"),
+]);
+
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
   id: NonEmptyString,
   kind: Type.Optional(AgentKindSchema),
+  createdVia: Type.Optional(AgentCreatedViaSchema),
+  creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   name: Type.Optional(NonEmptyString),
   identity: Type.Optional(
     closedObject({
@@ -79,14 +99,7 @@ export const AgentSummarySchema = closedObject({
     }),
   ),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
-  thinkingLevels: Type.Optional(
-    Type.Array(
-      closedObject({
-        id: NonEmptyString,
-        label: NonEmptyString,
-      }),
-    ),
-  ),
+  thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
   thinkingDefault: Type.Optional(NonEmptyString),
 });
@@ -94,9 +107,16 @@ export const AgentSummarySchema = closedObject({
 /** Empty request payload for listing configured agents. */
 export const AgentsListParamsSchema = closedObject({});
 
-/** Agent list result including the default agent and session scoping mode. */
+export const AgentOwnershipSchema = Type.Union([
+  Type.Literal("sole"),
+  Type.Literal("legacy"),
+  Type.Literal("explicit"),
+]);
+
 export const AgentsListResultSchema = closedObject({
   defaultId: NonEmptyString,
+  ownership: Type.Optional(AgentOwnershipSchema),
+  selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,
   scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
   agents: Type.Array(AgentSummarySchema),
@@ -163,6 +183,7 @@ export const AgentsDeleteResultSchema = closedObject({
       }),
     ),
   ),
+  purgeFailed: Type.Optional(Type.Literal(true)),
 });
 
 /** File metadata and optional content for agent-local editable files. */
@@ -220,17 +241,31 @@ export const AgentsFilesSetResultSchema = closedObject({
 });
 
 /** Model catalog request with optional visibility scope. */
-export const ModelsListParamsSchema = closedObject({
-  includeProviderCapabilities: Type.Optional(Type.Boolean()),
-  view: Type.Optional(
-    Type.Union([
-      Type.Literal("default"),
-      Type.Literal("configured"),
-      Type.Literal("provider-config"),
-      Type.Literal("all"),
-    ]),
-  ),
-});
+export const ModelsListParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    includeProviderCapabilities: Type.Optional(Type.Boolean()),
+    /** Reuse prepared/cached facts without starting provider discovery. */
+    preparedOnly: Type.Optional(Type.Boolean()),
+    /** Force replacement of a completed full-catalog generation. */
+    refresh: Type.Optional(Type.Boolean()),
+    view: Type.Optional(
+      Type.Union([
+        Type.Literal("default"),
+        Type.Literal("configured"),
+        Type.Literal("provider-config"),
+        Type.Literal("all"),
+      ]),
+    ),
+  },
+  {
+    additionalProperties: false,
+    not: {
+      properties: { preparedOnly: { const: true }, refresh: { const: true } },
+      required: ["preparedOnly", "refresh"],
+    },
+  },
+);
 
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({
@@ -246,8 +281,19 @@ export const ModelsAuthLogoutParamsSchema = closedObject({
 });
 
 /** Model catalog result. */
+export const ModelCatalogProviderOutcomeSchema = closedObject({
+  provider: NonEmptyString,
+  profileId: Type.Optional(NonEmptyString),
+  status: Type.Union([
+    Type.Literal("ready"),
+    Type.Literal("auth-rejected"),
+    Type.Literal("unavailable"),
+  ]),
+});
+
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),
 });
 
 /** Runs a bounded live credential probe for one model provider. */
@@ -337,6 +383,17 @@ export const SkillsUploadCommitParamsSchema = closedObject({
   sha256: Type.Optional(Sha256String),
 });
 
+/**
+ * ClawHub resolves a bare slug against every publisher, so requests that carry only the slug
+ * fail with 409 AMBIGUOUS_SKILL_SLUG once two publishers share it. Clients send the reference
+ * `skills.search` returned for the entry the operator picked.
+ */
+const CLAWHUB_SKILL_REF_DESCRIPTION =
+  "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.";
+
+/** Wire copy of the core trust state; this package intentionally depends on typebox only. */
+const CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE = "not-scanned-by-clawhub";
+
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
@@ -355,7 +412,7 @@ export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
     agentId: Type.Optional(NonEmptyString),
     source: Type.Literal("clawhub"),
-    slug: NonEmptyString,
+    slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
     version: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
@@ -401,17 +458,35 @@ export const SkillsSearchResultSchema = closedObject({
     closedObject({
       score: Type.Number(),
       slug: NonEmptyString,
+      installRef: Type.String({
+        minLength: 1,
+        description:
+          "Source-qualified reference for this result. Send it as `slug` to skills.install; several publishers can share one slug.",
+      }),
+      installOnly: Type.Optional(
+        Type.Literal(true, {
+          description:
+            "Present when ClawHub serves this result install-only: offer install directly with `installRef`, because skills.detail cannot answer for it. Absence means the ordinary review-then-install flow, so results from servers that predate this field keep their existing behavior.",
+        }),
+      ),
+      trustState: Type.Optional(
+        Type.Literal(CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE, {
+          description:
+            "Present when ClawHub resolves this result from a source it has not scanned.",
+        }),
+      ),
       displayName: NonEmptyString,
       summary: Type.Optional(Type.String()),
+      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       version: Type.Optional(NonEmptyString),
       updatedAt: Type.Optional(Type.Integer()),
     }),
   ),
 });
 
-/** Reads registry detail for one skill slug. */
+/** Reads registry detail for one skill. */
 export const SkillsDetailParamsSchema = closedObject({
-  slug: NonEmptyString,
+  slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
 });
 
 /** Reads current security verdicts for configured skills. */
@@ -764,7 +839,7 @@ export const SkillsProposalRequestRevisionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   targetAgentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
-  expectedRevisionHash: Type.Optional(Sha256String),
+  expectedRevisionHash: Sha256String,
   instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
   sessionKey: NonEmptyString,
   sessionId: Type.Optional(NonEmptyString),
@@ -786,7 +861,16 @@ export const SkillsProposalRequestRevisionResultSchema = Type.Object(
   { additionalProperties: true },
 );
 
-/** Shared approve/reject/quarantine action payload for one proposal. */
+/** Apply/reject payload bound to the exact proposal revision reviewed by the operator. */
+export const SkillsProposalDecisionParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  proposalId: NonEmptyString,
+  expectedRevisionHash: Sha256String,
+  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  reason: Type.Optional(Type.String()),
+});
+
+/** Quarantine payload with optional optimistic-concurrency evidence. */
 export const SkillsProposalActionParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   proposalId: NonEmptyString,
@@ -927,6 +1011,72 @@ export const ToolsCatalogParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   includePlugins: Type.Optional(Type.Boolean()),
 });
+
+export const ToolsGitHubStatusParamsSchema = closedObject({
+  agentId: NonEmptyString,
+});
+
+const GitHubIdentitySourceSchema = Type.Union([
+  Type.Literal("system-detected"),
+  Type.Literal("system-configured"),
+  Type.Literal("agent-override"),
+]);
+
+const GitHubAuthorValueSchema = Type.String({ minLength: 1, pattern: "\\S" });
+const GitHubAuthorSchema = closedObject({
+  name: Type.Optional(GitHubAuthorValueSchema),
+  email: Type.Optional(GitHubAuthorValueSchema),
+});
+
+export const ToolsGitHubStatusResultSchema = closedObject({
+  agentId: NonEmptyString,
+  source: GitHubIdentitySourceSchema,
+  credentialState: Type.Union([
+    Type.Literal("available"),
+    Type.Literal("unavailable"),
+    Type.Literal("configured_unavailable"),
+    Type.Literal("unverified"),
+    Type.Literal("rate_limited"),
+  ]),
+  account: Type.Union([
+    closedObject({
+      login: NonEmptyString,
+      avatarUrl: Type.Union([Type.String(), Type.Null()]),
+    }),
+    Type.Null(),
+  ]),
+  gitAuthor: closedObject({
+    name: Type.Union([Type.String(), Type.Null()]),
+    email: Type.Union([Type.String(), Type.Null()]),
+  }),
+  evidence: Type.Union([
+    Type.Literal("github-api"),
+    Type.Literal("none"),
+    Type.Literal("unverified"),
+    Type.Literal("rate-limited"),
+  ]),
+});
+
+const GitHubIdentityScopeSchema = Type.Union([Type.Literal("system"), Type.Literal("agent")]);
+
+export const ToolsGitHubManagedConfigureParamsSchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  agentId: NonEmptyString,
+  mode: Type.Literal("managed"),
+  secretName: GitHubSetupHandleSchema,
+  gitAuthor: Type.Optional(GitHubAuthorSchema),
+});
+
+export const ToolsGitHubInheritConfigureParamsSchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  agentId: NonEmptyString,
+  mode: Type.Literal("inherit"),
+});
+
+export const ToolsGitHubConfigureParamsSchema = Type.Union([
+  ToolsGitHubManagedConfigureParamsSchema,
+  ToolsGitHubInheritConfigureParamsSchema,
+]);
 
 /** Reads the effective tool set for one session. */
 export const ToolsEffectiveParamsSchema = closedObject({
@@ -1103,6 +1253,7 @@ export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
+export type ModelCatalogProviderOutcome = Static<typeof ModelCatalogProviderOutcomeSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
 export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
 export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
@@ -1112,6 +1263,15 @@ export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchem
 export type ModelsProbeResult = Static<typeof ModelsProbeResultSchema>;
 export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
 export type ToolsCatalogParams = Static<typeof ToolsCatalogParamsSchema>;
+export type ToolsGitHubStatusParams = Static<typeof ToolsGitHubStatusParamsSchema>;
+export type ToolsGitHubStatusResult = Static<typeof ToolsGitHubStatusResultSchema>;
+export type ToolsGitHubManagedConfigureParams = Static<
+  typeof ToolsGitHubManagedConfigureParamsSchema
+>;
+export type ToolsGitHubInheritConfigureParams = Static<
+  typeof ToolsGitHubInheritConfigureParamsSchema
+>;
+export type ToolsGitHubConfigureParams = Static<typeof ToolsGitHubConfigureParamsSchema>;
 export type ToolCatalogProfile = Static<typeof ToolCatalogProfileSchema>;
 export type ToolCatalogEntry = Static<typeof ToolCatalogEntrySchema>;
 export type ToolCatalogGroup = Static<typeof ToolCatalogGroupSchema>;
@@ -1142,6 +1302,7 @@ export type SkillsProposalRequestRevisionParams = Static<
 export type SkillsProposalRequestRevisionResult = Static<
   typeof SkillsProposalRequestRevisionResultSchema
 >;
+export type SkillsProposalDecisionParams = Static<typeof SkillsProposalDecisionParamsSchema>;
 export type SkillsProposalActionParams = Static<typeof SkillsProposalActionParamsSchema>;
 export type SkillProposalEvaluation = Static<typeof SkillProposalEvaluationSchema>;
 export type SkillsProposalEvaluateParams = Static<typeof SkillsProposalEvaluateParamsSchema>;

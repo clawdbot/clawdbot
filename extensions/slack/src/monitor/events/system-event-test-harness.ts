@@ -1,9 +1,12 @@
 // Slack plugin module implements system event test harness behavior.
+import type { AllMiddlewareArgs } from "@slack/bolt";
 import type { SlackMonitorContext } from "../context.js";
 
 export type SlackSystemEventHandler = (args: {
   event: Record<string, unknown>;
   body: unknown;
+  context?: AllMiddlewareArgs["context"];
+  client?: AllMiddlewareArgs["client"];
 }) => Promise<void>;
 
 export type SlackSystemEventTestOverrides = {
@@ -58,7 +61,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     resolveUserName: async (userId: string) => ({
       name: overrides?.userNames?.[userId] ?? "alice",
     }),
-    resolveSlackSystemEventSessionKey: () => "agent:main:main",
+    resolveSlackSystemEventRoute: () => ({ agentId: "main", sessionKey: "agent:main:main" }),
   } as unknown as SlackMonitorContext;
 
   return {

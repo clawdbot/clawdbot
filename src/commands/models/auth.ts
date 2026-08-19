@@ -16,11 +16,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   externalCliDiscoveryForProviderAuth,
   removeProviderAuthProfilesWithLock,
@@ -28,7 +24,7 @@ import {
 import {
   listProfilesForProvider,
   promoteAuthProfileInOrder,
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -51,9 +47,9 @@ import {
 } from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
-import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
+import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
-  resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore,
   resolvePluginSetupRegistry,
 } from "../../plugins/setup-registry.js";
 import type {
@@ -69,9 +65,7 @@ import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
-import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+import { loadValidConfigOrThrow, resolveModelsTargetAgent, updateConfig } from "./shared.js";
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
@@ -201,6 +195,7 @@ function validateOpenAICodexApiKeyInput(value: string): string | undefined {
 
 type ResolvedModelsAuthContext = {
   config: OpenClawConfig;
+  agentId: string;
   agentDir: string;
   workspaceDir: string;
   providers: ProviderPlugin[];
@@ -250,7 +245,7 @@ function preferSetupAuthProviders(params: {
     ? normalizeManualAuthProvider(params.requestedProvider)
     : undefined;
   if (requestedProvider) {
-    const setupProvider = resolvePluginSetupProvider({
+    const setupProvider = resolvePluginSetupProviderCore({
       provider: requestedProvider,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -271,22 +266,18 @@ async function resolveModelsAuthContext(params?: {
   config?: OpenClawConfig;
 }): Promise<ResolvedModelsAuthContext> {
   const config = params?.config ?? (await loadValidConfigOrThrow());
-  const agentId =
-    resolveKnownAgentId({ cfg: config, rawAgentId: params?.rawAgentId }) ??
-    resolveDefaultAgentId(config);
-  const agentDir = resolveAgentDir(config, agentId);
+  const { agentId, agentDir } = await resolveModelsAuthAgent(params?.rawAgentId, config);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const requestedProvider = params?.requestedProvider?.trim();
   const providerRef = requestedProvider
     ? normalizeManualAuthProvider(requestedProvider)
     : undefined;
-  const providers = resolvePluginProviders({
+  const providers = resolvePluginProvidersCore({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    bundledProviderVitestCompat: true,
     ...(providerRef
       ? {
           providerRefs: [providerRef],
@@ -302,16 +293,16 @@ async function resolveModelsAuthContext(params?: {
   });
   return {
     config,
+    agentId,
     agentDir,
     workspaceDir,
     providers: authProviders,
   };
 }
 
-async function resolveModelsAuthAgentDir(rawAgentId?: string | null): Promise<string> {
-  const config = await loadValidConfigOrThrow();
-  const agentId = resolveKnownAgentId({ cfg: config, rawAgentId }) ?? resolveDefaultAgentId(config);
-  return resolveAgentDir(config, agentId);
+async function resolveModelsAuthAgent(rawAgentId?: string | null, config?: OpenClawConfig) {
+  const cfg = config ?? (await loadValidConfigOrThrow());
+  return resolveModelsTargetAgent(cfg, rawAgentId ?? undefined);
 }
 
 function resolveRequestedProviderOrThrow(
@@ -418,6 +409,7 @@ async function persistProviderAuthResult(params: {
   result: ProviderAuthResult;
   profiles?: ProviderAuthResult["profiles"];
   config: OpenClawConfig;
+  agentId: string;
   agentDir: string;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
@@ -488,7 +480,7 @@ async function persistProviderAuthResult(params: {
     logConfigUpdated(params.runtime);
   }
 
-  await refreshRunningGatewayAuthState();
+  await refreshRunningGatewayAuthState(params.agentId);
 
   for (const profile of profiles) {
     params.runtime.log(
@@ -533,6 +525,7 @@ function resolveConfiguredAuthSelectionForProvider(
 
 async function runProviderAuthMethod(params: {
   config: OpenClawConfig;
+  agentId: string;
   agentDir: string;
   workspaceDir: string;
   provider: ProviderPlugin;
@@ -589,6 +582,7 @@ async function runProviderAuthMethod(params: {
     result,
     profiles,
     config: params.config,
+    agentId: params.agentId,
     agentDir: params.agentDir,
     runtime: params.runtime,
     prompter: params.prompter,
@@ -609,7 +603,7 @@ export async function modelsAuthSetupTokenCommand(
     );
   }
 
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
+  const { config, agentId, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
     requestedProvider: opts.provider,
     rawAgentId: opts.agent,
   });
@@ -646,6 +640,7 @@ export async function modelsAuthSetupTokenCommand(
 
   await runProviderAuthMethod({
     config,
+    agentId,
     agentDir,
     workspaceDir,
     provider,
@@ -665,7 +660,7 @@ export async function modelsAuthPasteTokenCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const agentDir = await resolveModelsAuthAgentDir(opts.agent);
+  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent);
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error(
@@ -714,7 +709,7 @@ export async function modelsAuthPasteTokenCommand(
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
 
-  await refreshRunningGatewayAuthState();
+  await refreshRunningGatewayAuthState(agentId);
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
@@ -734,7 +729,7 @@ export async function modelsAuthPasteApiKeyCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const agentDir = await resolveModelsAuthAgentDir(opts.agent);
+  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent);
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error(
@@ -774,24 +769,15 @@ export async function modelsAuthPasteApiKeyCommand(
     applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
   );
 
-  await refreshRunningGatewayAuthState();
+  await refreshRunningGatewayAuthState(agentId);
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
 }
 
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
-
 /** Interactive helper for adding token auth profiles, with provider/method prompts. */
 export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: RuntimeEnv) {
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
+  const { config, agentId, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
     rawAgentId: opts.agent,
   });
   const tokenProviders = listProvidersWithTokenMethods(providers);
@@ -846,6 +832,7 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
       }
       await runProviderAuthMethod({
         config,
+        agentId,
         agentDir,
         workspaceDir,
         provider: providerPlugin,
@@ -997,10 +984,10 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
   );
 }
 
-export async function runModelsAuthLoginFlow(
+export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
+  const { config, agentId, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
     requestedProvider: opts.provider,
     rawAgentId: opts.agent,
     config: opts.config,
@@ -1079,6 +1066,7 @@ export async function runModelsAuthLoginFlow(
 
   const { result, profiles } = await runProviderAuthMethod({
     config,
+    agentId,
     agentDir,
     workspaceDir,
     provider: selectedProvider,
@@ -1112,7 +1100,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  await runModelsAuthLoginFlow({
+  await runModelsAuthLoginFlowCore({
     ...opts,
     runtime,
     prompter: createClackPrompter(),

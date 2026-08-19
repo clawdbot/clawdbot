@@ -6,12 +6,17 @@ import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
+import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
+import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
+import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
+  commentaryPayloadsEnabled: boolean;
   execution: AgentTurnExecutionResult;
   runStartedAt: number;
   sessionCtx: TemplateContext;
@@ -47,6 +52,8 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     MessageThreadId: queued.originatingThreadId,
     ReplyToId: queued.originatingReplyToId,
     SenderId: run.senderId,
+    MemberRoleIds: run.memberRoleIds,
+    ChannelContext: run.channelContext,
     SenderName: run.senderName,
     SenderUsername: run.senderUsername,
     SenderE164: run.senderE164,
@@ -62,7 +69,6 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
 export async function executeFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
-  onExecutionStarted?: () => void;
   onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
   onCompactionNoticePayload: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
@@ -110,6 +116,12 @@ export async function executeFollowupTurn(params: {
   const shouldEmitToolLifecycle = () =>
     progressAllowed() &&
     (shouldEmitToolResult() || defaults.opts?.allowToolLifecycleWhenProgressHidden === true);
+  const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
+    resolveTurnCommentaryProgressOwner({
+      commentaryPayloadsEnabled: sourceOpts?.commentaryPayloadsEnabled === true,
+      options: sourceOpts,
+      resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
+    });
   let visibleToolError = false;
   let progressChain: Promise<void> = Promise.resolve();
   let pendingProgressTaskFailure: unknown;
@@ -178,10 +190,14 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
+    // Queue callbacks are refreshed per session, but authority belongs to the
+    // queued turn. Never let a later callback widen or narrow an older item.
+    toolsAllow: turn.queued.toolsAllow,
+    disableTools: turn.queued.disableTools,
+    commentaryPayloadsEnabled,
     runId: turn.runId,
-    onAgentRunStart: (runId) => {
-      params.onExecutionStarted?.();
-      sourceOpts?.onAgentRunStart?.(runId);
+    onAgentRunStart: (runId, executionIdentityToken) => {
+      sourceOpts?.onAgentRunStart?.(runId, executionIdentityToken);
     },
     onBlockReply: undefined,
     onPartialReply: undefined,
@@ -210,7 +226,11 @@ export async function executeFollowupTurn(params: {
     onItemEvent: sourceOpts?.onItemEvent
       ? (item) =>
           enqueueProgressResult(async () => {
-            if (!shouldEmitToolResult()) {
+            // Only an explicit draft-vs-durable owner contract may bypass hidden
+            // tool-progress filtering for queued preambles.
+            const draftOwnsPreamble =
+              progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress;
+            if (!draftOwnsPreamble && !shouldEmitToolResult()) {
               return false;
             }
             const visible = (
@@ -275,17 +295,22 @@ export async function executeFollowupTurn(params: {
         if (!progressAllowed()) {
           return false;
         }
-        const verboseToolResult = shouldEmitVerboseToolResult();
-        const toolResultProgressVisible = Boolean(channelToolResultProgress) || verboseToolResult;
+        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
+        const transientToolResultProgress = requiresDurableToolResult
+          ? undefined
+          : channelToolResultProgress;
+        const toolResultDeliveryAvailable =
+          Boolean(transientToolResultProgress) || verboseToolResult || requiresDurableToolResult;
         if (
           turn.queued.run.sourceReplyDeliveryMode === "message_tool_only" &&
-          !toolResultProgressVisible
+          !toolResultDeliveryAvailable
         ) {
           return false;
         }
         const visible =
-          channelToolResultProgress && !verboseToolResult
-            ? (await settleProgressVisibilityCallbackResult(channelToolResultProgress(payload)))
+          transientToolResultProgress && !verboseToolResult
+            ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
                 .visible
             : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
         if (visible && payload.isError === true) {
@@ -393,10 +418,26 @@ export async function executeFollowupTurn(params: {
           ...pendingToolTaskWatchers,
         ]);
       }
-      throw error;
+      if (!hasReplyOperationExecutionStarted(turn.operation)) {
+        throw error;
+      }
+      turn.operation.fail("run_failed", error);
+      execution = {
+        runId: turn.runId,
+        outcome: {
+          kind: "rejected",
+          payload: buildTerminalAgentRunFailureReplyPayload({
+            isHeartbeat: sourceOpts?.isHeartbeat,
+            visibleReplyDelivered: false,
+            sessionCtx,
+            cfg: turn.config,
+          }),
+        },
+      };
     }
   }
   return {
+    commentaryPayloadsEnabled,
     execution,
     runStartedAt,
     sessionCtx,

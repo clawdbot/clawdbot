@@ -21,6 +21,7 @@ import {
   isEmbeddedAgentRunHandleActive,
   retainEmbeddedAgentRunAbortabilityForRunId,
   setActiveEmbeddedRun,
+  supersedeEmbeddedAgentRunByRunId,
 } from "./runs.js";
 import { createEmbeddedRunHandle, testing } from "./runs.test-support.js";
 
@@ -174,6 +175,26 @@ describe("embedded-agent runner run registry", () => {
 
     clearEmbeddedAgentRunAbortabilityForRunId("run-finalizing");
     expect(isEmbeddedAgentRunAbortableForRunId("run-finalizing")).toBe(true);
+  });
+
+  it("supersedes an exact reply backend only after recording its terminal owner", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:cli-writer",
+      sessionId: "session-cli-writer",
+      resetTriggered: false,
+    });
+    const order: string[] = [];
+    operation.attachBackend({
+      kind: "cli",
+      runId: "run-cli-writer",
+      cancel: (reason) => order.push(`cancel:${reason}`),
+    });
+
+    expect(supersedeEmbeddedAgentRunByRunId("run-cli-writer", () => order.push("record"))).toBe(
+      true,
+    );
+    expect(order).toEqual(["record", "cancel:superseded"]);
+    expect(supersedeEmbeddedAgentRunByRunId("missing-run", vi.fn())).toBe(false);
   });
 
   it("passes restart ownership to every aborted run", () => {

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   validateQaRuntimePairReport,
   validateQaRuntimePairSummary,
-} from "../../scripts/validate-qa-runtime-pair-summary.mjs";
+} from "../../scripts/validate-qa-runtime-pair-summary.mts";
 
 type CellStatus = "pass" | "fail" | "skip";
 

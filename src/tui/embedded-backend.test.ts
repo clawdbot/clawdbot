@@ -61,6 +61,9 @@ const getRuntimeConfigMock = vi.fn(() => ({}));
 const loadGatewayModelCatalogMock = vi.fn(
   (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
 );
+const buildAllowedModelSetMock = vi.fn(({ catalog }: { catalog: unknown[] }) => ({
+  allowedCatalog: catalog,
+}));
 const readChatHistoryPageMock = vi.fn(
   async (_params?: unknown): Promise<{ messages: unknown[] }> => ({
     messages: [],
@@ -125,7 +128,7 @@ vi.mock("../config/sessions.js", () => ({
     goal ? `Goal: ${goal.objective ?? ""}` : "No goal for this session.",
   getSessionGoal: (...args: unknown[]) => getSessionGoalMock(...args),
   resolveAgentMainSessionKey: () => "agent:main:main",
-  resolveStorePath: () => "/tmp/openclaw-sessions.json",
+  resolveSessionStorePathCore: () => "/tmp/openclaw-sessions.json",
   updateSessionGoalObjective: (...args: unknown[]) => updateSessionGoalObjectiveMock(...args),
   updateSessionGoalStatus: (...args: unknown[]) => updateSessionGoalStatusMock(...args),
   updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),
@@ -170,7 +173,8 @@ vi.mock("../agents/defaults.js", () => ({
 }));
 
 vi.mock("../agents/model-selection.js", () => ({
-  buildAllowedModelSet: ({ catalog }: { catalog: unknown[] }) => ({ allowedCatalog: catalog }),
+  buildAllowedModelSet: (params: { catalog: unknown[]; agentId?: string }) =>
+    buildAllowedModelSetMock(params),
   buildConfiguredModelCatalog: ({ cfg }: { cfg: { models?: { providers?: unknown } } }) =>
     Object.entries(
       (cfg.models?.providers as Record<string, { models?: Array<{ id: string }> }>) ?? {},
@@ -213,7 +217,6 @@ vi.mock("../gateway/server-constants.js", () => ({
 vi.mock("../gateway/server-methods/chat.js", () => ({
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
   augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
-  enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
 }));
 
@@ -228,18 +231,19 @@ vi.mock("../gateway/session-utils.js", () => ({
   getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],
   listSessionsFromStoreAsync: (...args: unknown[]) => listSessionsFromStoreAsyncMock(...args),
-  loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
+  loadCombinedSessionStoreForGatewayCore: (...args: unknown[]) =>
     loadCombinedSessionStoreForGatewayMock(...args),
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
-  loadSessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
+  loadGatewaySessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
   resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
     primaryKey: key,
     target: { storeKeys: [key] },
   }),
-  resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
+  resolveGatewaySessionStoreTargetWithStore: ({ key }: { key: string }) => ({
     canonicalKey: key,
+    storeKeys: [key],
     storePath: "/tmp/openclaw-sessions.json",
   }),
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
@@ -365,14 +369,18 @@ describe("EmbeddedTuiBackend", () => {
     applySessionPatchProjectionMock.mockImplementation(
       async (params: {
         project: (context: {
-          entries: unknown[];
           existingEntry?: unknown;
+          isLabelInUse: (label: string) => boolean;
           primaryKey: string;
+          store: Readonly<Record<string, unknown>>;
         }) => Promise<unknown>;
-        resolveTarget: (snapshot: { entries: unknown[] }) => { primaryKey: string };
+        resolveTarget: (snapshot: { store: Readonly<Record<string, unknown>> }) => {
+          primaryKey: string;
+        };
       }) => {
-        const target = params.resolveTarget({ entries: [] });
-        return await params.project({ ...target, entries: [] });
+        const store = {};
+        const target = params.resolveTarget({ store });
+        return await params.project({ ...target, store, isLabelInUse: () => false });
       },
     );
     projectSessionsPatchEntryMock.mockReset();
@@ -381,6 +389,7 @@ describe("EmbeddedTuiBackend", () => {
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
     loadGatewayModelCatalogMock.mockReturnValue([]);
+    buildAllowedModelSetMock.mockClear();
     readChatHistoryPageMock.mockReset();
     readChatHistoryPageMock.mockResolvedValue({ messages: [] });
     loadSessionEntryMock.mockReset();
@@ -427,6 +436,7 @@ describe("EmbeddedTuiBackend", () => {
         key: "tui-created",
         agentId: "main",
         parentSessionKey: "agent:main:main",
+        armSessionDiffBaselineCapture: true,
         emitCommandHooks: true,
         commandSource: "tui:embedded",
         loadGatewayModelCatalog: expect.any(Function),
@@ -711,6 +721,35 @@ describe("EmbeddedTuiBackend", () => {
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
   });
 
+  it("passes the selected agent into model filtering", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { modelPolicy: { allow: ["fixture/main-model"] } },
+          work: { modelPolicy: { allow: ["fixture/work-model"] } },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          fixture: {
+            models: [{ id: "main-model" }, { id: "work-model" }],
+          },
+        },
+      },
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await backend.listModels({ agentId: "work" });
+
+    expect(buildAllowedModelSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work" }),
+    );
+  });
+
   it("patches wildcard replace-mode sessions against the same full catalog as model listing", async () => {
     getRuntimeConfigMock.mockReturnValue({
       agents: {
@@ -759,6 +798,9 @@ describe("EmbeddedTuiBackend", () => {
       ok: true,
       key: "agent:main:main",
     });
+    expect(applySessionPatchProjectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKeys: ["agent:main:main"] }),
+    );
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
   });
 
@@ -778,6 +820,9 @@ describe("EmbeddedTuiBackend", () => {
       AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
     );
 
+    expect(applySessionPatchProjectionMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ sessionKeys: expect.anything() }),
+    );
     expect(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({ storeKey: sessionKey, existingEntry: undefined }),
     );
@@ -794,17 +839,23 @@ describe("EmbeddedTuiBackend", () => {
     applySessionPatchProjectionMock.mockImplementationOnce(
       async (params: {
         project: (context: {
-          entries: Array<{ sessionKey: string; entry: typeof existingEntry }>;
           existingEntry?: typeof existingEntry;
+          isLabelInUse: (label: string) => boolean;
           primaryKey: string;
+          store: Readonly<Record<string, typeof existingEntry>>;
         }) => Promise<unknown>;
-        resolveTarget: (snapshot: {
-          entries: Array<{ sessionKey: string; entry: typeof existingEntry }>;
-        }) => { primaryKey: string };
+        resolveTarget: (snapshot: { store: Readonly<Record<string, typeof existingEntry>> }) => {
+          primaryKey: string;
+        };
       }) => {
-        const entries = [{ sessionKey, entry: existingEntry }];
-        const target = params.resolveTarget({ entries });
-        return await params.project({ ...target, entries, existingEntry });
+        const store = { [sessionKey]: existingEntry };
+        const target = params.resolveTarget({ store });
+        return await params.project({
+          ...target,
+          store,
+          existingEntry,
+          isLabelInUse: () => false,
+        });
       },
     );
     projectSessionsPatchEntryMock.mockResolvedValueOnce({
@@ -1834,7 +1885,7 @@ describe("EmbeddedTuiBackend", () => {
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledWith(
       "active-session",
       "steer this turn",
-      { steeringMode: "all", debounceMs: 500 },
+      { steeringMode: "all", debounceMs: 500, isInboundUserMessage: true },
     );
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
 

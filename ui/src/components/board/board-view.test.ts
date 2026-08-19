@@ -772,20 +772,34 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(allow?.disabled).toBe(false));
   });
 
-  it("keeps approval controls after a failed decision and clears the error on refresh", async () => {
-    const grant = vi.fn(async () => {
-      throw new Error("approval service unavailable");
+  it("toasts failed rejection while keeping controls and leaves successful decisions quiet", async () => {
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    const grant = vi.fn(async (_name: string, decision: "granted" | "rejected") => {
+      if (decision === "rejected") {
+        throw new Error("approval service unavailable");
+      }
     });
     const source = snapshot({ widgets: [boardWidget({ grantState: "pending" })] });
     const view = await mount({ snapshot: source, callbacks: callbacks({ grant }) });
-    view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')?.click();
+    const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
+    const reject = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]');
+    allow?.click();
+    await vi.waitFor(() => expect(grant).toHaveBeenCalledWith("alpha", "granted"));
+    await vi.waitFor(() => expect(reject?.disabled).toBe(false));
+    expect(toastHost.querySelector(".app-toast")).toBeNull();
+
+    reject?.click();
     await vi.waitFor(() => {
       expect(
         view.querySelector('[data-test-id="board-widget-action-error"]')?.textContent,
       ).toContain("approval service unavailable");
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
+        "Could not reject widget access. Try again.",
+      );
     });
-    expect(view.querySelector('[data-test-id="board-grant-allow"]')).not.toBeNull();
-    expect(view.querySelector('[data-test-id="board-grant-reject"]')).not.toBeNull();
+    expect(allow?.disabled).toBe(false);
+    expect(reject?.disabled).toBe(false);
 
     view.snapshot = structuredClone({ ...source, revision: source.revision + 1 });
     await settleCells(view);

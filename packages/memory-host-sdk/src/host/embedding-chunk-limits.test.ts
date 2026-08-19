@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.types.js";
 
 function createProvider(maxInputTokens: number): EmbeddingProvider {
   return {

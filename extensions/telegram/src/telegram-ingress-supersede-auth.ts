@@ -1,11 +1,12 @@
 // Telegram plugin module owns supersede sender authorization policy.
+import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTelegramDmAllow } from "./access-groups.js";
 import { mergeTelegramAccountConfig } from "./account-config.js";
 import {
   resolveTelegramCommandAuthorization,
   resolveTelegramGroupAllowFromContext,
-  resolveTelegramMessageForumFlagHint,
+  resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
@@ -14,11 +15,8 @@ type UpdateSenderFacts = {
   senderId: string;
   senderUsername?: string;
   chatId: number;
-  chatType?: string;
   isGroup: boolean;
-  isTopicMessage?: boolean;
-  isForum?: boolean;
-  messageThreadId?: number;
+  message: Message;
 };
 
 function extractUpdateSenderFacts(update: unknown): UpdateSenderFacts | null {
@@ -49,19 +47,8 @@ function extractUpdateSenderFacts(update: unknown): UpdateSenderFacts | null {
             senderId: String(fromObj.id),
             ...(typeof fromObj.username === "string" ? { senderUsername: fromObj.username } : {}),
             chatId: chat.id,
-            chatType,
             isGroup: chatType !== "private",
-            ...(typeof chat.is_forum === "boolean" ? { isForum: chat.is_forum } : {}),
-            ...(typeof (msg as { is_topic_message?: unknown }).is_topic_message === "boolean"
-              ? {
-                  isTopicMessage: (msg as { is_topic_message: boolean }).is_topic_message,
-                }
-              : {}),
-            ...(typeof (msg as { message_thread_id?: unknown }).message_thread_id === "number"
-              ? {
-                  messageThreadId: (msg as { message_thread_id: number }).message_thread_id,
-                }
-              : {}),
+            message: msg as Message,
           };
         }
       }
@@ -78,15 +65,8 @@ function extractUpdateSenderFacts(update: unknown): UpdateSenderFacts | null {
     senderId: String(from.id),
     ...(typeof from.username === "string" ? { senderUsername: from.username } : {}),
     chatId: chat.id,
-    chatType,
     isGroup: chatType !== "private",
-    ...(typeof chat.is_forum === "boolean" ? { isForum: chat.is_forum } : {}),
-    ...(typeof message.is_topic_message === "boolean"
-      ? { isTopicMessage: message.is_topic_message as boolean }
-      : {}),
-    ...(typeof message.message_thread_id === "number"
-      ? { messageThreadId: message.message_thread_id as number }
-      : {}),
+    message: message as unknown as Message,
   };
 }
 
@@ -132,13 +112,6 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
   const dmPolicy = accountCfg.dmPolicy ?? "pairing";
   const allowFrom = accountCfg.allowFrom;
   const groupAllowFrom = accountCfg.groupAllowFrom ?? accountCfg.allowFrom;
-  const isForum =
-    resolveTelegramMessageForumFlagHint({
-      chatType: facts.chatType as "private" | "group" | "supergroup" | "channel" | undefined,
-      isForum: facts.isForum,
-      isTopicMessage: facts.isTopicMessage,
-    }) ?? false;
-
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     cfg: auth.cfg,
     chatId: facts.chatId,
@@ -147,8 +120,7 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     allowFrom,
     senderId: facts.senderId,
     isGroup: facts.isGroup,
-    isForum,
-    messageThreadId: facts.messageThreadId,
+    threadSpec: resolveTelegramMessageThreadSpec(facts.message),
     groupAllowFrom,
     resolveTelegramGroupConfig: (chatId, messageThreadId, cfg) => {
       const telegramCfg = mergeTelegramAccountConfig(cfg, auth.accountId);

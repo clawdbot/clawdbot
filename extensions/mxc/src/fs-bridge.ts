@@ -35,18 +35,26 @@ export function createMxcFsBridge(params: { sandbox: MxcFsBridgeContext }): Sand
 }
 
 class MxcFsBridge implements SandboxFsBridge {
-  private readonly defaultContainerRoot = path.resolve(this.sandbox.containerWorkdir);
+  // These must be assigned in the constructor body, not as field initializers.
+  // Plugin sources load through jiti, which evaluates field initializers before
+  // it assigns constructor parameter properties, so `this.sandbox` would still
+  // be undefined here and provisioning would crash reading containerWorkdir.
+  private readonly defaultContainerRoot: string;
 
-  private readonly protectedSkillMounts = resolveMxcProtectedSkillMounts(this.sandbox);
+  private readonly protectedSkillMounts: readonly MxcFsMount[];
 
-  private readonly workspaceMounts = resolveWorkspaceMounts(this.sandbox);
+  private readonly workspaceMounts: readonly MxcFsMount[];
 
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
     (target, action) => this.ensureWritable(target, action),
   );
 
-  constructor(private readonly sandbox: MxcFsBridgeContext) {}
+  constructor(private readonly sandbox: MxcFsBridgeContext) {
+    this.defaultContainerRoot = path.resolve(sandbox.containerWorkdir);
+    this.protectedSkillMounts = resolveMxcProtectedSkillMounts(sandbox);
+    this.workspaceMounts = resolveWorkspaceMounts(sandbox);
+  }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);

@@ -2,11 +2,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { buildLegacyMigrationPreview } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { describe, expect, it, vi } from "vitest";
+import { stateMigrations } from "./doctor-contract-api.js";
 import * as legacySessionSurfaceApi from "./legacy-session-surface-api.js";
-import * as legacyStateMigrationsApi from "./legacy-state-migrations-api.js";
 import setupEntry from "./setup-entry.js";
 import * as setupPluginApi from "./setup-plugin-api.js";
+import { detectWhatsAppLegacyStateMigrations } from "./src/state-migrations.js";
 
 vi.mock("baileys", () => {
   throw new Error("setup plugin load must not load Baileys");
@@ -21,9 +23,6 @@ const setupEntryLoadOptions = {
     if (/[\\/]setup-plugin-api\.[jt]s$/u.test(specifier)) {
       return setupPluginApi;
     }
-    if (/[\\/]legacy-state-migrations-api\.[jt]s$/u.test(specifier)) {
-      return legacyStateMigrationsApi;
-    }
     if (/[\\/]legacy-session-surface-api\.[jt]s$/u.test(specifier)) {
       return legacySessionSurfaceApi;
     }
@@ -34,10 +33,7 @@ const setupEntryLoadOptions = {
 describe("whatsapp setup entry", () => {
   it("loads setup entry metadata without importing runtime dependencies", () => {
     expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
-    expect(setupEntry.features).toEqual({
-      legacySessionSurfaces: true,
-      legacyStateMigrations: true,
-    });
+    expect(setupEntry.features).toEqual({ legacySessionSurfaces: true });
   });
 
   it("loads the setup plugin without installing runtime dependencies", () => {
@@ -45,20 +41,7 @@ describe("whatsapp setup entry", () => {
     expect(whatsappSetupPlugin.id).toBe("whatsapp");
   });
 
-  it("loads legacy setup helpers without importing runtime dependencies", () => {
-    const detectLegacyStateMigrations =
-      setupEntry.loadLegacyStateMigrationDetector?.(setupEntryLoadOptions);
-    if (!detectLegacyStateMigrations) {
-      throw new Error("expected WhatsApp legacy state migration detector");
-    }
-    expect(
-      detectLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: "/tmp/openclaw-whatsapp-empty",
-        stateDir: "/tmp/openclaw-state",
-      }),
-    ).toStrictEqual([]);
+  it("loads the legacy session helper without importing runtime dependencies", () => {
     const legacySessionSurface = setupEntry.loadLegacySessionSurface?.(setupEntryLoadOptions);
     if (!legacySessionSurface) {
       throw new Error("expected WhatsApp legacy session surface");
@@ -96,22 +79,41 @@ describe("whatsapp setup entry", () => {
       fs.writeFileSync(path.join(oauthDir, "nested", "session-keep.json"), "{}", "utf-8");
       fs.symlinkSync(path.join(oauthDir, "notes.txt"), path.join(oauthDir, "session-linked.json"));
 
-      const detectLegacyStateMigrations =
-        setupEntry.loadLegacyStateMigrationDetector?.(setupEntryLoadOptions);
-      if (!detectLegacyStateMigrations) {
-        throw new Error("expected WhatsApp legacy state migration detector");
-      }
-      const migrations =
-        (await detectLegacyStateMigrations({
-          cfg: {},
-          env: {},
-          oauthDir,
-          stateDir: oauthDir,
-        })) ?? [];
+      const migrations = detectWhatsAppLegacyStateMigrations({ oauthDir });
 
       expect(migrations.map((migration) => path.basename(migration.sourcePath)).toSorted()).toEqual(
         authFiles.toSorted(),
       );
+      expect(
+        migrations
+          .map((migration) => ({
+            kind: migration.kind,
+            label: migration.label,
+            sourcePath: migration.sourcePath,
+            targetPath: migration.targetPath,
+            namespace: null,
+          }))
+          .toSorted((left, right) => left.sourcePath.localeCompare(right.sourcePath)),
+      ).toEqual(
+        authFiles
+          .map((fileName) => ({
+            kind: "move",
+            label: `WhatsApp auth ${fileName}`,
+            sourcePath: path.join(oauthDir, fileName),
+            targetPath: path.join(oauthDir, "whatsapp", "default", fileName),
+            namespace: null,
+          }))
+          .toSorted((left, right) => left.sourcePath.localeCompare(right.sourcePath)),
+      );
+      await expect(
+        stateMigrations[0]?.detectLegacyState({
+          config: {},
+          env: {},
+          oauthDir,
+          stateDir: oauthDir,
+          context: { openPluginStateKeyedStore: vi.fn() } as never,
+        }),
+      ).resolves.toEqual({ preview: migrations.map(buildLegacyMigrationPreview) });
       for (const migration of migrations) {
         expect(migration.targetPath).toBe(
           path.join(oauthDir, "whatsapp", "default", path.basename(migration.sourcePath)),

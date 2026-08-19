@@ -85,19 +85,60 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines).toEqual(["old line", "recent one", "recent two"]);
   });
 
+  it("reports truncation when the line limit omits complete records", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const content = "one\ntwo\nthree\n";
+
+    await fs.writeFile(file, content);
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredLogTail({ limit: 2, maxBytes: 100 });
+
+    expect(result).toMatchObject({
+      lines: ["two", "three"],
+      cursor: Buffer.byteLength(content),
+      size: Buffer.byteLength(content),
+      truncated: true,
+      reset: false,
+    });
+  });
+
+  it("keeps the first line when the byte window starts exactly after a newline", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const line = (message: string) => `${message}${" ".repeat(199 - message.length)}\n`;
+    const content = Array.from({ length: 10_000 }, (_, index) =>
+      line(index === 5000 ? "first-line-in-window" : "filler"),
+    ).join("");
+
+    await fs.writeFile(file, content);
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredLogTail({ limit: 5000, maxBytes: 1_000_000 });
+
+    expect(result.lines).toHaveLength(5000);
+    expect(result.lines[0]?.trimEnd()).toBe("first-line-in-window");
+  });
+
   it("falls back only within the active profile's rolling log family", async () => {
     const tempDir = tempDirs.make("openclaw-log-tail-");
-    const missing = path.join(tempDir, "openclaw-dev-2026-01-22.log");
-    const devLog = path.join(tempDir, "openclaw-dev-2026-01-21.log");
+    const missing = path.join(tempDir, "openclaw-2026-01-22.log");
     const defaultLog = path.join(tempDir, "openclaw-2026-01-21.log");
-    await fs.writeFile(devLog, "dev profile\n");
+    const devLog = path.join(tempDir, "openclaw-dev-2026-01-21.log");
     await fs.writeFile(defaultLog, "default profile\n");
-    await fs.utimes(devLog, new Date(0), new Date(0));
-    await fs.utimes(defaultLog, new Date(), new Date());
-    const { resolveLogFile } = await import("./log-tail.js");
-    const result = await resolveLogFile(missing, { rolling: true });
+    await fs.writeFile(devLog, "dev profile\n");
+    await fs.utimes(defaultLog, new Date(0), new Date(0));
+    await fs.utimes(devLog, new Date(), new Date());
+    setLoggerOverride({ file: missing });
 
-    expect(result).toBe(devLog);
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const result = await readConfiguredLogTail();
+
+    expect(result.file).toBe(defaultLog);
+    expect(result.lines).toEqual(["default profile"]);
   });
 
   it("does not reinterpret an explicit profile-shaped logging.file as rolling", async () => {

@@ -67,6 +67,7 @@ function parseOptions(
 function parseCliJson<T>(
   label: string,
   result: Awaited<ReturnType<OpenClawTestInstance["cli"]>>,
+  parse: (value: unknown) => T = (value) => value as T,
 ): T {
   if (result.code !== 0) {
     throw new Error(
@@ -74,7 +75,7 @@ function parseCliJson<T>(
     );
   }
   try {
-    return JSON.parse(result.stdout) as T;
+    return parse(JSON.parse(result.stdout) as unknown);
   } catch (error) {
     throw new Error(
       `${label} returned invalid JSON: ${formatErrorMessage(error)}\n${result.stdout}`,

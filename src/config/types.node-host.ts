@@ -15,6 +15,11 @@ export type NodeHostConfig = {
       enabled?: boolean;
     };
   };
+  /** Full OpenClaw session hosting from Gateway-managed worker bundles. */
+  workerRuns?: {
+    /** Allow this paired node to host worker sessions (default: false). */
+    enabled?: boolean;
+  };
   /** Browser proxy settings for node hosts. */
   browserProxy?: NodeHostBrowserProxyConfig;
   /** MCP servers started and exposed by the headless node host. */

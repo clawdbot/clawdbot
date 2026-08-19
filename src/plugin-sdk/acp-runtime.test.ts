@@ -37,6 +37,7 @@ const event = {
   originatingChannel: undefined,
   originatingTo: undefined,
   shouldSendToolSummaries: true,
+  shouldSendFullToolDetails: false,
   sendPolicy: "allow" as const,
 };
 
@@ -263,6 +264,7 @@ describe("tryDispatchAcpReplyHook", () => {
 
     expectDispatchPayloadFields({
       shouldSendToolSummaries: true,
+      shouldSendFullToolDetails: false,
     });
     const [payload] = dispatchMock.mock.calls[0] ?? [];
     const livePredicate = (payload as { shouldSendToolSummariesNow?: () => boolean })

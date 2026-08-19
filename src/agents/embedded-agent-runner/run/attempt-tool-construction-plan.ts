@@ -12,9 +12,10 @@ import {
   attachToolAllowlistIntersection,
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
+  expandShippedCoreToolPolicyNames,
   expandToolGroups,
   normalizeToolList,
-  normalizeToolName,
+  normalizeToolPolicyName,
   readToolAllowlistIntersection,
 } from "../../tool-policy.js";
 
@@ -50,7 +51,7 @@ function isPluginGroupAllowlistName(normalized: string): boolean {
 }
 
 function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
-  return toolsAllow.some((entry) => normalizeToolName(entry) === "*");
+  return toolsAllow.some((entry) => normalizeToolPolicyName(entry) === "*");
 }
 
 /**
@@ -81,7 +82,7 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
       : undefined;
     const policy = pluginGroups
       ? expandPolicyWithPluginGroups({ allow: restriction }, pluginGroups)
-      : { allow: restriction };
+      : { allow: expandShippedCoreToolPolicyNames(restriction) };
     return currentTools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
   }, tools);
 }
@@ -104,8 +105,8 @@ export function mergeForcedEmbeddedAttemptToolsAllow(
   if (required.length === 0) {
     return toolsAllow;
   }
-  const normalized = new Set(toolsAllow.map((entry) => normalizeToolName(entry)));
-  const missing = required.filter((name) => !normalized.has(normalizeToolName(name)));
+  const normalized = new Set(toolsAllow.map((entry) => normalizeToolPolicyName(entry)));
+  const missing = required.filter((name) => !normalized.has(normalizeToolPolicyName(name)));
   if (missing.length === 0) {
     return toolsAllow;
   }
@@ -131,7 +132,7 @@ function resolveCodingToolConstructionPlanForAllowlist(
   if (hasWildcardToolAllowlist(toolsAllow)) {
     return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
   }
-  const expanded = expandToolGroups(toolsAllow);
+  const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(toolsAllow));
   const normalized = normalizeToolList(expanded);
   const coreFamilies = new Set<CoreToolFactoryFamily>();
   let includePluginTools = false;
@@ -232,7 +233,7 @@ function shouldCreateBundleRuntimeForAttempt(
   if (hasWildcardToolAllowlist(params.toolsAllow)) {
     return true;
   }
-  return params.toolsAllow.some((toolName) => matchesAllowlist(normalizeToolName(toolName)));
+  return params.toolsAllow.some((toolName) => matchesAllowlist(normalizeToolPolicyName(toolName)));
 }
 
 /**

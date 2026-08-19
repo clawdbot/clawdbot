@@ -3,9 +3,19 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  operatorMcpOAuthIdentity,
+  requesterMcpOAuthIdentity,
+} from "../agents/mcp-oauth-identity.js";
+import {
+  readMcpOAuthPendingAuthorization,
+  updateMcpOAuthStore,
+  writeMcpOAuthPendingAuthorization,
+} from "../agents/mcp-oauth-store.js";
 import { readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { defaultRuntime } from "../runtime.js";
+import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { registerMcpCli } from "./mcp-cli.js";
@@ -121,6 +131,112 @@ afterEach(() => {
 });
 
 describe("mcp login OAuth integration", () => {
+  it("keeps per-requester list, status, and doctor probes read only", async () => {
+    await withTempHome(`openclaw-mcp-read-only-${randomUUID()}-`, async () => {
+      const logs: string[] = [];
+      const json: unknown[] = [];
+      vi.spyOn(defaultRuntime, "log").mockImplementation((line) => logs.push(String(line)));
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => json.push(value));
+      vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+      const program = new Command().exitOverride();
+      registerMcpCli(program);
+      await program.parseAsync(
+        [
+          "mcp",
+          "set",
+          "fixture",
+          JSON.stringify({
+            url: "https://mcp.example.com/rpc",
+            transport: "streamable-http",
+            auth: "oauth",
+            oauth: { identity: "per-requester" },
+          }),
+        ],
+        { from: "user" },
+      );
+      logs.length = 0;
+
+      await program.parseAsync(["mcp", "list"], { from: "user" });
+      expect(logs).toContain("- fixture (0 connected principals)");
+      logs.length = 0;
+      await program.parseAsync(["mcp", "status", "--json"], { from: "user" });
+      expect(json.at(-1)).toMatchObject({
+        servers: [{ name: "fixture", connectedPrincipals: 0 }],
+      });
+      json.length = 0;
+      await expect(
+        program.parseAsync(["mcp", "doctor", "--probe", "--json"], { from: "user" }),
+      ).rejects.toThrow("MCP doctor found errors");
+      expect(json.at(-1)).toMatchObject({ servers: [{ name: "fixture" }] });
+      withOpenClawStateDatabaseReadOnly(({ db }) => {
+        expect(db.prepare("SELECT count(*) AS count FROM mcp_oauth_stores").get()).toEqual({
+          count: 0,
+        });
+        expect(
+          db
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+            .get("mcp_oauth_pending_authorizations"),
+        ).toBeUndefined();
+      });
+    });
+  });
+
+  it("clears requester credentials when the same URL changes to shared OAuth", async () => {
+    await withTempHome(`openclaw-mcp-identity-flip-${randomUUID()}-`, async () => {
+      const serverUrl = "https://mcp.example.com/rpc";
+      const program = new Command().exitOverride();
+      registerMcpCli(program);
+      await program.parseAsync(
+        [
+          "mcp",
+          "set",
+          "fixture",
+          JSON.stringify({
+            url: serverUrl,
+            transport: "streamable-http",
+            auth: "oauth",
+            oauth: { identity: "per-requester" },
+          }),
+        ],
+        { from: "user" },
+      );
+      const operator = operatorMcpOAuthIdentity("fixture", serverUrl);
+      const requester = requesterMcpOAuthIdentity("fixture", serverUrl, {
+        requesterSenderId: "alice",
+        messageChannel: "telegram",
+      });
+      for (const identity of [operator, requester]) {
+        updateMcpOAuthStore(identity.storeKey, (store) => ({
+          ...store,
+          tokens: { access_token: identity.principal, token_type: "Bearer" },
+        }));
+      }
+      writeMcpOAuthPendingAuthorization(requester.storeKey, "requester-state");
+
+      await program.parseAsync(
+        [
+          "mcp",
+          "set",
+          "fixture",
+          JSON.stringify({
+            url: serverUrl,
+            transport: "streamable-http",
+            auth: "oauth",
+          }),
+        ],
+        { from: "user" },
+      );
+
+      await expect(readMcpOAuthCredentialsStatus(requester)).resolves.toEqual({
+        state: "unauthenticated",
+      });
+      await expect(readMcpOAuthCredentialsStatus(operator)).resolves.toEqual({
+        state: "authorized",
+      });
+      expect(readMcpOAuthPendingAuthorization("requester-state")).toBeUndefined();
+    });
+  });
+
   it("captures the browser callback, persists tokens, and closes the port", async () => {
     await withTempHome(`openclaw-mcp-login-${randomUUID()}-`, async () => {
       const oauthPort = await getFreePort();
@@ -162,11 +278,12 @@ describe("mcp login OAuth integration", () => {
         await login;
 
         await expect(
-          readMcpOAuthCredentialsStatus({
-            serverName: "fixture",
-            serverUrl: `${fixture.issuer}/mcp`,
-          }),
-        ).resolves.toMatchObject({ hasTokens: true, hasCodeVerifier: true });
+          readMcpOAuthCredentialsStatus(
+            operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`),
+          ),
+        ).resolves.toMatchObject({
+          state: "authorized",
+        });
         expect(fixture.exchange()).toMatchObject({
           tokenRedirectUri: redirectUrl,
           tokenVerifier: expect.any(String),

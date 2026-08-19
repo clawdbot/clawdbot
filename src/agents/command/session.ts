@@ -2,6 +2,7 @@
  * Resolves command session ids, keys, stores, and persisted thinking state.
  */
 import crypto from "node:crypto";
+import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   normalizeThinkLevel,
@@ -9,6 +10,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
@@ -19,36 +21,45 @@ import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions/main-session.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
-import { listSessionEntries } from "../../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import {
+  resolvePersistedSessionStoreOwner,
+  resolvePersistedSessionStoreOwnerForKey,
+} from "../../config/sessions/session-store-owner.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   normalizeMainKey,
+  parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  resolveDefaultAgentId,
+} from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
-import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
   sessionId: string;
   sessionKey?: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionEntry?: InternalSessionEntry;
+  sessionStore?: Record<string, InternalSessionEntry>;
   storePath: string;
   isNewSession: boolean;
   previousSessionId?: string;
@@ -57,12 +68,13 @@ type SessionResolution = {
 };
 
 type SessionKeyResolution = {
+  agentId?: string;
   sessionKey?: string;
-  sessionStore: Record<string, SessionEntry>;
+  sessionStore: Record<string, InternalSessionEntry>;
   storePath: string;
 };
 
-export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
+export function clearRotatedSessionMetadata(entry: InternalSessionEntry): InternalSessionEntry {
   const next = {
     ...entry,
     sessionFile: undefined,
@@ -92,6 +104,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     restartRecoveryTerminalRunIds: undefined,
     sessionStartedAt: undefined,
     sessionDiffBaseline: undefined,
+    sessionDiffBaselineCapture: undefined,
     lastInteractionAt: undefined,
     pendingTranscriptRepair: undefined,
   };
@@ -101,18 +114,49 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
 }
 
 type SessionIdMatchSet = {
-  matches: Array<[string, SessionEntry]>;
-  primaryStoreMatches: Array<[string, SessionEntry]>;
-  storeByKey: Map<string, SessionKeyResolution>;
+  candidates: SessionIdMatchCandidate[];
+  ownerConflict: boolean;
 };
+
+type SessionIdMatchCandidate = {
+  sessionKey: string;
+  entry: InternalSessionEntry;
+  resolution: SessionKeyResolution;
+  primary: boolean;
+};
+
+function selectSessionIdMatchCandidate(
+  candidates: SessionIdMatchCandidate[],
+  sessionId: string,
+): SessionIdMatchCandidate | undefined {
+  const selection = resolveSessionIdMatchSelection(
+    candidates.map((candidate) => [candidate.sessionKey, candidate.entry]),
+    sessionId,
+  );
+  if (selection.kind !== "selected") {
+    return undefined;
+  }
+  return candidates
+    .filter((candidate) => candidate.sessionKey === selection.sessionKey)
+    .toSorted((left, right) => {
+      const updatedAt = (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
+      if (updatedAt !== 0) {
+        return updatedAt;
+      }
+      if (left.primary !== right.primary) {
+        return left.primary ? -1 : 1;
+      }
+      return (left.resolution.agentId ?? "").localeCompare(right.resolution.agentId ?? "");
+    })[0];
+}
 
 function loadCommandSessionStore(params: {
   agentId?: string;
   clone?: boolean;
   storePath: string;
-}): Record<string, SessionEntry> {
+}): Record<string, InternalSessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({
+    listSessionEntriesCore({
       storePath: params.storePath,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.clone === false ? { clone: false } : {}),
@@ -130,48 +174,107 @@ export function buildExplicitSessionIdSessionKey(params: {
 
 function collectSessionIdMatchesForRequest(opts: {
   cfg: OpenClawConfig;
-  sessionStore: Record<string, SessionEntry>;
+  sessionStore: Record<string, InternalSessionEntry>;
   storePath: string;
   storeAgentId?: string;
   sessionId: string;
   searchOtherAgentStores: boolean;
   clone?: boolean;
 }): SessionIdMatchSet {
-  const matches: Array<[string, SessionEntry]> = [];
-  const primaryStoreMatches: Array<[string, SessionEntry]> = [];
-  const storeByKey = new Map<string, SessionKeyResolution>();
+  const candidates: SessionIdMatchCandidate[] = [];
+  let ownerConflict = false;
+  const configuredAgentIds = listAgentIds(opts.cfg).map(normalizeAgentId);
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(opts.cfg);
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(opts.cfg);
+  const configuredStoreOwners = new Map<string, Set<string>>();
+  for (const agentId of configuredAgentIds) {
+    const configuredStorePath = path.resolve(
+      resolveSessionStorePathCore(opts.cfg.session?.store, { agentId }),
+    );
+    const owners = configuredStoreOwners.get(configuredStorePath) ?? new Set<string>();
+    owners.add(agentId);
+    configuredStoreOwners.set(configuredStorePath, owners);
+  }
 
   const addMatches = (
-    candidateStore: Record<string, SessionEntry>,
+    candidateStore: Record<string, InternalSessionEntry>,
     candidateStorePath: string,
+    candidateAgentId: string | undefined,
     options?: { primary?: boolean },
   ): void => {
     for (const [candidateKey, candidateEntry] of Object.entries(candidateStore)) {
       if (candidateEntry?.sessionId !== opts.sessionId) {
         continue;
       }
-      matches.push([candidateKey, candidateEntry]);
-      if (options?.primary) {
-        primaryStoreMatches.push([candidateKey, candidateEntry]);
+      const normalizedCandidateAgentId = candidateAgentId
+        ? normalizeAgentId(candidateAgentId)
+        : undefined;
+      const scopedCandidateAgentId =
+        normalizedCandidateAgentId && configuredAgentIds.includes(normalizedCandidateAgentId)
+          ? normalizedCandidateAgentId
+          : undefined;
+      const pathOwners = configuredStoreOwners.get(path.resolve(candidateStorePath));
+      const pathOwnedAgentId =
+        pathOwners?.size === 1 ? pathOwners.values().next().value : undefined;
+      const parsedAgentId = parseAgentSessionKey(candidateKey)?.agentId;
+      const normalizedParsedAgentId = parsedAgentId ? normalizeAgentId(parsedAgentId) : undefined;
+      if (normalizedParsedAgentId && !configuredAgentIds.includes(normalizedParsedAgentId)) {
+        continue;
       }
-      storeByKey.set(candidateKey, {
+      const isLegacyUnscopedKey = classifySessionKeyShape(candidateKey) === "legacy_or_alias";
+      // A persisted fixed-store owner is authoritative even after retirement: retired rows stay
+      // unavailable instead of being reassigned by path cardinality or scan order.
+      const legacyUnscopedOwner = isLegacyUnscopedKey
+        ? persistedStoreOwner.kind === "configured"
+          ? persistedStoreOwner.agentId
+          : persistedStoreOwner.kind === "retired"
+            ? undefined
+            : (pathOwnedAgentId ??
+              (opts.searchOtherAgentStores ? undefined : scopedCandidateAgentId) ??
+              compatibilityAgentId)
+        : undefined;
+      const matchedAgentId =
+        normalizedParsedAgentId ??
+        (isLegacyUnscopedKey
+          ? legacyUnscopedOwner
+          : (scopedCandidateAgentId ?? compatibilityAgentId));
+      if (isLegacyUnscopedKey && persistedStoreOwner.kind === "retired") {
+        ownerConflict = true;
+        continue;
+      }
+      if (
+        !opts.searchOtherAgentStores &&
+        scopedCandidateAgentId &&
+        matchedAgentId &&
+        normalizeAgentId(matchedAgentId) !== scopedCandidateAgentId
+      ) {
+        ownerConflict = true;
+        continue;
+      }
+      candidates.push({
         sessionKey: candidateKey,
-        sessionStore: candidateStore,
-        storePath: candidateStorePath,
+        entry: candidateEntry,
+        primary: options?.primary === true,
+        resolution: {
+          ...(matchedAgentId ? { agentId: normalizeAgentId(matchedAgentId) } : {}),
+          sessionKey: candidateKey,
+          sessionStore: candidateStore,
+          storePath: candidateStorePath,
+        },
       });
     }
   };
 
-  addMatches(opts.sessionStore, opts.storePath, { primary: true });
+  addMatches(opts.sessionStore, opts.storePath, opts.storeAgentId, { primary: true });
   if (!opts.searchOtherAgentStores) {
-    return { matches, primaryStoreMatches, storeByKey };
+    return { candidates, ownerConflict };
   }
 
-  for (const agentId of listAgentIds(opts.cfg)) {
+  for (const agentId of configuredAgentIds) {
     if (agentId === opts.storeAgentId) {
       continue;
     }
-    const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
+    const candidateStorePath = resolveSessionStorePathCore(opts.cfg.session?.store, { agentId });
     addMatches(
       loadCommandSessionStore({
         agentId,
@@ -179,10 +282,11 @@ function collectSessionIdMatchesForRequest(opts: {
         ...(opts.clone === false ? { clone: false } : {}),
       }),
       candidateStorePath,
+      agentId,
     );
   }
 
-  return { matches, primaryStoreMatches, storeByKey };
+  return { candidates, ownerConflict };
 }
 
 /**
@@ -196,10 +300,17 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   agentId?: string;
 }): SessionKeyResolution {
   const sessionId = opts.sessionId.trim();
-  const storeAgentId = opts.agentId?.trim()
-    ? normalizeAgentId(opts.agentId)
-    : resolveDefaultAgentId(opts.cfg);
-  const storePath = resolveStorePath(opts.cfg.session?.store, {
+  const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(opts.cfg);
+  const storeAgentId =
+    requestedAgentId ??
+    (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
+    tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
+    resolveDefaultAgentId(opts.cfg, {
+      surface: "stored session lookup",
+      hint: "Pass an explicit agent id when looking up a session by id.",
+    });
+  const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
   const sessionStore = loadCommandSessionStore({
@@ -210,30 +321,75 @@ export function resolveStoredSessionKeyForSessionId(opts: {
     return { sessionKey: undefined, sessionStore, storePath };
   }
 
-  const selection = resolveSessionIdMatchSelection(
-    Object.entries(sessionStore).filter(([, entry]) => entry?.sessionId === sessionId),
-    sessionId,
+  const resolveMatchedAgentId = (sessionKey: string): string | undefined => {
+    const scopedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+    if (scopedAgentId) {
+      return normalizeAgentId(scopedAgentId);
+    }
+    const persistedRowOwner = resolvePersistedSessionStoreOwnerForKey(opts.cfg, sessionKey);
+    return persistedRowOwner.kind === "configured"
+      ? persistedRowOwner.agentId
+      : persistedRowOwner.kind === "retired"
+        ? undefined
+        : (requestedAgentId ?? tryResolveLegacyCompatibilityAgentId(opts.cfg));
+  };
+  const sessionIdMatches = Object.entries(sessionStore).filter(
+    ([, entry]) => entry?.sessionId === sessionId,
   );
+  const selectionMatches = requestedAgentId
+    ? sessionIdMatches.filter(
+        ([sessionKey]) => resolveMatchedAgentId(sessionKey) === requestedAgentId,
+      )
+    : sessionIdMatches;
+  if (requestedAgentId && selectionMatches.length === 0 && sessionIdMatches.length > 0) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `stored session id "${sessionId}"`,
+      hint: `The matching rows belong to a different agent than agent "${requestedAgentId}".`,
+    });
+  }
+  const selection = resolveSessionIdMatchSelection(selectionMatches, sessionId);
+  if (selection.kind !== "selected") {
+    return { agentId: requestedAgentId, sessionKey: undefined, sessionStore, storePath };
+  }
+
+  const sessionKey = selection.sessionKey;
+  const persistedRowOwner = resolvePersistedSessionStoreOwnerForKey(opts.cfg, sessionKey);
+  const resolvedAgentId = resolveMatchedAgentId(sessionKey);
+  if (!resolvedAgentId) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `stored session key "${sessionKey}"`,
+      hint:
+        persistedRowOwner.kind === "retired"
+          ? `The shared fixed-store row belongs to retired agent "${persistedRowOwner.agentId}".`
+          : "Pass an explicit agent id when looking up an unscoped session by id.",
+    });
+  }
+  if (requestedAgentId && requestedAgentId !== resolvedAgentId) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `stored session key "${sessionKey}"`,
+      hint: `The matching row belongs to agent "${resolvedAgentId}", not agent "${requestedAgentId}".`,
+    });
+  }
   return {
-    sessionKey: selection.kind === "selected" ? selection.sessionKey : undefined,
+    agentId: resolvedAgentId,
+    sessionKey,
     sessionStore,
     storePath,
   };
 }
 
-/** Resolves the session key/store targeted by one command request. */
-export function resolveSessionKeyForRequest(opts: {
+function resolveSessionKeyForRequestInternal(opts: {
   cfg: OpenClawConfig;
   to?: string;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
   clone?: boolean;
+  createMissingSessionId: boolean;
 }): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(opts.cfg));
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
   const requestedSessionKey = opts.sessionKey?.trim() || undefined;
@@ -250,12 +406,67 @@ export function resolveSessionKeyForRequest(opts: {
           agentId: requestedAgentId,
         })
       : undefined);
+  const scopedSessionAgentId = parseAgentSessionKey(explicitSessionKey)?.agentId;
+  const explicitKeyStoreOwner = resolvePersistedSessionStoreOwnerForKey(
+    opts.cfg,
+    explicitSessionKey,
+  );
+  if (
+    explicitKeyStoreOwner.kind === "configured" &&
+    requestedAgentId &&
+    requestedAgentId !== explicitKeyStoreOwner.agentId
+  ) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `session key "${explicitSessionKey}"`,
+      hint: `The shared fixed-store row belongs to agent "${explicitKeyStoreOwner.agentId}", not --agent "${requestedAgentId}".`,
+    });
+  }
+  if (explicitKeyStoreOwner.kind === "retired") {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `session key "${explicitSessionKey}"`,
+      hint: `The shared fixed-store row belongs to retired agent "${explicitKeyStoreOwner.agentId}".`,
+    });
+  }
+  const knownAgentId =
+    requestedAgentId ??
+    scopedSessionAgentId ??
+    (explicitKeyStoreOwner.kind === "configured" ? explicitKeyStoreOwner.agentId : undefined) ??
+    tryResolveLegacyCompatibilityAgentId(opts.cfg);
+  const unownedBareSessionKey = Boolean(
+    requestedSessionId &&
+    explicitSessionKey &&
+    classifySessionKeyShape(explicitSessionKey) === "legacy_or_alias" &&
+    !knownAgentId,
+  );
+  // A session id is already an explicit target: seed only its store scan from a live roster owner.
+  // The anchor is not resolved ownership and must never escape through the returned resolution.
+  const sessionIdScanAnchor = requestedSessionId
+    ? (knownAgentId ?? listAgentIds(opts.cfg)[0])
+    : undefined;
+  const defaultAgentId = knownAgentId
+    ? normalizeAgentId(knownAgentId)
+    : requestedSessionId
+      ? undefined
+      : normalizeAgentId(
+          resolveDefaultAgentId(opts.cfg, {
+            surface: "agent command session routing",
+            hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+          }),
+        );
   const storeAgentId = explicitSessionKey
-    ? isUnscopedSessionKeySentinel(explicitSessionKey)
-      ? (requestedAgentId ?? defaultAgentId)
-      : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
-    : (requestedAgentId ?? defaultAgentId);
-  const storePath = resolveStorePath(sessionCfg?.store, {
+    ? unownedBareSessionKey
+      ? sessionIdScanAnchor
+      : isUnscopedSessionKeySentinel(explicitSessionKey)
+        ? (requestedAgentId ?? defaultAgentId)
+        : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
+    : (requestedAgentId ?? defaultAgentId ?? sessionIdScanAnchor);
+  if (!storeAgentId) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: "agent command session routing",
+      hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+    });
+  }
+  const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     agentId: storeAgentId,
   });
   const loadOptions = opts.clone === false ? { clone: false as const } : undefined;
@@ -267,13 +478,16 @@ export function resolveSessionKeyForRequest(opts: {
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
-    (explicitSessionKey
+    (!unownedBareSessionKey && explicitSessionKey
       ? canonicalizeMainSessionAlias({
           cfg: opts.cfg,
           agentId: storeAgentId,
           sessionKey: explicitSessionKey,
         })
-      : undefined) ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
+      : undefined) ??
+    (!unownedBareSessionKey && ctx
+      ? resolveSessionKey(scope, ctx, mainKey, storeAgentId)
+      : undefined);
 
   // Entrypoint migration owners canonicalize legacy state before runtime reads. A missing target
   // row is not evidence that another agent's main session belongs to the configured default agent.
@@ -284,10 +498,10 @@ export function resolveSessionKeyForRequest(opts: {
   // first.
   if (
     requestedSessionId &&
-    !explicitSessionKey &&
+    (!explicitSessionKey || unownedBareSessionKey) &&
     (!sessionKey || sessionStore[sessionKey]?.sessionId !== requestedSessionId)
   ) {
-    const { matches, primaryStoreMatches, storeByKey } = collectSessionIdMatchesForRequest({
+    const { candidates, ownerConflict } = collectSessionIdMatchesForRequest({
       cfg: opts.cfg,
       sessionStore,
       storePath,
@@ -296,28 +510,73 @@ export function resolveSessionKeyForRequest(opts: {
       searchOtherAgentStores: requestedAgentId === undefined,
       ...(opts.clone === false ? { clone: false } : {}),
     });
-    const preferredSelection = resolveSessionIdMatchSelection(matches, requestedSessionId);
-    const currentStoreSelection =
-      preferredSelection.kind === "selected"
-        ? preferredSelection
-        : resolveSessionIdMatchSelection(primaryStoreMatches, requestedSessionId);
-    if (currentStoreSelection.kind === "selected") {
-      const preferred = storeByKey.get(currentStoreSelection.sessionKey);
-      if (preferred) {
-        return preferred;
-      }
-      sessionKey = currentStoreSelection.sessionKey;
+    const selectedMatch = selectSessionIdMatchCandidate(
+      candidates.filter((candidate) => candidate.resolution.agentId !== undefined),
+      requestedSessionId,
+    );
+    if (selectedMatch) {
+      return selectedMatch.resolution;
+    }
+    if (ownerConflict) {
+      throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+        surface: `session id "${requestedSessionId}"`,
+        hint: requestedAgentId
+          ? `The matching session belongs to a different agent than --agent "${requestedAgentId}".`
+          : "The matching unscoped session belongs to a retired fixed-store owner.",
+      });
     }
   }
 
-  if (requestedSessionId && !sessionKey) {
+  if (requestedSessionId && !sessionKey && opts.createMissingSessionId) {
+    const explicitSessionAgentId =
+      requestedAgentId ??
+      tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
+      resolveDefaultAgentId(opts.cfg, {
+        surface: "agent command session creation",
+        hint: "Pass --agent <id> when creating a session from --session-id.",
+      });
     sessionKey = buildExplicitSessionIdSessionKey({
       sessionId: requestedSessionId,
-      agentId: opts.agentId,
+      agentId: explicitSessionAgentId,
     });
+    return {
+      agentId: explicitSessionAgentId,
+      sessionKey,
+      sessionStore,
+      storePath,
+    };
   }
 
-  return { sessionKey, sessionStore, storePath };
+  return { agentId: storeAgentId, sessionKey, sessionStore, storePath };
+}
+
+/** Resolves an existing session-id row across agent stores without creating a fallback key. */
+export function resolveExistingSessionKeyForRequest(opts: {
+  cfg: OpenClawConfig;
+  sessionId: string;
+  agentId?: string;
+  clone?: boolean;
+}): SessionKeyResolution {
+  return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: false });
+}
+
+/** Resolves the session key/store targeted by one command request. */
+function resolveSessionKeyForRequest(opts: {
+  cfg: OpenClawConfig;
+  to?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  clone?: boolean;
+}): SessionKeyResolution {
+  return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
+}
+
+/** Core alias retained for runtime owners that bypass the public library facade. */
+export function resolveSessionKeyForRequestCore(
+  opts: Parameters<typeof resolveSessionKeyForRequest>[0],
+): SessionKeyResolution {
+  return resolveSessionKeyForRequest(opts);
 }
 
 /** Resolves or creates the session used by one agent command request. */
@@ -330,7 +589,12 @@ export function resolveSession(opts: {
   clone?: boolean;
 }): SessionResolution {
   const sessionCfg = opts.cfg.session;
-  const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequest({
+  const {
+    agentId: resolvedAgentId,
+    sessionKey,
+    sessionStore,
+    storePath,
+  } = resolveSessionKeyForRequestCore({
     cfg: opts.cfg,
     to: opts.to,
     sessionId: opts.sessionId,
@@ -341,9 +605,15 @@ export function resolveSession(opts: {
   const now = Date.now();
 
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
-  const sessionAgentId = opts.agentId?.trim()
-    ? normalizeAgentId(opts.agentId)
-    : resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(opts.cfg));
+  const sessionAgentId =
+    (opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined) ??
+    resolvedAgentId ??
+    parseAgentSessionKey(sessionKey)?.agentId ??
+    tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
+    resolveDefaultAgentId(opts.cfg, {
+      surface: "agent command session ownership",
+      hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+    });
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({

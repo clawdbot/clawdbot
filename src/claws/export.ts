@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync } from "node:fs";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { stringify as stringifyYaml } from "yaml";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
@@ -19,6 +20,7 @@ import { readClawManifestFile } from "./reader.js";
 import { isPortableClawAvatar } from "./schema-portability.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import { MAX_CLAW_MANIFEST_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
+import { materializeClawToolProfile } from "./tool-profile-consent.js";
 import {
   CLAW_BOOTSTRAP_FILE_NAMES,
   CLAW_OUTPUT_STABILITY,
@@ -85,13 +87,24 @@ function portableOpenClawProfile(
   agent: AgentConfig,
   extensions: ClawOpenClawExtension[],
 ): ClawOpenClawProfile | undefined {
-  const tools = {
+  const configuredTools = {
     ...(agent.tools?.profile ? { profile: agent.tools.profile } : {}),
     ...(agent.tools?.allow?.length ? { allow: agent.tools.allow } : {}),
     ...(agent.tools?.alsoAllow?.length ? { alsoAllow: agent.tools.alsoAllow } : {}),
     ...(agent.tools?.deny?.length ? { deny: agent.tools.deny } : {}),
     ...(agent.tools?.fs?.workspaceOnly === true ? { fs: { workspaceOnly: true as const } } : {}),
   };
+  let tools: NonNullable<ClawOpenClawProfile["agent"]["tools"]> = configuredTools;
+  if (configuredTools.profile || configuredTools.allow?.length) {
+    try {
+      tools = materializeClawToolProfile({ tools: configuredTools }).tools ?? {};
+    } catch (error) {
+      throw new ClawExportError(
+        "tool_profile_consent_required",
+        `Could not freeze the exported tool profile: ${(error as Error).message}`,
+      );
+    }
+  }
   const settings = {
     ...(agent.groupChat?.mentionPatterns?.length
       ? { groupChat: { mentionPatterns: agent.groupChat.mentionPatterns } }
@@ -606,10 +619,7 @@ export async function exportClawAgent(
     if (error instanceof ClawExportError) {
       throw error;
     }
-    throw new ClawExportError(
-      "export_write_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new ClawExportError("export_write_failed", coerceErrorMessage(error));
   }
   return {
     schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,

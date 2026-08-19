@@ -4,7 +4,7 @@ import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   expandToolGroups,
-  normalizeToolName,
+  normalizeToolPolicyName,
 } from "../tool-policy.js";
 import type { CronCreatorToolAllowlistEntry, CronToolsAllowCaptureRef } from "./cron-tool.types.js";
 
@@ -48,14 +48,14 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
   target.length = 0;
   const seen = new Set<string>();
   for (const tool of tools) {
-    const name = normalizeToolName(tool.name);
+    const name = normalizeToolPolicyName(tool.name);
     if (!name || seen.has(name)) {
       continue;
     }
     seen.add(name);
     const meta = toolMeta?.(tool);
     const pluginId =
-      typeof meta?.pluginId === "string" ? normalizeToolName(meta.pluginId) : undefined;
+      typeof meta?.pluginId === "string" ? normalizeToolPolicyName(meta.pluginId) : undefined;
     target.push(pluginId ? { name, pluginId } : { name });
   }
 }
@@ -75,7 +75,7 @@ function normalizeCronToolsAllow(values: readonly string[]): string[] {
   const normalized: string[] = [];
   const seen = new Set<string>();
   for (const entry of expandToolGroups([...values])) {
-    const toolName = normalizeToolName(entry);
+    const toolName = normalizeToolPolicyName(entry);
     if (!toolName || seen.has(toolName)) {
       continue;
     }
@@ -91,7 +91,7 @@ function normalizeCronCreatorToolsAllow(
   const normalized: NormalizedCronCreatorTool[] = [];
   const seen = new Set<string>();
   for (const entry of values) {
-    const name = normalizeToolName(typeof entry === "string" ? entry : entry.name);
+    const name = normalizeToolPolicyName(typeof entry === "string" ? entry : entry.name);
     if (!name || seen.has(name)) {
       continue;
     }
@@ -99,7 +99,7 @@ function normalizeCronCreatorToolsAllow(
     const pluginId =
       typeof entry === "string" || typeof entry.pluginId !== "string"
         ? undefined
-        : normalizeToolName(entry.pluginId);
+        : normalizeToolPolicyName(entry.pluginId);
     normalized.push(pluginId ? { name, pluginId } : { name });
   }
   return normalized;
@@ -123,7 +123,7 @@ function classifyExplicitToolsAllow(
     return "empty";
   }
   return values.some((entry) => {
-    const normalized = normalizeToolName(entry);
+    const normalized = normalizeToolPolicyName(entry);
     return normalized === "*" || normalized.startsWith("group:");
   })
     ? "resolved"

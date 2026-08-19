@@ -3,12 +3,26 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>"
+  echo "usage: bash scripts/plugin-npm-publish.sh [--repo-root <dir>] [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>"
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   usage
   exit 0
+fi
+
+tooling_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="${tooling_root}"
+if [[ "${1:-}" == "--repo-root" ]]; then
+  if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+    echo "--repo-root requires a directory" >&2
+    exit 2
+  fi
+  repo_root="$(cd "$2" && pwd)" || {
+    echo "repository root is not a directory: $2" >&2
+    exit 2
+  }
+  shift 2
 fi
 
 mode="${1:-}"
@@ -25,7 +39,8 @@ package_dir=""
 if [[ "$#" -gt 0 ]]; then
   case "$1" in
     -*) echo "unexpected plugin npm package-dir option: $1" >&2; exit 2 ;;
-    *) package_dir="$1"; shift ;;
+    /*) package_dir="$1"; shift ;;
+    *) package_dir="${repo_root}/$1"; shift ;;
   esac
 fi
 if [[ -z "${package_dir}" ]]; then
@@ -41,6 +56,7 @@ if [[ "${mode}" == "--pack" && -z "${OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR:-}" ]];
   exit 2
 fi
 
+cd "${tooling_root}"
 package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_dir}")"
 package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
 current_beta_version="$(npm view "${package_name}" dist-tags.beta 2>/dev/null || true)"
@@ -93,6 +109,7 @@ if [[ "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "0" && "${OPENCLAW_NPM_PUBLISH_
 fi
 
 log "Resolved package dir: ${package_dir}"
+log "Resolved repository root: ${repo_root}"
 log "Resolved package name: ${package_name}"
 log "Resolved package version: ${package_version}"
 log "Current beta dist-tag: ${current_beta_version:-<missing>}"
@@ -108,12 +125,20 @@ build_package_runtime() {
     return
   fi
   log "Package-local runtime build: ${package_dir}"
-  node scripts/lib/plugin-npm-runtime-build.mjs "${package_dir}" >&2
+  (
+    cd "${repo_root}"
+    node "${tooling_root}/scripts/lib/plugin-npm-runtime-build.mjs" "${package_dir}" >&2
+  )
 }
 
 check_package_npm_lock() {
   log "Package-local npm package-lock check: ${package_dir}"
-  node scripts/generate-npm-package-lock.mjs --package-dir "${package_dir}" >&2
+  (
+    cd "${repo_root}"
+    OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${repo_root}" \
+      node "${tooling_root}/scripts/generate-npm-package-lock.mjs" \
+        --package-dir "${package_dir}" >&2
+  )
 }
 
 mirror_auth_token=""
@@ -175,9 +200,13 @@ if [[ "${mode}" == "--pack" || "${mode}" == "--pack-dry-run" ]]; then
     pack_output_dir="$(cd "${OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR}" && pwd)"
     pack_args+=(--pack-destination "${pack_output_dir}")
   fi
-  OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
-    node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- \
-    "${pack_args[@]}"
+  (
+    cd "${repo_root}"
+    OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${repo_root}" \
+      OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+      node "${tooling_root}/scripts/lib/plugin-npm-package-manifest.mjs" \
+        --run "${package_dir}" -- "${pack_args[@]}"
+  )
   exit 0
 fi
 
@@ -185,8 +214,13 @@ fi
   cleanup_files=()
   trap 'rm -f "${cleanup_files[@]}"' EXIT
   run_with_manifest_overlay() {
-    OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
-      node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
+    (
+      cd "${repo_root}"
+      OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${repo_root}" \
+        OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+        node "${tooling_root}/scripts/lib/plugin-npm-package-manifest.mjs" \
+          --run "${package_dir}" -- "$@"
+    )
   }
   publish_userconfig=""
   if [[ -n "${publish_auth_token}" ]]; then

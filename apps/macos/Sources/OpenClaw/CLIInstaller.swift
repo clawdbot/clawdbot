@@ -22,14 +22,14 @@ enum CLIInstallBuild {
 }
 
 enum CLIInstallPolicy {
-    static func storedPolicy(defaults: UserDefaults = .standard) -> String? {
+    static func storedPolicy(defaults: UserDefaults = AppDefaults.standard) -> String? {
         defaults.string(forKey: cliInstallPolicyKey)
     }
 
     static func requiredGatewayVersionString(
         appVersion: String?,
         isDebug: Bool,
-        defaults: UserDefaults = .standard) -> String?
+        defaults: UserDefaults = AppDefaults.standard) -> String?
     {
         guard !CLIInstallBuild.isStable(appVersion: appVersion, isDebug: isDebug) else {
             return appVersion
@@ -176,8 +176,11 @@ enum CLIInstaller {
         return locations
     }
 
-    static func managedExecutableLocation() -> String {
-        URL(fileURLWithPath: self.installPrefix())
+    static func managedExecutableLocation(
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
+        profile: AppProfile = .current) -> String
+    {
+        URL(fileURLWithPath: self.installPrefix(homeDirectory: homeDirectory, profile: profile))
             .appendingPathComponent("bin/openclaw")
             .path
     }
@@ -198,7 +201,7 @@ enum CLIInstaller {
                 expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
                 preferredPaths: preferredPaths)
             if status.isReady {
-                self.rememberValidated(status)
+                self.rememberValidated(status, defaults: AppDefaults.standard)
                 return status
             }
             fallbackStatus = fallbackStatus ?? status
@@ -222,7 +225,7 @@ enum CLIInstaller {
             expectedVersion: expectedVersion,
             preferredPaths: preferredPaths)
         if status.isReady {
-            self.rememberValidated(status)
+            self.rememberValidated(status, defaults: AppDefaults.standard)
         }
         return status
     }
@@ -313,10 +316,14 @@ enum CLIInstaller {
         return environment
     }
 
-    private static func rememberValidated(_ status: Status) {
+    static func rememberValidated(_ status: Status, defaults: UserDefaults) {
         guard case let .ready(location, version) = status else { return }
-        UserDefaults.standard.set(location, forKey: cliValidatedExecutableKey)
-        UserDefaults.standard.set(version, forKey: cliValidatedVersionKey)
+        if defaults.string(forKey: cliValidatedExecutableKey) != location {
+            defaults.set(location, forKey: cliValidatedExecutableKey)
+        }
+        if defaults.string(forKey: cliValidatedVersionKey) != version {
+            defaults.set(version, forKey: cliValidatedVersionKey)
+        }
     }
 
     @discardableResult
@@ -430,10 +437,13 @@ enum CLIInstaller {
         target == .channel(.dev) ? 7200 : 900
     }
 
-    private static func installPrefix() -> String {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(".openclaw")
-            .path
+    static func installPrefix(
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
+        profile: AppProfile = .current) -> String
+    {
+        // Managed install identity follows only the profile; a state override must not split
+        // the install used by its LaunchAgent.
+        profile.stateDirectoryURL(homeDirectory: homeDirectory).path
     }
 
     static func installScriptCommand(
@@ -470,11 +480,13 @@ enum CLIInstaller {
         executable: String,
         targetVersion: String,
         restartGateway: Bool = true,
-        repair: Bool = false) -> [String]
+        repair: Bool = false,
+        profile: AppProfile = .current) -> [String]
     {
-        var command = repair
-            ? [executable, "update", "repair", "--json", "--timeout", "900", "--yes"]
-            : [executable, "update", "--tag", targetVersion, "--json", "--timeout", "900"]
+        let arguments = repair
+            ? ["update", "repair", "--json", "--timeout", "900", "--yes"]
+            : ["update", "--tag", targetVersion, "--json", "--timeout", "900"]
+        var command = profile.localCLICommand(prefix: [executable], arguments: arguments)
         if !restartGateway {
             command.append("--no-restart")
         }
@@ -559,7 +571,7 @@ enum CLIInstaller {
         case .exact: "exact"
         case let .channel(channel): channel.rawValue
         }
-        UserDefaults.standard.set(policy, forKey: cliInstallPolicyKey)
+        AppDefaults.standard.set(policy, forKey: cliInstallPolicyKey)
     }
 
     private static func devCheckoutLocation(prefix: String) -> String {
@@ -573,7 +585,8 @@ enum CLIInstaller {
         paused: Bool = AppStateStore.shared.isPaused,
         start: @MainActor () -> Void = { GatewayProcessManager.shared.setActive(true) },
         waitUntilReady: @MainActor () async -> Bool = {
-            await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12)
+            await GatewayProcessManager.shared.waitForGatewayReady(
+                timeout: GatewayLaunchAgentManager.startupMigrationTolerance)
         }) async -> LocalGatewayActivation
     {
         guard mode == .local, !paused else { return .deferred }

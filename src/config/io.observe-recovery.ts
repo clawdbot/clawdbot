@@ -498,7 +498,7 @@ function* recoverSuspiciousConfigRead(
   return preparedCandidate;
 }
 
-export async function promoteConfigSnapshotToLastKnownGood(params: {
+export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
   deps: ObserveRecoveryDeps;
   snapshot: ConfigFileSnapshot;
   logger?: Pick<typeof console, "warn">;
@@ -548,7 +548,7 @@ export async function promoteConfigSnapshotToLastKnownGood(params: {
   return true;
 }
 
-export async function recoverConfigFromLastKnownGood(params: {
+export async function recoverConfigFromLastKnownGoodCore(params: {
   deps: ObserveRecoveryDeps;
   snapshot: ConfigFileSnapshot;
   reason: string;
@@ -611,7 +611,7 @@ export async function recoverConfigFromLastKnownGood(params: {
     stat,
     observedAt: now,
   });
-  const clobberedPath = await preserveConfigSnapshotAsClobbered({
+  const clobberedPath = await preserveConfigSnapshotAsClobberedCore({
     deps,
     snapshot,
     observedAt: now,
@@ -662,7 +662,7 @@ export async function recoverConfigFromLastKnownGood(params: {
   return true;
 }
 
-export async function preserveConfigSnapshotAsClobbered(params: {
+export async function preserveConfigSnapshotAsClobberedCore(params: {
   deps: ObserveRecoveryDeps;
   snapshot: ConfigFileSnapshot;
   observedAt?: string;

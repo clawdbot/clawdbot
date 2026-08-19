@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  collectBuiltDoctorContractClosureViolations,
   listBuiltPluginControlPlaneModules,
   probeBuiltPluginControlPlaneModules,
   verifyBuiltPluginControlPlaneModules,
-} from "../../scripts/check-built-plugin-control-plane-modules.mjs";
+} from "../../scripts/check-built-plugin-control-plane-modules.mts";
 
 const roots: string[] = [];
 
@@ -107,5 +108,54 @@ describe("built plugin control-plane module loads", () => {
     expect(() => probeBuiltPluginControlPlaneModules(modules, { rootDir, timeoutMs: 100 })).toThrow(
       /timed out|ETIMEDOUT/u,
     );
+  });
+});
+
+describe("built doctor contract closures", () => {
+  it("follows chunk edges to a forbidden runtime dependency", () => {
+    const rootDir = makeRoot();
+    write(
+      rootDir,
+      "dist/extensions/demo/doctor-contract-api.js",
+      'import { rule } from "../../token-chunk.js";\nexport const rules = [rule];\n',
+    );
+    write(rootDir, "dist/token-chunk.js", 'export { rule } from "./exec-chunk.js";\n');
+    write(rootDir, "dist/exec-chunk.js", 'import "execa";\nexport const rule = 1;\n');
+
+    expect(
+      collectBuiltDoctorContractClosureViolations(listBuiltPluginControlPlaneModules({ rootDir }), {
+        rootDir,
+      }),
+    ).toEqual([
+      {
+        pluginId: "demo",
+        kind: "doctor-contract",
+        relativePath: "dist/extensions/demo/doctor-contract-api.js",
+        dependency: "execa",
+        importerPath: "dist/exec-chunk.js",
+      },
+    ]);
+  });
+
+  it("ignores lazy edges and non-doctor contract surfaces", () => {
+    const rootDir = makeRoot();
+    // A dynamic import is never paid at enumeration time, and the general contract
+    // surface may legitimately spawn commands (matrix probes its SDK packages).
+    write(
+      rootDir,
+      "dist/extensions/demo/doctor-contract-api.js",
+      'export const load = () => import("execa");\n',
+    );
+    write(
+      rootDir,
+      "dist/extensions/demo/contract-api.js",
+      'import "execa";\nexport const a = 1;\n',
+    );
+
+    expect(
+      collectBuiltDoctorContractClosureViolations(listBuiltPluginControlPlaneModules({ rootDir }), {
+        rootDir,
+      }),
+    ).toEqual([]);
   });
 });

@@ -1,6 +1,7 @@
 // Codex tests cover transport stdio plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createStdioTransport, resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
@@ -32,6 +33,29 @@ describe("createStdioTransport", () => {
       ["app-server", "--listen", "stdio://"],
       expect.objectContaining({ cwd: "/srv/codex-project" }),
     );
+  });
+
+  it("passes native context and auto-compaction arguments to Codex unchanged", () => {
+    const args = [
+      "app-server",
+      "--listen",
+      "stdio://",
+      "-c",
+      "model_context_window=1000000",
+      "-c",
+      "model_auto_compact_token_limit=700000",
+      "-c",
+      "model_auto_compact_token_limit_scope=total",
+    ];
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: { appServer: { command: "codex", args } },
+      env: {},
+      requirementsToml: null,
+    });
+
+    createStdioTransport(runtime.start);
+
+    expect(spawnMock).toHaveBeenCalledWith("codex", args, expect.any(Object));
   });
 });
 
@@ -77,6 +101,24 @@ describe("resolveCodexAppServerSpawnEnv", () => {
       KEEP: "parent",
       Other: "configured",
     });
+  });
+
+  it("strips inherited runtime loader injection before spawn", () => {
+    expect({
+      ...resolveCodexAppServerSpawnEnv(
+        {
+          env: {
+            NODE_PATH: "/configured/node_modules",
+            DYLD_INSERT_LIBRARIES: "/configured/inject.dylib",
+          },
+        },
+        {
+          NODE_PATH: "/ambient/node_modules",
+          LD_PRELOAD: "/ambient/inject.so",
+          KEEP: "safe",
+        },
+      ),
+    }).toEqual({ KEEP: "safe" });
   });
 
   it("uses a null-prototype env map and ignores prototype-polluting keys", () => {

@@ -634,6 +634,14 @@ describe("Parallels smoke model selection", () => {
     }
   });
 
+  it("rejects inherited object keys as unknown Parallels smoke arguments", () => {
+    for (const parseArgs of [parseMacosSmokeArgs, parseLinuxSmokeArgs, parseWindowsSmokeArgs]) {
+      for (const arg of ["constructor", "toString"]) {
+        expectFatalError(() => parseArgs([arg, "ignored"]), `unknown arg: ${arg}`);
+      }
+    }
+  });
+
   it("keeps provider auth and model defaults in the shared TypeScript helper", () => {
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL");
@@ -2153,7 +2161,15 @@ kill -TERM "$$"`,
     expect(transports).toContain("launch retry");
   });
 
-  it("keeps Windows update-only env flags scoped before verification", () => {
+  it("preserves bundled plugin inventory during dev updates", () => {
+    const devUpdateLines = [macos, windows].map((script) =>
+      script.split("\n").find((line) => line.includes("update --channel dev")),
+    );
+
+    expect(devUpdateLines).not.toContain(undefined);
+    for (const updateLine of devUpdateLines) {
+      expect(updateLine).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    }
     expect(powershell).toContain("windowsScopedEnvFunction");
     expect(windows).toContain(
       "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",

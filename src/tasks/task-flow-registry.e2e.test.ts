@@ -4,8 +4,8 @@ import { resetConfigRuntimeState } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  completeTaskRunByRunId,
-  createRunningTaskRun as createRunningTaskRunOrNull,
+  completeTaskRunByRunIdCore as completeTaskRunByRunId,
+  createRunningTaskRunCore as createRunningTaskRunOrNull,
 } from "./task-executor.js";
 import { getTaskFlowByIdForOwner, listTaskFlowsForOwner } from "./task-flow-owner-access.js";
 import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";

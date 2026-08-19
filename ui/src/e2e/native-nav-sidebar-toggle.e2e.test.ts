@@ -1,6 +1,7 @@
 // Shipped apps stamp `openclaw-native-nav`; current apps advertise web chrome
 // at document start and stamp `openclaw-native-web-chrome` at document end.
 // Plain browsers keep their normal in-page controls.
+import path from "node:path";
 import type { BrowserContext } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -15,6 +16,40 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
+const TOAST_PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/toast-layering");
+const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
+  featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+  methodResponses: {
+    "sessions.list": chatSessionListResponse(),
+    "sessions.catalog.list": {
+      catalogs: [
+        {
+          id: "codex",
+          label: "Codex",
+          capabilities: { archive: true, continueSession: true },
+          hosts: [
+            {
+              connected: true,
+              hostId: "gateway:local",
+              kind: "gateway",
+              label: "Local Codex",
+              sessions: [
+                {
+                  archived: false,
+                  canArchive: true,
+                  canContinue: true,
+                  name: "Toast routing proof",
+                  status: "idle",
+                  threadId: "toast-routing-proof",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+};
 
 let context: BrowserContext | undefined;
 
@@ -25,15 +60,18 @@ suite.define(() => {
   });
 
   async function openPage(options: {
+    colorScheme?: "dark" | "light";
+    height?: number;
     nativeNav?: boolean;
     scenario?: ControlUiMockGatewayScenario;
     webChrome?: boolean;
     width?: number;
   }) {
     context = await suite.browser.newContext({
+      colorScheme: options.colorScheme,
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { height: 900, width: options.width ?? 1280 },
+      viewport: { height: options.height ?? 900, width: options.width ?? 1280 },
     });
     const page = await context.newPage();
     if (options.nativeNav) {
@@ -311,6 +349,15 @@ suite.define(() => {
     const drawer = navigation.locator("openclaw-modal-dialog.nav-drawer");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
     const trigger = page.locator(".chat-pane__nav-toggle").first();
+    const readFocusLocation = () =>
+      page.evaluate(() => {
+        // Native dialog tab order may hand focus to browser chrome when no document candidate remains.
+        // `document.hasFocus()` distinguishes that from focus on the underlying inert page.
+        if (!document.hasFocus()) {
+          return "browser-chrome";
+        }
+        return document.activeElement?.closest(".shell-nav") ? "navigation" : "page";
+      });
 
     await expect.poll(() => navigation.getAttribute("inert")).toBe("");
     await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(0);
@@ -324,7 +371,16 @@ suite.define(() => {
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
     await trigger.focus();
+    const afterShowMarker = "data-e2e-after-show";
+    await drawer.evaluate((element, marker) => {
+      element.removeAttribute(marker);
+      element.addEventListener("wa-after-show", () => element.setAttribute(marker, ""), {
+        once: true,
+      });
+    }, afterShowMarker);
     await page.keyboard.press("Enter");
+    await expect.poll(() => drawer.getAttribute(afterShowMarker)).toBe("");
+    await expect.poll(readFocusLocation).toBe("navigation");
 
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
@@ -333,15 +389,10 @@ suite.define(() => {
     await expect.poll(() => dialog.isVisible()).toBe(true);
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
-    await expect
-      .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
-      .toBe(true);
 
     for (const key of ["Tab", "Tab", "Shift+Tab", "Shift+Tab"] as const) {
       await page.keyboard.press(key);
-      await expect
-        .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
-        .toBe(true);
+      await expect.poll(readFocusLocation).not.toBe("page");
     }
 
     expect(
@@ -382,6 +433,62 @@ suite.define(() => {
     await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
     await expect.poll(() => drawer.count()).toBe(0);
   });
+
+  it.each(["dark", "light"] as const)(
+    "keeps the toast above the mobile drawer in %s mode",
+    async (colorScheme) => {
+      const page = await openPage({
+        colorScheme,
+        height: 844,
+        nativeNav: false,
+        scenario: TOAST_SCENARIO,
+        width: 390,
+      });
+      const drawer = page.locator("openclaw-modal-dialog.nav-drawer");
+      const dialog = page.getByRole("dialog", { name: "Navigation" });
+      await page.locator(".chat-pane__nav-toggle").first().click();
+      await expect.poll(() => dialog.isVisible()).toBe(true);
+
+      const catalog = drawer.locator('[data-session-section="catalog:codex"]');
+      await catalog.waitFor({ state: "visible" });
+      await catalog.locator(".sidebar-recent-sessions__head").hover();
+      await catalog.locator('[data-session-catalog-view-menu="codex"]').click();
+      await page
+        .locator('wa-dropdown-item[value="hide-catalog"]')
+        .evaluate((element) => (element as HTMLElement).click());
+      const host = drawer.locator("openclaw-toast-host");
+      const toast = host.locator(".app-toast");
+      await toast.waitFor();
+      await expect.poll(() => toast.textContent()).toContain("Codex hidden");
+      const dismiss = toast.getByRole("button", { name: "Dismiss" });
+      await dismiss.click({ trial: true });
+
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(TOAST_PROOF_DIR, `mobile-drawer-toast-${colorScheme}.png`),
+      });
+      if (colorScheme === "dark") {
+        await page.keyboard.press("Escape");
+        await expect.poll(() => dialog.isVisible()).toBe(false);
+      } else {
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await expect.poll(() => drawer.count()).toBe(0);
+      }
+      const handedOffToast = page.locator(".shell > openclaw-toast-host .app-toast");
+      await expect.poll(() => handedOffToast.textContent()).toContain("Codex hidden");
+      const [toastBounds, composerBounds] = await Promise.all([
+        handedOffToast.boundingBox(),
+        page.locator(".agent-chat__composer-shell").boundingBox(),
+      ]);
+      if (!toastBounds || !composerBounds) {
+        throw new Error("expected the handed-off toast and chat composer to have layout boxes");
+      }
+      expect(Math.round(toastBounds.y)).toBe(20);
+      expect(toastBounds.y + toastBounds.height).toBeLessThan(composerBounds.y);
+      await handedOffToast.getByRole("button", { name: "Dismiss" }).click();
+      await expect.poll(() => handedOffToast.isVisible()).toBe(false);
+    },
+  );
 
   it("keeps the sidebar rail beside a half-width native link browser", async () => {
     const page = await openPage({ webChrome: true, width: 620 });

@@ -42,7 +42,7 @@
 .device-entry__details > summary {
   color: var(--muted);
   user-select: none;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .device-entry__details > summary:hover {
@@ -83,7 +83,7 @@
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
   user-select: none;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .device-group__dups > summary:hover {

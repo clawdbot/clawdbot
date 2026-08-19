@@ -2,9 +2,10 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   listKnownSessionStoreAgentIds,
@@ -21,21 +22,20 @@ import {
 } from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
 import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
-const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
+const { listSessionEntriesCore, patchSessionEntryCore, replaceSessionEntry } = sessionAccessor;
 
 const taskStatusMocks = vi.hoisted(() => ({
   buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
 }));
 
 function sweepCronRunSessions(
-  params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId" | "defaultAgentId">,
+  params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId">,
 ) {
-  return sweepCronRunSessionsImpl({ ...params, agentId: "main", defaultAgentId: "main" });
+  return sweepCronRunSessionsImpl({ ...params, agentId: "main" });
 }
 
 vi.mock("../tasks/task-status-access.js", () => ({
@@ -62,7 +62,7 @@ async function seedSessionEntries(
 
 function readSessionEntries(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -266,7 +266,7 @@ describe("sweepCronRunSessions", () => {
     expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "ops")).toEqual([
       { agentId: "ops", storePath: exactStorePath },
     ]);
-    expect(Object.keys(loadCombinedSessionStoreForGateway(cfg).store).toSorted()).toEqual([
+    expect(Object.keys(loadCombinedSessionStoreForGatewayCore(cfg).store).toSorted()).toEqual([
       mainKey,
       opsKey,
     ]);
@@ -282,7 +282,6 @@ describe("sweepCronRunSessions", () => {
     expect(
       await sweepCronRunSessionsImpl({
         agentId: "main",
-        defaultAgentId: "main",
         sessionStorePath: exactStorePath,
         nowMs: now,
         log,
@@ -290,7 +289,6 @@ describe("sweepCronRunSessions", () => {
     ).toEqual({ swept: true, pruned: 0 });
     const result = await sweepCronRunSessionsImpl({
       agentId: "ops",
-      defaultAgentId: "main",
       sessionStorePath: exactStorePath,
       nowMs: now,
       log,
@@ -444,7 +442,7 @@ describe("sweepCronRunSessions", () => {
     const writerStarted = createDeferred();
     const releaseWriter = createDeferred();
     const firstValidation = createDeferred();
-    const writer = patchSessionEntry({ storePath, sessionKey }, async () => {
+    const writer = patchSessionEntryCore({ storePath, sessionKey }, async () => {
       writerStarted.resolve();
       await releaseWriter.promise;
       return {};
@@ -636,7 +634,6 @@ describe("sweepCronRunSessions", () => {
     expect(
       await sweepCronRunSessionsImpl({
         agentId: "main",
-        defaultAgentId: "main",
         sessionStorePath: storePath,
         nowMs: now,
         log,
@@ -646,7 +643,6 @@ describe("sweepCronRunSessions", () => {
     expect(
       await sweepCronRunSessionsImpl({
         agentId: "MAIN",
-        defaultAgentId: "main",
         sessionStorePath: `${tmpDir}${path.sep}.${path.sep}sessions.json`,
         nowMs: now + 1_000,
         log,
@@ -687,7 +683,7 @@ describe("sweepCronRunSessions", () => {
     const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
       code: "EACCES",
     });
-    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation(() => {
+    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(() => {
       throw eacces;
     });
 

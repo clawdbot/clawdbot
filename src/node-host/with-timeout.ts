@@ -9,7 +9,7 @@ import { toErrorObject } from "../infra/errors.js";
  * completion, and preserves object-shaped abort reasons as Error properties.
  */
 /** Run work with an optional timeout and AbortSignal. */
-export async function withTimeout<T>(
+export async function runAbortableTimeout<T>(
   work: (signal: AbortSignal | undefined) => Promise<T>,
   timeoutMs?: number,
   label?: string,

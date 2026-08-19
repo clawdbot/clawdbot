@@ -14,7 +14,7 @@ import {
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 const CODEX_MISSING_TERMINAL_MESSAGE =
   "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";

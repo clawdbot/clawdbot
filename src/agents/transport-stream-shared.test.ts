@@ -13,6 +13,25 @@ import { describe, expect, it, vi } from "vitest";
 import { classifyAssistantFailoverReason } from "./embedded-agent-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
+function createTransportOutput() {
+  return makeAssistantMessageFixture({ stopReason: "stop", content: [] });
+}
+
+function projectFailure(output: ReturnType<typeof createTransportOutput>, error: unknown): void {
+  failTransportStream({
+    stream: { push: () => {}, end: () => {} },
+    output,
+    error,
+  });
+}
+
+type TransportFailureFixture = { error: Error; signal?: AbortSignal };
+type TransportFailureOutput = {
+  stopReason: "error" | "aborted";
+  errorMessage: string;
+  errorCode?: string;
+};
+
 describe("transport stream shared helpers", () => {
   it("sanitizes unpaired surrogate code units", () => {
     const high = String.fromCharCode(0xd83d);
@@ -64,7 +83,7 @@ describe("transport stream shared helpers", () => {
   it("finalizes successful transport streams", () => {
     const push = vi.fn();
     const end = vi.fn();
-    const output = { stopReason: "stop" };
+    const output = createTransportOutput();
 
     finalizeTransportStream({
       stream: { push, end },
@@ -88,9 +107,7 @@ describe("transport stream shared helpers", () => {
       code: "OPENCLAW_RESTART_ABORT",
     });
     controller.abort(reason);
-    const output: { stopReason: string; errorMessage?: string; errorCode?: string } = {
-      stopReason: "stop",
-    };
+    const output = createTransportOutput();
 
     expect(() =>
       finalizeTransportStream({
@@ -128,7 +145,7 @@ describe("transport stream shared helpers", () => {
     expect(() =>
       finalizeTransportStream({
         stream: { push: vi.fn(), end: vi.fn() },
-        output: { stopReason: "stop" },
+        output: createTransportOutput(),
         signal: controller.signal,
       }),
     ).toThrow("Request was aborted");
@@ -140,7 +157,7 @@ describe("transport stream shared helpers", () => {
     const push = vi.fn();
     const end = vi.fn();
     const cleanup = vi.fn();
-    const output: { stopReason: string; errorMessage?: string } = { stopReason: "stop" };
+    const output = createTransportOutput();
 
     failTransportStream({
       stream: { push, end },
@@ -165,9 +182,9 @@ describe("transport stream shared helpers", () => {
     circular.self = circular;
 
     for (const error of [1n, circular]) {
-      const output: { stopReason: string; errorMessage?: string } = { stopReason: "stop" };
+      const output = createTransportOutput();
 
-      expect(() => assignTransportErrorDetails(output, error)).not.toThrow();
+      expect(() => projectFailure(output, error)).not.toThrow();
       expect(output.stopReason).toBe("error");
       expect(output.errorMessage).toBeTruthy();
     }
@@ -181,15 +198,15 @@ describe("transport stream shared helpers", () => {
     const sdkError = new OpenAI.APIConnectionError({ cause: fetchError });
     const output = makeAssistantMessageFixture({ stopReason: "stop", content: [] });
 
-    assignTransportErrorDetails(output, sdkError);
+    projectFailure(output, sdkError);
 
     expect(output.errorCode).toBe("ECONNREFUSED");
     expect(classifyAssistantFailoverReason(output)).toBe("timeout");
   });
 
   it("prefers top-level errorCode over nested cause codes", () => {
-    const output: { stopReason: string; errorCode?: string } = { stopReason: "stop" };
-    assignTransportErrorDetails(output, {
+    const output = createTransportOutput();
+    projectFailure(output, {
       errorCode: "TOP_LEVEL",
       code: "MIDDLE",
       cause: { code: "CAUSE_CODE", cause: { code: "DEEP_CAUSE_CODE" } },
@@ -200,9 +217,42 @@ describe("transport stream shared helpers", () => {
   it("stops traversing cyclic cause chains", () => {
     const error: { cause?: unknown } = {};
     error.cause = error;
-    const output: { stopReason: string; errorCode?: string } = { stopReason: "stop" };
+    const output = createTransportOutput();
 
-    expect(() => assignTransportErrorDetails(output, error)).not.toThrow();
+    expect(() => projectFailure(output, error)).not.toThrow();
     expect(output.errorCode).toBeUndefined();
+  });
+
+  it.each<{
+    name: string;
+    setup: () => TransportFailureFixture;
+    expected: TransportFailureOutput;
+  }>([
+    {
+      name: "provider failure",
+      setup: () => ({ error: Object.assign(new Error("busy"), { status: 503 }) }),
+      expected: { stopReason: "error", errorMessage: "503: busy", errorCode: "503" },
+    },
+    {
+      name: "coded abort",
+      setup: () => {
+        const controller = new AbortController();
+        const error = Object.assign(new Error("restarted"), { code: "OPENCLAW_RESTART_ABORT" });
+        controller.abort(error);
+        return { error, signal: controller.signal };
+      },
+      expected: {
+        stopReason: "aborted",
+        errorMessage: "restarted",
+        errorCode: "OPENCLAW_RESTART_ABORT",
+      },
+    },
+  ])("keeps the deprecated public wrapper terminal fields for $name", ({ setup, expected }) => {
+    const { error, signal } = setup();
+    const output = createTransportOutput();
+
+    assignTransportErrorDetails(output, error, signal);
+
+    expect(output).toMatchObject(expected);
   });
 });

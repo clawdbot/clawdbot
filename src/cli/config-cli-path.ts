@@ -1,6 +1,7 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
@@ -222,7 +223,7 @@ export function formatConfigUnsetMissingPathMessage(params: {
 }
 
 function isSchemaRecord(value: unknown): value is JsonSchemaRecord {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return isPlainRecord(value);
 }
 
 function schemaTypes(schema: JsonSchemaRecord): Set<string> {
@@ -594,8 +595,4 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
   }
   delete record[last];
   return { removed: true, leafContainer: "object" };
-}
-
-export function toDotPath(path: readonly PathSegment[]): string {
-  return path.join(".");
 }

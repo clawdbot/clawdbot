@@ -4,7 +4,6 @@ import type {
   AgentEvent,
   AgentMessage,
   AgentTool,
-  CompactionResult,
   ThinkingLevel,
 } from "../runtime/index.js";
 import type {
@@ -23,6 +22,18 @@ import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
+type AgentSessionCompactionOutcome =
+  | { status: "completed"; tokensBefore: number; tokensAfter: number; willRetry: boolean }
+  | { status: "skipped"; reason: string }
+  | { status: "failed"; reason: string }
+  | { status: "aborted" };
+
+type AgentSessionCompactionEndEvent = {
+  type: "compaction_end";
+  reason: "manual" | "threshold" | "overflow";
+  outcome: AgentSessionCompactionOutcome;
+};
+
 export type AgentSessionEvent =
   | Exclude<AgentEvent, { type: "agent_end" }>
   | {
@@ -35,14 +46,7 @@ export type AgentSessionEvent =
   | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
   | { type: "session_info_changed"; name: string | undefined }
   | { type: "thinking_level_changed"; level: ThinkingLevel }
-  | {
-      type: "compaction_end";
-      reason: "manual" | "threshold" | "overflow";
-      result: CompactionResult | undefined;
-      aborted: boolean;
-      willRetry: boolean;
-      errorMessage?: string;
-    }
+  | AgentSessionCompactionEndEvent
   | {
       type: "auto_retry_start";
       attempt: number;
@@ -53,7 +57,7 @@ export type AgentSessionEvent =
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
 
 export type AgentSessionEventListener = (event: AgentSessionEvent) => unknown;
-export type AgentSessionWriteLockRunner = <T>(run: () => Promise<T> | T) => Promise<T>;
+export type AgentSessionWriteSettlementRunner = <T>(run: () => Promise<T> | T) => Promise<T>;
 
 export interface AgentSessionConfig {
   agent: Agent;
@@ -80,10 +84,12 @@ export interface AgentSessionConfig {
   extensionRunnerRef?: { current?: ExtensionRunner };
   /** Session start metadata emitted when extensions bind to this runtime. */
   sessionStartEvent?: SessionStartEvent;
-  /** Lock used before session-file writes or write-capable hooks. */
-  withSessionWriteLock?: AgentSessionWriteLockRunner;
+  /** Settlement boundary for session writes and write-capable hooks. */
+  withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   /** Owner of reactive context-overflow recovery. Defaults to the session. */
   contextOverflowRecoveryOwner?: "session" | "caller";
+  /** Whether disposing this object ends the durable provider session. Defaults to true. */
+  cleanupProviderSessionResourcesOnDispose?: boolean;
 }
 
 export interface ExtensionBindings {

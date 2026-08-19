@@ -18,7 +18,7 @@ import {
 } from "./task-registry.store.js";
 import type { TaskDeliveryState, TaskRecord, TaskRuntime } from "./task-registry.types.js";
 
-export const log = createSubsystemLogger("tasks/registry");
+export const taskRegistryLog = createSubsystemLogger("tasks/registry");
 export const TASK_FLOW_SYNC_RETRY_DELAYS_MS = [1_000, 5_000, 25_000, 120_000, 600_000] as const;
 
 const taskRegistryProcessState = getTaskRegistryProcessState();
@@ -29,6 +29,7 @@ export const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
 export const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
 export const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
 export const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
+export const taskActivityByTaskId = taskRegistryProcessState.taskActivityByTaskId;
 type TaskRegistryRestoreState =
   | { status: "uninitialized" }
   | { status: "restoring" }
@@ -116,7 +117,7 @@ export function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObs
   try {
     observers.onEvent(createEvent());
   } catch (error) {
-    log.warn("Task registry observer failed", {
+    taskRegistryLog.warn("Task registry observer failed", {
       event: "task-registry",
       error,
     });
@@ -131,7 +132,7 @@ export function persistTaskRegistry(): boolean {
     });
     return true;
   } catch (error) {
-    log.warn("Failed to persist task registry snapshot", { error });
+    taskRegistryLog.warn("Failed to persist task registry snapshot", { error });
     return false;
   }
 }
@@ -170,7 +171,7 @@ export function tryPersistTaskUpsert(
     persistTaskUpsert(task, pendingDeliveryState);
     return true;
   } catch (error) {
-    log.warn("Failed to persist task registry upsert", {
+    taskRegistryLog.warn("Failed to persist task registry upsert", {
       operation,
       taskId: task.taskId,
       runId: task.runId,
@@ -212,7 +213,7 @@ export function tryPersistTaskDelete(taskId: string): boolean {
     persistTaskDelete(taskId);
     return true;
   } catch (error) {
-    log.warn("Failed to persist task registry delete", {
+    taskRegistryLog.warn("Failed to persist task registry delete", {
       taskId,
       error,
     });
@@ -239,7 +240,7 @@ export function tryPersistTaskDeliveryStateUpsert(state: TaskDeliveryState): boo
     persistTaskDeliveryStateUpsert(state);
     return true;
   } catch (error) {
-    log.warn("Failed to persist task delivery state", {
+    taskRegistryLog.warn("Failed to persist task delivery state", {
       taskId: state.taskId,
       error,
     });
@@ -249,6 +250,12 @@ export function tryPersistTaskDeliveryStateUpsert(state: TaskDeliveryState): boo
 
 export function clearTaskRegistryMemory(): void {
   clearTaskFlowSyncRetries();
+  for (const activity of taskActivityByTaskId.values()) {
+    if (activity.flushTimer) {
+      clearTimeout(activity.flushTimer);
+    }
+  }
+  taskActivityByTaskId.clear();
   tasks.clear();
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();
@@ -531,7 +538,7 @@ export function restoreTaskRegistryOnce() {
     const restoreError = new Error(`Task registry restore failed: ${message}`, { cause: error });
     taskRegistryRestoreState = { status: "failed", error: restoreError };
     // Compact console logs omit structured metadata, so keep the rejected value visible there too.
-    log.warn("Failed to restore task registry", {
+    taskRegistryLog.warn("Failed to restore task registry", {
       error: message,
       consoleMessage: `Failed to restore task registry: ${message}`,
     });

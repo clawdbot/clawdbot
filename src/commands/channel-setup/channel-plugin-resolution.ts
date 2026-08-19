@@ -36,8 +36,8 @@ type ResolveInstallableChannelPluginResult = {
   supportsRequestedCapability?: boolean;
 };
 
-function resolveWorkspaceDir(cfg: OpenClawConfig) {
-  return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+function resolveWorkspaceDir(cfg: OpenClawConfig, agentId?: string) {
+  return resolveAgentWorkspaceDir(cfg, agentId ?? resolveDefaultAgentId(cfg));
 }
 
 function resolveResolvedChannelId(params: {
@@ -54,7 +54,11 @@ function resolveResolvedChannelId(params: {
   return normalizeChannelId(params.catalogEntry.id) ?? (params.catalogEntry.id as ChannelId);
 }
 
-function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
+function resolveCatalogChannelEntry(
+  raw: string,
+  cfg: OpenClawConfig | null,
+  workspaceDir?: string,
+) {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
@@ -62,7 +66,7 @@ function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const entries = cfg
     ? listTrustedChannelPluginCatalogEntries({
         cfg,
-        workspaceDir: resolveWorkspaceDir(cfg),
+        workspaceDir,
       })
     : listRawChannelPluginCatalogEntries({ excludeWorkspace: true });
   return entries.find((entry) => {
@@ -112,15 +116,18 @@ export async function resolveInstallableChannelPlugin(params: {
   runtime: RuntimeEnv;
   rawChannel?: string | null;
   channelId?: ChannelId;
+  agentId?: string;
   allowInstall?: boolean;
   prompter?: WizardPrompter;
   supports?: (plugin: ChannelPlugin) => boolean;
 }): Promise<ResolveInstallableChannelPluginResult> {
   const supports = params.supports ?? (() => true);
   let nextCfg = params.cfg;
-  const workspaceDir = resolveWorkspaceDir(nextCfg);
+  const workspaceDir = resolveWorkspaceDir(nextCfg, params.agentId);
   const catalogEntry =
-    (params.rawChannel ? resolveCatalogChannelEntry(params.rawChannel, nextCfg) : undefined) ??
+    (params.rawChannel
+      ? resolveCatalogChannelEntry(params.rawChannel, nextCfg, workspaceDir)
+      : undefined) ??
     (params.channelId
       ? getTrustedChannelPluginCatalogEntry(params.channelId, {
           cfg: nextCfg,
@@ -194,7 +201,7 @@ export async function resolveInstallableChannelPlugin(params: {
             channelId,
             supports,
             pluginId: installedPluginId,
-            workspaceDir: resolveWorkspaceDir(nextCfg),
+            workspaceDir: resolveWorkspaceDir(nextCfg, params.agentId),
           })
         : undefined;
       return {

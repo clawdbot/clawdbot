@@ -2,6 +2,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -15,7 +16,6 @@ import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-l
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import {
-  asObject,
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
 } from "../agents/provider-http-errors.js";
@@ -222,7 +222,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
       }
 
       const discoveredModels = models.flatMap((rawModel) => {
-        const model = asObject(rawModel);
+        const model = asOptionalRecord(rawModel);
         const modelId = normalizeOptionalString(model?.id);
         if (!modelId) {
           return [];
@@ -230,7 +230,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         return [
           {
             id: modelId,
-            meta: asObject(model?.meta),
+            meta: asOptionalRecord(model?.meta),
             advertisedContextWindow: readOpenAICompatibleContextWindow(model),
           },
         ];

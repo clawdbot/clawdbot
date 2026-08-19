@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
-import { loadSessionEntry, upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { noteMainSessionRecoveryIntegrity } from "./doctor-main-session-recovery.js";
 
@@ -27,7 +27,7 @@ describe("doctor main-session recovery integrity", () => {
   });
 
   async function writeTombstone(abortedLastRun: boolean): Promise<void> {
-    await upsertSessionEntry({ agentId, sessionKey, storePath }, {
+    await upsertSessionEntryCore({ agentId, sessionKey, storePath }, {
       sessionId: "session-wedged-main",
       updatedAt: abortedLastRun ? 0 : 1,
       status: "failed",

@@ -8,6 +8,7 @@ import {
 import { buildChannelConfigSchema, type ChannelPlugin } from "./channel-api.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
+import { resolveNostrPrivateKey } from "./private-key.js";
 import {
   createNostrSetupAdapter,
   createNostrSetupContract,
@@ -38,7 +39,7 @@ function resolveSetupNostrAccount(params: {
 }): ResolvedNostrAccount {
   const nostrCfg = getNostrConfig(params.cfg);
   const accountId = params.accountId?.trim() || resolveDefaultSetupNostrAccountId(params.cfg);
-  const privateKey = typeof nostrCfg?.privateKey === "string" ? nostrCfg.privateKey.trim() : "";
+  const privateKey = resolveNostrPrivateKey(nostrCfg?.privateKey);
   const configured = Boolean(privateKey);
   return {
     accountId,

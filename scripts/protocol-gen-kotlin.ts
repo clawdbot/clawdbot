@@ -8,7 +8,7 @@ import {
   PROTOCOL_VERSION,
 } from "../packages/gateway-protocol/src/version.js";
 import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-descriptors.js";
-import { extractGatewayEventNames } from "./check-protocol-event-coverage.mjs";
+import { extractGatewayEventNames } from "./check-protocol-event-coverage.mts";
 
 type JsonSchema = {
   type?: string | string[];
@@ -56,6 +56,11 @@ const schemaNames = new Map<string, string>([
   ["QuestionListResult", "QuestionListResult"],
   ["SessionObserverPlanProgress", "SessionObserverPlanProgress"],
   ["SessionObserverDigest", "SessionObserverDigest"],
+  ["WorkerDesktopObserveParams", "WorkerDesktopObserveParams"],
+  ["WorkerDesktopObserveResult", "WorkerDesktopObserveResult"],
+  ["WorkerDesktopLaunchParams", "WorkerDesktopLaunchParams"],
+  ["WorkerDesktopLaunchResult", "WorkerDesktopLaunchResult"],
+  ["ProjectsListResult", "ProjectsListResult"],
 ]);
 
 const androidEnums: EnumSpec[] = [
@@ -75,18 +80,6 @@ const androidEnums: EnumSpec[] = [
     ["CallLog", "callLog"],
     ["VoiceWake", "voiceWake"],
     ["MobileUI", "mobileUI"],
-  ]),
-  enumSpec("OpenClawCanvasCommand", "canvas.", [
-    ["Present", "present"],
-    ["Hide", "hide"],
-    ["Navigate", "navigate"],
-    ["Eval", "eval"],
-    ["Snapshot", "snapshot"],
-  ]),
-  enumSpec("OpenClawCanvasA2UICommand", "canvas.a2ui.", [
-    ["Push", "push"],
-    ["PushJSONL", "pushJSONL"],
-    ["Reset", "reset"],
   ]),
   enumSpec("OpenClawCameraCommand", "camera.", [
     ["List", "list"],

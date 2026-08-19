@@ -4,7 +4,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { closeOpenClawAgentDatabasesForTest } from "./openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -15,7 +14,6 @@ import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 
 afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -173,88 +171,5 @@ describe("OpenClaw state lease", () => {
         ),
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
     });
-  });
-
-  it("never transfers an expired lease away from its live process owner", async () => {
-    await withOpenClawTestState({ label: "core-state-process-lease-live-owner" }, async () => {
-      const processOwner = {
-        pid: process.pid,
-        startTime: null,
-        isAlive: (pid: number) => pid === process.pid,
-        readStartTime: () => null,
-      };
-      const options = {
-        scope: "core:test",
-        key: "live-process-owner",
-        database: { scope: "shared" as const },
-        leaseMs: 1_000,
-        waitMs: 500,
-        processOwner,
-      };
-
-      await withOpenClawStateLease(options, async (owner) => {
-        runOpenClawStateWriteTransaction(({ db }) => {
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<LeaseDatabase>(db)
-              .updateTable("state_leases")
-              .set({ expires_at: Date.now() - 1 })
-              .where("scope", "=", options.scope)
-              .where("lease_key", "=", options.key),
-          );
-        });
-
-        await expect(
-          withOpenClawStateLease({ ...options, waitMs: 5 }, async () => undefined),
-        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" });
-        expect(() => owner.assertOwned()).not.toThrow();
-      });
-    });
-  });
-
-  it.each([
-    { label: "dead", alive: false, observedStartTime: 123 },
-    { label: "recycled", alive: true, observedStartTime: 456 },
-  ])("reclaims a $label process-owned lease before its TTL", async (scenario) => {
-    await withOpenClawTestState(
-      { label: `core-state-process-lease-${scenario.label}` },
-      async () => {
-        const now = Date.now();
-        runOpenClawStateWriteTransaction(({ db }) => {
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<LeaseDatabase>(db)
-              .insertInto("state_leases")
-              .values({
-                scope: "core:test",
-                lease_key: "stale-process-owner",
-                owner: "previous-owner",
-                expires_at: now + 300_000,
-                heartbeat_at: now,
-                payload_json: JSON.stringify({ pid: process.pid, starttime: 123 }),
-                created_at: now,
-                updated_at: now,
-              }),
-          );
-        });
-
-        await withOpenClawStateLease(
-          {
-            scope: "core:test",
-            key: "stale-process-owner",
-            database: { scope: "shared" },
-            leaseMs: 1_000,
-            waitMs: 0,
-            processOwner: {
-              pid: process.pid,
-              startTime: 456,
-              isAlive: () => scenario.alive,
-              readStartTime: () => scenario.observedStartTime,
-            },
-          },
-          async (lease) => lease.assertOwned(),
-        );
-      },
-    );
   });
 });

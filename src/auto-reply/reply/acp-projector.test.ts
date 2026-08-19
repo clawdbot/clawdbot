@@ -22,6 +22,7 @@ function createProjectorHarness(
     onProgress?: () => void;
     shouldSendToolSummaries?: boolean;
     shouldSendToolSummariesNow?: () => boolean;
+    shouldSendFullToolDetails?: boolean;
   },
 ) {
   const deliveries: Delivery[] = [];
@@ -29,6 +30,7 @@ function createProjectorHarness(
     cfg: createCfg(cfgOverrides),
     shouldSendToolSummaries: opts?.shouldSendToolSummaries ?? true,
     shouldSendToolSummariesNow: opts?.shouldSendToolSummariesNow,
+    shouldSendFullToolDetails: opts?.shouldSendFullToolDetails ?? false,
     deliver: async (kind, payload) => {
       deliveries.push({ kind, text: payload.text });
       return true;
@@ -145,6 +147,35 @@ async function runHiddenBoundaryCase(params: {
 }
 
 describe("createAcpReplyProjector", () => {
+  it("shows execute details only in full verbose mode", async () => {
+    const summary = createLiveToolLifecycleHarness();
+    await emitTool(summary.projector, {
+      tag: "tool_call",
+      toolCallId: "call_execute_summary",
+      kind: "execute",
+      status: "in_progress",
+      title: "exec: cat /private/operator-file",
+      text: "exec: cat /private/operator-file (in_progress)",
+    });
+    expect(summary.deliveries[0]?.text).not.toContain("cat /private/operator-file");
+    expect(summary.deliveries[0]?.text).toContain("status=in_progress");
+
+    const full = createStreamHarness(
+      "live",
+      { tagVisibility: { tool_call: true } },
+      { shouldSendFullToolDetails: true },
+    );
+    await emitTool(full.projector, {
+      tag: "tool_call",
+      toolCallId: "call_execute_full",
+      kind: "execute",
+      status: "in_progress",
+      title: "exec: cat /private/operator-file",
+      text: "exec: cat /private/operator-file (in_progress)",
+    });
+    expect(full.deliveries[0]?.text).toContain("cat /private/operator-file");
+  });
+
   it("reports progress for ACP runtime events before delivery filtering", async () => {
     const onProgress = vi.fn();
     const { projector } = createProjectorHarness(undefined, { onProgress });

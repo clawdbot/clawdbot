@@ -8,7 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
+import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adoptedSourceKey } from "./session-catalog-adoption.js";
 import {
@@ -24,6 +24,57 @@ import {
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
 } from "./session-catalog.js";
+
+type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
+  agentId?: string;
+};
+type SessionCatalogProvider = Omit<
+  RegisteredSessionCatalogProvider,
+  "list" | "read" | "continueSession" | "archive" | "openTerminal"
+> & {
+  list: (
+    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["list"]>[0]>,
+  ) => ReturnType<RegisteredSessionCatalogProvider["list"]>;
+  read: (
+    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["read"]>[0]>,
+  ) => ReturnType<RegisteredSessionCatalogProvider["read"]>;
+  continueSession?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>;
+  archive?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["archive"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["archive"]>>;
+  openTerminal?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>;
+};
+
+function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
+  return {
+    ...provider,
+    list: (params) => provider.list({ agentId: "main", ...params }),
+    read: (params) => provider.read({ agentId: "main", ...params }),
+    ...(provider.continueSession
+      ? {
+          continueSession: (params) => provider.continueSession!({ agentId: "main", ...params }),
+        }
+      : {}),
+    ...(provider.archive
+      ? { archive: (params) => provider.archive!({ agentId: "main", ...params }) }
+      : {}),
+    ...(provider.openTerminal
+      ? {
+          openTerminal: (params) => provider.openTerminal!({ agentId: "main", ...params }),
+        }
+      : {}),
+  } as SessionCatalogProvider;
+}
 
 function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   registerClaudeSessionDiscovery({
@@ -56,8 +107,8 @@ function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider 
     id: "anthropic",
     config: {},
     runtime: runtimeWithSession,
-    registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-      provider = candidate;
+    registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+      provider = bindTestCatalogOwner(candidate);
     },
   } as unknown as OpenClawPluginApi);
   if (!provider) {
@@ -69,6 +120,7 @@ function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider 
 const homes: string[] = [];
 const originalHome = process.env.HOME;
 const originalPath = process.env.PATH;
+const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const nodeHostMocks = vi.hoisted(() => ({
   runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
   userShellPaths: new Map<string, string>(),
@@ -160,6 +212,39 @@ async function writeDesktopMetadata(
   );
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, `local_${name}.json`), JSON.stringify(metadata));
+}
+
+async function writeIndexedDesktopSession(
+  home: string,
+  params: {
+    sessionId: string;
+    localSessionId: string;
+    metadataName: string;
+    title: string;
+    prompt: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const { sessionId, localSessionId, metadataName, title, prompt, metadata } = params;
+  await writeProject({
+    home,
+    entries: [
+      {
+        sessionId,
+        fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+        projectPath: "/work/openclaw",
+        isSidechain: false,
+      },
+    ],
+    transcripts: { [sessionId]: [message(sessionId, "user", prompt, 1)] },
+  });
+  await writeDesktopMetadata(home, metadataName, {
+    sessionId: localSessionId,
+    cliSessionId: sessionId,
+    cwd: "/work/openclaw",
+    title,
+    ...metadata,
+  });
 }
 
 function encodeVarint(value: number): Buffer {
@@ -458,6 +543,11 @@ afterEach(async () => {
   nodeHostMocks.userShellPaths.clear();
   process.env.HOME = originalHome;
   process.env.PATH = originalPath;
+  if (originalClaudeConfigDir === undefined) {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  } else {
+    process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  }
   await Promise.all(homes.splice(0).map((home) => fs.rm(home, { recursive: true, force: true })));
 });
 
@@ -511,6 +601,70 @@ describe("Claude session catalog", () => {
     );
   });
 
+  it("lists an explicit CLAUDE_CONFIG_DIR while isolated", async () => {
+    const home = await createHome();
+    const configParent = await createHome();
+    const sessionId = "explicit-config-root";
+    await writeProject({
+      home: configParent,
+      entries: [{ sessionId, summary: "Explicit config session", isSidechain: false }],
+      transcripts: { [sessionId]: [message(sessionId, "user", "explicit root", 1)] },
+    });
+    await writeDesktopMetadata(home, "private", {
+      cliSessionId: sessionId,
+      sessionId: "desktop-private",
+      title: "Private desktop title",
+    });
+    process.env.HOME = home;
+    process.env.CLAUDE_CONFIG_DIR = path.join(configParent, ".claude");
+    const provider = captureCatalogProvider({
+      nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
+    } as unknown as PluginRuntime);
+
+    await expect(
+      provider.list({ allowProcessHomeFallback: false, hostIds: ["gateway:local"] }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        hostId: "gateway:local",
+        sessions: [
+          expect.objectContaining({
+            threadId: sessionId,
+            name: "Explicit config session",
+            source: "claude-cli",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("preserves date-first parsing for numeric-looking index timestamps", async () => {
+    const home = await createHome();
+    const sessionId = "numeric-looking-timestamps";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          created: "0",
+          modified: "2026",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "timestamp contract", 1)] },
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [
+        {
+          threadId: sessionId,
+          createdAt: Date.parse("0"),
+          updatedAt: Date.parse("2026"),
+          recencyAt: Date.parse("2026"),
+        },
+      ],
+    });
+  });
+
   it("adopts a local CLI row with a locked one-shot fork binding", async () => {
     const home = await createHome();
     process.env.HOME = home;
@@ -555,8 +709,8 @@ describe("Claude session catalog", () => {
           },
         },
       }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
@@ -605,8 +759,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config: {},
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
 
@@ -645,8 +799,8 @@ describe("Claude session catalog", () => {
         id: "anthropic",
         config,
         runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-        registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-          provider = candidate;
+        registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+          provider = bindTestCatalogOwner(candidate);
         },
       } as unknown as OpenClawPluginApi;
 
@@ -683,8 +837,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
 
@@ -720,8 +874,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
 
@@ -758,8 +912,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
 
@@ -804,28 +958,16 @@ describe("Claude session catalog", () => {
       ],
       transcripts: { [sessionId]: [message(sessionId, "user", "source prompt", 1)] },
     });
-    let provider: SessionCatalogProvider | undefined;
-    const api = {
-      id: "anthropic",
-      config: {},
-      runtime: {
-        config: { current: () => ({}) },
-        agent: {
-          session: {
-            listSessionEntries: () => [
-              {
-                sessionKey: "agent:main:claude-bound",
-                entry: entry(sessionId),
-              },
-            ],
-          },
+    const provider = captureCatalogProvider({
+      config: { current: () => ({}) },
+      agent: {
+        session: {
+          listSessionEntries: () => [
+            { sessionKey: "agent:main:claude-bound", entry: entry(sessionId) },
+          ],
         },
       },
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
-      },
-    } as unknown as OpenClawPluginApi;
-    registerClaudeSessionCatalog(api);
+    } as unknown as PluginRuntime);
 
     const hosts = await provider?.list({});
     expect(hosts?.[0]?.sessions[0]?.sessionKey).toBe("agent:main:claude-bound");
@@ -859,25 +1001,11 @@ describe("Claude session catalog", () => {
       sessionId: "openclaw-adopted",
       entry: { sessionId: "openclaw-adopted", updatedAt: Date.now() },
     }));
-    let provider: SessionCatalogProvider | undefined;
-    const api = {
-      id: "anthropic",
-      config: {},
-      runtime: {
-        config: { current: () => ({}) },
-        nodes: { list: async () => ({ nodes: [] }) },
-        agent: {
-          session: {
-            listSessionEntries: () => [],
-            createSessionEntry,
-          },
-        },
-      },
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
-      },
-    } as unknown as OpenClawPluginApi;
-    registerClaudeSessionCatalog(api);
+    const provider = captureCatalogProvider({
+      config: { current: () => ({}) },
+      nodes: { list: async () => ({ nodes: [] }) },
+      agent: { session: { listSessionEntries: () => [], createSessionEntry } },
+    } as unknown as PluginRuntime);
 
     const hosts = await provider?.list({});
     expect(hosts?.[0]?.sessions).toEqual([
@@ -972,8 +1100,8 @@ describe("Claude session catalog", () => {
           },
         },
       },
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
@@ -1086,8 +1214,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config: {},
       runtime,
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
@@ -1219,23 +1347,12 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     const sessionId = "desktop-custom-group";
     const localSessionId = "local_11111111-1111-1111-1111-111111111111";
-    await writeProject({
-      home,
-      entries: [
-        {
-          sessionId,
-          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          projectPath: "/work/openclaw",
-          isSidechain: false,
-        },
-      ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "custom group prompt", 1)] },
-    });
-    await writeDesktopMetadata(home, "custom-group", {
-      sessionId: localSessionId,
-      cliSessionId: sessionId,
-      cwd: "/work/openclaw",
+    await writeIndexedDesktopSession(home, {
+      sessionId,
+      localSessionId,
+      metadataName: "custom-group",
       title: "Desktop custom group",
+      prompt: "custom group prompt",
     });
     await writeDesktopGroupStore(
       home,
@@ -1252,32 +1369,23 @@ describe("Claude session catalog", () => {
   it("retains the current Claude Desktop pull request when history is truncated", async () => {
     const home = await createHome();
     const sessionId = "desktop-pull-requests";
-    await writeProject({
-      home,
-      entries: [
-        {
-          sessionId,
-          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          projectPath: "/work/openclaw",
-          isSidechain: false,
-        },
-      ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "pull request prompt", 1)] },
-    });
-    await writeDesktopMetadata(home, "pull-requests", {
-      sessionId: "local_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      cliSessionId: sessionId,
-      cwd: "/work/openclaw",
+    await writeIndexedDesktopSession(home, {
+      sessionId,
+      localSessionId: "local_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      metadataName: "pull-requests",
       title: "Desktop pull requests",
-      prNumber: 111772,
-      prs: [
-        { prNumber: 111772, state: "MERGED" },
-        { prNumber: 111179, state: "MERGED", dismissed: true },
-        ...Array.from({ length: 1_000 }, (_value, index) => ({
-          prNumber: index + 1,
-          state: "CLOSED",
-        })),
-      ],
+      prompt: "pull request prompt",
+      metadata: {
+        prNumber: 111772,
+        prs: [
+          { prNumber: 111772, state: "MERGED" },
+          { prNumber: 111179, state: "MERGED", dismissed: true },
+          ...Array.from({ length: 1_000 }, (_value, index) => ({
+            prNumber: index + 1,
+            state: "CLOSED",
+          })),
+        ],
+      },
     });
 
     await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
@@ -1297,26 +1405,17 @@ describe("Claude session catalog", () => {
   it("adds the current Claude Desktop pull request when history omits it", async () => {
     const home = await createHome();
     const sessionId = "desktop-current-pull-request";
-    await writeProject({
-      home,
-      entries: [
-        {
-          sessionId,
-          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          projectPath: "/work/openclaw",
-          isSidechain: false,
-        },
-      ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "draft prompt", 1)] },
-    });
-    await writeDesktopMetadata(home, "current-pull-request", {
-      sessionId: "local_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-      cliSessionId: sessionId,
-      cwd: "/work/openclaw",
+    await writeIndexedDesktopSession(home, {
+      sessionId,
+      localSessionId: "local_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      metadataName: "current-pull-request",
       title: "Desktop pull request",
-      prNumber: 107302,
-      prState: "OPEN",
-      prs: [{ prNumber: 107301, state: "CLOSED" }],
+      prompt: "draft prompt",
+      metadata: {
+        prNumber: 107302,
+        prState: "OPEN",
+        prs: [{ prNumber: 107301, state: "CLOSED" }],
+      },
     });
 
     await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
@@ -1330,156 +1429,106 @@ describe("Claude session catalog", () => {
     });
   });
 
-  it("skips custom group names spliced with decoder garbage", async () => {
-    const home = await createHome();
-    const sessionId = "desktop-garbage-group";
-    const localSessionId = "local_33333333-3333-3333-3333-333333333333";
-    const groupId = "cg-44444444-4444-4444-4444-444444444444";
-    await writeProject({
-      home,
-      entries: [
+  const desktopGroupCases: Array<{
+    name: string;
+    sessionId: string;
+    localSessionId: string;
+    groupId: string;
+    expectedGroup?: string;
+    prompt?: string;
+    records: (
+      groupId: string,
+      localSessionId: string,
+    ) => Array<{
+      sequence: number;
+      value: string | Buffer;
+    }>;
+  }> = [
+    {
+      name: "skips custom group names spliced with decoder garbage",
+      sessionId: "desktop-garbage-group",
+      localSessionId: "local_33333333-3333-3333-3333-333333333333",
+      groupId: "cg-44444444-4444-4444-4444-444444444444",
+      expectedGroup: "Release",
+      // Keep malformed control-byte records ahead of the valid record.
+      records: (groupId, localSessionId) => [
         {
-          sessionId,
-          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          projectPath: "/work/openclaw",
-          isSidechain: false,
+          sequence: 1,
+          value:
+            `{"id":"${groupId}","name":"Rele\u0012)\fase"}` +
+            `{"id":"${groupId}","name":"Release"}` +
+            `{"code:${localSessionId}":"${groupId}"}`,
         },
       ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "garbage group prompt", 1)] },
-    });
-    await writeDesktopMetadata(home, "garbage-group", {
-      sessionId: localSessionId,
-      cliSessionId: sessionId,
-      cwd: "/work/openclaw",
-      title: "Desktop garbage group",
-    });
-    // Keep the control-byte guard as defense in depth for malformed decoded values.
-    await writeDesktopGroupStoreEntries(home, [
-      {
-        sequence: 1,
-        value:
-          `{"id":"${groupId}","name":"Rele\u0012)\fase"}` +
-          `{"id":"${groupId}","name":"Release"}` +
-          `{"code:${localSessionId}":"${groupId}"}`,
-      },
-    ]);
-
-    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
-      sessions: [{ threadId: sessionId, customGroup: "Release", source: "claude-desktop" }],
-    });
-  });
-
-  it("uses the highest-sequence Claude Desktop custom group value", async () => {
-    const home = await createHome();
-    const sessionId = "desktop-newest-custom-group";
-    const localSessionId = "local_55555555-5555-5555-5555-555555555555";
-    const groupId = "cg-66666666-6666-6666-6666-666666666666";
-    await writeProject({
-      home,
-      entries: [
+    },
+    {
+      name: "uses the highest-sequence Claude Desktop custom group value",
+      sessionId: "desktop-newest-custom-group",
+      localSessionId: "local_55555555-5555-5555-5555-555555555555",
+      groupId: "cg-66666666-6666-6666-6666-666666666666",
+      expectedGroup: "New",
+      prompt: "newest group prompt",
+      records: (groupId, localSessionId) =>
+        ["Old", "New"].map((group, index) => ({
+          sequence: index + 1,
+          value: `{"id":"${groupId}","name":"${group}"}{"code:${localSessionId}":"${groupId}"}`,
+        })),
+    },
+    {
+      name: "reads custom groups from a UTF-16 encoded Local Storage value",
+      sessionId: "desktop-utf16-group",
+      localSessionId: "local_77777777-7777-7777-7777-777777777777",
+      groupId: "cg-88888888-8888-8888-8888-888888888888",
+      expectedGroup: "Release",
+      // Chromium stores the entire JSON as UTF-16 once a value escapes Latin-1.
+      records: (groupId, localSessionId) => [
         {
-          sessionId,
-          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          projectPath: "/work/openclaw",
-          isSidechain: false,
+          sequence: 1,
+          value: Buffer.from(
+            `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
+            "utf16le",
+          ),
         },
       ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "newest group prompt", 1)] },
-    });
-    await writeDesktopMetadata(home, "newest-custom-group", {
-      sessionId: localSessionId,
-      cliSessionId: sessionId,
-      cwd: "/work/openclaw",
-      title: "Desktop newest custom group",
-    });
-    await writeDesktopGroupStoreEntries(home, [
-      {
-        sequence: 1,
-        value: `{"id":"${groupId}","name":"Old"}{"code:${localSessionId}":"${groupId}"}`,
-      },
-      {
-        sequence: 2,
-        value: `{"id":"${groupId}","name":"New"}{"code:${localSessionId}":"${groupId}"}`,
-      },
-    ]);
-
-    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
-      sessions: [{ threadId: sessionId, customGroup: "New", source: "claude-desktop" }],
-    });
-  });
-
-  it("reads custom groups from a UTF-16 encoded Local Storage value", async () => {
-    const home = await createHome();
-    const sessionId = "desktop-utf16-group";
-    const localSessionId = "local_77777777-7777-7777-7777-777777777777";
-    const groupId = "cg-88888888-8888-8888-8888-888888888888";
-    await writeProject({
-      home,
-      entries: [
+    },
+    {
+      name: "drops custom groups once a newer entry no longer carries them",
+      sessionId: "desktop-deleted-group",
+      localSessionId: "local_99999999-9999-9999-9999-999999999999",
+      groupId: "cg-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      // A newer empty store must shadow the older assignment.
+      records: (groupId, localSessionId) => [
         {
-          sessionId,
-          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          projectPath: "/work/openclaw",
-          isSidechain: false,
+          sequence: 1,
+          value: `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
         },
+        { sequence: 2, value: "{}" },
       ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "utf16 group prompt", 1)] },
-    });
-    await writeDesktopMetadata(home, "utf16-group", {
-      sessionId: localSessionId,
-      cliSessionId: sessionId,
-      cwd: "/work/openclaw",
-      title: "Desktop utf16 group",
-    });
-    // Chromium switches a whole value to UTF-16 when any character escapes Latin-1,
-    // so the ASCII JSON arrives with interleaved NUL bytes.
-    const records = `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`;
-    await writeDesktopGroupStoreEntries(home, [
-      { sequence: 1, value: Buffer.from(records, "utf16le") },
-    ]);
+    },
+  ];
 
-    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
-      sessions: [{ threadId: sessionId, customGroup: "Release", source: "claude-desktop" }],
-    });
-  });
-
-  it("drops custom groups once a newer entry no longer carries them", async () => {
-    const home = await createHome();
-    const sessionId = "desktop-deleted-group";
-    const localSessionId = "local_99999999-9999-9999-9999-999999999999";
-    const groupId = "cg-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-    await writeProject({
-      home,
-      entries: [
-        {
-          sessionId,
-          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          projectPath: "/work/openclaw",
-          isSidechain: false,
-        },
-      ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "deleted group prompt", 1)] },
-    });
-    await writeDesktopMetadata(home, "deleted-group", {
-      sessionId: localSessionId,
-      cliSessionId: sessionId,
-      cwd: "/work/openclaw",
-      title: "Desktop deleted group",
-    });
-    // Removing the last custom group rewrites the store without any records; the older
-    // value must not win on sequence.
-    await writeDesktopGroupStoreEntries(home, [
-      {
-        sequence: 1,
-        value: `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
-      },
-      { sequence: 2, value: "{}" },
-    ]);
-
-    const page = await listLocalClaudeSessionPage({}, home);
-    expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
-    expect(page.sessions[0]).not.toHaveProperty("customGroup");
-  });
+  it.each(desktopGroupCases)(
+    "$name",
+    async ({ sessionId, localSessionId, groupId, expectedGroup, prompt, records }) => {
+      const home = await createHome();
+      const metadataName = sessionId.replace(/^desktop-/, "");
+      await writeIndexedDesktopSession(home, {
+        sessionId,
+        localSessionId,
+        metadataName,
+        title: `Desktop ${metadataName.replaceAll("-", " ")}`,
+        prompt: prompt ?? `${metadataName.replaceAll("-", " ")} prompt`,
+      });
+      await writeDesktopGroupStoreEntries(home, records(groupId, localSessionId));
+      const page = await listLocalClaudeSessionPage({}, home);
+      expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
+      if (expectedGroup === undefined) {
+        expect(page.sessions[0]).not.toHaveProperty("customGroup");
+      } else {
+        expect(page.sessions[0]).toMatchObject({ customGroup: expectedGroup });
+      }
+    },
+  );
 
   it("discovers CLI fallback transcripts and rejects sidechains, foreign entrypoints, and escapes", async () => {
     const home = await createHome();
@@ -2326,7 +2375,11 @@ describe("Claude session catalog", () => {
     const binDir = path.join(home, "bin");
     await fs.mkdir(binDir);
     await fs.writeFile(path.join(binDir, "claude"), "#!/bin/sh\n");
-    await fs.chmod(path.join(binDir, "claude"), 0o755);
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "claude.cmd"), "@echo off\r\n");
+    } else {
+      await fs.chmod(path.join(binDir, "claude"), 0o755);
+    }
     expect(
       commands[2]?.isAvailable?.({ config: {}, env: { HOME: home, PATH: binDir } } as never),
     ).toBe(true);
@@ -2351,6 +2404,57 @@ describe("Claude session catalog", () => {
     registerClaudeSessionCatalog(api);
     expect(registerSessionCatalog).toHaveBeenCalledWith(
       expect.objectContaining({ id: "claude", label: "Claude Code" }),
+    );
+  });
+
+  it("builds a local Claude terminal start plan with the initial prompt", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const binDir = path.join(home, "bin");
+    await fs.mkdir(binDir);
+    const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "claude"), "#!/bin/sh\n");
+    }
+    await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+    if (process.platform !== "win32") {
+      await fs.chmod(executable, 0o755);
+    }
+    process.env.PATH = binDir;
+    nodeHostMocks.userShellPaths.set("claude", binDir);
+    const provider = captureCatalogProvider(createPluginRuntimeMock());
+
+    await expect(
+      provider.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/work/new-session",
+        initialMessage: "--help",
+      }),
+    ).resolves.toEqual({
+      kind: "local",
+      argv: [executable, "--", "--help"],
+      cwd: "/work/new-session",
+      pathEnv: binDir,
+      title: "claude",
+    });
+    await expect(
+      provider.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/work/command-prompt",
+        initialMessage: "mcp",
+      }),
+    ).resolves.toMatchObject({ argv: [executable, "--", "mcp"] });
+    await expect(
+      provider.startTerminalSession?.({ agentId: "main", cwd: "/work/blank-session" }),
+    ).resolves.toMatchObject({ argv: [executable], cwd: "/work/blank-session" });
+    await expect(
+      provider.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/work/new-session",
+        nodeId: "paired-node",
+      }),
+    ).rejects.toThrow(
+      "Paired-node Claude terminal start is unavailable; omit hostId to start on the gateway host",
     );
   });
 
@@ -2470,8 +2574,8 @@ describe("Claude session catalog", () => {
         nodes: { list: async () => ({ nodes: [] }) },
         agent: { session: { listSessionEntries: () => [] } },
       },
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi);
 
@@ -2590,7 +2694,7 @@ describe("Claude session catalog", () => {
     ]);
   });
 
-  it("omits the Gateway's same-install node host from native discovery", async () => {
+  it("keeps remote nodes while isolated state suppresses local HOME discovery", async () => {
     const home = await createHome();
     process.env.HOME = home;
     const invoke = vi.fn(async ({ nodeId }: { nodeId: string }) => ({
@@ -2628,9 +2732,47 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime);
 
-    const hosts = await provider.list({});
+    const hosts = await provider.list({ allowProcessHomeFallback: false });
 
-    expect(hosts.map((host) => host.hostId)).toEqual(["gateway:local", "node:remote-node"]);
+    expect(hosts.map((host) => host.hostId)).toEqual(["node:remote-node"]);
+    await expect(
+      provider.read({
+        allowProcessHomeFallback: false,
+        hostId: "gateway:local",
+        threadId: "private-thread",
+      }),
+    ).rejects.toThrow("local Claude sessions are unavailable in isolated state");
+    await expect(
+      provider.continueSession?.({
+        allowProcessHomeFallback: false,
+        hostId: "gateway:local",
+        threadId: "private-thread",
+      }),
+    ).rejects.toThrow("local Claude sessions are unavailable in isolated state");
+    await expect(
+      provider.openTerminal?.({
+        allowProcessHomeFallback: false,
+        hostId: "gateway:local",
+        threadId: "private-thread",
+      }),
+    ).rejects.toThrow("local Claude sessions are unavailable in isolated state");
+    await expect(
+      provider.startTerminalSession?.({
+        allowProcessHomeFallback: false,
+        agentId: "main",
+        cwd: process.cwd(),
+      }),
+    ).rejects.toThrow("local Claude sessions are unavailable in isolated state");
+    // Node starts are outside the process-HOME guard: they must surface the
+    // truthful capability error, not the isolation rejection.
+    await expect(
+      provider.startTerminalSession?.({
+        allowProcessHomeFallback: false,
+        agentId: "main",
+        cwd: process.cwd(),
+        nodeId: "remote-node",
+      }),
+    ).rejects.toThrow("Paired-node Claude terminal start is unavailable");
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
   });

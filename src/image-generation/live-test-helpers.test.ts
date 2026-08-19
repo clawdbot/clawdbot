@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   parseCaseFilter,
-  parseCsvFilter,
+  parseImageProviderFilter,
   parseProviderModelMap,
   redactLiveApiKey,
   resolveConfiguredLiveImageModels,
@@ -12,9 +12,9 @@ import {
 
 describe("image-generation live-test helpers", () => {
   it("parses provider filters and treats empty/all as unfiltered", () => {
-    expect(parseCsvFilter()).toBeNull();
-    expect(parseCsvFilter("all")).toBeNull();
-    expect(parseCsvFilter(" openai , google ")).toEqual(new Set(["openai", "google"]));
+    expect(parseImageProviderFilter()).toBeNull();
+    expect(parseImageProviderFilter("all")).toBeNull();
+    expect(parseImageProviderFilter(" openai , google ")).toEqual(new Set(["openai", "google"]));
   });
 
   it("parses live case filters and treats empty/all as unfiltered", () => {

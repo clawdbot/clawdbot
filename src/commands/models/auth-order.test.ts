@@ -78,17 +78,41 @@ describe("models auth order", () => {
   it("set writes the store order and refreshes a running gateway", async () => {
     const runtime = createRuntime();
     await modelsAuthOrderSetCommand(
-      { provider: "anthropic", order: ["anthropic:b", "anthropic:a"] },
+      { provider: "anthropic", agent: "ops", order: ["anthropic:b", "anthropic:a"] },
       runtime,
     );
 
     expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent-main",
+      agentDir: "/tmp/agent-ops",
       provider: "anthropic",
       order: ["anthropic:b", "anthropic:a"],
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("ops");
     expect(runtime.logs).toContain("Auth profile order override: anthropic:b, anthropic:a");
+  });
+
+  it("accepts alias-provider profiles and reports the canonical stored order", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "xai:a": { type: "oauth", provider: "xai", access: "tok" },
+      },
+    });
+    mocks.setAuthProfileOrder.mockResolvedValue({
+      version: 1,
+      profiles: {},
+      order: { xai: ["xai:a"] },
+    });
+    const runtime = createRuntime();
+
+    await modelsAuthOrderSetCommand({ provider: "x-ai", order: ["xai:a"] }, runtime);
+
+    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/agent-main",
+      provider: "xai",
+      order: ["xai:a"],
+    });
+    expect(runtime.logs).toContain("Auth profile order override: xai:a");
   });
 
   it("clear removes the store order and refreshes a running gateway", async () => {
@@ -100,7 +124,7 @@ describe("models auth order", () => {
       provider: "anthropic",
       order: null,
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("main");
     expect(runtime.logs.some((line) => line.includes("Auth profile order override cleared"))).toBe(
       true,
     );

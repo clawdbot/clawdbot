@@ -1,7 +1,7 @@
 // Trajectory command export helpers implement CLI export behavior.
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";

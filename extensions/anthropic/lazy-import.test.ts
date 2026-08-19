@@ -24,6 +24,7 @@ describe("anthropic session catalog lazy imports", () => {
           list: async () => [],
           read: async () => ({ hostId: "gateway:local", label: "Local", threadId: "", items: [] }),
           continueSession: async () => ({ sessionKey: "agent:main:test" }),
+          startTerminalSession: async () => ({ kind: "local", argv: ["claude"] }),
           openTerminal: async () => ({ kind: "local", argv: ["claude"] }),
           checkUpstreamActivity: async () => [],
         }),
@@ -61,8 +62,8 @@ describe("anthropic session catalog lazy imports", () => {
     expect(nodeCommands).toHaveLength(3);
     expect(nodePolicies).toHaveLength(1);
 
-    await expect(catalogs[0]?.list({})).resolves.toEqual([]);
-    await expect(catalogs[0]?.list({})).resolves.toEqual([]);
+    await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);
+    await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);
     await expect(nodeCommands[0]?.handle()).resolves.toBe("[]");
     await expect(nodeCommands[0]?.handle()).resolves.toBe("[]");
     expect(catalogImports).toBe(1);

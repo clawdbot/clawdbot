@@ -3,10 +3,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveInspectedChannelAccount } from "../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
-import {
-  buildChannelAccountSnapshot,
-  formatChannelAllowFrom,
-} from "../channels/account-summary.js";
+import { buildChannelAccountSummary, formatChannelAllowFrom } from "../channels/account-summary.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
@@ -147,7 +144,7 @@ export async function buildChannelSummary(
         sourceConfig,
         accountId,
       });
-      const snapshot = buildChannelAccountSnapshot({
+      const snapshot = buildChannelAccountSummary({
         plugin,
         account,
         cfg: effective,

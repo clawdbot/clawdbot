@@ -134,10 +134,12 @@ describe("ClickClack account resolution", () => {
         env: { CLICKCLACK_SERVICE_TOKEN: "  test-token-placeholder  " },
       }),
     ).toEqual({
+      allowBots: false,
       allowFrom: ["*"],
       accountId: "service",
       apiEndpoint: "https://app.clickclack.chat",
       baseUrl: "https://app.clickclack.chat",
+      botLoopProtection: undefined,
       config: {
         allowFrom: ["*"],
         baseUrl: "https://app.clickclack.chat",
@@ -241,11 +243,13 @@ describe("ClickClack account resolution", () => {
     } satisfies CoreConfig;
 
     expect(resolveClickClackAccount({ cfg, accountId: "peter" })).toEqual({
+      allowBots: false,
       allowFrom: ["*"],
       accountId: "peter",
       agentId: "peter-bot",
       apiEndpoint: "https://app.clickclack.chat",
       baseUrl: "https://app.clickclack.chat",
+      botLoopProtection: undefined,
       config: {
         agentId: "peter-bot",
         allowFrom: ["*"],

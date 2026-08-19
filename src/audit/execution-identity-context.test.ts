@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  insertOperatorApproval,
+  resolveOperatorApproval,
+} from "../gateway/operator-approval-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -120,6 +124,48 @@ function prepareExecutionIdentityContextAtAdmission(
   });
 }
 
+function recordDeniedApprovalForRun(
+  runId: string,
+  database: ReturnType<typeof databaseOptions>,
+  id = "denied-approval",
+  binding?: { contextId: string; executionId: string },
+): void {
+  insertOperatorApproval({
+    approval: {
+      id,
+      kind: "exec",
+      presentation: {
+        kind: "exec",
+        commandText: "details withheld",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      source: { runId, toolCallId: "private-tool-call", toolName: "exec" },
+      runtimeEpoch: "runtime-1",
+      createdAtMs: 100,
+      expiresAtMs: 1_000,
+      ...(binding
+        ? {
+            executionIdentityToken: {
+              tokenVersion: 1,
+              createdAt: 100,
+              runId,
+              contextId: binding.contextId,
+              executionId: binding.executionId,
+            },
+          }
+        : {}),
+    },
+    databaseOptions: database,
+  });
+  resolveOperatorApproval({
+    id,
+    decision: "deny",
+    resolver: { kind: "device", id: "private-reviewer-device" },
+    nowMs: 200,
+    databaseOptions: database,
+  });
+}
+
 describe("execution identity context storage", () => {
   it("replays one byte-identical canonical context idempotently across restart", () => {
     const database = databaseOptions();
@@ -153,6 +199,60 @@ describe("execution identity context storage", () => {
       },
     );
     expect(afterRestart.identity).toEqual({ state: "present", context: first });
+  });
+
+  it("keeps explicit unknown invoker evidence distinct from omission across restart", () => {
+    const database = databaseOptions();
+    const unknown = prepareExecutionIdentityContextAtAdmission(
+      facts("run-unknown", { invoker: { state: "unknown" } }),
+      {
+        ...database,
+        now: 100,
+        contextId: "context-unknown",
+        executionId: "execution-unknown",
+        runtimeInstanceId: "runtime-unknown",
+      },
+    );
+    const absent = prepareExecutionIdentityContextAtAdmission(facts("run-absent"), {
+      ...database,
+      now: 101,
+      contextId: "context-absent",
+      executionId: "execution-absent",
+      runtimeInstanceId: "runtime-absent",
+    });
+
+    expect(unknown).toMatchObject({
+      invoker: { state: "unknown" },
+      coverageState: "unknown",
+      missingEvidence: ["invoker.principal"],
+    });
+    expect(unknown.invoker).not.toHaveProperty("principal");
+    expect(absent).toMatchObject({
+      invoker: { state: "absent" },
+      coverageState: "unattributed",
+      missingEvidence: ["invoker.principal"],
+    });
+
+    closeOpenClawStateDatabaseForTest();
+    const unknownAfterRestart = inspectExecutionIdentityRun(
+      { executionId: "execution-unknown" },
+      { ...database, now: 101 },
+    );
+    expect(unknownAfterRestart.identity).toEqual({ state: "present", context: unknown });
+    expect(unknownAfterRestart.coverage).toEqual({
+      state: "unknown",
+      missingEvidence: ["invoker.principal"],
+    });
+    expect(unknownAfterRestart.decisions).toEqual([
+      expect.objectContaining({
+        enforcement: expect.objectContaining({ coverageState: "unknown" }),
+        missingEvidence: ["invoker.principal"],
+      }),
+    ]);
+    expect(
+      inspectExecutionIdentityRun({ executionId: "execution-absent" }, { ...database, now: 101 })
+        .identity,
+    ).toEqual({ state: "present", context: absent });
   });
 
   it.each([
@@ -214,24 +314,28 @@ describe("execution identity context storage", () => {
 
   it("keeps distinct turns sharing one run correlation exactly inspectable", () => {
     const database = databaseOptions();
-    const first = prepareExecutionIdentityContextAtAdmission(facts("session-run"), {
+    prepareExecutionIdentityContextAtAdmission(facts("session-run"), {
       ...database,
       now: 100,
       contextId: "context-first",
       executionId: "execution-first",
       runtimeInstanceId: "runtime-1",
     });
-    const second = prepareExecutionIdentityContextAtAdmission(facts("session-run"), {
+    prepareExecutionIdentityContextAtAdmission(facts("session-run"), {
       ...database,
       now: 101,
       contextId: "context-second",
       executionId: "execution-second",
       runtimeInstanceId: "runtime-1",
     });
+    recordDeniedApprovalForRun("session-run", database, "shared-run-approval", {
+      contextId: "context-first",
+      executionId: "execution-first",
+    });
 
     const discovery = inspectExecutionIdentityRun(
       { runId: "session-run" },
-      { ...database, now: 101 },
+      { ...database, now: 300 },
     );
     expect(discovery).toMatchObject({
       run: { runId: "session-run", status: "known" },
@@ -245,37 +349,49 @@ describe("execution identity context storage", () => {
       },
       decisions: [],
     });
-    expect(
-      inspectExecutionIdentityRun(
-        { runId: "session-run", executionLimit: 1 },
-        { ...database, now: 101 },
-      ),
-    ).toMatchObject({
-      identity: {
-        state: "ambiguous",
-        candidates: [{ executionId: "execution-first" }],
-      },
-      nextExecutionCursor: "1",
+    for (const [executionOffset, executionId, nextExecutionCursor] of [
+      [0, "execution-first", "1"],
+      [1, "execution-second", undefined],
+    ] as const) {
+      expect(
+        inspectExecutionIdentityRun(
+          { runId: "session-run", executionOffset, executionLimit: 1 },
+          { ...database, now: 300 },
+        ),
+      ).toMatchObject({
+        identity: { state: "ambiguous", candidates: [{ executionId }] },
+        ...(nextExecutionCursor ? { nextExecutionCursor } : {}),
+      });
+    }
+    const firstInspection = inspectExecutionIdentityRun(
+      { executionId: "execution-first" },
+      { ...database, now: 300 },
+    );
+    const secondInspection = inspectExecutionIdentityRun(
+      { executionId: "execution-second" },
+      { ...database, now: 300 },
+    );
+    expect(firstInspection).toMatchObject({
+      identity: { state: "present", context: { contextId: "context-first" } },
+      coverage: { state: "enforced" },
+      decisions: [{ decision: { outcome: "not-applicable" } }, { decision: { outcome: "denied" } }],
     });
-    expect(
-      inspectExecutionIdentityRun(
-        { runId: "session-run", executionOffset: 1, executionLimit: 1 },
-        { ...database, now: 101 },
-      ),
-    ).toMatchObject({
-      identity: {
-        state: "ambiguous",
-        candidates: [{ executionId: "execution-second" }],
+    expect(secondInspection).toMatchObject({
+      identity: { state: "present", context: { contextId: "context-second" } },
+      coverage: {
+        state: "unknown",
+        missingEvidence: expect.arrayContaining(["decision.execution_link"]),
       },
+      decisions: [
+        { decision: { outcome: "not-applicable" } },
+        {
+          decision: {
+            outcome: "unknown",
+            reasonCode: "operator_approval_execution_link_mismatch",
+          },
+        },
+      ],
     });
-    expect(
-      inspectExecutionIdentityRun({ executionId: "execution-first" }, { ...database, now: 101 })
-        .identity,
-    ).toEqual({ state: "present", context: first });
-    expect(
-      inspectExecutionIdentityRun({ executionId: "execution-second" }, { ...database, now: 101 })
-        .identity,
-    ).toEqual({ state: "present", context: second });
   });
 
   it("confirms durable retries without manufacturing lost evidence", () => {
@@ -391,6 +507,7 @@ describe("execution identity context storage", () => {
     const context = prepareExecutionIdentityContextAtAdmission(
       facts("run-attributed", {
         invoker: {
+          state: "present",
           kind: "local-account",
           rawPrincipalRef: "private-local-account",
           displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",
@@ -823,9 +940,128 @@ describe("execution identity context storage", () => {
     ]);
     expect(
       inspectExecutionIdentityRun(
-        { runId: "run-receipt", decisionOffset: 1 },
+        { runId: "run-receipt", decisionLimit: 1 },
+        { ...database, now: 123 },
+      ).nextDecisionCursor,
+    ).toBeUndefined();
+    expect(
+      inspectExecutionIdentityRun(
+        { runId: "run-receipt", decisionCursor: "a:0:0" },
         { ...database, now: 123 },
       ).decisions,
     ).toEqual([]);
+  });
+
+  it("projects an authoritative denied approval by run before and after restart", () => {
+    const database = databaseOptions();
+    prepareExecutionIdentityContextAtAdmission(facts("run-denied-receipt"), {
+      ...database,
+      now: 100,
+      contextId: "context-denied-receipt",
+      executionId: "execution-denied-receipt",
+      runtimeInstanceId: "runtime-1",
+    });
+    recordDeniedApprovalForRun("run-denied-receipt", database, "denied-approval", {
+      contextId: "context-denied-receipt",
+      executionId: "execution-denied-receipt",
+    });
+
+    const beforeRestart = inspectExecutionIdentityRun(
+      { runId: "run-denied-receipt" },
+      { ...database, now: 300 },
+    );
+    expect(beforeRestart).toMatchObject({
+      coverage: { state: "enforced" },
+      decisions: [
+        { decision: { outcome: "not-applicable" } },
+        {
+          contextId: "context-denied-receipt",
+          executionId: "execution-denied-receipt",
+          runId: "run-denied-receipt",
+          decision: {
+            outcome: "denied",
+            reasonCode: "operator_approval_denied_by_reviewer",
+          },
+          enforcement: {
+            coverageState: "enforced",
+            contextFieldsUsed: ["contextId", "executionId", "runId"],
+          },
+          source: { owner: "operator_approvals" },
+        },
+      ],
+    });
+    expect(JSON.stringify(beforeRestart)).not.toContain("private-reviewer-device");
+    expect(JSON.stringify(beforeRestart)).not.toContain("private-tool-call");
+
+    closeOpenClawStateDatabaseForTest();
+    expect(
+      inspectExecutionIdentityRun({ runId: "run-denied-receipt" }, { ...database, now: 300 }),
+    ).toEqual(beforeRestart);
+    expect(
+      inspectExecutionIdentityRun(
+        { runId: "run-denied-receipt", decisionCursor: "a:0:0", decisionLimit: 1 },
+        { ...database, now: 300 },
+      ),
+    ).toMatchObject({
+      decisions: [{ decision: { reasonCode: "operator_approval_denied_by_reviewer" } }],
+    });
+    expect(
+      inspectExecutionIdentityRun(
+        { runId: "run-denied-receipt", decisionCursor: "1", decisionLimit: 1 },
+        { ...database, now: 300 },
+      ).decisions,
+    ).toMatchObject([{ decision: { reasonCode: "operator_approval_denied_by_reviewer" } }]);
+  });
+
+  it("keeps a corrupt approval unknown before its decision page is returned", () => {
+    const database = databaseOptions();
+    prepareExecutionIdentityContextAtAdmission(facts("run-corrupt-approval"), {
+      ...database,
+      now: 100,
+      contextId: "context-corrupt-approval",
+      executionId: "execution-corrupt-approval",
+      runtimeInstanceId: "runtime-1",
+    });
+    recordDeniedApprovalForRun("run-corrupt-approval", database, "corrupt-approval", {
+      contextId: "context-corrupt-approval",
+      executionId: "execution-corrupt-approval",
+    });
+    openOpenClawStateDatabase(database)
+      .db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?")
+      .run("{", "corrupt-approval");
+
+    expect(
+      inspectExecutionIdentityRun(
+        { executionId: "execution-corrupt-approval", decisionLimit: 1 },
+        { ...database, now: 300 },
+      ),
+    ).toMatchObject({
+      coverage: {
+        state: "unknown",
+        missingEvidence: expect.arrayContaining(["operator_approval.valid"]),
+      },
+      decisions: [{ decision: { outcome: "not-applicable" } }],
+      nextDecisionCursor: "a:0:0",
+    });
+  });
+
+  it("reports a retained approval with no identity context as an unknown missing link", () => {
+    const database = databaseOptions();
+    recordDeniedApprovalForRun("run-missing-context", database);
+
+    expect(
+      inspectExecutionIdentityRun({ runId: "run-missing-context" }, { ...database, now: 300 }),
+    ).toMatchObject({
+      run: { runId: "run-missing-context", status: "known" },
+      identity: {
+        state: "unknown",
+        reasonCode: "decision_context_link_missing",
+      },
+      decisions: [],
+      coverage: {
+        state: "unknown",
+        missingEvidence: ["identity.context", "decision.context_link"],
+      },
+    });
   });
 });

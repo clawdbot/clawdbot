@@ -13,10 +13,7 @@ import {
   type AnyAgentTool,
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateLeaseRunner,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { TSchema } from "typebox";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
@@ -39,7 +36,6 @@ type MemoryToolOptions = {
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
 };
 
 const loadMemoryToolsModule = createLazyRuntimeModule(() => import("./src/tools.js"));
@@ -156,14 +152,19 @@ function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | nul
   });
 }
 
-function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentTool | null {
+function createLazyStandingIntentTool(
+  ctx: OpenClawPluginToolContext,
+  reportUnavailable: (reason: string) => void,
+): AnyAgentTool | null {
   if (ctx.senderIsOwner !== true) {
+    reportUnavailable("owner authorization is unavailable for this turn");
     return null;
   }
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
   const provider = ctx.messageChannel?.trim();
   const senderId = ctx.requesterSenderId?.trim();
   if (!cfg) {
+    reportUnavailable("runtime config is unavailable for this turn");
     return null;
   }
   const { sessionAgentId: agentId } = resolveSessionAgentIds({
@@ -240,7 +241,6 @@ function resolveMemoryToolOptions(
     conversationRecall: ctx.conversationRecall,
     activeProjectKeys: ctx.activeProjectKeys,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
-    ...(host.withLease ? { withLease: host.withLease } : {}),
   };
 }
 
@@ -282,8 +282,7 @@ export default definePluginEntry({
       api.runtime.llm.acquireLocalService(...args);
     const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options);
-    const withLease: PluginStateLeaseRunner = (...args) => api.runtime.state.withLease(...args);
-    const host = { acquireLocalService, openKeyedStore, withLease } satisfies MemoryCoreRuntimeHost;
+    const host = { acquireLocalService, openKeyedStore } satisfies MemoryCoreRuntimeHost;
     configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);
@@ -308,9 +307,13 @@ export default definePluginEntry({
       names: ["memory_get"],
     });
 
-    api.registerTool((ctx) => createLazyStandingIntentTool(ctx), {
-      names: ["intent"],
-    });
+    api.registerTool(
+      (ctx) =>
+        createLazyStandingIntentTool(ctx, (reason) => {
+          api.logger.warn(`memory-core: intent tool unavailable: ${reason}`);
+        }),
+      { names: ["intent"] },
+    );
 
     api.on("before_prompt_build", async (event, ctx) => {
       if (ctx.trigger !== "user") {

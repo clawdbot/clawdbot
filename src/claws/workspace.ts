@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
 import {
   openOpenClawStateDatabase,
@@ -499,7 +500,7 @@ export async function createClawWorkspaceFiles(
             ? `workspace_file_${error.code}`
             : "workspace_file_io_error";
       throw new ClawWorkspaceWriteError(
-        [diagnostic(action, code, error instanceof Error ? error.message : String(error))],
+        [diagnostic(action, code, coerceErrorMessage(error))],
         createdFiles,
       );
     }

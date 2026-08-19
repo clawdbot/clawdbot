@@ -4,7 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 // Browser tests cover server.agent contract form layout act commands plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
@@ -15,6 +15,7 @@ import {
 import {
   getBrowserControlServerTestState,
   getPwMocks,
+  makeResponse,
   setBrowserControlServerSsrFPolicy,
   setBrowserControlServerTabUrl,
 } from "./server.control-server.test-harness.js";
@@ -721,6 +722,40 @@ describe("browser control server", () => {
     },
   );
 
+  it("keeps act:close bound to the tab it closed", async () => {
+    const base = await startServerAndBase();
+    requirePwMock("closePageViaPlaywright").mockImplementationOnce(async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (!url.includes("/json/list")) {
+            return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
+          }
+          return makeResponse([
+            {
+              id: "abce9999",
+              title: "Survivor",
+              url: "https://other",
+              webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/abce9999",
+              type: "page",
+            },
+          ]);
+        }),
+      );
+    });
+
+    const result = await postJson<{ ok?: boolean; targetId?: string; url?: string }>(
+      `${base}/act`,
+      { kind: "close", targetId: "abcd1234" },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      targetId: "abcd1234",
+      url: "https://example.com",
+    });
+  });
+
   it("wait/download rejects traversal path outside downloads dir", async () => {
     const base = await startServerAndBase();
     const waitRes = await postJson<{ error?: string }>(`${base}/wait/download`, {
@@ -806,7 +841,40 @@ describe("browser control server", () => {
     expectRecordFields(waitCall, "wait download call", {
       targetId: "abcd1234",
     });
+    expect(waitCall.signal).toBeInstanceOf(AbortSignal);
     expect(String(waitCall.path)).toContain("safe-wait.pdf");
+  });
+
+  it("cancels wait/download when its HTTP caller disconnects", async () => {
+    const base = await startServerAndBase();
+    let operationSignal: AbortSignal | undefined;
+    requirePwMock("waitForDownloadViaPlaywright").mockImplementationOnce(async (value) => {
+      const options = value as { signal?: AbortSignal };
+      operationSignal = options.signal;
+      await new Promise<void>((_resolve, reject) => {
+        options.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = options.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("request aborted"));
+          },
+          { once: true },
+        );
+      });
+      throw new Error("unreachable");
+    });
+    const controller = new AbortController();
+    const response = realFetch(`${base}/wait/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "cancelled-wait.pdf" }),
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
+    controller.abort(new Error("caller disconnected"));
+    await expect(response).rejects.toThrow();
+    await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
   });
 
   it("download accepts in-root relative output path", async () => {
@@ -822,6 +890,7 @@ describe("browser control server", () => {
       targetId: "abcd1234",
       ref: "e12",
     });
+    expect(downloadCall.signal).toBeInstanceOf(AbortSignal);
     expect(String(downloadCall.path)).toContain("safe-download.pdf");
   });
 });

@@ -16,8 +16,8 @@ import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { PreparedCliRunContext } from "./cli-runner/types.js";
-import type { RunCliAgentParams } from "./cli-runner/types.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
 type CliProvider = "claude-cli" | "codex-cli" | "google-gemini-cli";
 type McpLoopbackClientGrant = ReturnType<
@@ -153,6 +153,7 @@ export function buildPreparedCliRunContext(
 ): PreparedCliRunContext {
   const provider = overrides.provider ?? "claude-cli";
   const model = overrides.model ?? "sonnet";
+  const runId = overrides.runId ?? "run-test";
   const workspaceDir = overrides.workspaceDir ?? "/tmp";
   const baseBackend =
     provider === "claude-cli"
@@ -203,6 +204,7 @@ export function buildPreparedCliRunContext(
   const backend = { ...baseBackend, ...overrides.backend };
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext(runId),
       sessionId: overrides.sessionId ?? "s1",
       sessionKey: overrides.sessionKey,
       sessionEntry: overrides.sessionEntry,
@@ -219,7 +221,7 @@ export function buildPreparedCliRunContext(
       emitCommentaryText: overrides.emitCommentaryText,
       onSuccessfulAuthBinding: overrides.onSuccessfulAuthBinding,
       timeoutMs: overrides.timeoutMs ?? 1_000,
-      runId: overrides.runId ?? "run-test",
+      runId,
       skillsSnapshot: overrides.skillsSnapshot,
     },
     started: Date.now(),
@@ -264,21 +266,6 @@ export function buildClaudeLiveRunContext(overrides: PreparedCliRunContextOverri
     ...overrides,
     backend: { ...overrides.backend, liveSession: "claude-stdio" },
   });
-}
-
-export function buildClaudeLiveBackend(
-  overrides: Partial<PreparedCliRunContext["preparedBackend"]["backend"]> = {},
-) {
-  return {
-    command: "claude",
-    args: ["-p", "--output-format", "stream-json"],
-    output: "jsonl" as const,
-    input: "stdin" as const,
-    sessionArgs: ["--session-id", "{sessionId}"],
-    systemPromptArg: "--append-system-prompt",
-    systemPromptFileArg: "--append-system-prompt-file",
-    ...overrides,
-  };
 }
 
 export function createCancelableLiveRunLifecycle() {
@@ -426,9 +413,9 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       return getSession();
     },
     createSession,
-    prepare(overrides: Partial<RunCliAgentParams> = {}) {
+    prepare(overrides: Partial<Omit<RunCliAgentParams, "admittedRunContext">> = {}) {
       const { dir, sessionFile } = getSession();
-      const defaults: RunCliAgentParams = {
+      const defaults: Omit<RunCliAgentParams, "admittedRunContext"> = {
         sessionId: "session-test",
         sessionFile,
         workspaceDir: dir,
@@ -439,7 +426,13 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
         runId: "run-test",
         config: {},
       };
-      return prepareCliRun(Object.assign(defaults, overrides));
+      const prepared = Object.assign(defaults, overrides);
+      return prepareCliRun({
+        ...prepared,
+        ...(prepared.preparedRunAdmission
+          ? {}
+          : { admittedRunContext: createTestAdmittedRunContext(prepared.runId) }),
+      });
     },
     appendTranscript(entry: {
       id: string;

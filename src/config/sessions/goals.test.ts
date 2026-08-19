@@ -11,7 +11,7 @@ import {
 } from "./goals.js";
 import {
   loadSessionEntry,
-  upsertSessionEntry as upsertAccessorSessionEntry,
+  upsertSessionEntryCore as upsertAccessorSessionEntry,
 } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";

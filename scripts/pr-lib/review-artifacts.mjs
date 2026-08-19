@@ -2,6 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
+import { isRecord as isObject } from "../lib/record-shared.mjs";
 
 const REVIEW_ARTIFACT_ENUMS = Object.freeze({
   recommendation: Object.freeze([
@@ -97,10 +98,6 @@ function createReviewArtifactTemplate({ number, headSha }) {
   };
 }
 
-function isObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -165,7 +162,7 @@ function validateReviewArtifacts({ review, reviewMarkdown, prMeta }) {
     (stamp.number !== prMeta.number || stamp.headSha !== prMeta.headRefOid)
   ) {
     add(
-      `Review artifact identity mismatch in .local/review.json: authored for PR #${stamp.number} at ${stamp.headSha}, but .local/pr-meta.json describes PR #${prMeta.number} at ${prMeta.headRefOid}; re-run scripts/pr review-artifacts-init`,
+      `Review artifact identity mismatch in .local/review.json: authored for PR #${String(stamp.number)} at ${String(stamp.headSha)}, but .local/pr-meta.json describes PR #${String(prMeta.number)} at ${String(prMeta.headRefOid)}; re-run scripts/pr review-artifacts-init`,
     );
   }
   if (prMetaIdentifiesHead) {

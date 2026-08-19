@@ -3,7 +3,7 @@ import type { Server as HttpServer } from "node:http";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { getFreeGatewayPort } from "../../../src/gateway/test-helpers.e2e.js";
+import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -173,7 +173,7 @@ async function waitForCachedBoardFace(page: Page, face: "chat" | "dashboard"): P
 describeControlUiE2e("Control UI dashboard MCP Apps", () => {
   beforeAll(async () => {
     controlUi = await startControlUiE2eServer();
-    sandboxPort = await getFreeGatewayPort();
+    sandboxPort = await getGatewayE2ePortBlock();
     sandboxServer = createSandboxHostHttpServer();
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
@@ -196,7 +196,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
   });
 
   it("renders a pinned app and proactively renews its board lease", async () => {
-    const context = await browser.newContext({ permissions: ["local-network-access"] });
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      permissions: ["local-network-access"],
+    });
     contexts.add(context);
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -228,6 +231,21 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       })
       .toBeGreaterThan(0);
     await waitForMountedApp(page);
+    const widgetBackgrounds = await page.evaluate(() => {
+      const widgetElement = document.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+      const frame = document
+        .querySelector("mcp-app-view")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      if (!widgetElement || !frame) {
+        throw new Error("dashboard MCP App frame is missing");
+      }
+      return {
+        frame: getComputedStyle(frame).backgroundColor,
+        widget: getComputedStyle(widgetElement).backgroundColor,
+      };
+    });
+    expect(widgetBackgrounds.frame).toBe(widgetBackgrounds.widget);
+    expect(widgetBackgrounds.frame).not.toBe("rgba(0, 0, 0, 0)");
     await expect
       .poll(async () => (await gateway.getRequests("board.widget.appView")).length, {
         timeout: 15_000,

@@ -19,7 +19,8 @@ scenario:
     - The failed tool never replays and qa-channel receives exactly one final reply.
   codeRefs:
     - src/cron/isolated-agent/run-executor.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow

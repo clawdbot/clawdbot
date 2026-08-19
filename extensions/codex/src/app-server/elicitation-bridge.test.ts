@@ -2,7 +2,7 @@
 import {
   callGatewayTool,
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
@@ -14,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
   return mock.mock.calls.at(index);
@@ -32,6 +33,37 @@ function gatewayToolArg(index = 0, argIndex = 0) {
 }
 
 function createParams(): EmbeddedRunAttemptParams {
+  const hostCapabilities: AgentHarnessHostCapabilities = {
+    kind: "agent-harness-host-capability",
+    version: 1,
+    assertActive: () => {},
+    bindToolSurface: (tools) => tools,
+    runBeforeToolCall: async ({ params }) => ({ blocked: false, params }),
+    requestApproval: async (request) =>
+      (await callGatewayTool(
+        "plugin.approval.request",
+        { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+        {
+          pluginId: "codex",
+          ...request,
+          timeoutMs: request.timeoutMs,
+          twoPhase: true,
+        },
+        { expectFinal: false },
+      )) as Awaited<ReturnType<AgentHarnessHostCapabilities["requestApproval"]>>,
+    waitForApproval: async (request) => {
+      const result = (await callGatewayTool(
+        "plugin.approval.waitDecision",
+        { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+        { id: request.approvalId },
+      )) as { id?: string } & Partial<
+        NonNullable<Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>>
+      >;
+      return result?.id === request.approvalId
+        ? { decision: result.decision, terminalReason: result.terminalReason }
+        : undefined;
+    },
+  };
   return {
     sessionKey: "agent:main:session-1",
     agentId: "main",
@@ -39,6 +71,7 @@ function createParams(): EmbeddedRunAttemptParams {
     currentChannelId: "chat-1",
     agentAccountId: "default",
     currentThreadTs: "thread-ts",
+    hostCapabilities,
   } as unknown as EmbeddedRunAttemptParams;
 }
 
@@ -227,6 +260,56 @@ describe("Codex app-server elicitation bridge", () => {
     vi.restoreAllMocks();
   });
 
+  it("declines app elicitations for scheduled app authority", async () => {
+    const params = {
+      ...createParams(),
+      trigger: "cron",
+      scheduledRuntimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { version: 1 },
+      },
+    } as EmbeddedRunAttemptParams;
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation(),
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps unrelated Computer Use elicitation policy unchanged", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use", decision: "allow-once" });
+    const params = {
+      ...createParams(),
+      trigger: "cron",
+      scheduledRuntimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { version: 1 },
+      },
+    } as EmbeddedRunAttemptParams;
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation(),
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    });
+
+    expect(result).toEqual({ action: "accept", content: null, _meta: null });
+    expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
+  });
+
   it("routes MCP tool approval elicitations through plugin approvals", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-1", status: "accepted" })
@@ -271,6 +354,28 @@ describe("Codex app-server elicitation bridge", () => {
       "plugin.approval.request",
       "plugin.approval.waitDecision",
     ]);
+  });
+
+  it("declines timed-out MCP approvals with explanatory metadata", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-timeout", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-timeout",
+        decision: "deny",
+        terminalReason: "timeout",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildApprovalElicitation(),
+      paramsForRun: createParams(),
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({
+      action: "decline",
+      content: null,
+      _meta: { message: "Approval timed out before an operator responded." },
+    });
   });
 
   it("does not treat inherited request-time MCP decisions as final", async () => {

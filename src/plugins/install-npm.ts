@@ -35,6 +35,7 @@ import {
   resolveEffectiveInstallMode,
   runInstallSourceScan,
 } from "./install-shared.js";
+import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
@@ -49,6 +50,7 @@ export async function installPluginFromNpmSpec(
     extensionsDir?: string;
     npmDir?: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
@@ -83,7 +85,7 @@ export async function installPluginFromNpmSpec(
     };
   }
 
-  const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs });
+  const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal });
   if (!metadataResult.ok) {
     return {
       ok: false,
@@ -111,6 +113,7 @@ export async function installPluginFromNpmSpec(
           spec: parsedSpec,
           resolvedPrereleaseVersion: npmResolution.version,
           timeoutMs,
+          signal: params.signal,
           logger,
         })
       : null;
@@ -143,6 +146,7 @@ export async function installPluginFromNpmSpec(
       expectedPluginId,
       currentResolution: npmResolution,
       timeoutMs,
+      signal: params.signal,
       logger,
     });
     if (compatibleResolution) {
@@ -230,6 +234,8 @@ export async function installPluginFromNpmSpec(
       scan: async () =>
         await preflightPluginNpmInstallPolicy({
           config: params.config,
+          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
           logger,
           mode: policyMode,
           packageName: parsedSpec.name,
@@ -247,33 +253,37 @@ export async function installPluginFromNpmSpec(
     await fs.rm(policyTempDir, { recursive: true, force: true });
   }
 
-  const result = await installPluginFromManagedNpmRoot({
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    config: params.config,
-    packageName: parsedSpec.name,
-    dependencySpec: resolveManagedNpmRootDependencySpec({
-      parsedSpec,
-      resolution: npmResolution,
+  const result = await installPluginFromManagedNpmRoot(
+    copyPluginInstallTransactionRequest(params, {
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      config: params.config,
+      packageName: parsedSpec.name,
+      dependencySpec: resolveManagedNpmRootDependencySpec({
+        parsedSpec,
+        resolution: npmResolution,
+      }),
+      displaySpec: spec,
+      installPolicyRequest: {
+        kind: "plugin-npm",
+        requestedSpecifier: spec,
+        source: npmInstallPolicySource,
+      },
+      extensionsDir: params.extensionsDir,
+      npmDir: params.npmDir,
+      timeoutMs,
+      signal: params.signal,
+      logger,
+      mode,
+      dryRun,
+      skipPolicyPreflight: true,
+      expectedPluginId,
+      expectedReplacementPluginId: params.expectedReplacementPluginId,
+      npmResolution,
+      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),
-    displaySpec: spec,
-    installPolicyRequest: {
-      kind: "plugin-npm",
-      requestedSpecifier: spec,
-      source: npmInstallPolicySource,
-    },
-    extensionsDir: params.extensionsDir,
-    npmDir: params.npmDir,
-    timeoutMs,
-    logger,
-    mode,
-    dryRun,
-    skipPolicyPreflight: true,
-    expectedPluginId,
-    expectedReplacementPluginId: params.expectedReplacementPluginId,
-    npmResolution,
-    ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
-  });
+  );
   emitSuccessfulPluginInstallSecurityEvent(result, {
     dryRun,
     mode: policyMode,

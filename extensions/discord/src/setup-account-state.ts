@@ -2,8 +2,11 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { inspectDiscordAccountTokenState } from "./account-token-inspect.js";
-import { resolveDefaultDiscordAccountId } from "./accounts.js";
-import { mergeDiscordAccountConfig, resolveDiscordAccountConfig } from "./accounts.js";
+import {
+  resolveDefaultDiscordAccountId,
+  mergeDiscordAccountConfig,
+  resolveDiscordAccountConfig,
+} from "./accounts.js";
 import type { DiscordAccountConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
 

@@ -1,6 +1,6 @@
 // Codex tests cover run attempt thread cleanup plugin behavior.
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
@@ -279,6 +279,160 @@ describe("Codex app-server main thread cleanup", () => {
     });
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
     expect(userRequestMethods().slice(-2)).toEqual(["thread/unsubscribe", "turn/start"]);
+  });
+
+  it("preserves a quiet long-running native tool while a distinct shared-client turn completes", async () => {
+    const physical = createClientHarness();
+    const startClient = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(physical.client);
+    const firstParams = createParams(
+      path.join(tempDir, "concurrent-first.jsonl"),
+      path.join(tempDir, "concurrent-first-workspace"),
+      "agent:main:telegram:topic:first",
+    );
+    const secondParams = createParams(
+      path.join(tempDir, "concurrent-second.jsonl"),
+      path.join(tempDir, "concurrent-second-workspace"),
+      "agent:main:telegram:topic:second",
+    );
+    firstParams.timeoutMs = 100;
+    secondParams.timeoutMs = 100;
+
+    const firstRun = runCodexAppServerAttempt(firstParams, {
+      bindingStore: testCodexAppServerBindingStore,
+      turnCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 1_000,
+    });
+    const initialize = await waitForHarnessRequest(physical, "initialize");
+    physical.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const firstThreadStart = await waitForHarnessRequest(physical, "thread/start");
+    physical.send({ id: firstThreadStart.id, result: threadStartResult("thread-1") });
+    const firstTurnStart = await waitForHarnessRequest(physical, "turn/start");
+    physical.send({ id: firstTurnStart.id, result: turnStartResult("turn-1") });
+
+    physical.send({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-silent",
+          type: "commandExecution",
+          command: "sleep 1",
+          status: "inProgress",
+        },
+      },
+    });
+
+    const secondRequestStart = physical.writes.length;
+    const secondRun = runCodexAppServerAttempt(secondParams, {
+      bindingStore: testCodexAppServerBindingStore,
+      turnCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 1_000,
+    });
+    const secondThreadStart = await waitForHarnessRequest(
+      physical,
+      "thread/start",
+      secondRequestStart,
+    );
+    physical.send({ id: secondThreadStart.id, result: threadStartResult("thread-2") });
+    const secondTurnStart = await waitForHarnessRequest(physical, "turn/start", secondRequestStart);
+    physical.send({ id: secondTurnStart.id, result: turnStartResult("turn-2") });
+    physical.send({
+      method: "item/started",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        item: {
+          id: "cmd-ticking",
+          type: "commandExecution",
+          command: "printf tick",
+          status: "inProgress",
+        },
+      },
+    });
+    physical.send({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        itemId: "cmd-ticking",
+        delta: "tick\n",
+      },
+    });
+    physical.send({
+      method: "item/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        item: {
+          id: "cmd-ticking",
+          type: "commandExecution",
+          command: "printf tick",
+          status: "completed",
+          aggregatedOutput: "tick\n",
+          exitCode: 0,
+        },
+      },
+    });
+    physical.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        turn: { id: "turn-2", status: "completed" },
+      },
+    });
+
+    const secondResult = await secondRun;
+    let firstSettled = false;
+    void firstRun.then(
+      () => {
+        firstSettled = true;
+      },
+      () => {
+        firstSettled = true;
+      },
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
+    expect(firstSettled).toBe(false);
+
+    physical.send({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-silent",
+          type: "commandExecution",
+          command: "sleep 1",
+          status: "completed",
+          aggregatedOutput: "silent command finished\n",
+          exitCode: 0,
+        },
+      },
+    });
+    physical.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+
+    const firstResult = await firstRun;
+    expect(startClient).toHaveBeenCalledOnce();
+    expect(readAttemptTerminal(firstResult)).toMatchObject({ timedOut: false, promptError: null });
+    expect(readAttemptTerminal(secondResult)).toMatchObject({ timedOut: false, promptError: null });
+    expect(JSON.stringify(firstResult.messagesSnapshot)).toContain("silent command finished");
+    expect(JSON.stringify(firstResult.messagesSnapshot)).not.toContain("matching tool.result");
+    expect(JSON.stringify(secondResult.messagesSnapshot)).toContain("tick");
+    expect(JSON.stringify(secondResult.messagesSnapshot)).not.toContain("cmd-silent");
   });
 
   it("keeps an incognito thread subscribed for live in-process reuse", async () => {

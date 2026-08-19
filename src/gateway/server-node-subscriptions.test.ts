@@ -18,7 +18,6 @@ describe("node subscription manager", () => {
       sent.push(event);
     });
 
-    expect(sent).toHaveLength(2);
     expect(sent.map((event) => event.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
     expect(sent.map((event) => event.pairingGeneration).toSorted()).toEqual([
       "generation-a",

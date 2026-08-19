@@ -398,7 +398,7 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
-  it("does not inherit Telegram root groups into multi-account named accounts", async () => {
+  it("records inherited Telegram root groups for multi-account named accounts", async () => {
     const { cfg, result } = await runIngressPolicyScenario({
       telegram: {
         dmPolicy: "pairing",
@@ -427,19 +427,41 @@ describe("registerPolicyDoctorChecks", () => {
     });
     const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
 
-    expect(evidence).not.toEqual(
+    expect(evidence).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           accountId: "work",
           groupId: "ops",
           kind: "channelRequireMention",
+          source: "oc://openclaw.config/channels/telegram/groups/ops/requireMention",
+          value: false,
+        }),
+        expect.objectContaining({
+          accountId: "personal",
+          groupId: "ops",
+          kind: "channelRequireMention",
+          source: "oc://openclaw.config/channels/telegram/groups/ops/requireMention",
+          value: false,
         }),
       ]),
     );
-    expect(result.findings).toEqual([]);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-group-mention-required",
+          ocPath: "oc://openclaw.config/channels/telegram/groups/ops/requireMention",
+          message: expect.stringContaining("account 'work'"),
+        }),
+        expect.objectContaining({
+          checkId: "policy/ingress-group-mention-required",
+          ocPath: "oc://openclaw.config/channels/telegram/groups/ops/requireMention",
+          message: expect.stringContaining("account 'personal'"),
+        }),
+      ]),
+    );
   });
 
-  it("lets Telegram account groups override root group inheritance", () => {
+  it("lets an explicit Telegram account groups map override root inheritance", () => {
     const cfg = {
       channels: {
         telegram: {
@@ -453,6 +475,7 @@ describe("registerPolicyDoctorChecks", () => {
             work: {
               groups: {},
             },
+            personal: {},
           },
         },
       },
@@ -466,6 +489,37 @@ describe("registerPolicyDoctorChecks", () => {
           accountId: "work",
           groupId: "ops",
           kind: "channelRequireMention",
+        }),
+      ]),
+    );
+  });
+
+  it("inherits root groups through a single Telegram account empty map", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groups: {
+            ops: {
+              requireMention: false,
+            },
+          },
+          accounts: {
+            work: {
+              groups: {},
+            },
+          },
+        },
+      },
+    };
+
+    expect(scanPolicyIngress(cfg)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountId: "work",
+          groupId: "ops",
+          kind: "channelRequireMention",
+          source: "oc://openclaw.config/channels/telegram/groups/ops/requireMention",
+          value: false,
         }),
       ]),
     );

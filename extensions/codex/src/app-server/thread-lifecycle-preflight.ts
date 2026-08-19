@@ -24,7 +24,7 @@ import {
 import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
 import {
-  assertCodexRingZeroHasNoManagedHooks,
+  assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   buildCodexRingZeroThreadConfigPatch,
   CODEX_RING_ZERO_BASE_INSTRUCTIONS,
   readCodexInheritedMcpServerNames,
@@ -103,18 +103,30 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const ringZeroActive =
     hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params.params);
-  const restrictedToolSurface = ringZeroActive || messageOnlySourceReply;
+  const restrictedToolSurface =
+    ringZeroActive ||
+    messageOnlySourceReply ||
+    params.params.pluginHarnessToolPolicyRestricted === true;
+  const imageGenerationDenied =
+    params.params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate") === true;
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
     throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }
-  const ringZeroInheritedMcpServerNames = restrictedToolSurface
-    ? await lifecycleTiming.measure("ring-zero-mcp-config-read", () =>
+  const restrictedToolSurfaceInheritedMcpServerNames = restrictedToolSurface
+    ? await lifecycleTiming.measure("restricted-tool-surface-mcp-config-read", () =>
         readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal),
       )
     : [];
-  if (restrictedToolSurface) {
-    await lifecycleTiming.measure("ring-zero-config-requirements-read", () =>
-      assertCodexRingZeroHasNoManagedHooks(params.client, params.signal),
+  if (restrictedToolSurface || imageGenerationDenied) {
+    await lifecycleTiming.measure("tool-policy-config-requirements-read", () =>
+      assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+        params.client,
+        {
+          restrictedToolSurface,
+          additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
+        },
+        params.signal,
+      ),
     );
   }
   const ringZeroConfigFingerprint = ringZeroActive
@@ -124,7 +136,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         config: buildCodexRingZeroThreadConfigPatch(
           params.params,
           true,
-          ringZeroInheritedMcpServerNames,
+          restrictedToolSurfaceInheritedMcpServerNames,
         )!,
       })
     : undefined;
@@ -146,7 +158,8 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ringZeroActive,
     ringZeroClientInstanceId,
     ringZeroConfigFingerprint,
-    ringZeroInheritedMcpServerNames,
+    restrictedToolSurface,
+    restrictedToolSurfaceInheritedMcpServerNames,
     userMcpServersConfigPatch,
     userMcpServersFingerprint,
     webSearchThreadConfigFingerprint,

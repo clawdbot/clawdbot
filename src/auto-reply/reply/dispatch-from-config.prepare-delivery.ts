@@ -11,6 +11,7 @@ import {
 } from "../reply-payload.js";
 import { resolveRoutedPolicyConversationType } from "./dispatch-from-config.context.js";
 import type { GatherDispatchRequestReadyState } from "./dispatch-from-config.gather.js";
+import { hasAskUserPayload } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import {
   loadReplyMediaPathsRuntime,
@@ -211,6 +212,9 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     });
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
+    }
+    if (hasAskUserPayload(payload) && !effectiveAbortSignal?.aborted && !result?.delivered) {
+      throw new Error("ask_user prompt delivery failed");
     }
     return result;
   };

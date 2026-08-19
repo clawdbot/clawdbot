@@ -1,40 +1,4 @@
-import { z } from "zod";
 import type { CuaLastFrame } from "./frame.js";
-
-const COMPUTER_ACTIONS = [
-  "left_click",
-  "right_click",
-  "middle_click",
-  "double_click",
-  "triple_click",
-  "mouse_move",
-  "left_click_drag",
-  "left_mouse_down",
-  "left_mouse_up",
-  "scroll",
-  "type",
-  "key",
-  "hold_key",
-] as const;
-
-export const ComputerActParamsSchema = z.strictObject({
-  action: z.enum(COMPUTER_ACTIONS),
-  displayFrameId: z.string().optional(),
-  x: z.number().finite().nonnegative().optional(),
-  y: z.number().finite().nonnegative().optional(),
-  fromX: z.number().finite().nonnegative().optional(),
-  fromY: z.number().finite().nonnegative().optional(),
-  text: z.string().optional(),
-  keys: z.string().optional(),
-  modifiers: z.string().optional(),
-  scrollDirection: z.enum(["up", "down", "left", "right"]).optional(),
-  scrollAmount: z.number().int().positive().optional(),
-  durationMs: z.number().int().nonnegative().optional(),
-  screenIndex: z.number().int().nonnegative().optional(),
-  refWidth: z.number().int().positive().optional(),
-});
-
-export type ComputerActParams = z.infer<typeof ComputerActParamsSchema>;
 
 const MODIFIER_ALIASES = new Map<string, string>([
   ["ctrl", "ctrl"],

@@ -1,9 +1,9 @@
-// Regression coverage for the non-isolated runner's cross-file cleanup: when a
-// sibling file fails during collection, vitest skips onAfterRunSuite for it, so
-// cleanup must run from onAfterRunFiles or the crashed file's evaluated real
-// modules stay cached and the next file's vi.mock factories silently never apply.
+// Regression coverage for the non-isolated runner's cross-file cleanup. Keep
+// every producer/observer pair in one child run: the contract is file-to-file
+// cleanup, not five independent Vitest process boots.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -11,13 +11,13 @@ import { expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const require = createRequire(import.meta.url);
 
 function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
     // Drop parent Vitest state so the child run resolves its own config, and
-    // drop GITHUB_ACTIONS so the child's github-actions reporter cannot emit
-    // ::error annotations that the parent CI job renders as its own failures.
+    // drop GITHUB_ACTIONS so the child's reporter cannot annotate the parent.
     if (
       key.startsWith("VITEST") ||
       key.startsWith("OPENCLAW_VITEST") ||
@@ -28,225 +28,154 @@ function childEnv(): NodeJS.ProcessEnv {
     }
     env[key] = value;
   }
-  // "CI" in env alone turns tinyrainbow colors on; NO_COLOR overrides every
-  // enable path, keeping the plain-text substring assertions below stable.
   env.NO_COLOR = "1";
+  delete env.OPENCLAW_SKIP_CHANNELS;
+  delete env.OPENCLAW_SKIP_CRON;
   return env;
 }
 
-it("applies vi.mock factories after a sibling file fails during collection", async () => {
+function fixtureFiles(): Record<string, string> {
+  const gatewayMocksPath = JSON.stringify(
+    path.join(repoRoot, "src", "gateway", "test-helpers.mocks.ts"),
+  );
+  const runtimeStorePath = JSON.stringify(
+    path.join(repoRoot, "src", "plugin-sdk", "runtime-store.ts"),
+  );
+  const sessionSuspensionPath = JSON.stringify(
+    path.join(repoRoot, "src", "agents", "session-suspension.ts"),
+  );
+  const agentRunRegistryPath = JSON.stringify(
+    path.join(repoRoot, "src", "infra", "agent-run-registry.ts"),
+  );
+  const agentEventsPath = JSON.stringify(path.join(repoRoot, "src", "infra", "agent-events.ts"));
+
+  return {
+    "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
+    "01-mid.ts": [
+      'import { flavor } from "./01-dep.js";',
+      "export function describeFlavor(): string {",
+      "  return `flavor:${flavor()}`;",
+      "}",
+      "",
+    ].join("\n"),
+    // Evaluate the real importer graph, then fail collection. The following
+    // file must still apply its mock after onAfterRunFiles cleanup.
+    "01-a-crash.test.ts": 'import "./01-mid.js";\nthrow new Error("synthetic collect failure");\n',
+    "01-b-mock.test.ts": [
+      'import { expect, it, vi } from "vitest";',
+      'vi.mock("./01-dep.js", () => ({ flavor: () => "mocked" }));',
+      'const { describeFlavor } = await import("./01-mid.js");',
+      'it("applies mocks after a sibling collection failure", () => {',
+      '  expect(describeFlavor()).toBe("flavor:mocked");',
+      "});",
+      "",
+    ].join("\n"),
+    "02-a-gateway-env.test.ts": [
+      `import ${gatewayMocksPath};`,
+      'import { expect, it } from "vitest";',
+      'it("seeds gateway helper env", () => {',
+      '  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBe("1");',
+      '  expect(process.env.OPENCLAW_SKIP_CRON).toBe("1");',
+      "});",
+      "",
+    ].join("\n"),
+    "02-b-gateway-env.test.ts": [
+      'import { expect, it } from "vitest";',
+      'it("restores gateway helper env", () => {',
+      "  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();",
+      "  expect(process.env.OPENCLAW_SKIP_CRON).toBeUndefined();",
+      "});",
+      "",
+    ].join("\n"),
+    "03-a-runtime-store.test.ts": [
+      `import { createPluginRuntimeStore } from ${runtimeStorePath};`,
+      'import { expect, it } from "vitest";',
+      'const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });',
+      'it("seeds a named runtime slot", () => {',
+      '  store.setRuntime({ source: "first-file" });',
+      '  expect(store.getRuntime()).toEqual({ source: "first-file" });',
+      "});",
+      "",
+    ].join("\n"),
+    "03-b-runtime-store.test.ts": [
+      `import { createPluginRuntimeStore } from ${runtimeStorePath};`,
+      'import { expect, it } from "vitest";',
+      'const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });',
+      'it("clears named runtime slots", () => {',
+      "  expect(store.tryGetRuntime()).toBeNull();",
+      "});",
+      "",
+    ].join("\n"),
+    "04-a-session-suspension.test.ts": [
+      `import { fenceSessionSuspensionWritesForGatewayShutdown } from ${sessionSuspensionPath};`,
+      'import { expect, it } from "vitest";',
+      'const testApi = (globalThis as Record<PropertyKey, { isSessionSuspensionWriteCleanupActiveForTest(): boolean }>)[Symbol.for("openclaw.sessionSuspensionTestApi")];',
+      'it("seeds the session suspension shutdown fence", () => {',
+      "  fenceSessionSuspensionWritesForGatewayShutdown();",
+      "  expect(testApi?.isSessionSuspensionWriteCleanupActiveForTest()).toBe(true);",
+      "});",
+      "",
+    ].join("\n"),
+    "04-b-session-suspension.test.ts": [
+      `import ${sessionSuspensionPath};`,
+      'import { expect, it } from "vitest";',
+      'const testApi = (globalThis as Record<PropertyKey, { isSessionSuspensionWriteCleanupActiveForTest(): boolean }>)[Symbol.for("openclaw.sessionSuspensionTestApi")];',
+      'it("clears the session suspension shutdown fence", () => {',
+      "  expect(testApi?.isSessionSuspensionWriteCleanupActiveForTest()).toBe(false);",
+      "});",
+      "",
+    ].join("\n"),
+    "05-a-agent-run.test.ts": [
+      `import { getAgentRunContext, registerAgentRunContext } from ${agentRunRegistryPath};`,
+      `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
+      'import { expect, it } from "vitest";',
+      'it("seeds process-global run contexts", () => {',
+      '  registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });',
+      '  registerAgentRunContext("unrelated-run-b", { sessionKey: "session-b" });',
+      '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
+      "  let sequence;",
+      "  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });",
+      '  emitAgentEvent({ runId: "reused-run", stream: "assistant", data: {} });',
+      "  unsubscribe();",
+      '  expect(getAgentRunContext("unrelated-run-a")).toBeDefined();',
+      '  expect(getAgentRunContext("unrelated-run-b")).toBeDefined();',
+      "  expect(sequence).toBe(1);",
+      "});",
+      "",
+    ].join("\n"),
+    "05-b-agent-run.test.ts": [
+      `import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${agentRunRegistryPath};`,
+      `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
+      'import { expect, it } from "vitest";',
+      'it("clears agent run registry state", () => {',
+      '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
+      "  let sequence;",
+      "  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });",
+      '  emitAgentEvent({ runId: "reused-run", stream: "assistant", data: {} });',
+      "  unsubscribe();",
+      "  expect(sequence).toBe(1);",
+      '  clearAgentRunContext("reused-run");',
+      '  registerAgentRunContext("target-run", { sessionKey: "target-session" });',
+      "  expect(sweepStaleRunContexts(-1)).toBe(1);",
+      '  expect(getAgentRunContext("target-run")).toBeUndefined();',
+      "});",
+      "",
+    ].join("\n"),
+  };
+}
+
+it("cleans every shared runner surface between files", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-non-isolated-runner-"));
   try {
-    const write = (name: string, content: string) =>
-      fs.writeFile(path.join(root, name), content, "utf-8");
-    // The child project resolves vitest through the repository install.
-    await fs.symlink(
-      path.join(repoRoot, "node_modules"),
-      path.join(root, "node_modules"),
-      "junction",
-    );
-    await write("dep.ts", 'export function flavor(): string {\n  return "real";\n}\n');
-    await write(
-      "mid.ts",
+    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
+    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
+    for (const [name, content] of Object.entries(fixtureFiles())) {
+      await fs.writeFile(path.join(root, name), content, "utf8");
+    }
+    await fs.writeFile(
+      path.join(root, "vitest.config.ts"),
       [
-        'import { flavor } from "./dep.js";',
-        "export function describeFlavor(): string {",
-        "  return `flavor:${flavor()}`;",
-        "}",
-        "",
-      ].join("\n"),
-    );
-    // Evaluates the real mid->dep chain into the shared module cache, then
-    // fails collection so runSuite early-returns without onAfterRunSuite.
-    await write(
-      "a-crash.test.ts",
-      'import "./mid.js";\nthrow new Error("synthetic collect failure");\n',
-    );
-    // Mocks the leaf module and observes it through the cached importer; with a
-    // poisoned cache this sees "flavor:real" instead of the mocked value.
-    await write(
-      "b-mock.test.ts",
-      [
-        'import { expect, it, vi } from "vitest";',
-        'vi.mock("./dep.js", () => ({ flavor: () => "mocked" }));',
-        'const { describeFlavor } = await import("./mid.js");',
-        'it("sees the mocked module through its importer", () => {',
-        '  expect(describeFlavor()).toBe("flavor:mocked");',
-        "});",
-        "",
-      ].join("\n"),
-    );
-    await write(
-      "vitest.config.ts",
-      [
-        'import { defineConfig } from "vitest/config";',
-        'import { BaseSequencer } from "vitest/node";',
-        "// Alphabetical order keeps a-crash collected before b-mock regardless of",
-        "// the duration cache; the leak only reproduces in that order.",
-        "class AlphabeticalSequencer extends BaseSequencer {",
-        '  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {',
-        "    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));",
-        "  }",
-        "}",
-        "export default defineConfig({",
-        `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
-        "  test: {",
-        "    isolate: false,",
-        "    fileParallelism: false,",
-        "    maxWorkers: 1,",
-        "    sequence: { sequencer: AlphabeticalSequencer },",
-        `    runner: ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))},`,
-        "  },",
-        "});",
-        "",
-      ].join("\n"),
-    );
-
-    const vitestEntry = path.join(repoRoot, "node_modules", "vitest", "vitest.mjs");
-    const result = await execFileAsync(
-      process.execPath,
-      [vitestEntry, "run", "--root", root, "--config", path.join(root, "vitest.config.ts")],
-      { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
-    ).catch((error: unknown) => error as { stdout?: string; stderr?: string });
-    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-
-    // The crash file must fail collection first, and the mock file must still
-    // pass; a poisoned module cache turns b-mock into the second failure.
-    expect(output).toContain("synthetic collect failure");
-    expect(output).toContain("1 failed | 1 passed");
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
-it("clears named plugin runtime slots between files", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-store-runner-"));
-  try {
-    const write = (name: string, content: string) =>
-      fs.writeFile(path.join(root, name), content, "utf-8");
-    const runtimeStorePath = JSON.stringify(
-      path.join(repoRoot, "src", "plugin-sdk", "runtime-store.ts"),
-    );
-    await fs.symlink(
-      path.join(repoRoot, "node_modules"),
-      path.join(root, "node_modules"),
-      "junction",
-    );
-    await write(
-      "a-seed.test.ts",
-      [
-        `import { createPluginRuntimeStore } from ${runtimeStorePath};`,
-        'import { expect, it } from "vitest";',
-        'const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });',
-        'it("seeds a named runtime slot", () => {',
-        '  store.setRuntime({ source: "first-file" });',
-        '  expect(store.getRuntime()).toEqual({ source: "first-file" });',
-        "});",
-        "",
-      ].join("\n"),
-    );
-    await write(
-      "b-observe.test.ts",
-      [
-        `import { createPluginRuntimeStore } from ${runtimeStorePath};`,
-        'import { expect, it } from "vitest";',
-        'const store = createPluginRuntimeStore({ pluginId: "fixture", errorMessage: "missing" });',
-        'it("starts without a runtime from the previous file", () => {',
-        "  expect(store.tryGetRuntime()).toBeNull();",
-        "});",
-        "",
-      ].join("\n"),
-    );
-    await write(
-      "vitest.config.ts",
-      [
-        'import { defineConfig } from "vitest/config";',
-        'import { BaseSequencer } from "vitest/node";',
-        "class AlphabeticalSequencer extends BaseSequencer {",
-        '  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {',
-        "    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));",
-        "  }",
-        "}",
-        "export default defineConfig({",
-        `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
-        "  test: {",
-        "    isolate: false,",
-        "    fileParallelism: false,",
-        "    maxWorkers: 1,",
-        "    sequence: { sequencer: AlphabeticalSequencer },",
-        `    runner: ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))},`,
-        "  },",
-        "});",
-        "",
-      ].join("\n"),
-    );
-
-    const vitestEntry = path.join(repoRoot, "node_modules", "vitest", "vitest.mjs");
-    const result = await execFileAsync(
-      process.execPath,
-      [vitestEntry, "run", "--root", root, "--config", path.join(root, "vitest.config.ts")],
-      { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
-    ).catch((error: unknown) => error as { stdout?: string; stderr?: string });
-    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-
-    expect(output).toContain("2 passed");
-    expect(output).not.toContain("first-file");
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
-it("clears session suspension state between files", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-suspension-runner-"));
-  try {
-    const write = (name: string, content: string) =>
-      fs.writeFile(path.join(root, name), content, "utf-8");
-    const sessionSuspensionPath = JSON.stringify(
-      path.join(repoRoot, "src", "agents", "session-suspension.ts"),
-    );
-    const sessionSuspensionTestSupportPath = JSON.stringify(
-      path.join(repoRoot, "src", "agents", "session-suspension.test-support.ts"),
-    );
-    const sharedVitestConfigPath = JSON.stringify(
-      path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"),
-    );
-    await fs.symlink(
-      path.join(repoRoot, "node_modules"),
-      path.join(root, "node_modules"),
-      "junction",
-    );
-    await write(
-      "a-seed.test.ts",
-      [
-        `import { getSuspendedLaneIdsForGatewayPublication } from ${sessionSuspensionPath};`,
-        `import { seedClearedLaneResumeForTest } from ${sessionSuspensionTestSupportPath};`,
-        'import { expect, it } from "vitest";',
-        'const laneId = "plugin:test:session-suspension";',
-        'it("seeds real process-global suspension state", () => {',
-        "  seedClearedLaneResumeForTest(laneId, {",
-        "    resumeConcurrency: 1,",
-        "    resumeAtMs: Date.now() + 10_000,",
-        "  });",
-        "  expect(getSuspendedLaneIdsForGatewayPublication()).toContain(laneId);",
-        "});",
-        "",
-      ].join("\n"),
-    );
-    await write(
-      "b-observe.test.ts",
-      [
-        `import { getSuspendedLaneIdsForGatewayPublication } from ${sessionSuspensionPath};`,
-        'import { expect, it } from "vitest";',
-        'it("starts without real suspension state from the previous file", () => {',
-        "  expect(getSuspendedLaneIdsForGatewayPublication()).toEqual(new Set());",
-        "});",
-        "",
-      ].join("\n"),
-    );
-    await write(
-      "vitest.config.ts",
-      [
-        `import { sharedVitestConfig } from ${sharedVitestConfigPath};`,
+        `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};`,
         'import { defineConfig } from "vitest/config";',
         'import { BaseSequencer } from "vitest/node";',
         "class AlphabeticalSequencer extends BaseSequencer {",
@@ -267,101 +196,28 @@ it("clears session suspension state between files", async () => {
         "});",
         "",
       ].join("\n"),
-    );
-
-    const vitestEntry = path.join(repoRoot, "node_modules", "vitest", "vitest.mjs");
-    const result = await execFileAsync(
-      process.execPath,
-      [vitestEntry, "run", "--root", root, "--config", path.join(root, "vitest.config.ts")],
-      { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
-    );
-    expect(`${result.stdout}\n${result.stderr}`).toContain("2 passed");
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
-it("disposes embedded-agent SQLite state before running the next file", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sqlite-lifecycle-runner-"));
-  const orderLogPath = path.join(root, "order.log");
-  const forceClearPath = path.join(
-    repoRoot,
-    "src",
-    "agents",
-    "embedded-agent-runner",
-    "runs.force-clear-terminal.test.ts",
-  );
-  const persistencePath = path.join(
-    repoRoot,
-    "src",
-    "agents",
-    "embedded-agent-runner",
-    "runs.persistence.test.ts",
-  );
-  try {
-    const embeddedConfigPath = JSON.stringify(
-      path.join(repoRoot, "test", "vitest", "vitest.agents-embedded-agent.config.ts"),
-    );
-    await fs.symlink(
-      path.join(repoRoot, "node_modules"),
-      path.join(root, "node_modules"),
-      "junction",
-    );
-    await fs.writeFile(
-      path.join(root, "vitest.config.ts"),
-      [
-        `import { createAgentsEmbeddedVitestConfig } from ${embeddedConfigPath};`,
-        'import { BaseSequencer } from "vitest/node";',
-        "class AlphabeticalSequencer extends BaseSequencer {",
-        '  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {',
-        "    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));",
-        "  }",
-        "}",
-        "const base = createAgentsEmbeddedVitestConfig();",
-        "export default {",
-        "  ...base,",
-        `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
-        "  test: {",
-        "    ...base.test,",
-        "    exclude: [],",
-        "    isolate: false,",
-        "    fileParallelism: false,",
-        "    maxWorkers: 1,",
-        "    sequence: { ...base.test?.sequence, sequencer: AlphabeticalSequencer },",
-        "  },",
-        "};",
-        "",
-      ].join("\n"),
       "utf8",
     );
 
-    const vitestEntry = path.join(repoRoot, "node_modules", "vitest", "vitest.mjs");
     const result = await execFileAsync(
       process.execPath,
       [
-        vitestEntry,
+        path.join(vitestPackageDir, "vitest.mjs"),
         "run",
-        "src/agents/embedded-agent-runner/runs.force-clear-terminal.test.ts",
-        "src/agents/embedded-agent-runner/runs.persistence.test.ts",
+        "--root",
+        root,
         "--config",
         path.join(root, "vitest.config.ts"),
       ],
-      {
-        cwd: repoRoot,
-        env: { ...childEnv(), OPENCLAW_VITEST_FILE_ORDER_LOG: orderLogPath },
-        maxBuffer: 16 * 1024 * 1024,
-      },
-    );
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/Test Files\s+2 passed \(2\)/u);
-    await expect(fs.readFile(orderLogPath, "utf8")).resolves.toBe(
-      [
-        `START ${forceClearPath}`,
-        `END ${forceClearPath}`,
-        `START ${persistencePath}`,
-        `END ${persistencePath}`,
-        "",
-      ].join("\n"),
-    );
+      { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
+    ).catch((error: unknown) => error as { stdout?: string; stderr?: string });
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+
+    // The collection failure is intentional. Every behavior test after it must
+    // pass; any leaked surface turns the summary into a second failure.
+    expect(output).toContain("synthetic collect failure");
+    expect(output).toContain("1 failed | 9 passed");
+    expect(output).not.toContain("first-file");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

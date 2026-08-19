@@ -1,12 +1,17 @@
 /** Tests plugin-specific runtime config secret collectors. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
 import { createResolverContext, type ResolverContext } from "./runtime-shared.js";
 
 const { loadPluginManifestRegistryForPluginRegistryMock } = vi.hoisted(() => ({
   loadPluginManifestRegistryForPluginRegistryMock: vi.fn(),
+}));
+
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: () => loadPluginManifestRegistryForPluginRegistryMock(),
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
@@ -25,10 +30,14 @@ function asConfig(value: unknown): OpenClawConfig {
   };
 }
 
-function makeContext(sourceConfig: OpenClawConfig): ResolverContext {
+function makeContext(
+  sourceConfig: OpenClawConfig,
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">,
+): ResolverContext {
   return createResolverContext({
     sourceConfig,
     env: {},
+    ...(manifestRegistry ? { manifestRegistry } : {}),
   });
 }
 
@@ -153,6 +162,84 @@ describe("collectPluginConfigAssignments", () => {
     const assignment = requireAssignment(context, 0);
     expect(assignment.path).toBe("plugins.entries.acpx.config.mcpServers.github.env.GITHUB_TOKEN");
     expect(assignment.expected).toBe("string");
+  });
+
+  it("collects contracts from a secondary agent workspace registry", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "research-secret",
+          origin: "workspace",
+          configContracts: {
+            secretInputs: {
+              bundledDefaultEnabled: false,
+              paths: [{ path: "apiKey", expected: "string" }],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          ops: { workspace: "/srv/ops" },
+          research: { workspace: "/srv/research" },
+        },
+      },
+      plugins: {
+        entries: {
+          "research-secret": {
+            enabled: true,
+            config: { apiKey: envRef("RESEARCH_API_KEY") },
+          },
+        },
+      },
+    };
+    const context = makeContext(config);
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: loadablePluginOrigins([["research-secret", "workspace"]]),
+    });
+
+    expect(context.assignments).toMatchObject([
+      { path: "plugins.entries.research-secret.config.apiKey" },
+    ]);
+  });
+
+  it("collects from a supplied manifest registry without cold registry loading", () => {
+    const config = createPluginConfig("prepared-plugin", {
+      credentials: { token: envRef("PREPARED_TOKEN") },
+    });
+    const context = makeContext(config, {
+      plugins: [
+        {
+          id: "prepared-plugin",
+          origin: "config",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "credentials.token", expected: "string" }],
+            },
+          },
+        } as never,
+      ],
+    });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: loadablePluginOrigins([["prepared-plugin", "config"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.prepared-plugin.config.credentials.token",
+    ]);
+    expect(loadPluginManifestRegistryForPluginRegistryMock).not.toHaveBeenCalled();
   });
 
   it("resolves assignments via apply callback", () => {

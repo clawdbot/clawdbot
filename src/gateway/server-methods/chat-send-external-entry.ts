@@ -1,4 +1,7 @@
-import { runWithCronCreatorAuthority } from "../../agents/cron-creator-authority-context.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { handleChatSend } from "./chat-send-handler.js";
@@ -6,8 +9,8 @@ import { resolveGatewayChatCronCreatorAuthorityAdmission } from "./cron-creator-
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
-  resolve: (params) =>
-    resolveGatewayChatCronCreatorAuthorityAdmission({
+  resolve: (params) => {
+    const authority = resolveGatewayChatCronCreatorAuthorityAdmission({
       runId: params.runId,
       resolvedSessionKey: params.sessionKey,
       spawnedBy: params.spawnedBy,
@@ -20,8 +23,12 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
       isSystemGenerated: params.isSystemGenerated,
       turnKind: params.turnKind,
       isDirectExternalUser: true,
-    }),
-  run: (authority, run, signal) => runWithCronCreatorAuthority(authority.runId, run, signal),
+    });
+    return authority
+      ? createCronCreatorAuthorityCapability(authority.runId, authority.callerOrigin)
+      : undefined;
+  },
+  run: (capability, run, signal) => runWithCronCreatorAuthorityCapability(capability, run, signal),
 };
 
 /** Authenticated external chat entry; internal re-entry must call handleChatSend directly. */

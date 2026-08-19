@@ -8,6 +8,12 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  asFiniteNumberInRange,
+  asOptionalRecord,
+  asPositiveSafeInteger,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CLAWROUTER_DEFAULT_BASE_URL = "https://clawrouter.openclaw.ai";
 
@@ -73,19 +79,9 @@ type RouteMetadata = {
   upstreamModel?: string;
 };
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.map(readString).filter((entry): entry is string => Boolean(entry))
+    ? value.map(normalizeOptionalString).filter((entry): entry is string => Boolean(entry))
     : [];
 }
 
@@ -102,16 +98,8 @@ export function normalizeClawRouterReasoningEfforts(
   return efforts.length > 0 ? efforts : undefined;
 }
 
-function readNonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function readPositiveSafeInteger(value: unknown): number | undefined {
-  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : undefined;
-}
-
 function readCatalogRows(body: unknown): readonly unknown[] {
-  const providers = readRecord(body)?.providers;
+  const providers = asOptionalRecord(body)?.providers;
   if (!Array.isArray(providers)) {
     throw new Error("ClawRouter catalog response must contain providers[]");
   }
@@ -119,9 +107,9 @@ function readCatalogRows(body: unknown): readonly unknown[] {
 }
 
 function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
-  const row = readRecord(value);
-  const path = readString(row?.path);
-  const requestFormat = readString(row?.requestFormat);
+  const row = asOptionalRecord(value);
+  const path = normalizeOptionalString(row?.path);
+  const requestFormat = normalizeOptionalString(row?.requestFormat);
   if (!path || !requestFormat) {
     return undefined;
   }
@@ -133,25 +121,35 @@ function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
 }
 
 function parseCatalogPricing(value: unknown): CatalogPricing | undefined {
-  const row = readRecord(value);
+  const row = asOptionalRecord(value);
   if (!row) {
     return undefined;
   }
   return {
-    inputMicrosPerMillion: readNonNegativeNumber(row.inputMicrosPerMillion),
-    outputMicrosPerMillion: readNonNegativeNumber(row.outputMicrosPerMillion),
-    cachedInputMicrosPerMillion: readNonNegativeNumber(row.cachedInputMicrosPerMillion),
-    cacheWrite5mInputMicrosPerMillion: readNonNegativeNumber(row.cacheWrite5mInputMicrosPerMillion),
-    cacheWrite1hInputMicrosPerMillion: readNonNegativeNumber(row.cacheWrite1hInputMicrosPerMillion),
-    maxInputTokens: readPositiveSafeInteger(row.maxInputTokens),
-    defaultMaxOutputTokens: readPositiveSafeInteger(row.defaultMaxOutputTokens),
+    inputMicrosPerMillion: asFiniteNumberInRange(row.inputMicrosPerMillion, { min: 0 }),
+    outputMicrosPerMillion: asFiniteNumberInRange(row.outputMicrosPerMillion, { min: 0 }),
+    cachedInputMicrosPerMillion: asFiniteNumberInRange(row.cachedInputMicrosPerMillion, { min: 0 }),
+    cacheWrite5mInputMicrosPerMillion: asFiniteNumberInRange(
+      row.cacheWrite5mInputMicrosPerMillion,
+      {
+        min: 0,
+      },
+    ),
+    cacheWrite1hInputMicrosPerMillion: asFiniteNumberInRange(
+      row.cacheWrite1hInputMicrosPerMillion,
+      {
+        min: 0,
+      },
+    ),
+    maxInputTokens: asPositiveSafeInteger(row.maxInputTokens),
+    defaultMaxOutputTokens: asPositiveSafeInteger(row.defaultMaxOutputTokens),
   };
 }
 
 function parseCatalogModel(value: unknown): CatalogModel | undefined {
-  const row = readRecord(value);
-  const id = readString(row?.id);
-  const upstream = readString(row?.upstream);
+  const row = asOptionalRecord(value);
+  const id = normalizeOptionalString(row?.id);
+  const upstream = normalizeOptionalString(row?.upstream);
   if (!id || !upstream) {
     return undefined;
   }
@@ -165,15 +163,15 @@ function parseCatalogModel(value: unknown): CatalogModel | undefined {
 }
 
 function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
-  const row = readRecord(value);
-  const id = readString(row?.id);
-  const nativeBaseUrl = readString(row?.nativeBaseUrl);
+  const row = asOptionalRecord(value);
+  const id = normalizeOptionalString(row?.id);
+  const nativeBaseUrl = normalizeOptionalString(row?.nativeBaseUrl);
   if (!id || !nativeBaseUrl || !nativeBaseUrl.startsWith("/v1/native/")) {
     return undefined;
   }
   return {
     id,
-    displayName: readString(row?.displayName) ?? id,
+    displayName: normalizeOptionalString(row?.displayName) ?? id,
     openaiCompatible: row?.openaiCompatible === true,
     nativeBaseUrl,
     routes: Array.isArray(row?.routes)
@@ -377,9 +375,9 @@ export async function buildClawRouterProviderConfig(params: {
 }
 
 function readRouteMetadata(params: ProviderRuntimeModel["params"]): RouteMetadata | undefined {
-  const row = readRecord(params?.[ROUTE_METADATA_KEY]);
-  const baseUrl = readString(row?.baseUrl);
-  const api = readString(row?.api);
+  const row = asOptionalRecord(params?.[ROUTE_METADATA_KEY]);
+  const baseUrl = normalizeOptionalString(row?.baseUrl);
+  const api = normalizeOptionalString(row?.api);
   if (
     !baseUrl ||
     (api !== "openai-responses" &&
@@ -389,7 +387,7 @@ function readRouteMetadata(params: ProviderRuntimeModel["params"]): RouteMetadat
   ) {
     return undefined;
   }
-  const upstreamModel = readString(row?.upstreamModel);
+  const upstreamModel = normalizeOptionalString(row?.upstreamModel);
   return {
     api,
     baseUrl,

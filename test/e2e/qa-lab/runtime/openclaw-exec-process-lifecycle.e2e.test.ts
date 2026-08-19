@@ -105,8 +105,8 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     const shellMarker = `shell-route-${process.pid}`;
     const foregroundCommand =
       process.platform === "win32"
-        ? `Write-Output -NoNewline ${shellQuote(shellMarker)}; Write-Output -NoNewline \"|$env:OPENCLAW_SHELL\"`
-        : `printf '%s' ${shellQuote(shellMarker)} && printf '|%s' \"$OPENCLAW_SHELL\"`;
+        ? `Write-Output -NoNewline ${shellQuote(shellMarker)}; Write-Output -NoNewline "|$env:OPENCLAW_SHELL"`
+        : `printf '%s' ${shellQuote(shellMarker)} && printf '|%s' "$OPENCLAW_SHELL"`;
     const foreground = await foregroundExecTool.execute("foreground-shell", {
       command: foregroundCommand,
     });
@@ -171,7 +171,7 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
 
     const timedOut = await foregroundExecTool.execute("foreground-timeout", {
       command: nodeEvalCommand("setTimeout(() => {}, 5000);"),
-      timeout: 0.05,
+      timeoutSeconds: 0.05,
     });
     expect(timedOut.details).toMatchObject({
       status: "failed",

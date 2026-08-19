@@ -1,5 +1,6 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -25,12 +26,9 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import {
-  buildSessionUsageDateParams,
-  requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
 } from "../../lib/sessions/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -48,6 +46,7 @@ import {
 } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
+import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import {
   DEFAULT_VISIBLE_COLUMNS,
   type SessionLogEntry,
@@ -72,12 +71,6 @@ export type UsageRouteData = {
   providerUsageSummary: ProviderUsageSummary | null;
   loadedAtMs: number | null;
   error: string | null;
-};
-
-type UsageTaskValue = {
-  result: SessionsUsageResult;
-  costSummary: CostUsageSummary;
-  providerUsageSummary: ProviderUsageSummary | null;
 };
 
 type UsageDetailTaskValue<T> = {
@@ -190,24 +183,7 @@ class UsagePage extends OpenClawLightDomElement {
       }
       this.refreshPolicy.beginLoad();
       const agentId = normalizedAgentId || undefined;
-      const agentScopeParams = agentId ? { agentId } : { agentScope: "all" as const };
-      const [result, costSummary, providerUsageSummary] = await Promise.all([
-        requestSessionUsage(client, { startDate, endDate, agentId, scope, timeZone }),
-        client.request<CostUsageSummary>(
-          "usage.cost",
-          {
-            startDate,
-            endDate,
-            ...agentScopeParams,
-            ...buildSessionUsageDateParams(timeZone),
-          },
-          { signal },
-        ),
-        client
-          .request<ProviderUsageSummary>("usage.status", undefined, { signal })
-          .catch(() => null),
-      ]);
-      return { result, costSummary, providerUsageSummary } satisfies UsageTaskValue;
+      return requestUsageSnapshot(client, { startDate, endDate, agentId, scope, timeZone }, signal);
     },
     onComplete: (value) => {
       this.usageTaskActiveClient = null;

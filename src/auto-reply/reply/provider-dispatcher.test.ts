@@ -21,7 +21,7 @@ vi.mock("../dispatch.js", () => ({
     hoisted.plainDispatchMock(...args),
 }));
 
-const { dispatchReplyWithBufferedBlockDispatcher, dispatchReplyWithDispatcher } =
+const { dispatchReplyWithBufferedBlockDispatcherCore, dispatchReplyWithDispatcherCore } =
   await import("./provider-dispatcher.js");
 
 const dispatchResult = {
@@ -41,7 +41,7 @@ describe("provider dispatcher wrappers", () => {
       deliver: async () => ({ visibleReplySent: false }),
     } satisfies ReplyDispatcherWithTypingOptions;
 
-    await dispatchReplyWithBufferedBlockDispatcher({
+    await dispatchReplyWithBufferedBlockDispatcherCore({
       ctx: { Body: "hello" },
       cfg: {} as OpenClawConfig,
       dispatcherOptions,
@@ -62,7 +62,7 @@ describe("provider dispatcher wrappers", () => {
       deliver: async () => ({ visibleReplySent: false }),
     } satisfies ReplyDispatcherOptions;
 
-    await dispatchReplyWithDispatcher({
+    await dispatchReplyWithDispatcherCore({
       ctx: { Body: "hello" },
       cfg: {} as OpenClawConfig,
       dispatcherOptions,

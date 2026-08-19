@@ -8,9 +8,9 @@ import {
 } from "../../../agents/auth-profiles/oauth-shared.js";
 import {
   loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
-import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import {
   applySessionEntryReplacements,
   listSessionEntriesForCanonicalRepair,
@@ -19,7 +19,7 @@ import {
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { loadJsonFile } from "../../../infra/json-file.js";
+import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
@@ -174,8 +174,9 @@ function repairProviderlessCodexSessionOverride(
     delete entry.model;
     delete entry.modelProvider;
   }
-  if (entry.contextTokens !== undefined) {
+  if (entry.contextTokens !== undefined || entry.contextTokensSource !== undefined) {
     delete entry.contextTokens;
+    delete entry.contextTokensSource;
   }
   if (entry.contextBudgetStatus !== undefined) {
     delete entry.contextBudgetStatus;
@@ -331,11 +332,12 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
   }
   const agentDir = resolveAgentDir(params.cfg, params.agentId, params.env);
   const localProfiles = loadPersistedAuthProfileStore(agentDir)?.profiles ?? {};
-  const mainProfiles =
-    loadPersistedAuthProfileStore(resolveSharedMainAuthAgentDir(params.env))?.profiles ?? {};
+  const mainProfiles = loadPersistedSharedAuthProfileStore(params.env)?.profiles ?? {};
   const localLegacyAuthPath = resolveLegacyAuthProfilesPath(agentDir);
   const localLegacySourceExists = fs.existsSync(localLegacyAuthPath);
-  const localLegacySource = localLegacySourceExists ? loadJsonFile(localLegacyAuthPath) : null;
+  const localLegacySource = localLegacySourceExists
+    ? loadJsonFileThroughSymlink(localLegacyAuthPath)
+    : null;
   const localLegacyProfiles =
     isRecord(localLegacySource) && isRecord(localLegacySource.profiles)
       ? localLegacySource.profiles

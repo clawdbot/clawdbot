@@ -92,7 +92,6 @@ export const en = {
       remotePasswordMode: "How do you want to provide this gateway password?",
       remoteTokenMode: "How do you want to provide this gateway token?",
       tailscaleExposure: "Tailscale exposure",
-      tailscaleReset: "Reset Tailscale serve/funnel on exit?",
       tokenPlaceholder: "Needed for multi-machine or non-loopback access",
       tokenPrompt: "Gateway token",
       tokenPromptGenerate: "Gateway token (blank to generate)",
@@ -114,6 +113,8 @@ export const en = {
       cacheFailed: "Failed to generate completion cache. Run `{command}` later.",
       enable: "Enable {shell} shell completion for {cli}?",
       installed: "Shell completion installed. {reloadHint}",
+      profileNotWritable:
+        "Shell completion was not changed: {profile} is not writable. Run `{command}` against a writable profile file.",
       reloadPowerShell: "Restart your shell or run: {command}",
       reloadShell: "Restart your shell or run: source {profile}",
       title: "Shell completion",
@@ -293,7 +294,6 @@ export const en = {
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
       controlUiPreparing: "Preparing the Control UI…",
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
-      failedOptionLine: "{label}: {reason}",
       failedOptionsIntro: "These didn't work just now:",
       findMeLater:
         "You can always find me later — run `openclaw` in a terminal, or open Settings in the dashboard.",
@@ -436,25 +436,25 @@ export const en = {
         "OpenClaw is an open-source assistant that learns and grows with you, by the OpenClaw Foundation (a non-profit).",
       baselineDmSessions:
         "Shared inboxes: isolate DM sessions (session.dmScope: per-channel-peer) and keep tool access minimal.",
-      baselinePairing: "Pairing/allowlists + mention gating.",
-      baselineSandbox: "Sandbox + least-privilege tools.",
-      baselineSecrets: "Keep secrets out of the agent's reachable filesystem.",
+      baselinePairing: "Use pairing or allowlists; require mentions in group chats.",
+      baselineSandbox: "Use a sandbox and give tools only the permissions they need.",
+      baselineSecrets: "Keep secrets outside the agent's reachable filesystem.",
       baselineSharedInbox:
-        "Multi-user/shared inbox: split trust boundaries (separate gateway/credentials, ideally separate OS users/hosts).",
+        "Shared inboxes: use separate gateways and credentials; separate OS users or hosts provide stronger isolation.",
       baselineStrongModel:
-        "Use the strongest available model for any bot with tools or untrusted inboxes.",
+        "Use the strongest available model for bots with tools or shared/public inboxes.",
       confirm:
         "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
       hardeningRequired:
-        "If you're not comfortable with security hardening and access control, don't run OpenClaw.",
-      learnMore: "Learn more",
-      notMultitenant: "OpenClaw is not a hostile multi-tenant boundary by default.",
-      personalAgent: "By default, OpenClaw is a personal agent: one trusted operator boundary.",
+        "If you're not comfortable managing access controls and security hardening, don't run OpenClaw without help.",
+      learnMore: "Learn more at",
+      notMultitenant: "OpenClaw is not designed to safely separate multiple users by default.",
+      personalAgent: "By default, OpenClaw is a personal agent for one operator.",
       promptRisk: "A bad prompt can trick it into doing unsafe things.",
-      recommendedBaseline: "Recommended baseline",
+      recommendedBaseline: "Recommended safer setup",
       runRegularly: "Run regularly",
       sharedAuthority:
-        "If multiple users can message one tool-enabled agent, they share that delegated tool authority.",
+        "If multiple users can message one tool-enabled agent, they can all influence how it uses its tools.",
       title: "Security disclaimer",
       toolAccess: "This bot can read files and run actions if tools are enabled.",
     },
@@ -931,6 +931,13 @@ export const en = {
       outgoingWebhookPathKeep: "Outgoing webhook path set ({value}). Keep it?",
       outgoingWebhookPathPrompt: "Outgoing webhook path (optional)",
       outgoingWebhookPathTitle: "Synology Chat outgoing webhook path",
+      publicWebhookUrlHelp:
+        "Use the exact externally reachable HTTPS outgoing-webhook callback URL configured in Synology Chat.",
+      publicWebhookUrlKeep: "Public attachment webhook URL already configured. Keep it?",
+      publicWebhookUrlPrompt: "Public attachment webhook URL (optional)",
+      publicWebhookUrlScope:
+        "Expose only this webhook route; OpenClaw uses it for short-lived attachment downloads.",
+      publicWebhookUrlTitle: "Synology Chat public attachment route",
       setupTitle: "Synology Chat webhook setup",
       tokenEnvPrompt: "SYNOLOGY_CHAT_TOKEN detected. Use env var?",
       tokenInput: "Enter Synology Chat outgoing webhook token",
@@ -1097,14 +1104,9 @@ export const en = {
       controlUiTitle: "Control UI",
       controlUiDocs: "Docs: https://docs.openclaw.ai/web/control-ui",
       dashboardCopyPaste: "Copy/paste this URL in a browser on this machine to control OpenClaw.",
-      dashboardLinkWithToken: "Dashboard link (with token): {url}",
       dashboardOpened: "Opened in your browser. Keep that tab to control OpenClaw.",
       dashboardOpenAnytime: "Open the dashboard anytime: {command}",
       dashboardReady: "Dashboard ready",
-      dashboardTokenMemory:
-        "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
-      dashboardTokenPrompt:
-        "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
       dashboardWhenReady: "When you're ready: {command}",
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
@@ -1141,6 +1143,10 @@ export const en = {
       healthCheckHelp: "Health check help",
       installGateway: "Install Gateway service (recommended)",
       laterTitle: "Later",
+      managedGatewaySetupFailed:
+        "The managed {service} setup failed: {error}\nInspect service state and logs: {statusCommand}\nRetry the managed service installation: {recoveryCommand}",
+      managedGatewayUnreachable:
+        "The managed {service} did not become reachable after setup.\nInspect service state and logs: {statusCommand}\nRetry the managed service: {recoveryCommand}",
       managedWebSearchSkipped: "Managed web search provider was skipped.",
       noBackgroundGatewayExpected:
         "Setup was run without Gateway service install, so no background gateway is expected.",
@@ -1203,7 +1209,6 @@ export const en = {
       webSearchUnavailableAction:
         "web_search will not work until the provider is re-enabled or a different provider is selected.",
       webUiUrl: "Web UI: {url}",
-      webUiWithTokenUrl: "Web UI (with token): {url}",
       whatNow: 'What now: https://openclaw.ai/showcase ("What People Are Building").',
       whatNowTitle: "What now",
       workspaceBackupTitle: "Workspace backup",

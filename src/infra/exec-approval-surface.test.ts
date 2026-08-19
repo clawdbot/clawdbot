@@ -1,5 +1,6 @@
 // Covers approval initiating-surface detection.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
@@ -207,7 +208,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       meta: { label: "Matrix" },
       approvalCapability: {
         native: {},
-        getActionAvailabilityState: ({ approvalKind }: { approvalKind?: "exec" | "plugin" }) =>
+        getActionAvailabilityState: ({ approvalKind }: { approvalKind?: ChannelApprovalKind }) =>
           approvalKind === "plugin" ? { kind: "enabled" as const } : { kind: "disabled" as const },
       },
     });
@@ -229,7 +230,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
   it("uses generic approval availability for plugin initiating surfaces", () => {
     const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "enabled" as const }));
     const getActionAvailabilityState = vi.fn(
-      ({ approvalKind }: { approvalKind?: "exec" | "plugin" }) =>
+      ({ approvalKind }: { approvalKind?: ChannelApprovalKind }) =>
         approvalKind === "plugin" ? { kind: "disabled" as const } : { kind: "enabled" as const },
     );
     getChannelPluginMock.mockReturnValue({

@@ -30,7 +30,7 @@ scenario:
     - src/agents/conversation-capability-profile.ts
     - src/agents/requester-tool-policy.ts
     - src/agents/sender-tool-policy.ts
-    - src/agents/subagent-capabilities.ts
+    - src/agents/subagents/spawn/subagent-capabilities.ts
   execution:
     kind: flow
     suiteIsolation: isolated

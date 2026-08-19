@@ -86,8 +86,8 @@ describe("status-json-payload", () => {
         pluginCompatibility: [
           {
             pluginId: "legacy",
-            code: "deprecated-memory-embedding-provider-api",
-            severity: "warn",
+            code: "hook-only",
+            severity: "info",
             message: "warn",
           },
         ],
@@ -129,15 +129,14 @@ describe("status-json-payload", () => {
         warnings: [
           {
             pluginId: "legacy",
-            code: "deprecated-memory-embedding-provider-api",
-            severity: "warn",
+            code: "hook-only",
+            severity: "info",
             message: "warn",
           },
         ],
       },
     });
   });
-
   it("omits optional sections when they are absent", () => {
     expect(
       buildStatusJsonPayload({

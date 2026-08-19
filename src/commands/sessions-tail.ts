@@ -1,3 +1,4 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Session trajectory tail command.
  *
@@ -11,7 +12,6 @@ import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
@@ -56,22 +56,6 @@ const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
 const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
-let followIntervalMsForTests: number | undefined;
-
-/** Overrides the follow polling interval for tests. */
-function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
-  followIntervalMsForTests = intervalMs;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsTailTestApi")] = {
-    setSessionsTailFollowIntervalMsForTests,
-  };
-}
-
-function resolveFollowIntervalMs(): number {
-  return followIntervalMsForTests ?? FOLLOW_INTERVAL_MS;
-}
 
 function parseTailCount(value: string | number | undefined): number | null {
   if (value === undefined) {
@@ -292,7 +276,7 @@ async function followSelections(
           );
         }
       }
-    }, resolveFollowIntervalMs());
+    }, FOLLOW_INTERVAL_MS);
 
     const stop = () => {
       clearInterval(interval);

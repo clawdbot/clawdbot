@@ -70,6 +70,8 @@ type DiscordSendOpts = {
   allowedMentions?: DiscordAllowedMentions;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
+  /** @internal Refresh durable custody immediately before Discord REST I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
@@ -92,6 +94,7 @@ async function sendDiscordThreadTextChunks(params: {
   suppressEmbeds?: boolean;
   allowedMentions?: DiscordAllowedMentions;
   onResult?: DiscordSendProgress;
+  onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<void> {
   for (const chunk of params.chunks) {
     await sendDiscordText({
@@ -106,6 +109,7 @@ async function sendDiscordThreadTextChunks(params: {
       allowedMentions: params.allowedMentions,
       maxChars: params.maxChars,
       onResult: params.onResult,
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
     });
   }
 }
@@ -238,6 +242,7 @@ export async function sendMessageDiscord(
     });
     let threadRes: { id: string; message?: { id: string; channel_id: string } };
     try {
+      await opts.onPlatformSendDispatch?.();
       threadRes = (await request(
         () =>
           createThread<{ id: string; message?: { id: string; channel_id: string } }>(
@@ -309,6 +314,7 @@ export async function sendMessageDiscord(
           allowedMentions: opts.allowedMentions,
           maxChars: textLimit,
           onResult: reportThreadResult,
+          onPlatformSendDispatch: opts.onPlatformSendDispatch,
         });
         await sendDiscordThreadTextChunks({
           rest,
@@ -322,6 +328,7 @@ export async function sendMessageDiscord(
           suppressEmbeds,
           allowedMentions: opts.allowedMentions,
           onResult: reportThreadResult,
+          onPlatformSendDispatch: opts.onPlatformSendDispatch,
         });
       } else {
         await sendDiscordThreadTextChunks({
@@ -336,6 +343,7 @@ export async function sendMessageDiscord(
           suppressEmbeds,
           allowedMentions: opts.allowedMentions,
           onResult: reportThreadResult,
+          onPlatformSendDispatch: opts.onPlatformSendDispatch,
         });
       }
     } catch (err) {
@@ -391,6 +399,7 @@ export async function sendMessageDiscord(
         allowedMentions: opts.allowedMentions,
         maxChars: textLimit,
         onResult: reportResult,
+        onPlatformSendDispatch: opts.onPlatformSendDispatch,
       });
     } else {
       result = await sendDiscordText({
@@ -408,6 +417,7 @@ export async function sendMessageDiscord(
         allowedMentions: opts.allowedMentions,
         maxChars: textLimit,
         onResult: reportResult,
+        onPlatformSendDispatch: opts.onPlatformSendDispatch,
       });
     }
   } catch (err) {
@@ -447,6 +457,7 @@ export async function sendStickerDiscord(
     enforce_nonce: true,
     ...(flags ? { flags } : {}),
   };
+  await opts.onPlatformSendDispatch?.();
   const res = (await request(
     () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
     "sticker",
@@ -474,6 +485,7 @@ export async function sendPollDiscord(
     enforce_nonce: true,
     ...(flags ? { flags } : {}),
   };
+  await opts.onPlatformSendDispatch?.();
   const res = (await request(
     () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
     "poll",

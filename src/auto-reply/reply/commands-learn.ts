@@ -51,6 +51,7 @@ function workshopIsAvailable(params: HandleCommandsParams): boolean {
   }
 
   const policySessionKey = resolveRuntimePolicySessionKey({
+    agentId: params.agentId,
     cfg: params.cfg,
     ctx: params.ctx,
     sessionKey: params.sessionKey,

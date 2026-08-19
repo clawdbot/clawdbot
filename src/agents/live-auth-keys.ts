@@ -3,12 +3,10 @@
  * Reads provider-specific and manifest-declared env names without logging or
  * exposing secret values, with explicit single-key pins for flaky live lanes.
  */
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { classifyFailoverSignal } from "./failover/classify.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const KEY_SPLIT_RE = /[\s,;]+/g;
@@ -170,24 +168,6 @@ export function collectProviderApiKeys(
 
 /** Return whether a provider error message indicates API-key rate limiting. */
 export function isApiKeyRateLimitError(message: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(message);
-  if (lower.includes("rate_limit")) {
-    return true;
-  }
-  if (lower.includes("rate limit")) {
-    return true;
-  }
-  if (lower.includes("429")) {
-    return true;
-  }
-  if (lower.includes("quota exceeded") || lower.includes("quota_exceeded")) {
-    return true;
-  }
-  if (lower.includes("resource exhausted") || lower.includes("resource_exhausted")) {
-    return true;
-  }
-  if (lower.includes("too many requests")) {
-    return true;
-  }
-  return false;
+  const classification = classifyFailoverSignal({ message });
+  return classification?.kind === "reason" && classification.reason === "rate_limit";
 }

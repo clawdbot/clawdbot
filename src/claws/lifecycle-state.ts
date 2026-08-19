@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { listConfiguredMcpServers, unsetConfiguredMcpServer } from "../config/mcp-config.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -564,7 +565,7 @@ export async function applyClawRemovePlan(
         action: "removed",
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       cronJobs.push({
         manifestId: cron.manifestId,
         schedulerJobId: cron.schedulerJobId,

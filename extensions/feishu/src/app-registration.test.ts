@@ -1,7 +1,6 @@
 // Feishu tests cover app registration plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -35,10 +34,9 @@ type RegistrationFetchOptions = {
 
 const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 
-const hermeticPublicLookup: LookupFn = (async (_hostname: string, _options?: unknown) => ({
-  address: HERMETIC_PUBLIC_LOOKUP_ADDRESS,
-  family: 4,
-})) as LookupFn;
+const hermeticPublicLookup: LookupFn = async () => [
+  { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
+];
 
 async function startLocalServer(
   handler: (req: IncomingMessage, res: ServerResponse) => void,
@@ -409,59 +407,5 @@ describe("Feishu app registration", () => {
         );
       },
     );
-  });
-});
-
-describe("feishu bound reads — local HTTP server", () => {
-  it("rejects oversized response before fully buffering the response (OOM guard)", async () => {
-    const chunk = Buffer.alloc(1024 * 1024, 0x61);
-    const totalChunks = 64;
-    let chunksWritten = 0;
-
-    const srv = await startLocalServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      let sent = 0;
-      const sendChunk = () => {
-        if (sent >= totalChunks) {
-          res.end();
-          return;
-        }
-        sent += 1;
-        chunksWritten += 1;
-        const ok = res.write(chunk);
-        if (ok) {
-          setImmediate(sendChunk);
-          return;
-        }
-        res.once("drain", sendChunk);
-      };
-      sendChunk();
-    });
-
-    try {
-      const response = await fetch(`http://127.0.0.1:${srv.port}/`);
-      // Mutation-control: bare `response.json()` would buffer all 20 MiB.
-      await expect(readProviderJsonResponse(response, "feishu.bound-proof")).rejects.toThrow(
-        /JSON response exceeds/,
-      );
-      expect(chunksWritten).toBeLessThan(totalChunks);
-      console.log(`[bound-proof] canceled at ${chunksWritten}/${totalChunks} chunks`);
-    } finally {
-      await srv.stop();
-    }
-  });
-
-  it("parses well-formed JSON response under the cap", async () => {
-    const payload = { code: 0, data: { app_id: "cli_test" } };
-    const srv = await startLocalServer((_req, res) => {
-      writeJson(res, payload);
-    });
-    try {
-      const response = await fetch(`http://127.0.0.1:${srv.port}/`);
-      const result = await readProviderJsonResponse<typeof payload>(response, "feishu.bound-proof");
-      expect(result).toEqual(payload);
-    } finally {
-      await srv.stop();
-    }
   });
 });

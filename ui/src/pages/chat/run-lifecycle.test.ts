@@ -4,10 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   CHAT_RUN_STATUS_TOAST_DURATION_MS,
   handleAbortChat,
   hasAbortableSessionRun,
+  hasDirectSessionRun,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
@@ -19,6 +21,7 @@ type ReconcileHost = Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0]
 type TestRow = {
   key: string;
   hasActiveRun?: boolean;
+  hasActiveSubagentRun?: boolean;
   activeRunIds?: string[];
   status?: string;
   startedAt?: number;
@@ -58,12 +61,36 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
     chatInputHistoryItems: null,
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     ...over,
   };
 }
 
 describe("handleAbortChat", () => {
+  it("dispatches sessions.abort when only descendant work remains", async () => {
+    const request = vi.fn(async () => ({ status: "aborted" }));
+    const host = makeAbortHost({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessionsResult: makeSessionsResult([
+        {
+          key: "agent:main",
+          hasActiveRun: false,
+          hasActiveSubagentRun: true,
+          status: "done",
+        },
+      ]),
+    });
+
+    expect(hasDirectSessionRun(host)).toBe(false);
+    expect(hasAbortableSessionRun(host)).toBe(true);
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "agent:main",
+      clearQueued: true,
+    });
+  });
+
   it("shows reconnect guidance when an offline session run has no browser run identity", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
@@ -261,9 +288,6 @@ describe("reconcileChatRunLifecycle yielded parent", () => {
         sessionKey: "s1",
         occurredAt: 1,
       },
-      planStatus: {
-        steps: [{ step: "Wait for child completion", status: "in_progress" }],
-      },
     });
 
     reconcileChatRunLifecycle(host, {
@@ -277,7 +301,6 @@ describe("reconcileChatRunLifecycle yielded parent", () => {
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
     expect(host.chatRunStatus).toBeNull();
-    expect(host.planStatus).toBeNull();
     expect(host.lastLocalTerminalReconcile).toBeNull();
     expect(host.sessionsResult?.sessions[0]).toMatchObject({
       activeRunIds: [],
@@ -288,16 +311,13 @@ describe("reconcileChatRunLifecycle yielded parent", () => {
 });
 
 describe("reconcileChatRunLifecycle indicators", () => {
-  it("clears plan status on terminal run end", () => {
+  it("clears run-owned transient indicators on terminal run end", () => {
     const host = makeHost({
       chatRunId: "r1",
       knownAgentRunIds: new Set(["r1", "r2"]),
       waitingApprovalStatuses: new Map([
         ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "r1" }],
       ]),
-      planStatus: {
-        steps: [{ step: "Finish the run", status: "in_progress" }],
-      },
     });
 
     reconcileChatRunLifecycle(host, {
@@ -306,7 +326,6 @@ describe("reconcileChatRunLifecycle indicators", () => {
       clearLocalRun: true,
     });
 
-    expect(host.planStatus).toBeNull();
     expect(host.knownAgentRunIds).toEqual(new Set(["r2"]));
     expect(host.waitingApprovalStatuses?.size).toBe(0);
   });
@@ -327,28 +346,6 @@ describe("reconcileChatRunLifecycle indicators", () => {
     });
 
     expect(host.waitingApprovalStatuses?.has("approval-1")).toBe(true);
-  });
-
-  it("preserves an owned plan when another run terminates", () => {
-    const host = makeHost({
-      chatRunId: "r1",
-      planStatus: {
-        runId: "r1",
-        steps: [{ step: "Finish the run", status: "in_progress" }],
-      },
-    });
-
-    reconcileChatRunLifecycle(host, {
-      outcome: "done",
-      runId: "r2",
-      clearIndicators: true,
-      clearLocalRun: false,
-    });
-
-    expect(host.planStatus).toEqual({
-      runId: "r1",
-      steps: [{ step: "Finish the run", status: "in_progress" }],
-    });
   });
 });
 

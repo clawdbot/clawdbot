@@ -404,9 +404,9 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    entries: {
+      codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: {
@@ -417,7 +417,7 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
           },
         },
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -460,11 +460,11 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
 ```json5
 {
   agents: {
-    list: [
-      { id: "main" },
-      { id: "agent-a", workspace: "/home/user/agent-a" },
-      { id: "agent-b", workspace: "/home/user/agent-b" },
-    ],
+    entries: {
+      main: { default: true },
+      "agent-a": { workspace: "/home/user/agent-a" },
+      "agent-b": { workspace: "/home/user/agent-b" },
+    },
   },
   bindings: [
     {

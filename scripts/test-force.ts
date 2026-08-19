@@ -30,11 +30,6 @@ function parseArgs(argv: readonly string[]): { help: boolean } {
   return { help: false };
 }
 
-export const testForceTesting = {
-  parseArgs,
-  usage,
-};
-
 function killGatewayListeners(port: number): PortProcess[] {
   try {
     const killed = forceFreePort(port);
@@ -58,7 +53,7 @@ function runTests() {
   const isolatedLock =
     process.env.OPENCLAW_GATEWAY_LOCK ??
     path.join(os.tmpdir(), `openclaw-gateway.lock.test.${Date.now()}`);
-  const result = spawnSync(process.execPath, ["scripts/test-projects.mjs"], {
+  const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/test-projects.mts"], {
     stdio: "inherit",
     env: {
       ...process.env,
@@ -72,7 +67,7 @@ function runTests() {
   process.exit(result.status ?? 1);
 }
 
-export function main(argv: readonly string[] = process.argv.slice(2)) {
+function main(argv: readonly string[] = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
     console.log(usage());

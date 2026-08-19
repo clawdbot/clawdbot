@@ -5,6 +5,11 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
+export const SystemAgentWizardCancelSchema = closedObject({
+  /** The visible step this action belongs to; stale controls must not affect a newer step. */
+  stepId: NonEmptyString,
+});
+
 /**
  * OpenClaw chat lets clients (macOS app onboarding, future UIs) hold the
  * setup/repair conversation over the gateway. The gateway live-tests the
@@ -17,6 +22,8 @@ export const SystemAgentChatParamsSchema = closedObject({
   message: Type.Optional(Type.String()),
   /** Typed answer from a client rendering the current `WizardStep`. */
   wizardAnswer: Type.Optional(WizardAnswerSchema),
+  /** Direct client control for cancelling the currently rendered hosted wizard. */
+  wizardCancel: Type.Optional(SystemAgentWizardCancelSchema),
   /** Seeds a purpose-specific first greeting for a fresh conversation. */
   welcomeVariant: Type.Optional(
     Type.Union([Type.Literal("onboarding"), Type.Literal("new-agent")]),
@@ -158,7 +165,10 @@ export const SystemChangesListResultSchema = closedObject({
  * client can walk the ladder candidate-by-candidate without ever leaving a
  * broken default model behind.
  */
-export const SystemAgentSetupDetectParamsSchema = closedObject({});
+export const SystemAgentSetupDetectParamsSchema = closedObject({
+  /** Agent whose model, credentials, and workspace are being inspected. */
+  agentId: Type.Optional(NonEmptyString),
+});
 
 const ProviderAutoSetupInferenceKind = Type.TemplateLiteral("provider-auto:${string}", {
   pattern: "^provider-auto:.+$",
@@ -300,7 +310,10 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
 });
 
 /** Live verification of the Gateway's current default-agent inference route. */
-export const SystemAgentSetupVerifyParamsSchema = closedObject({});
+export const SystemAgentSetupVerifyParamsSchema = closedObject({
+  /** Agent whose configured inference route is being verified. */
+  agentId: Type.Optional(NonEmptyString),
+});
 
 export const SystemAgentSetupVerifyResultSchema = Type.Union([
   closedObject({
@@ -316,6 +329,8 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
 ]);
 
 export const SystemAgentSetupActivateParamsSchema = closedObject({
+  /** Agent that owns the verified and persisted inference route. */
+  agentId: Type.Optional(NonEmptyString),
   kind: Type.Union([
     Type.Literal("existing-model"),
     Type.Literal("openai-api-key"),
@@ -351,6 +366,8 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
 export const SystemAgentSetupAuthStartParamsSchema = closedObject({
   /** Client-generated so cancellation remains possible if the start reply is lost. */
   sessionId: NonEmptyString,
+  /** Agent that owns credentials and model selection created by this setup flow. */
+  agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
   workspace: Type.Optional(Type.String()),
 });
@@ -360,6 +377,7 @@ export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type SystemAgentChatParams = Static<typeof SystemAgentChatParamsSchema>;
+export type SystemAgentWizardCancel = Static<typeof SystemAgentWizardCancelSchema>;
 export type SystemAgentChatQuestion = Static<typeof SystemAgentChatQuestionSchema>;
 export type SystemAgentChatResult = Static<typeof SystemAgentChatResultSchema>;
 export type SystemAgentChatHistoryParams = Static<typeof SystemAgentChatHistoryParamsSchema>;

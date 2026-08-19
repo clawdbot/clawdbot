@@ -1,11 +1,20 @@
+import path from "node:path";
 import {
   createAssistantMessageEventStream,
   type Context,
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
-import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt.queue-message.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
   appendHistory,
@@ -30,8 +39,118 @@ import { SettingsManager } from "./settings-manager.js";
 import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 
 registerAgentSessionLoopTestLifecycle();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const completedCompactionEvent = (reason: "threshold" | "overflow", willRetry: boolean) =>
+  expect.objectContaining({
+    type: "compaction_end",
+    reason,
+    outcome: expect.objectContaining({ status: "completed", willRetry }),
+  });
 
 describe("AgentSession loop correctness", () => {
+  it("publishes a queued user message only after its transcript entry is committed", async () => {
+    const { session, sessionManager } = await createTestSession();
+    type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
+    const queuedMessages = (
+      session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
+    ).steeringQueue.messages;
+    const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
+      type: "message_start" | "message_end";
+      message: QueuedMessage;
+    }) => Promise<void>;
+    const observedPersistedMessages: boolean[] = [];
+    session.subscribe((event) => {
+      if (event.type === "message_end" && event.message.role === "user") {
+        observedPersistedMessages.push(
+          sessionManager
+            .getEntries()
+            .some(
+              (entry) =>
+                entry.type === "message" &&
+                entry.message.role === "user" &&
+                entry.message.timestamp === event.message.timestamp,
+            ),
+        );
+      }
+    });
+    const abortController = new AbortController();
+    const wait = steerActiveSessionWithOptionalDeliveryWait(session, "commit before receipt", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await vi.waitFor(() => expect(queuedMessages).toHaveLength(1));
+      const message = queuedMessages.shift();
+      expect(message).toBeDefined();
+      if (!message) {
+        return;
+      }
+      await handleAgentEvent({ type: "message_start", message });
+      await handleAgentEvent({ type: "message_end", message });
+      await expect(wait).resolves.toBeUndefined();
+
+      expect(observedPersistedMessages).toEqual([true]);
+    } finally {
+      abortController.abort();
+      await Promise.allSettled([wait]);
+    }
+  });
+
+  it("rejects a consumed steer immediately when its transcript append fails", async () => {
+    const { session, sessionManager } = await createTestSession();
+    type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
+    const queuedMessages = (
+      session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
+    ).steeringQueue.messages;
+    const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
+      type: "message_start" | "message_end";
+      message: QueuedMessage;
+    }) => Promise<void>;
+    const persistenceError = new Error("SQLite transcript append failed");
+    vi.spyOn(sessionManager, "appendMessage").mockImplementation(() => {
+      throw persistenceError;
+    });
+    const publishedUserMessages: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "message_end" && event.message.role === "user") {
+        publishedUserMessages.push(event.message);
+      }
+    });
+    let sourceConsumed = false;
+    const abortController = new AbortController();
+    const wait = steerActiveSessionWithOptionalDeliveryWait(session, "retain queued source", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      abortSignal: abortController.signal,
+    }).then(() => {
+      sourceConsumed = true;
+    });
+    const rejection = expect(wait).rejects.toBe(persistenceError);
+
+    try {
+      await vi.waitFor(() => expect(queuedMessages).toHaveLength(1));
+      const message = queuedMessages.shift();
+      expect(message).toBeDefined();
+      if (!message) {
+        return;
+      }
+      await handleAgentEvent({ type: "message_start", message });
+      await expect(handleAgentEvent({ type: "message_end", message })).rejects.toBe(
+        persistenceError,
+      );
+      await rejection;
+
+      expect(sourceConsumed).toBe(false);
+      expect(publishedUserMessages).toEqual([]);
+      expect(sessionManager.getEntries().filter((entry) => entry.type === "message")).toEqual([]);
+    } finally {
+      abortController.abort();
+      await Promise.allSettled([wait, rejection]);
+    }
+  });
+
   it.each([2, 3])(
     "confirms each of %i identical queued messages only after its own transcript commit",
     async (waiterCount) => {
@@ -257,6 +376,63 @@ describe("AgentSession loop correctness", () => {
     });
   });
 
+  it("does not append when a compaction extension rejects the finalized summary", async () => {
+    const dir = tempDirs.make("openclaw-rejected-compaction-");
+    const target = {
+      agentId: "main",
+      sessionId: "rejected-compaction-reopen",
+      sessionKey: "agent:main:rejected-compaction-reopen",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(target, {
+      cwd: dir,
+      message: { role: "user", content: "authoritative question", timestamp: 1 },
+    });
+    const sessionManager = SessionManager.open(target, dir);
+    sessionManager.appendMessage(
+      createAssistant(testModel, [{ type: "text", text: "authoritative answer" }]),
+    );
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["session_before_compact", [async () => ({ cancel: true })]],
+    ]);
+    const { session } = await createTestSession({
+      sessionManager,
+      resourceLoader: createResourceLoader(handlers),
+    });
+    const persistedBefore = await loadTranscriptEvents(target);
+    const contextBefore = sessionManager.buildSessionContext();
+
+    await expect(session.compact()).rejects.toThrow("Compaction cancelled");
+
+    sessionManager.flushPendingPersistence();
+    const persistedAfterRejection = await loadTranscriptEvents(target);
+    expect(JSON.stringify(persistedAfterRejection)).toBe(JSON.stringify(persistedBefore));
+    expect(
+      persistedAfterRejection.some(
+        (entry) =>
+          typeof entry === "object" &&
+          entry !== null &&
+          "type" in entry &&
+          entry.type === "compaction",
+      ),
+    ).toBe(false);
+
+    const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
+    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+    const reopened = SessionManager.open(target, dir);
+    try {
+      expect(reopened.getBranch()).toEqual(persistedBefore.slice(1));
+      expect(reopened.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+      expect(reopened.buildSessionContext()).toEqual(contextBefore);
+    } finally {
+      closeOpenClawAgentDatabaseByPath(databasePath);
+    }
+  });
+
   it("keeps a successful high-usage response and performs threshold maintenance without retry", async () => {
     const settingsManager = createAutoCompactionSettings();
     const compactionEvents: AgentSessionEvent[] = [];
@@ -284,9 +460,40 @@ describe("AgentSession loop correctness", () => {
         content: [{ type: "text", text: "complete answer" }],
       }),
     );
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("threshold", false));
+  });
+
+  it("surfaces threshold safeguard rejection without appending compaction state", async () => {
+    const settingsManager = createAutoCompactionSettings();
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["session_before_compact", [async () => ({ cancel: true })]],
+    ]);
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
     );
+    const { session, sessionManager } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(handlers),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({
+        type: "compaction_end",
+        reason: "threshold",
+        outcome: { status: "aborted" },
+      }),
+    );
+    expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
   });
 
   it("does not pre-prompt compact from usage before a zero unavailable marker", async () => {
@@ -408,9 +615,7 @@ describe("AgentSession loop correctness", () => {
     await session.prompt("finish now");
 
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
-    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("threshold", false));
   });
 
   it("compacts and retries a high-usage length-truncated response", async () => {
@@ -438,9 +643,7 @@ describe("AgentSession loop correctness", () => {
     await session.prompt("long request");
 
     expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "overflow", willRetry: true }),
-    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("overflow", true));
     expect(session.getLastAssistantText()).toBe("complete retry");
   });
 
@@ -482,9 +685,7 @@ describe("AgentSession loop correctness", () => {
     await session.prompt("long request");
 
     expect({ agentRequests, summaryRequests }).toEqual({ agentRequests: 2, summaryRequests: 2 });
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "overflow", willRetry: true }),
-    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("overflow", true));
     const compactionEntry = sessionManager.getBranch().find((entry) => entry.type === "compaction");
     expect(compactionEntry).toMatchObject({ type: "compaction", fromHook: false });
     expect(compactionEntry?.summary).toContain("recovered default summary");
@@ -569,9 +770,11 @@ describe("AgentSession loop correctness", () => {
       expect.objectContaining({
         type: "compaction_end",
         reason: "overflow",
-        willRetry: false,
-        errorMessage:
-          "Context overflow recovery failed: Turn prefix summarization failed: model returned no summary text",
+        outcome: {
+          status: "failed",
+          reason:
+            "Context overflow recovery failed: Turn prefix summarization failed: model returned no summary text",
+        },
       }),
     );
     expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
@@ -627,10 +830,8 @@ describe("AgentSession loop correctness", () => {
       expect(compactionEvents[0]).toMatchObject({
         type: "compaction_end",
         reason: "overflow",
-        aborted: true,
-        willRetry: false,
+        outcome: { status: "aborted" },
       });
-      expect(compactionEvents[0]?.errorMessage).toBeUndefined();
       expect(created.sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(
         false,
       );
@@ -670,9 +871,11 @@ describe("AgentSession loop correctness", () => {
       expect.objectContaining({
         type: "compaction_end",
         reason: "overflow",
-        willRetry: false,
-        errorMessage:
-          "Context overflow recovery failed: Turn prefix summarization failed: provider unavailable",
+        outcome: {
+          status: "failed",
+          reason:
+            "Context overflow recovery failed: Turn prefix summarization failed: provider unavailable",
+        },
       }),
     );
     expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
@@ -731,9 +934,7 @@ describe("AgentSession loop correctness", () => {
     await session.prompt("long request");
 
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
-    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("threshold", false));
   });
 
   it("delivers a pending prompt immediately after pre-prompt compaction", async () => {

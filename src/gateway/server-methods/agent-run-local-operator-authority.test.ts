@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  resetAgentRunRegistryForTest,
+} from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   resolveGatewayChatCronCreatorAuthorityAdmission,
@@ -7,6 +13,22 @@ import {
   type GatewayCronCreatorAuthorityAdmission,
 } from "./cron-creator-authority-admission.js";
 import type { GatewayClient } from "./shared-types.js";
+
+const agentRuntimeContext = createTestAdmittedRunContext("run-local-operator-runtime");
+const agentRuntimeAuthority = claimAgentRunDelegatedAuthority(
+  agentRuntimeContext.operationalRunInstance,
+);
+const agentRuntimeIdentity: AgentRuntimeIdentity = {
+  kind: "agentRuntime",
+  agentId: "main",
+  sessionKey: "agent:main:worker",
+  operationalRunInstance: agentRuntimeContext.operationalRunInstance,
+  delegatedAuthority: { kind: "local", ...agentRuntimeAuthority },
+};
+
+afterAll(() => {
+  resetAgentRunRegistryForTest();
+});
 
 function createClient(overrides: Partial<NonNullable<GatewayClient["internal"]>> = {}) {
   return {
@@ -61,6 +83,7 @@ describe("resolveGatewayCronCreatorAuthorityAdmission", () => {
   it("mints only for the admitted direct local admin turn", () => {
     expect(resolveGatewayCronCreatorAuthorityAdmission(createParams())).toEqual({
       runId: "run-local-operator",
+      callerOrigin: { kind: "local" },
     } satisfies GatewayCronCreatorAuthorityAdmission);
   });
 
@@ -85,6 +108,7 @@ describe("resolveGatewayCronCreatorAuthorityAdmission", () => {
     ["internal handoff", { request: { internalRuntimeHandoffId: "handoff-1" } }],
     ["model-run request", { request: { modelRun: true } }],
     ["identity retry", { request: { internalExecutionIdentityRetry: true } }],
+    ["identity recovery attempt", { request: { internalExecutionIdentityRecoveryAttempt: 1 } }],
     ["exec approval followup", { request: { execApprovalFollowupExpectedSessionId: "session-1" } }],
     ["internal session effects", { request: { sessionEffects: "internal" } }],
     ["suppressed prompt persistence", { request: { suppressPromptPersistence: true } }],
@@ -107,11 +131,7 @@ describe("resolveGatewayCronCreatorAuthorityAdmission", () => {
       "worker runtime",
       {
         client: createClient({
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "agent:main:worker",
-          },
+          agentRuntimeIdentity,
         }),
       },
     ],
@@ -146,6 +166,7 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
   it("mints only for a direct external local-admin user turn", () => {
     expect(resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams())).toEqual({
       runId: "run-local-chat",
+      callerOrigin: { kind: "local" },
     });
   });
 
@@ -172,11 +193,7 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
       "worker runtime",
       {
         client: createClient({
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "agent:main:worker",
-          },
+          agentRuntimeIdentity,
         }),
       },
     ],

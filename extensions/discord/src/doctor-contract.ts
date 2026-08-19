@@ -4,10 +4,12 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// The narrow activation subpath avoids realtime-voice's agent-consult/session
+// graph, which doctor enumeration must not cold-load.
 import {
   isSupportedRealtimeVoiceActivationName,
   normalizeRealtimeVoiceActivationNamePrefix,
-} from "openclaw/plugin-sdk/realtime-voice";
+} from "openclaw/plugin-sdk/realtime-voice-activation";
 import {
   asObjectRecord,
   defineChannelAliasMigration,

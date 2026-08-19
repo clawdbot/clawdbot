@@ -1,9 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Defines secret reference and resolution configuration types.
-import { isRecord } from "../utils.js";
 
 /** Supported secret reference backends in config. */
-export type SecretRefSource = "env" | "file" | "exec"; // pragma: allowlist secret
+export type SecretRefSource = "env" | "file" | "exec" | "store"; // pragma: allowlist secret
 
 /**
  * Stable identifier for a secret in a configured source.
@@ -11,6 +12,7 @@ export type SecretRefSource = "env" | "file" | "exec"; // pragma: allowlist secr
  * - env source: provider "default", id "OPENAI_API_KEY"
  * - file source: provider "mounted-json", id "/providers/openai/apiKey"
  * - exec source: provider "vault", id "openai/api-key"
+ * - store source: provider "default", id "OPENAI_API_KEY"
  */
 export type SecretRef = {
   source: SecretRefSource;
@@ -44,6 +46,8 @@ type SecretDefaults = {
   file?: string;
   /** Default provider alias for exec SecretRefs. */
   exec?: string;
+  /** Default provider alias for shared-store SecretRefs. */
+  store?: string;
 };
 
 /** Return whether an env SecretRef id is a supported uppercase environment variable name. */
@@ -60,7 +64,10 @@ export function isSecretRef(value: unknown): value is SecretRef {
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec" ||
+      value.source === "store") &&
     typeof value.provider === "string" &&
     value.provider.trim().length > 0 &&
     typeof value.id === "string" &&
@@ -75,7 +82,10 @@ function isLegacySecretRefWithoutProvider(
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec" ||
+      value.source === "store") &&
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
     value.provider === undefined
@@ -171,12 +181,7 @@ export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): Secr
     return value;
   }
   if (isLegacySecretRefWithoutProvider(value)) {
-    const provider =
-      value.source === "env"
-        ? (defaults?.env ?? DEFAULT_SECRET_PROVIDER_ALIAS)
-        : value.source === "file"
-          ? (defaults?.file ?? DEFAULT_SECRET_PROVIDER_ALIAS)
-          : (defaults?.exec ?? DEFAULT_SECRET_PROVIDER_ALIAS);
+    const provider = defaults?.[value.source] ?? DEFAULT_SECRET_PROVIDER_ALIAS;
     return {
       source: value.source,
       provider,
@@ -200,11 +205,7 @@ export function hasConfiguredSecretInput(value: unknown, defaults?: SecretDefaul
 
 /** Trim a literal secret input string while leaving non-string inputs unresolved. */
 export function normalizeSecretInputString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function formatSecretRefLabel(ref: SecretRef): string {
@@ -369,16 +370,26 @@ export type ExecSecretProviderConfig =
   | ManualExecSecretProviderConfig
   | PluginIntegrationSecretProviderConfig;
 
+export type StoreSecretProviderConfig = {
+  source: "store";
+};
+
 export type SecretProviderConfig =
   | EnvSecretProviderConfig
   | FileSecretProviderConfig
-  | ExecSecretProviderConfig;
+  | ExecSecretProviderConfig
+  | StoreSecretProviderConfig;
 
 export type SecretsConfig = {
+  egressProxy?: {
+    enabled?: boolean;
+    bypassHosts?: string[];
+  };
   providers?: Record<string, SecretProviderConfig>;
   defaults?: {
     env?: string;
     file?: string;
     exec?: string;
+    store?: string;
   };
 };

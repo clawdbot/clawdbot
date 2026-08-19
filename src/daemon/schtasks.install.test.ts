@@ -418,6 +418,20 @@ describe("installScheduledTask", () => {
     });
   });
 
+  it("preserves task scripts when Scheduled Task deletion fails", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, okSchtasksResponse, accessDeniedResponse);
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\n", "utf8");
+
+      await expect(uninstallScheduledTask({ env, stdout: new PassThrough() })).rejects.toThrow(
+        "schtasks delete failed: ERROR: Access is denied.",
+      );
+      await expect(fs.access(scriptPath)).resolves.toBeUndefined();
+    });
+  });
+
   it("creates the Scheduled Task via XML with battery start/continue enabled (#59299)", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       schtasksResponses.push(okSchtasksResponse, missingTaskResponse);

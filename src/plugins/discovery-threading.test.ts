@@ -13,7 +13,7 @@ vi.mock("./discovery.js", async (importOriginal) => {
   };
 });
 
-const { loadPluginManifestRegistry } = await import("./manifest-registry.js");
+const { loadPluginManifestRegistryCore } = await import("./manifest-registry.js");
 const { loadInstalledPluginIndexWithDiscovery } = await import("./installed-plugin-index.js");
 
 const emptyDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
@@ -25,7 +25,7 @@ describe("discovery threading", () => {
   });
 
   it("skips internal discoverOpenClawPlugins when discovery is supplied", () => {
-    loadPluginManifestRegistry({ discovery: emptyDiscovery });
+    loadPluginManifestRegistryCore({ discovery: emptyDiscovery });
     expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
 
     discoverOpenClawPluginsMock.mockClear();
@@ -34,7 +34,7 @@ describe("discovery threading", () => {
   });
 
   it("calls discoverOpenClawPlugins when neither discovery nor candidates supplied", () => {
-    loadPluginManifestRegistry({});
+    loadPluginManifestRegistryCore({});
     expect(discoverOpenClawPluginsMock).toHaveBeenCalledTimes(1);
 
     discoverOpenClawPluginsMock.mockClear();
@@ -43,7 +43,7 @@ describe("discovery threading", () => {
   });
 
   it("prefers explicit candidates over discovery when both are supplied", () => {
-    loadPluginManifestRegistry({ candidates: [], diagnostics: [], discovery: emptyDiscovery });
+    loadPluginManifestRegistryCore({ candidates: [], diagnostics: [], discovery: emptyDiscovery });
     expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
 
     discoverOpenClawPluginsMock.mockClear();

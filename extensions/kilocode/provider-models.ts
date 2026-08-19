@@ -196,10 +196,6 @@ function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[
 }
 
 export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
-  if (process.env.NODE_ENV === "test" || process.env.VITEST) {
-    return buildStaticCatalog();
-  }
-
   const provider = await buildLiveModelProviderConfig({
     providerId: "kilocode",
     endpoint: KILOCODE_MODELS_URL,

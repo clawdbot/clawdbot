@@ -22,6 +22,7 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import {
   resolveAgentWorkspaceDir,
@@ -29,12 +30,13 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   MODELS_JSON_STATE,
   type ModelsJsonReadyResult,
   type ModelsJsonReadyState,
 } from "./models-config-state.js";
-import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./models-config.plan.js";
 import { repairPluginModelCatalogTransportMetadata } from "./plugin-model-catalog-repair.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
@@ -64,6 +66,11 @@ type EnsureOpenClawModelsJsonOptions = {
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+};
+
+type PlanOpenClawModelsJsonSourceOptions = EnsureOpenClawModelsJsonOptions & {
+  authStore?: AuthProfileStore;
 };
 
 type PlannedOpenClawModelsJsonSource = Readonly<{
@@ -91,47 +98,35 @@ async function readFileMtimeMs(pathname: string): Promise<number | null> {
   }
 }
 
-async function buildModelsJsonFingerprint(params: {
-  config: OpenClawConfig;
-  discoveryAuthConfig: OpenClawConfig;
-  sourceConfigForSecrets: OpenClawConfig;
-  agentDir: string;
-  workspaceDir?: string;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "pluginIds">;
-  providerDiscoveryProviderIds?: readonly string[];
-  providerDiscoveryTimeoutMs?: number;
-  providerDiscoveryEntriesOnly?: boolean;
-  env?: NodeJS.ProcessEnv;
-}): Promise<string> {
-  const authProfilesSqlitePath = resolveAuthProfileDatabasePath(params.agentDir);
+async function buildModelsJsonFingerprint(context: PreparedModelsConfigContext): Promise<string> {
+  const authProfilesSqlitePath = resolveAuthProfileDatabasePath(context.agentDir);
   const authProfilesMtimeMs = await readFileMtimeMs(authProfilesSqlitePath);
   const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
-  const modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));
+  const modelsFileMtimeMs = await readFileMtimeMs(path.join(context.agentDir, "models.json"));
   const pluginCatalogFingerprint = createHash("sha256")
-    .update(stableStringify(listPreparedPluginModelCatalogs(params.agentDir)))
+    .update(stableStringify(listPreparedPluginModelCatalogs(context.agentDir)))
     .digest("base64url");
-  const envShape = createConfigRuntimeEnv(params.config, params.env ?? {});
-  const pluginMetadataSnapshotIndexFingerprint = params.pluginMetadataSnapshot
-    ? resolveInstalledManifestRegistryIndexFingerprint(params.pluginMetadataSnapshot.index)
+  const pluginMetadataSnapshotIndexFingerprint = context.pluginMetadataSnapshot
+    ? resolveInstalledManifestRegistryIndexFingerprint(context.pluginMetadataSnapshot.index)
     : undefined;
   return stableStringify({
-    config: params.config,
-    discoveryAuthConfigHash: hashRuntimeConfigValue(params.discoveryAuthConfig),
-    sourceConfigForSecrets: params.sourceConfigForSecrets,
-    envShape: params.env ? hashRuntimeConfigValue(envShape) : envShape,
+    config: context.cfg,
+    discoveryAuthConfigHash: hashRuntimeConfigValue(context.discoveryAuthConfig),
+    sourceConfigForSecrets: context.sourceConfigForSecrets,
+    envShape: context.envFingerprint,
     authProfilesMtimeMs,
     authProfilesWalMtimeMs,
     modelsFileMtimeMs,
     pluginCatalogFingerprint,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: context.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
     pluginMetadataSnapshotPluginIds:
-      params.pluginMetadataSnapshot?.pluginIds === undefined
+      context.pluginMetadataSnapshot?.pluginIds === undefined
         ? null
-        : params.pluginMetadataSnapshot.pluginIds.toSorted(),
-    providerDiscoveryProviderIds: params.providerDiscoveryProviderIds,
-    providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs,
-    providerDiscoveryEntriesOnly: params.providerDiscoveryEntriesOnly === true,
+        : context.pluginMetadataSnapshot.pluginIds.toSorted(),
+    providerDiscoveryProviderIds: context.providerDiscoveryProviderIds,
+    providerDiscoveryTimeoutMs: context.providerDiscoveryTimeoutMs,
+    providerDiscoveryEntriesOnly: context.providerDiscoveryEntriesOnly === true,
   });
 }
 
@@ -290,44 +285,42 @@ function resolveModelsConfigInput(config?: OpenClawConfig): {
   };
 }
 
-/** Builds the canonical source freshness fingerprint for generated model catalogs. */
-async function buildModelsJsonSourceFingerprint(
+function prepareModelsConfigContext(
   config?: OpenClawConfig,
   agentDirOverride?: string,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    pluginMetadataSnapshot?: ModelsConfigPluginMetadataSnapshot;
-    workspaceDir?: string;
-    providerDiscoveryProviderIds?: readonly string[];
-    providerDiscoveryTimeoutMs?: number;
-    providerDiscoveryEntriesOnly?: boolean;
-  } = {},
-): Promise<{ agentDir: string; fingerprint: string; workspaceDir?: string }> {
+  options: EnsureOpenClawModelsJsonOptions = {},
+): PreparedModelsConfigContext {
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
+  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
   const workspaceDir =
     options.workspaceDir ??
     (agentDirOverride?.trim()
       ? undefined
       : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+  const fingerprintEnv = createConfigRuntimeEnv(cfg, options.env ?? {});
+  const env = options.env ? fingerprintEnv : createConfigRuntimeEnv(cfg);
   const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);
   const pluginMetadataSnapshot =
     options.pluginMetadataSnapshot ??
     resolvePluginMetadataSnapshot({
       config: cfg,
-      env: createConfigRuntimeEnv(cfg, options.env),
+      env,
       ...(workspaceDir ? { workspaceDir } : {}),
       ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
     });
-  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
-  const fingerprint = await buildModelsJsonFingerprint({
-    config: cfg,
+  return {
+    cfg,
     discoveryAuthConfig: resolved.discoveryAuthConfig,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
+    env,
+    envFingerprint: options.env ? hashRuntimeConfigValue(fingerprintEnv) : fingerprintEnv,
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    ...(options.env ? { env: options.env } : {}),
+    ...(options.preparedStaticProviderCatalog
+      ? { preparedStaticProviderCatalog: options.preparedStaticProviderCatalog }
+      : {}),
     ...(options.providerDiscoveryProviderIds
       ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
       : {}),
@@ -337,11 +330,9 @@ async function buildModelsJsonSourceFingerprint(
     ...(options.providerDiscoveryEntriesOnly === true
       ? { providerDiscoveryEntriesOnly: true }
       : {}),
-  });
-  return {
-    agentDir,
-    fingerprint,
-    ...(workspaceDir ? { workspaceDir } : {}),
+    ...(options.onProviderCatalogOutcome
+      ? { onProviderCatalogOutcome: options.onProviderCatalogOutcome }
+      : {}),
   };
 }
 
@@ -355,28 +346,13 @@ async function prepareOpenClawModelsJsonSource(
   agentDirOverride?: string,
   options: EnsureOpenClawModelsJsonOptions = {},
 ): Promise<PreparedOpenClawModelsJsonSource> {
-  const resolved = resolveModelsConfigInput(config);
-  const cfg = resolved.config;
-  const sourceFingerprint = await buildModelsJsonSourceFingerprint(
-    config,
-    agentDirOverride,
-    options,
-  );
-  const workspaceDir = sourceFingerprint.workspaceDir;
-  const pluginMetadataSnapshot =
-    options.pluginMetadataSnapshot ??
-    resolvePluginMetadataSnapshot({
-      config: cfg,
-      env: createConfigRuntimeEnv(cfg, options.env),
-      ...(workspaceDir ? { workspaceDir } : {}),
-      ...(options.providerDiscoveryProviderIds?.length ? { preferPersisted: false } : {}),
-    });
-  const agentDir = sourceFingerprint.agentDir;
+  const context = prepareModelsConfigContext(config, agentDirOverride, options);
+  const { agentDir, pluginMetadataSnapshot, workspaceDir } = context;
   const targetPath = path.join(agentDir, "models.json");
-  const fingerprint = sourceFingerprint.fingerprint;
+  const fingerprint = await buildModelsJsonFingerprint(context);
   const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
   const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
-  if (cached) {
+  if (cached && !options.onProviderCatalogOutcome) {
     const settled = await cached;
     await ensureModelsFileModeForModelsJson(targetPath);
     return {
@@ -389,7 +365,6 @@ async function prepareOpenClawModelsJsonSource(
   const pending: Promise<ModelsJsonReadyState> = withModelsJsonWriteLock(targetPath, async () => {
     // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
     // are available to provider discovery without mutating process.env.
-    const env = createConfigRuntimeEnv(cfg, options.env);
     const existingModelsFile = await readExistingModelsFile(targetPath);
     const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
       agentDir,
@@ -397,27 +372,9 @@ async function prepareOpenClawModelsJsonSource(
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     });
     const plan = await planOpenClawModelsJson({
-      cfg,
-      discoveryAuthConfig: resolved.discoveryAuthConfig,
-      sourceConfigForSecrets: resolved.sourceConfigForSecrets,
-      agentDir,
-      env,
-      ...(workspaceDir ? { workspaceDir } : {}),
+      context,
       existingRaw: existingModelsFile.raw,
       existingParsed: existingParsedForMerge,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-      ...(options.preparedStaticProviderCatalog
-        ? { preparedStaticProviderCatalog: options.preparedStaticProviderCatalog }
-        : {}),
-      ...(options.providerDiscoveryProviderIds
-        ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
-        : {}),
-      ...(options.providerDiscoveryTimeoutMs !== undefined
-        ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
-        : {}),
-      ...(options.providerDiscoveryEntriesOnly === true
-        ? { providerDiscoveryEntriesOnly: true }
-        : {}),
     });
 
     if (plan.action === "skip") {
@@ -453,24 +410,7 @@ async function prepareOpenClawModelsJsonSource(
   MODELS_JSON_STATE.readyCache.set(cacheKey, pending);
   try {
     const settled = await pending;
-    const refreshedFingerprint = await buildModelsJsonFingerprint({
-      config: cfg,
-      discoveryAuthConfig: resolved.discoveryAuthConfig,
-      sourceConfigForSecrets: resolved.sourceConfigForSecrets,
-      agentDir,
-      ...(workspaceDir ? { workspaceDir } : {}),
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.providerDiscoveryProviderIds
-        ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
-        : {}),
-      ...(options.providerDiscoveryTimeoutMs !== undefined
-        ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
-        : {}),
-      ...(options.providerDiscoveryEntriesOnly === true
-        ? { providerDiscoveryEntriesOnly: true }
-        : {}),
-    });
+    const refreshedFingerprint = await buildModelsJsonFingerprint(context);
     const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);
     if (refreshedCacheKey !== cacheKey) {
       MODELS_JSON_STATE.readyCache.delete(cacheKey);
@@ -499,25 +439,10 @@ async function prepareOpenClawModelsJsonSource(
 export async function planOpenClawModelsJsonSource(
   config?: OpenClawConfig,
   agentDirOverride?: string,
-  options: EnsureOpenClawModelsJsonOptions = {},
+  options: PlanOpenClawModelsJsonSourceOptions = {},
 ): Promise<PlannedOpenClawModelsJsonSource> {
-  const resolved = resolveModelsConfigInput(config);
-  const cfg = resolved.config;
-  const workspaceDir =
-    options.workspaceDir ??
-    (agentDirOverride?.trim()
-      ? undefined
-      : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
-  const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);
-  const pluginMetadataSnapshot =
-    options.pluginMetadataSnapshot ??
-    resolvePluginMetadataSnapshot({
-      config: cfg,
-      env: createConfigRuntimeEnv(cfg, options.env),
-      ...(workspaceDir ? { workspaceDir } : {}),
-      ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
-    });
-  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
+  const context = prepareModelsConfigContext(config, agentDirOverride, options);
+  const { agentDir, pluginMetadataSnapshot } = context;
   const existingModelsFile = await readExistingModelsFile(path.join(agentDir, "models.json"));
   const existingPluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(agentDir);
   const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
@@ -526,29 +451,11 @@ export async function planOpenClawModelsJsonSource(
     pluginCatalogs: existingPluginCatalogs,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   });
-  const env = createConfigRuntimeEnv(cfg, options.env);
   const plan = await planOpenClawModelsJson({
-    cfg,
-    discoveryAuthConfig: resolved.discoveryAuthConfig,
-    sourceConfigForSecrets: resolved.sourceConfigForSecrets,
-    agentDir,
-    env,
-    ...(workspaceDir ? { workspaceDir } : {}),
+    context,
+    ...(options.authStore ? { authStore: options.authStore } : {}),
     existingRaw: existingModelsFile.raw,
     existingParsed: existingParsedForMerge,
-    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    ...(options.preparedStaticProviderCatalog
-      ? { preparedStaticProviderCatalog: options.preparedStaticProviderCatalog }
-      : {}),
-    ...(options.providerDiscoveryProviderIds
-      ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
-      : {}),
-    ...(options.providerDiscoveryTimeoutMs !== undefined
-      ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
-      : {}),
-    ...(options.providerDiscoveryEntriesOnly === true
-      ? { providerDiscoveryEntriesOnly: true }
-      : {}),
   });
   return {
     agentDir,

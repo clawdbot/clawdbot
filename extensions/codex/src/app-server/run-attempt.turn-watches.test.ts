@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { describe, expect, it, vi } from "vitest";
+import * as approvalBridge from "./approval-bridge.js";
 import { buildCodexAppServerPromptTimeoutOutcome } from "./attempt-results.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -305,6 +306,7 @@ describe("createCodexAttemptTurnWatchController", () => {
       isCompleted: () => false,
       isTerminalTurnNotificationQueued: () => false,
       getActiveAppServerTurnRequests: () => 0,
+      getActiveAppServerTurnRequestsWithoutTimeout: () => 0,
       getActiveTurnItemCount: () => 0,
       getActiveCompletionBlockerItemCount: () => 0,
       getActiveFinalizationHookCount: () => 0,
@@ -713,7 +715,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       assistantText: "Finished.",
       activeCount: 1,
       completedCount: 1,
-      timeoutKind: "progress",
+      timeoutKind: "terminal",
       replayBlockedReason: "potential_side_effect",
     },
     {
@@ -1091,6 +1093,16 @@ describe("runCodexAppServerAttempt turn watches", () => {
       turnTerminalIdleTimeoutMs: 1_000,
     });
     await harness.waitForMethod("turn/start");
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "mcp-hung",
+        type: "mcpToolCall",
+        server: "server-1",
+        tool: "approval-gated-tool",
+        status: "inProgress",
+        arguments: {},
+      }),
+    );
 
     const response = harness.handleServerRequest({
       id: "request-pending-elicitation",
@@ -1140,6 +1152,135 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     const result = await run;
     expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
+  });
+
+  it("times out a hung elicitation at the attempt-progress deadline", async () => {
+    const harness = createStartedThreadHarness();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    let requestAborted = false;
+    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockImplementation(
+      async ({ signal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              requestAborted = true;
+              reject(new Error("elicitation aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const params = makeTestParams({ timeoutMs: 100 });
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 500,
+      turnAssistantCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+
+    const response = harness.handleServerRequest({
+      id: "request-hung-elicitation",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        mode: "form",
+        message: "Approve?",
+        requestedSchema: { type: "object", properties: {} },
+        serverName: "server-1",
+        _meta: null,
+      },
+    });
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: "request:mcpServer/elicitation/request:start",
+          }),
+        ),
+      fastWait,
+    );
+
+    const result = await run;
+    await expect(response).rejects.toThrow("elicitation aborted");
+    expectTimedOutAttempt(result);
+    expect(requestAborted).toBe(true);
+    const warnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+    );
+    expect(warnCall?.[1]).toMatchObject({
+      timeoutMs: 100,
+      lastActivityReason: "request:mcpServer/elicitation/request:start",
+    });
+  });
+
+  it("keeps turn request activity active until command approval resolves", async () => {
+    const harness = createStartedThreadHarness();
+    const approvalResponse = { decision: "accept" } as const;
+    let resolveApproval!: (value: typeof approvalResponse) => void;
+    const approval = new Promise<typeof approvalResponse>((resolve) => {
+      resolveApproval = resolve;
+    });
+    vi.spyOn(approvalBridge, "handleCodexAppServerApprovalRequest").mockImplementation(
+      async () => await approval,
+    );
+    const params = makeTestParams({ timeoutMs: 500 });
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 1_000,
+      turnAssistantCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 1_000,
+    });
+    await harness.waitForMethod("turn/start");
+
+    const response = harness.handleServerRequest({
+      id: "request-pending-approval",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "command-1",
+        command: "echo approved",
+        cwd: "/workspace",
+      },
+    });
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: "request:item/commandExecution/requestApproval:start",
+          }),
+        ),
+      fastWait,
+    );
+    expect(
+      onRunProgress.mock.calls.some(
+        ([event]) =>
+          (event as { reason?: string }).reason ===
+          "request:item/commandExecution/requestApproval:response",
+      ),
+    ).toBe(false);
+
+    resolveApproval(approvalResponse);
+    await expect(response).resolves.toEqual(approvalResponse);
+    expect(onRunProgress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "request:item/commandExecution/requestApproval:response",
+      }),
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    expect(readAttemptTerminal(await run)).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -1225,21 +1366,20 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
   });
 
-  it("counts pending secret user input requests as turn attempt progress", async () => {
-    // `item/tool/requestUserInput` records attempt progress but never suppresses
-    // the attempt watch while pending, so this proves the turn outlives the
+  it("keeps secret user input request activity active until the answer arrives", async () => {
+    // Pending user input must keep the active request open and outlive the
     // deadline `turn:start` alone would have set. That needs
     // preRequestIdleMs + pendingHoldMs > attemptIdleTimeoutMs > pendingHoldMs;
     // both bounds are asserted below so load can never make it vacuous.
-    // The two request resets in run-attempt-server-requests.ts land ~20ms apart
-    // (`finally` runs at `return`, not when the bridge promise settles), so this
-    // cannot attribute survival to `:start` over `:response` — it guards the
-    // pair. Mutating either one alone still passes; mutating both fails.
     const attemptIdleTimeoutMs = 1_000;
     const preRequestIdleMs = 500;
     const pendingHoldMs = 700;
     const harness = createStartedThreadHarness();
-    const params = makeTestParams({ timeoutMs: attemptIdleTimeoutMs });
+    const toolAuthorityFingerprint = "turn-watch-secret-input-authority";
+    const params = makeTestParams({
+      timeoutMs: attemptIdleTimeoutMs,
+      toolAuthorityFingerprint,
+    });
     params.onBlockReply = vi.fn();
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
@@ -1271,6 +1411,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "input-1",
+        isBlocking: true,
         questions: [
           {
             id: "mode",
@@ -1300,10 +1441,24 @@ describe("runCodexAppServerAttempt turn watches", () => {
     // Lower bound: the turn has now outlived the deadline turn:start alone set,
     // so surviving proves the pending request moved it.
     expect(Date.now() - turnObservedAt).toBeGreaterThan(attemptIdleTimeoutMs);
-    expect(queueActiveRunMessageForTest("session-1", "2")).toBe(true);
+    expect(
+      onRunProgress.mock.calls.some(
+        ([event]) =>
+          (event as { reason?: string }).reason === "request:item/tool/requestUserInput:response",
+      ),
+    ).toBe(false);
+    expect(
+      queueActiveRunMessageForTest("session-1", "2", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });
+    expect(onRunProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "request:item/tool/requestUserInput:response" }),
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
     const result = await run;

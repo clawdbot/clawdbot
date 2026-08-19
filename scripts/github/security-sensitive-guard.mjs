@@ -13,8 +13,10 @@ import {
   guardCommentHeadSha,
   guardTrustedActorCandidates,
   isCommentNewerThan,
+  normalizeGuardLoginSet,
   readBoundedGitHubErrorText,
   readBoundedGitHubJson,
+  sanitizeGuardDisplayValue,
 } from "./guard-shared.mjs";
 
 /** Marker used to identify security-sensitive guard comments. */
@@ -39,6 +41,16 @@ const securitySensitiveFiles = [
   },
 ];
 
+/**
+ * @typedef {{
+ *   body?: string,
+ *   created_at?: string,
+ *   html_url?: string,
+ *   user?: { login?: string },
+ * }} GuardComment
+ * @typedef {{ login: string, source: string }} GuardActorCandidate
+ */
+
 export function securitySensitiveFileDefinitions() {
   return securitySensitiveFiles.map((entry) => ({ ...entry }));
 }
@@ -51,14 +63,8 @@ export function isSecuritySensitiveFile(filename) {
   return securitySensitiveFileDefinition(filename) !== null;
 }
 
-export function sanitizeDisplayValue(value) {
-  return String(value)
-    .replace(/[\p{Cc}]/gu, "?")
-    .slice(0, 240);
-}
-
 export function markdownCode(value) {
-  return `\`${sanitizeDisplayValue(value).replaceAll("`", "\\`")}\``;
+  return `\`${sanitizeGuardDisplayValue(value).replaceAll("`", "\\`")}\``;
 }
 
 function* securitySensitiveOverrideCandidates({ comments, expectedSha, newerThan }) {
@@ -76,7 +82,7 @@ function* securitySensitiveOverrideCandidates({ comments, expectedSha, newerThan
       }
       yield {
         login,
-        reason: reason ? sanitizeDisplayValue(reason) : null,
+        reason: reason ? sanitizeGuardDisplayValue(reason) : null,
         sha: expectedSha,
         url: comment.html_url,
       };
@@ -84,6 +90,14 @@ function* securitySensitiveOverrideCandidates({ comments, expectedSha, newerThan
   }
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => boolean,
+ *   newerThan?: string,
+ * }} options
+ */
 export function findSecuritySensitiveOverrideCommand({
   comments,
   expectedSha,
@@ -102,6 +116,14 @@ export function findSecuritySensitiveOverrideCommand({
   return null;
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => Promise<boolean>,
+ *   newerThan?: string,
+ * }} input
+ */
 export async function findSecuritySensitiveOverrideCommandAsync(input) {
   for (const candidate of securitySensitiveOverrideCandidates(input)) {
     if (await input.isSecurityMember(candidate.login)) {
@@ -143,22 +165,8 @@ export function isSecuritySensitiveGuardTrustedForHead(comment, currentHeadSha) 
   );
 }
 
-export function securityApproverSet(value) {
-  return new Set(
-    String(value ?? "")
-      .split(/[\s,]+/u)
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
-}
-
 export function securitySensitiveGuardCommentAuthors(value) {
-  return new Set(
-    String(value ?? "github-actions[bot]")
-      .split(/[\s,]+/u)
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  return normalizeGuardLoginSet(value, "github-actions[bot]");
 }
 
 export function isSecuritySensitiveGuardMarkerComment(comment, trustedAuthors) {
@@ -200,7 +208,7 @@ function renderChangedFileLines(changes) {
   const listedFiles = changes.slice(0, maxListedFiles);
   const omittedCount = changes.length - listedFiles.length;
   const lines = listedFiles.map(
-    (change) => `- ${markdownCode(change.path)}: ${sanitizeDisplayValue(change.reason)}`,
+    (change) => `- ${markdownCode(change.path)}: ${sanitizeGuardDisplayValue(change.reason)}`,
   );
   if (omittedCount > 0) {
     lines.push(`- ${omittedCount} additional security-sensitive files not shown`);
@@ -235,7 +243,7 @@ export function renderAuthorizedSecuritySensitiveComment(override) {
     "This PR includes security-sensitive file changes. A repository admin or member of `@openclaw/openclaw-secops` authorized this exact head SHA with `/allow-security-sensitive-change`.",
     "",
     `- Approved SHA: ${markdownCode(override.sha)}`,
-    `- Approved by: @${sanitizeDisplayValue(override.login)}`,
+    `- Approved by: @${sanitizeGuardDisplayValue(override.login)}`,
   ];
   if (override.reason) {
     lines.push(`- Reason: ${markdownCode(override.reason)}`);
@@ -253,7 +261,7 @@ export function renderTrustedSecuritySensitiveComment({ actor, headSha, changes 
     "This PR includes security-sensitive file changes. The guard is informational because the PR author is a repository admin or a member of `@openclaw/openclaw-secops`.",
     "",
     `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
-    `- Trusted actor: @${sanitizeDisplayValue(actor.login)}`,
+    `- Trusted actor: @${sanitizeGuardDisplayValue(actor.login)}`,
     `- Trusted role: ${markdownCode(actor.reason)}`,
     "",
     "Changed files:",
@@ -304,6 +312,12 @@ export function securitySensitiveGuardTrustedActorCandidates({
   return guardTrustedActorCandidates({ pullRequest, event, currentHeadSha });
 }
 
+/**
+ * @param {{
+ *   candidates: GuardActorCandidate[],
+ *   isSecuritySensitiveApprover: (login: string) => Promise<string | null>,
+ * }} options
+ */
 export async function findTrustedSecuritySensitiveGuardActor({
   candidates,
   isSecuritySensitiveApprover,
@@ -318,13 +332,6 @@ export async function findTrustedSecuritySensitiveGuardActor({
     }
   }
   return null;
-}
-
-export function githubApi(token, options = {}) {
-  return createGitHubApi(token, {
-    ...options,
-    userAgent: "openclaw-security-sensitive-guard",
-  });
 }
 
 async function writeSummary(markdown) {
@@ -351,8 +358,8 @@ async function main() {
     return;
   }
 
-  const api = githubApi(token);
-  const explicitSecurityApprovers = securityApproverSet(process.env.OPENCLAW_SECURITY_APPROVERS);
+  const api = createGitHubApi(token, { userAgent: "openclaw-security-sensitive-guard" });
+  const explicitSecurityApprovers = normalizeGuardLoginSet(process.env.OPENCLAW_SECURITY_APPROVERS);
   const trustedCommentAuthors = securitySensitiveGuardCommentAuthors(
     process.env.OPENCLAW_SECURITY_SENSITIVE_GUARD_COMMENT_BOTS,
   );
@@ -456,7 +463,7 @@ async function main() {
       [
         "## Security Sensitive Guard",
         "",
-        `Security-sensitive changes noted for trusted actor @${sanitizeDisplayValue(trustedActor.login)} and allowed to continue.`,
+        `Security-sensitive changes noted for trusted actor @${sanitizeGuardDisplayValue(trustedActor.login)} and allowed to continue.`,
       ].join("\n"),
     );
     console.log("Security-sensitive changes noted for trusted actor; guard is informational.");
@@ -485,7 +492,7 @@ async function main() {
       [
         "## Security Sensitive Guard",
         "",
-        `Security-sensitive changes authorized by @${sanitizeDisplayValue(override.login)} for ${markdownCode(override.sha)}.`,
+        `Security-sensitive changes authorized by @${sanitizeGuardDisplayValue(override.login)} for ${markdownCode(override.sha)}.`,
       ].join("\n"),
     );
     console.log("Security-sensitive changes authorized by trusted override.");

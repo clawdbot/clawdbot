@@ -13,12 +13,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import {
-  mergeSsrFPolicies,
-  SsrFBlockedError,
-  type LookupFn,
-  type SsrFPolicy,
-} from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
@@ -36,14 +31,14 @@ import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
   scheduleToolProgress,
 } from "./common.js";
 import {
   extractBasicHtmlContent,
   htmlToMarkdown,
   markdownToText,
-  truncateText,
+  truncateWebFetchText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
 import {
@@ -337,7 +332,7 @@ function formatWebFetchErrorDetail(params: {
     const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
     text = markdownToText(withTitle);
   }
-  const truncated = truncateText(text.trim(), maxChars);
+  const truncated = truncateWebFetchText(text.trim(), maxChars);
   return truncated.text;
 }
 
@@ -404,7 +399,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
     const minimal = includeWarning
       ? wrapWebContent("", "web_fetch")
       : wrapExternalContent("", { source: "web_fetch", includeWarning: false });
-    const truncatedWrapper = truncateText(minimal, maxChars);
+    const truncatedWrapper = truncateWebFetchText(minimal, maxChars);
     return {
       text: truncatedWrapper.text,
       truncated: true,
@@ -413,7 +408,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
     };
   }
   const maxInner = Math.max(0, maxChars - wrapperOverhead);
-  let truncated = truncateText(value, maxInner);
+  let truncated = truncateWebFetchText(value, maxInner);
   let wrappedText = includeWarning
     ? wrapWebContent(truncated.text, "web_fetch")
     : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
@@ -421,7 +416,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
   if (wrappedText.length > maxChars) {
     const excess = wrappedText.length - maxChars;
     const adjustedMaxInner = Math.max(0, maxInner - excess);
-    truncated = truncateText(value, adjustedMaxInner);
+    truncated = truncateWebFetchText(value, adjustedMaxInner);
     wrappedText = includeWarning
       ? wrapWebContent(truncated.text, "web_fetch")
       : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
@@ -454,7 +449,7 @@ async function spillWebFetchContent(
   sourceTruncated = false,
 ): Promise<WebFetchWrappedContent> {
   if (!wrapped.truncated) {
-    return wrapped;
+    return sourceTruncated ? { ...wrapped, truncated: true } : wrapped;
   }
   // maxChars/maxCharsCap bound the model-visible return text. Recoverable spill
   // uses this fixed file cap so vanished pages can still be read after truncation.
@@ -688,10 +683,7 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const ssrfPolicy = mergeSsrFPolicies(params.ssrfPolicy);
-  const dangerouslyAllowPrivateNetwork = ssrfPolicy?.dangerouslyAllowPrivateNetwork === true;
-  const allowRfc2544BenchmarkRange = ssrfPolicy?.allowRfc2544BenchmarkRange === true;
-  const allowIpv6UniqueLocalRange = ssrfPolicy?.allowIpv6UniqueLocalRange === true;
+  const ssrfPolicy = params.ssrfPolicy;
   const useTrustedEnvProxy = params.useTrustedEnvProxy;
   let parsedUrl: URL;
   try {
@@ -708,12 +700,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   const cacheDiscriminators = [
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
-    dangerouslyAllowPrivateNetwork ? "allow-private-network" : "",
-    allowRfc2544BenchmarkRange ? "allow-rfc2544" : "",
-    allowIpv6UniqueLocalRange ? "allow-ipv6-ula" : "",
-    ssrfPolicy?.allowedHostnames?.length
-      ? `allowed-hostnames:${sha256Hex(ssrfPolicy.allowedHostnames.join("\n"))}`
-      : "",
+    ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(ssrfPolicy))}` : "",
     useTrustedEnvProxy ? "trusted-env-proxy" : "",
     headersCacheKey ? `headers:${headersCacheKey}` : "",
   ].filter(Boolean);
@@ -944,6 +931,7 @@ export function createWebFetchTool(options?: {
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
+  hostnameAllowlistRef?: { value?: string[] };
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
@@ -1004,11 +992,13 @@ export function createWebFetchTool(options?: {
       };
       const params = args as Record<string, unknown>;
       const url = sanitizeWebFetchUrl(
-        readStringParam(params, "url", { required: true, trim: false }),
+        readToolStringParam(params, "url", { required: true, trim: false }),
       );
-      const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
+      const extractMode =
+        readToolStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readPositiveIntegerParam(params, "maxChars");
       const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
+      const hostnameAllowlist = options?.hostnameAllowlistRef?.value;
       // The progress line is emitted only if the fetch is still pending after
       // the threshold; fast cache/network hits clear the timer before it fires.
       const clearProgressTimer = scheduleToolProgress(
@@ -1041,7 +1031,9 @@ export function createWebFetchTool(options?: {
           readabilityEnabled,
           config,
           useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
-          ssrfPolicy: executionFetch?.ssrfPolicy,
+          ssrfPolicy: hostnameAllowlist
+            ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
+            : executionFetch?.ssrfPolicy,
           ...(providerCacheKey ? { providerCacheKey } : {}),
           lookupFn: options?.lookupFn,
           signal,

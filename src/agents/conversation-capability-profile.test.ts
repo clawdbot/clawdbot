@@ -11,9 +11,76 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 describe("resolveConversationCapabilityProfile", () => {
+  it("intersects base and provider profile contributions from plugin manifests", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          profile: "coding",
+          byProvider: { openai: { profile: "messaging" } },
+        },
+      },
+      modelProvider: "openai",
+      pluginMetadataSnapshot: {
+        plugins: [
+          {
+            contracts: { tools: ["coding_only", "messaging_only", "shared"] },
+            toolMetadata: {
+              coding_only: { profiles: ["coding"] },
+              messaging_only: { profiles: ["messaging"] },
+              shared: { profiles: ["coding", "messaging"] },
+            },
+          },
+        ],
+      } as never,
+    });
+
+    expect(
+      projectConversationToolNames({
+        capabilityProfile: profile,
+        toolNames: ["coding_only", "messaging_only", "shared"],
+        warn: () => undefined,
+      }),
+    ).toEqual(["shared"]);
+  });
+
+  it("intersects a prepared direct policy with existing tool policy", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: { tools: { deny: ["write"] } },
+      chatType: "direct",
+      conversationToolPolicy: { allow: ["read", "write", "exec"], deny: ["exec"] },
+    });
+
+    expect(profile.policy.groupPolicy).toEqual({
+      allow: ["read", "write", "exec"],
+      deny: ["exec"],
+    });
+    expect(profile.policy.inheritancePolicies).toContain(profile.policy.groupPolicy);
+    expect(
+      projectConversationToolNames({
+        capabilityProfile: profile,
+        toolNames: ["read", "write", "exec", "process"],
+        warn: () => undefined,
+      }),
+    ).toEqual(["read"]);
+  });
+
+  it("does not add a requester restriction without a conversation policy", () => {
+    const profile = resolveConversationCapabilityProfile({ chatType: "direct" });
+
+    expect(profile.policy.groupPolicy).toBeUndefined();
+    expect(
+      projectConversationToolNames({
+        capabilityProfile: profile,
+        toolNames: ["read", "write", "exec"],
+        warn: () => undefined,
+      }),
+    ).toEqual(["read", "write", "exec"]);
+  });
+
   it("prepares a direct conversation profile with sender tool restrictions", () => {
     const cfg: OpenClawConfig = {
       tools: {

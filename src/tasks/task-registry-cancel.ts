@@ -9,7 +9,7 @@ import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import { maybeDeliverTaskTerminalUpdate } from "./task-registry-delivery.js";
 import { updateTask } from "./task-registry-mutation.js";
-import { finalizeTaskRunByRunId, updateTaskStateByRunId } from "./task-registry-record-api.js";
+import { finalizeTaskRecordByRunId, updateTaskStateByRunId } from "./task-registry-record-api.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
 import {
   ensureTaskRegistryReady,
@@ -166,7 +166,7 @@ export async function cancelTaskById(params: {
           // Reconcile the original task scope: steer/orphan recovery may have
           // replaced the registry run ID without remapping durable task rows.
           const taskRunId = task.runId?.trim() || result.runId;
-          const reconciledTasks = finalizeTaskRunByRunId({
+          const reconciledTasks = finalizeTaskRecordByRunId({
             runId: taskRunId,
             runtime: "subagent",
             sessionKey: childSessionKey,

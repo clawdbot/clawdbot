@@ -20,11 +20,12 @@ import type {
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
-import { asBoolean, asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
+import { asBoolean, asFiniteNumber, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
@@ -50,10 +51,10 @@ type MicrosoftProviderConfig = {
 function normalizeMicrosoftProviderConfig(
   rawConfig: Record<string, unknown>,
 ): MicrosoftProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const rawEdge = asObject(rawConfig.edge);
-  const rawMicrosoft = asObject(rawConfig.microsoft);
-  const rawProviderMicrosoft = asObject(providers?.microsoft);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const rawEdge = asOptionalRecord(rawConfig.edge);
+  const rawMicrosoft = asOptionalRecord(rawConfig.microsoft);
+  const rawProviderMicrosoft = asOptionalRecord(providers?.microsoft);
   const raw = { ...rawEdge, ...rawMicrosoft, ...rawProviderMicrosoft };
   const outputFormat = trimToUndefined(raw.outputFormat);
   return {
@@ -166,12 +167,12 @@ async function listMicrosoftVoices(
     const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");
     return Array.isArray(voices)
       ? voices.flatMap((value) => {
-          const voice = asObject(value);
+          const voice = asOptionalRecord(value);
           const id = trimToUndefined(voice?.ShortName);
           if (!voice || !id) {
             return [];
           }
-          const voiceTag = asObject(voice.VoiceTag);
+          const voiceTag = asOptionalRecord(voice.VoiceTag);
           const categories = readMicrosoftVoiceTagStrings(voiceTag?.ContentCategories);
           const personalities = readMicrosoftVoiceTagStrings(voiceTag?.VoicePersonalities);
           return [

@@ -1,5 +1,6 @@
 // Coverage for terminal attempt trajectory status classification.
 import { describe, expect, it } from "vitest";
+import { hasAttemptTerminalState } from "./attempt-terminal-evidence.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
@@ -46,11 +47,41 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
-  it("marks length-limited visible text as non-deliverable without terminal output", () => {
+  it("records a recovery receipt without assistant text as successful terminal output", () => {
+    const hasTerminalOutput = hasAttemptTerminalState({
+      lastToolRecovery: { toolName: "write" },
+    });
+
+    expect(hasTerminalOutput).toBe(true);
+    expect(resolveAttemptTrajectoryTerminal(baseParams({ hasTerminalOutput }))).toEqual({
+      status: "success",
+    });
+  });
+
+  it("records length-limited visible text as success with no synthesized payload", () => {
+    // The headline case: an ordinary text-only truncated reply. Finalization runs
+    // before terminal preparation converts assistant text into payloads, so
+    // synthesizedPayloadCount is still 0 here while the reply is delivered. The
+    // durable record must not contradict that.
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
           assistantTexts: ["Partial answer."],
+          synthesizedPayloadCount: 0,
+          lastAssistantStopReason: "length",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
+  it("keeps a length-limited turn with nothing to show non-deliverable", () => {
+    // No visible text, no payload, no terminal output: nothing reached the user,
+    // so this stays the incomplete-turn error the runner still surfaces.
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          assistantTexts: [],
+          synthesizedPayloadCount: 0,
           lastAssistantStopReason: "length",
         }),
       ),
@@ -60,7 +91,23 @@ describe("attempt trajectory status", () => {
     });
   });
 
-  it("does not treat streamed partial payloads as completed length-limited output", () => {
+  it("keeps whitespace-only length-limited text non-deliverable", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          assistantTexts: ["   \n  "],
+          lastAssistantStopReason: "length",
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
+  it("records a delivered length-limited partial payload as success", () => {
+    // The terminal owner delivers this turn as a partial reply, so the durable
+    // trajectory record must agree instead of reporting a non-deliverable error.
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
@@ -69,10 +116,7 @@ describe("attempt trajectory status", () => {
           lastAssistantStopReason: "length",
         }),
       ),
-    ).toEqual({
-      status: "error",
-      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
-    });
+    ).toEqual({ status: "success" });
   });
 
   it("keeps length-limited turns successful when terminal output was delivered", () => {

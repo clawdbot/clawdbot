@@ -85,13 +85,13 @@ describe("Gateway node exec approvals", () => {
           gateway,
           identity,
           operator,
-          onEvent: firstInbox.onEvent,
+          onEvent: (event) => firstInbox.onEvent(event),
         });
 
         replacementNode = await connectNode({
           gateway,
           identity,
-          onEvent: replacementInbox.onEvent,
+          onEvent: (event) => replacementInbox.onEvent(event),
         });
         await waitForConnectedNode(operator, identity.deviceId, gateway.logs);
 
@@ -251,7 +251,6 @@ async function connectClient(params: {
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
     const finish = (client: GatewayClient, error?: Error) => {
       if (settled) {
         return;
@@ -286,7 +285,7 @@ async function connectClient(params: {
       onConnectError: (error) => finish(client, error),
       onClose: (code, reason) => finish(client, new Error(`Gateway closed (${code}): ${reason}`)),
     });
-    timeout = setTimeout(
+    const timeout = setTimeout(
       () =>
         finish(client, new Error(`Gateway client connection timed out:\n${params.gateway.logs()}`)),
       REQUEST_TIMEOUT_MS,

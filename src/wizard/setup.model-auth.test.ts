@@ -8,7 +8,7 @@ import { runSetupModelAuthStep } from "./setup.model-auth.js";
 type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type ResolvePluginSetupProvider =
-  typeof import("../plugins/setup-registry.js").resolvePluginSetupProvider;
+  typeof import("../plugins/setup-registry.js").resolvePluginSetupProviderCore;
 
 const applyAuthChoice = vi.hoisted(() => vi.fn());
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn());
@@ -27,7 +27,7 @@ const resolveManifestProviderAuthChoice = vi.hoisted(() =>
     choiceLabel: "Anthropic CLI",
   })),
 );
-const resolvePluginSetupProvider = vi.hoisted(() =>
+const resolvePluginSetupProviderCore = vi.hoisted(() =>
   vi.fn<ResolvePluginSetupProvider>(() => undefined),
 );
 
@@ -61,7 +61,7 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore,
 }));
 
 function createPrompter(): WizardPrompter {
@@ -147,6 +147,7 @@ describe("runSetupModelAuthStep", () => {
     expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
       agentId: "ops",
       agentDir: "/tmp/ops-agent",
+      pendingAuthProfiles: [],
       validateCatalog: false,
     });
   });
@@ -167,6 +168,42 @@ describe("runSetupModelAuthStep", () => {
       agentDir: "/tmp/ops-agent",
       validateCatalog: false,
     });
+  });
+
+  it("passes collected auth profiles to the model check before persistence", async () => {
+    const config = createDefaultAgentConfig();
+    const pendingAuthProfiles = [
+      {
+        profileId: "anthropic:default",
+        credential: {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "test-anthropic-key",
+        },
+      },
+    ];
+    const persistAuthProfiles = vi.fn(async () => {});
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice.mockResolvedValueOnce({
+      config,
+      authProfiles: pendingAuthProfiles,
+      persistAuthProfiles,
+    });
+
+    await runSetupModelAuthStep({
+      config,
+      opts: {},
+      prompter: createPrompter(),
+      runtime: createRuntime(),
+    });
+
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      pendingAuthProfiles,
+      validateCatalog: false,
+    });
+    expect(persistAuthProfiles).not.toHaveBeenCalled();
   });
 
   it("applies an interactive model selection to the agent override", async () => {

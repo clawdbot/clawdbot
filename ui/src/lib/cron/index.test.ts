@@ -6,12 +6,14 @@ import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { CronJob, CronRunsResult } from "../../api/types.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { CronJob, CronJobsListResult, CronRunsResult } from "../../api/types.ts";
 import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
+  getVisibleCronJobs,
   loadCronFailingCount,
   loadCronModelSuggestions,
   toggleCronJob,
@@ -20,6 +22,7 @@ import {
   loadCronScopeStats,
   loadMoreCronRuns,
   normalizeCronFormState,
+  removeCronJob,
   resolveConfiguredCronModelSuggestions,
   runCronJob,
   startCronEdit,
@@ -39,13 +42,17 @@ function createState(overrides: Partial<CronState> = {}): CronState {
 }
 
 function createCronRequest(jobId: string, options: { existing?: boolean } = {}) {
-  const jobs = options.existing ? [{ id: jobId }] : [];
+  const existingJob = createCronJob({ id: jobId, name: "Existing job" });
+  const jobs = options.existing ? [existingJob] : [];
   return vi.fn(async (method: string, _payload?: unknown) => {
-    if (method === "cron.add" || method === "cron.update") {
+    if (method === "cron.add") {
       return { id: jobId };
     }
+    if (method === "cron.update") {
+      return existingJob;
+    }
     if (method === "cron.list") {
-      return { jobs };
+      return cronJobsListResponse(jobs as CronJob[]);
     }
     if (method === "cron.status") {
       return { enabled: true, jobs: jobs.length, nextWakeAtMs: null };
@@ -63,6 +70,7 @@ function createCronJob(overrides: Partial<CronJob> & Pick<CronJob, "id" | "name"
     enabled: true,
     createdAtMs: 0,
     updatedAtMs: 0,
+    configRevision: "config-revision-1",
     schedule: { kind: "cron", expr: "0 * * * *" },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
@@ -108,12 +116,28 @@ function createCronSubmitHarness(
   const request = createCronRequest(jobId, {
     existing: options.listExisting ?? method === "cron.update",
   });
+  const loadedJobs = options.jobs?.map((job) =>
+    createCronJob({
+      ...job,
+      id: job.id,
+      name: job.name ?? options.form?.name ?? "Existing job",
+      configRevision: job.configRevision ?? "config-revision-1",
+    }),
+  );
+  const editingJob =
+    method === "cron.update"
+      ? (loadedJobs?.find((job) => job.id === jobId) ??
+        createCronJob({ id: jobId, name: options.form?.name ?? "Existing job" }))
+      : null;
   const state = createStateWithRequest(request, {
     ...options.state,
-    ...(options.jobs ? { cronJobs: options.jobs } : {}),
-    cronEditingJobId: method === "cron.update" ? jobId : null,
+    ...(loadedJobs ? { cronJobs: loadedJobs } : editingJob ? { cronJobs: [editingJob] } : {}),
     cronForm: createCronForm(options.form),
   });
+  if (editingJob) {
+    startCronEdit(state, editingJob);
+    state.cronForm = createCronForm(options.form);
+  }
   const submit = async () => {
     const result = await addCronJob(state);
     return { call: findRequestCall(request.mock.calls, method), result };
@@ -156,25 +180,26 @@ function requestPatch(call: readonly [method: string, payload?: unknown]) {
   return requireRecord(requestPayload(call).patch, `${call[0]} patch`);
 }
 
-type EmptyCronListResponse = {
-  jobs: [];
-  total: number;
-  hasMore: boolean;
-  nextOffset: null;
-};
-
-function emptyCronListResponse(): EmptyCronListResponse {
-  return { jobs: [], total: 0, hasMore: false, nextOffset: null };
+function cronJobsListResponse(
+  jobs: CronJob[],
+  overrides: Partial<Omit<CronJobsListResult, "jobs">> = {},
+): CronJobsListResult {
+  return {
+    jobs,
+    snapshotRevision: "cron-jobs-fixture",
+    total: jobs.length,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
+    ...overrides,
+  };
 }
 
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
+function emptyCronListResponse(
+  overrides: Partial<Omit<CronJobsListResult, "jobs">> = {},
+): CronJobsListResult {
+  return cronJobsListResponse([], overrides);
 }
 
 function createCronRunsResult(
@@ -203,7 +228,7 @@ function createCronRunsRace(
 }
 
 function createCronJobsReloadHarness(stateOverrides: Partial<CronState> = {}) {
-  const first = createDeferred<EmptyCronListResponse>();
+  const first = createDeferred<CronJobsListResult>();
   const payloads: unknown[] = [];
   const request = vi.fn(async (method: string, payload?: unknown) => {
     if (method !== "cron.list") {
@@ -278,9 +303,13 @@ describe("cron controller", () => {
       cronModelSuggestions: [],
     };
 
-    await loadCronModelSuggestions(state);
+    await loadCronModelSuggestions(state, "writer");
 
-    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(request).toHaveBeenCalledWith("models.list", {
+      agentId: "writer",
+      view: "configured",
+      preparedOnly: true,
+    });
     expect(state.cronModelSuggestions).toEqual(["a-model", "z-model"]);
   });
 
@@ -382,7 +411,7 @@ describe("cron controller", () => {
     for (const response of responses) {
       const request = createMethodRequest({
         "cron.add": response,
-        "cron.list": { jobs: [] },
+        "cron.list": emptyCronListResponse(),
         "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
       });
       const state = createStateWithRequest(request, {
@@ -630,6 +659,7 @@ describe("cron controller", () => {
 
     expectRecordFields(requestPayload(call), {
       id: "job-1",
+      expectedConfigRevision: "config-revision-1",
     });
     expectRecordFields(requestPatch(call), {
       name: "edited job",
@@ -640,7 +670,362 @@ describe("cron controller", () => {
       delivery: { mode: "none" },
     });
     expect(requestPatch(call)).not.toHaveProperty("deleteAfterRun");
+    expect(state.cronEditingJobId).toBe("job-1");
+    expect(state.cronEditingJob?.name).toBe("Existing job");
+    expect(state.cronEditingConfigRevision).toBe("config-revision-1");
+  });
+
+  it("requires a loaded config revision before form saves and toggles", async () => {
+    const job = createCronJob({
+      id: "job-missing-revision",
+      name: "Missing revision",
+      configRevision: undefined,
+    });
+    const request = vi.fn(async () => {
+      throw new Error("unguarded mutation should not be issued");
+    });
+    const saveState = createStateWithRequest(request, { cronJobs: [job] });
+    startCronEdit(saveState, job);
+    saveState.cronForm.name = "Unsafe edit";
+
+    await expect(addCronJob(saveState)).resolves.toEqual({ saved: false });
+    expect(saveState.cronEditingJobId).toBe(job.id);
+    expect(saveState.cronError).toContain("configuration revision");
+    expect(request).not.toHaveBeenCalled();
+
+    const toggleState = createStateWithRequest(request, { cronJobs: [job] });
+    await expect(toggleCronJob(toggleState, job, false)).resolves.toBe(false);
+    expect(toggleState.cronError).toContain("configuration revision");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("freezes the edit revision across list refreshes and reloads the exact job after conflict", async () => {
+    const staleJob = createCronJob({
+      id: "job-conflict",
+      name: "Loaded name",
+      description: "loaded description",
+      configRevision: "revision-stale",
+    });
+    const listedJob = {
+      ...staleJob,
+      name: "Listed name",
+      description: "newer listed definition",
+      updatedAtMs: 2,
+      configRevision: "revision-current",
+    };
+    const authoritativeJob = {
+      ...listedJob,
+      name: "Authoritative name",
+      description: "third writer definition",
+      updatedAtMs: 3,
+      configRevision: "revision-newest",
+    };
+    const conflict = Object.assign(new Error("cron job definition changed"), {
+      name: "GatewayRequestError",
+      details: {
+        code: "CRON_JOB_CHANGED",
+        expectedConfigRevision: "revision-stale",
+        actualConfigRevision: "revision-current",
+      },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.update") {
+        throw conflict;
+      }
+      if (method === "cron.list") {
+        return cronJobsListResponse([listedJob]);
+      }
+      if (method === "cron.get") {
+        return authoritativeJob;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1 };
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, { cronJobs: [staleJob] });
+    startCronEdit(state, staleJob);
+    state.cronForm.name = "My stale edit";
+    state.cronJobs = [listedJob];
+
+    await expect(addCronJob(state)).resolves.toEqual({ saved: false });
+
+    expect(request).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({
+        id: staleJob.id,
+        expectedConfigRevision: "revision-stale",
+      }),
+    );
+    expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
+    expect(state.cronEditingJobId).toBe(staleJob.id);
+    expect(state.cronEditingJob).toEqual(authoritativeJob);
+    expect(state.cronEditingConfigRevision).toBe("revision-newest");
+    expect(state.cronJobs).toEqual([listedJob]);
+    expect(state.cronForm.name).toBe("Authoritative name");
+    expect(state.cronForm.description).toBe("third writer definition");
+    expect(state.cronError).toContain("latest definition is loaded");
+  });
+
+  it("keeps an exact conflict refresh out of the filtered jobs cache", async () => {
+    const staleJob = createCronJob({
+      id: "job-filtered-conflict",
+      name: "Loaded name",
+      description: "loaded description",
+      configRevision: "revision-stale",
+    });
+    const authoritativeJob = {
+      ...staleJob,
+      name: "Authoritative name",
+      description: "latest definition",
+      updatedAtMs: 2,
+      configRevision: "revision-current",
+    };
+    const savedJob = {
+      ...authoritativeJob,
+      name: "Retried name",
+      updatedAtMs: 3,
+      configRevision: "revision-saved",
+    };
+    const conflict = Object.assign(new Error("cron job definition changed"), {
+      details: { code: "CRON_JOB_CHANGED" },
+    });
+    const updateRevisions: unknown[] = [];
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "cron.update") {
+        updateRevisions.push(requireRecord(payload, "cron.update payload").expectedConfigRevision);
+        if (updateRevisions.length === 1) {
+          throw conflict;
+        }
+        return savedJob;
+      }
+      if (method === "cron.list") {
+        return emptyCronListResponse({ snapshotRevision: "filtered-snapshot" });
+      }
+      if (method === "cron.get") {
+        return authoritativeJob;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1 };
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, {
+      cronJobs: [staleJob],
+      cronJobsQuery: "missing from filtered results",
+    });
+    startCronEdit(state, staleJob);
+    state.cronForm.name = "My stale edit";
+
+    await expect(addCronJob(state)).resolves.toEqual({ saved: false });
+
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.objectContaining({ query: "missing from filtered results" }),
+    );
+    expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
+    expect(state.cronJobs).toEqual([]);
+    expect(getVisibleCronJobs(state)).toEqual([]);
+    expect(state.cronJobsTotal).toBe(0);
+    expect(state.cronEditingJobId).toBe(authoritativeJob.id);
+    expect(state.cronEditingJob).toEqual(authoritativeJob);
+    expect(state.cronEditingConfigRevision).toBe("revision-current");
+    expect(state.cronForm.name).toBe("Authoritative name");
+    expect(state.cronForm.description).toBe("latest definition");
+
+    state.cronForm.name = "Retried name";
+    await expect(addCronJob(state)).resolves.toEqual({
+      saved: true,
+      jobId: authoritativeJob.id,
+    });
+    expect(updateRevisions).toEqual(["revision-stale", "revision-current"]);
+    expect(state.cronJobs).toEqual([]);
+    expect(state.cronEditingJob).toEqual(savedJob);
+    expect(state.cronEditingConfigRevision).toBe("revision-saved");
+  });
+
+  it("keeps a stale form paired with its frozen revision when conflict refresh fails", async () => {
+    const staleJob = createCronJob({
+      id: "job-conflict-deferred",
+      name: "Loaded name",
+      configRevision: "revision-stale",
+    });
+    const listedJob = {
+      ...staleJob,
+      name: "Newer listed name",
+      configRevision: "revision-current",
+    };
+    const conflict = Object.assign(new Error("cron job definition changed"), {
+      details: { code: "CRON_JOB_CHANGED" },
+    });
+    const firstList = createDeferred<CronJobsListResult>();
+    const updateRevisions: unknown[] = [];
+    let listCalls = 0;
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "cron.update") {
+        updateRevisions.push(requireRecord(payload, "cron.update payload").expectedConfigRevision);
+        throw conflict;
+      }
+      if (method === "cron.list") {
+        listCalls += 1;
+        return listCalls === 1 ? firstList.promise : cronJobsListResponse([listedJob]);
+      }
+      if (method === "cron.get") {
+        throw new Error("exact job refresh unavailable");
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1 };
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, { cronJobs: [staleJob] });
+    startCronEdit(state, staleJob);
+    state.cronForm.name = "My stale edit";
+
+    const inFlightList = loadCronJobsPage(state, { tableFilters: true });
+    await vi.waitFor(() => expect(listCalls).toBe(1));
+    await expect(addCronJob(state)).resolves.toEqual({ saved: false });
+
+    expect(state.cronForm.name).toBe("My stale edit");
+    expect(state.cronEditingConfigRevision).toBe("revision-stale");
+    expect(state.cronError).toContain("could not be loaded");
+
+    firstList.resolve(cronJobsListResponse([listedJob], { snapshotRevision: "newer-list" }));
+    await inFlightList;
+    expect(state.cronJobs).toEqual([listedJob]);
+    expect(state.cronForm.name).toBe("My stale edit");
+    expect(state.cronEditingConfigRevision).toBe("revision-stale");
+
+    await expect(addCronJob(state)).resolves.toEqual({ saved: false });
+    expect(updateRevisions).toEqual(["revision-stale", "revision-stale"]);
+  });
+
+  it("commits authoritative update state before a failed jobs reconciliation", async () => {
+    const loadedJob = createCronJob({
+      id: "job-authoritative-save",
+      name: "Loaded name",
+      configRevision: "revision-loaded",
+    });
+    const updatedJob = {
+      ...loadedJob,
+      name: "Saved name",
+      updatedAtMs: 2,
+      configRevision: "revision-saved",
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.update") {
+        return updatedJob;
+      }
+      if (method === "cron.list") {
+        throw new Error("reconciliation unavailable");
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1 };
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, { cronJobs: [loadedJob] });
+    startCronEdit(state, loadedJob);
+    state.cronForm.name = "Saved name";
+
+    await expect(addCronJob(state)).resolves.toEqual({
+      saved: true,
+      jobId: loadedJob.id,
+    });
+
+    expect(state.cronJobs).toEqual([updatedJob]);
+    expect(state.cronEditingJob).toEqual(updatedJob);
+    expect(state.cronEditingConfigRevision).toBe("revision-saved");
+  });
+
+  it("commits authoritative toggle state and advances an open editor revision", async () => {
+    const loadedJob = createCronJob({
+      id: "job-authoritative-toggle",
+      name: "Toggle job",
+      enabled: true,
+      configRevision: "revision-loaded",
+    });
+    const updatedJob = {
+      ...loadedJob,
+      enabled: false,
+      updatedAtMs: 2,
+      configRevision: "revision-toggled",
+    };
+    const listResponse = createDeferred<CronJobsListResult>();
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return updatedJob;
+      }
+      if (method === "cron.list") {
+        return listResponse.promise;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1 };
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, { cronJobs: [loadedJob] });
+    startCronEdit(state, loadedJob);
+    state.cronForm.name = "Unsaved rename";
+
+    const toggle = toggleCronJob(state, loadedJob, false);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("cron.list", expect.anything()));
+
+    expect(request).toHaveBeenCalledWith("cron.update", {
+      id: loadedJob.id,
+      expectedConfigRevision: "revision-loaded",
+      patch: { enabled: false },
+    });
+    expect(state.cronJobs).toEqual([updatedJob]);
+    expect(state.cronEditingJob).toEqual(updatedJob);
+    expect(state.cronEditingConfigRevision).toBe("revision-toggled");
+    expect(state.cronForm.name).toBe("Unsaved rename");
+
+    listResponse.resolve(cronJobsListResponse([updatedJob]));
+    await expect(toggle).resolves.toBe(true);
+
+    await addCronJob(state);
+    const updateCalls = request.mock.calls.filter(([method]) => method === "cron.update");
+    expect(updateCalls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        expectedConfigRevision: "revision-toggled",
+        patch: expect.objectContaining({ name: "Unsaved rename" }),
+      }),
+    );
+  });
+
+  it("removes confirmed jobs locally before a failed reconciliation", async () => {
+    const removedJob = createCronJob({ id: "job-remove-local", name: "Remove locally" });
+    const remainingJob = createCronJob({ id: "job-remaining", name: "Keep locally" });
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.remove") {
+        return { ok: true, removed: true };
+      }
+      if (method === "cron.list") {
+        throw new Error("reconciliation unavailable");
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1 };
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, {
+      cronJobs: [removedJob, remainingJob],
+      cronJobsTotal: 2,
+      cronRunsJobId: removedJob.id,
+      cronRuns: [{ ts: 1, jobId: removedJob.id, action: "finished", status: "ok" }],
+      cronRunsTotal: 1,
+    });
+    startCronEdit(state, removedJob);
+
+    await removeCronJob(state, removedJob);
+
+    expect(state.cronJobs).toEqual([remainingJob]);
+    expect(state.cronJobsTotal).toBe(1);
     expect(state.cronEditingJobId).toBeNull();
+    expect(state.cronEditingJob).toBeNull();
+    expect(state.cronRunsJobId).toBeNull();
+    expect(state.cronRuns).toEqual([]);
   });
 
   it("sends null delivery.accountId in cron.update to clear persisted account routing", async () => {
@@ -674,6 +1059,34 @@ describe("cron controller", () => {
     });
   });
 
+  it("sends null delivery.to in cron.update to clear a persisted destination", async () => {
+    const job = createCronJob({
+      id: "job-clear-to",
+      name: "clear to",
+      delivery: { mode: "announce", channel: "telegram", to: "12345" },
+    });
+    const { submit } = createCronSubmitHarness(job.id, {
+      method: "cron.update",
+      jobs: [job],
+      form: {
+        name: "clear to",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        wakeMode: "next-heartbeat",
+        payloadText: "run",
+        deliveryMode: "announce",
+        deliveryTo: "   ",
+      },
+    });
+
+    const { call } = await submit();
+
+    expectRecordFields(requireRecord(requestPatch(call).delivery, "delivery"), {
+      mode: "announce",
+      to: null,
+    });
+  });
+
   it("maps a cron job into editable form fields", () => {
     const state = createState();
     const job = createCronJob({
@@ -690,6 +1103,8 @@ describe("cron controller", () => {
     startCronEdit(state, job);
 
     expect(state.cronEditingJobId).toBe("job-9");
+    expect(state.cronEditingJob).toEqual(job);
+    expect(state.cronEditingConfigRevision).toBe("config-revision-1");
     expect(state.cronRunsJobId).toBe("job-9");
     expect(state.cronForm.name).toBe("Weekly report");
     expect(state.cronForm.sessionKey).toBe("agent:ops:main");
@@ -753,7 +1168,7 @@ describe("cron controller", () => {
       delivery: { mode: "none" },
     });
     const request = createMethodRequest({
-      "cron.list": { jobs: [scriptJob], total: 1, hasMore: false, nextOffset: null },
+      "cron.list": cronJobsListResponse([scriptJob]),
       "cron.update": { id: scriptJob.id },
       "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
     });
@@ -1333,9 +1748,13 @@ describe("cron controller", () => {
   });
 
   it.each([
-    { scenario: "all agents", cronAgentId: null, expectedAgentId: "" },
-    { scenario: "the default agent", cronAgentId: "main", expectedAgentId: "main" },
-    { scenario: "a selected agent", cronAgentId: "writer", expectedAgentId: "writer" },
+    {
+      scenario: "an all-agent filter with a selected owner",
+      cronAgentId: null,
+      selectedAgentId: "writer",
+    },
+    { scenario: "the default agent", cronAgentId: "main", selectedAgentId: "main" },
+    { scenario: "a selected agent", cronAgentId: "writer", selectedAgentId: "writer" },
   ])("canceling edit resets form for $scenario and clears edit mode", (scenario) => {
     const state = createState({ cronAgentId: scenario.cronAgentId });
     const job = createCronJob({
@@ -1349,12 +1768,14 @@ describe("cron controller", () => {
     state.cronForm.name = "changed";
     state.cronFieldErrors = { name: "Name is required." };
 
-    cancelCronEdit(state);
+    cancelCronEdit(state, scenario.selectedAgentId);
 
     expect(state.cronEditingJobId).toBeNull();
+    expect(state.cronEditingJob).toBeNull();
+    expect(state.cronEditingConfigRevision).toBeNull();
     expect(state.cronForm).toEqual({
       ...DEFAULT_CRON_FORM,
-      agentId: scenario.expectedAgentId,
+      agentId: scenario.selectedAgentId,
     });
     // Fresh forms start visually clean; validation re-arms on change/submit.
     expect(state.cronFieldErrors).toEqual({});
@@ -1371,16 +1792,18 @@ describe("cron controller", () => {
           payload: { kind: "systemEvent", text: "ping" },
         }),
       ],
-      cronEditingJobId: "job-1",
     });
 
     const sourceJob = state.cronJobs[0];
     if (!sourceJob) {
       throw new Error("Expected source cron job");
     }
+    startCronEdit(state, sourceJob);
     startCronClone(state, sourceJob);
 
     expect(state.cronEditingJobId).toBeNull();
+    expect(state.cronEditingJob).toBeNull();
+    expect(state.cronEditingConfigRevision).toBeNull();
     expect(state.cronRunsJobId).toBe("job-1");
     expect(state.cronForm.name).toBe("Daily ping copy");
     expect(state.cronForm.payloadText).toBe("ping");
@@ -1399,9 +1822,9 @@ describe("cron controller", () => {
     const state = createStateWithRequest(request, {
       cronJobs: [sourceJob],
       cronAgentId: "main",
-      cronEditingJobId: "job-1",
     });
 
+    startCronEdit(state, sourceJob);
     startCronClone(state, sourceJob);
     await addCronJob(state);
 
@@ -1472,8 +1895,8 @@ describe("cron controller", () => {
           sortBy: "updatedAtMs",
           sortDir: "desc",
         });
-        return {
-          jobs: [
+        return cronJobsListResponse(
+          [
             {
               id: "job-1",
               name: "Daily",
@@ -1484,12 +1907,11 @@ describe("cron controller", () => {
               sessionTarget: "main",
               wakeMode: "next-heartbeat",
               payload: { kind: "systemEvent", text: "ping" },
+              state: {},
             },
           ],
-          total: 1,
-          hasMore: false,
-          nextOffset: null,
-        };
+          { snapshotRevision: "daily-jobs" },
+        );
       }
       return {};
     });
@@ -1507,6 +1929,106 @@ describe("cron controller", () => {
     expect(state.cronJobs).toHaveLength(1);
     expect(state.cronJobsTotal).toBe(1);
     expect(state.cronJobsHasMore).toBe(false);
+  });
+
+  it("appends jobs only from the accepted snapshot revision", async () => {
+    const firstJob = createCronJob({ id: "job-1", name: "First" });
+    const secondJob = createCronJob({ id: "job-2", name: "Second" });
+    const request = vi.fn(async () =>
+      cronJobsListResponse([secondJob], {
+        snapshotRevision: "stable-revision",
+        total: 2,
+        offset: 1,
+        limit: 1,
+      }),
+    );
+    const state = createStateWithRequest(request, {
+      cronJobs: [firstJob],
+      cronJobsSnapshotRevision: "stable-revision",
+      cronJobsTotal: 2,
+      cronJobsHasMore: true,
+      cronJobsNextOffset: 1,
+      cronJobsLimit: 1,
+    });
+
+    await loadCronJobsPage(state, { append: true });
+
+    expect(state.cronJobs.map((job) => job.id)).toEqual(["job-1", "job-2"]);
+    expect(state.cronJobsSnapshotRevision).toBe("stable-revision");
+    expect(state.cronJobsHasMore).toBe(false);
+    expect(state.cronJobsNextOffset).toBeNull();
+  });
+
+  it("restarts at page zero instead of committing an append from a changed snapshot", async () => {
+    const staleJob = createCronJob({ id: "stale-only", name: "Stale" });
+    const stableJob = createCronJob({ id: "stable", name: "Stable" });
+    const currentJob = createCronJob({ id: "current", name: "Current" });
+    const responses = [
+      cronJobsListResponse([staleJob, stableJob], {
+        snapshotRevision: "revision-a",
+        total: 3,
+        limit: 2,
+        hasMore: true,
+        nextOffset: 2,
+      }),
+      emptyCronListResponse({
+        snapshotRevision: "revision-b",
+        total: 2,
+        offset: 2,
+        limit: 2,
+      }),
+      cronJobsListResponse([stableJob, currentJob], {
+        snapshotRevision: "revision-b",
+        total: 2,
+        limit: 2,
+      }),
+    ];
+    const offsets: number[] = [];
+    const request = vi.fn(async (_method: string, payload?: unknown) => {
+      offsets.push(requireRecord(payload, "cron.list payload").offset as number);
+      const response = responses.shift();
+      if (!response) {
+        throw new Error("unexpected cron.list call");
+      }
+      return response;
+    });
+    const state = createStateWithRequest(request, { cronJobsLimit: 2 });
+
+    await loadCronJobsPage(state);
+    await loadCronJobsPage(state, { append: true });
+
+    expect(offsets).toEqual([0, 2, 0]);
+    expect(state.cronJobs.map((job) => job.id)).toEqual(["stable", "current"]);
+    expect(state.cronJobsSnapshotRevision).toBe("revision-b");
+    expect(state.cronJobsTotal).toBe(2);
+    expect(state.cronJobsHasMore).toBe(false);
+    expect(state.cronJobsNextOffset).toBeNull();
+  });
+
+  it("keeps the last coherent jobs page when snapshot metadata is invalid", async () => {
+    const existingJob = createCronJob({ id: "existing", name: "Existing" });
+    const request = vi.fn(async () => ({
+      jobs: [],
+      total: 0,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    }));
+    const state = createStateWithRequest(request, {
+      cronJobs: [existingJob],
+      cronJobsSnapshotRevision: "accepted-revision",
+      cronJobsTotal: 1,
+      cronJobsHasMore: false,
+      cronJobsNextOffset: null,
+    });
+
+    await loadCronJobsPage(state);
+
+    expect(state.cronJobs).toEqual([existingJob]);
+    expect(state.cronJobsSnapshotRevision).toBe("accepted-revision");
+    expect(state.cronJobsTotal).toBe(1);
+    expect(state.cronError).toContain("cron.list returned an invalid inventory page");
   });
 
   it("keeps table-only filters out of shared cron jobs loads", async () => {
@@ -1567,6 +2089,8 @@ describe("cron controller", () => {
           payload: { kind: "systemEvent", text: "ping" },
         }),
       ],
+      cronJobsSnapshotRevision: "revision-a",
+      cronJobsTotal: 2,
       cronJobsHasMore: true,
       cronJobsNextOffset: 1,
     });
@@ -1577,7 +2101,13 @@ describe("cron controller", () => {
       cronJobsLastStatusFilter: "unknown",
     });
     await loadCronJobsPage(state, { tableFilters: true });
-    first.resolve(emptyCronListResponse());
+    first.resolve(
+      emptyCronListResponse({
+        snapshotRevision: "revision-b",
+        total: 1,
+        offset: 1,
+      }),
+    );
     await appendLoad;
 
     expectRecordFields(requireRecord(payloads[0], "append cron.list payload"), {
@@ -1591,6 +2121,7 @@ describe("cron controller", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(state.cronJobsReloadPending).toBe(false);
     expect(state.cronJobsReloadPendingTableFilters).toBe(false);
+    expect(state.cronJobsSnapshotRevision).toBe("cron-jobs-fixture");
   });
 
   it("uses the latest queued cron jobs table-filter mode", async () => {
@@ -1616,8 +2147,8 @@ describe("cron controller", () => {
   it("drops malformed cron jobs before they enter UI state", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "cron.list") {
-        return {
-          jobs: [
+        return cronJobsListResponse(
+          [
             { id: "bad-missing-payload", name: "Broken", enabled: true },
             {
               id: "job-ok",
@@ -1630,11 +2161,9 @@ describe("cron controller", () => {
               wakeMode: "next-heartbeat",
               payload: { kind: "systemEvent", text: "ping" },
             },
-          ],
-          total: 2,
-          hasMore: false,
-          nextOffset: null,
-        };
+          ] as unknown as CronJob[],
+          { snapshotRevision: "malformed-job-page" },
+        );
       }
       return {};
     });
@@ -1655,14 +2184,14 @@ describe("cron controller", () => {
       const offset = (payload as { offset?: number } | undefined)?.offset ?? 0;
       if (offset === 0) {
         return {
-          entries: [{ ts: 2, jobId: "job-1", status: "ok", summary: "newest" }],
+          entries: [{ ts: 2, jobId: "job-1", action: "finished", status: "ok", summary: "newest" }],
           total: 2,
           hasMore: true,
           nextOffset: 1,
         };
       }
       return {
-        entries: [{ ts: 1, jobId: "job-1", status: "ok", summary: "older" }],
+        entries: [{ ts: 1, jobId: "job-1", action: "finished", status: "ok", summary: "older" }],
         total: 2,
         hasMore: false,
         nextOffset: null,
@@ -1681,7 +2210,13 @@ describe("cron controller", () => {
   });
 
   it("keeps the newest filtered run history when an older overview request finishes last", async () => {
-    const currentEntry = { ts: 2, jobId: "fresh-job", status: "ok" as const, summary: "fresh" };
+    const currentEntry = {
+      ts: 2,
+      jobId: "fresh-job",
+      action: "finished" as const,
+      status: "ok" as const,
+      summary: "fresh",
+    };
     const { older: olderOverview, state } = createCronRunsRace([currentEntry]);
 
     const olderLoad = loadCronRuns(state, null);
@@ -1690,11 +2225,14 @@ describe("cron controller", () => {
     expect(state.cronRuns).toEqual([currentEntry]);
 
     olderOverview.resolve(
-      createCronRunsResult([{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale" }], {
-        total: 8,
-        hasMore: true,
-        nextOffset: 1,
-      }),
+      createCronRunsResult(
+        [{ ts: 1, jobId: "stale-job", action: "finished", status: "ok", summary: "stale" }],
+        {
+          total: 8,
+          hasMore: true,
+          nextOffset: 1,
+        },
+      ),
     );
 
     await expect(olderLoad).resolves.toBe("skipped");
@@ -1708,6 +2246,7 @@ describe("cron controller", () => {
     const selectedEntry = {
       ts: 2,
       jobId: "selected-job",
+      action: "finished" as const,
       status: "ok" as const,
       summary: "selected history",
     };
@@ -1719,7 +2258,15 @@ describe("cron controller", () => {
     await expect(loadCronRuns(state, "selected-job")).resolves.toBe("ok");
 
     olderOverview.resolve(
-      createCronRunsResult([{ ts: 1, jobId: "other-job", status: "ok", summary: "wrong task" }]),
+      createCronRunsResult([
+        {
+          ts: 1,
+          jobId: "other-job",
+          action: "finished",
+          status: "ok",
+          summary: "wrong task",
+        },
+      ]),
     );
 
     await expect(olderLoad).resolves.toBe("skipped");
@@ -1731,6 +2278,7 @@ describe("cron controller", () => {
     const overviewEntry = {
       ts: 2,
       jobId: "overview-job",
+      action: "finished" as const,
       status: "ok" as const,
       summary: "current overview",
     };
@@ -1745,7 +2293,15 @@ describe("cron controller", () => {
     await expect(loadCronRuns(state, null)).resolves.toBe("ok");
 
     olderJobHistory.resolve(
-      createCronRunsResult([{ ts: 1, jobId: "selected-job", status: "ok", summary: "stale task" }]),
+      createCronRunsResult([
+        {
+          ts: 1,
+          jobId: "selected-job",
+          action: "finished",
+          status: "ok",
+          summary: "stale task",
+        },
+      ]),
     );
 
     await expect(olderLoad).resolves.toBe("skipped");
@@ -1757,11 +2313,20 @@ describe("cron controller", () => {
     const currentEntry = {
       ts: 3,
       jobId: "filtered-job",
+      action: "finished" as const,
       status: "error" as const,
       summary: "filtered result",
     };
     const { older: olderPage, state } = createCronRunsRace([currentEntry], {
-      cronRuns: [{ ts: 2, jobId: "previous-job", status: "ok", summary: "previous" }],
+      cronRuns: [
+        {
+          ts: 2,
+          jobId: "previous-job",
+          action: "finished",
+          status: "ok",
+          summary: "previous",
+        },
+      ],
       cronRunsHasMore: true,
       cronRunsNextOffset: 1,
     });
@@ -1774,7 +2339,15 @@ describe("cron controller", () => {
 
     olderPage.resolve(
       createCronRunsResult(
-        [{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale older page" }],
+        [
+          {
+            ts: 1,
+            jobId: "stale-job",
+            action: "finished",
+            status: "ok",
+            summary: "stale older page",
+          },
+        ],
         { total: 9, hasMore: true, nextOffset: 2 },
       ),
     );
@@ -1787,7 +2360,13 @@ describe("cron controller", () => {
   });
 
   it("ignores a stale run-history failure after the current request succeeds", async () => {
-    const currentEntry = { ts: 2, jobId: "fresh-job", status: "ok" as const, summary: "fresh" };
+    const currentEntry = {
+      ts: 2,
+      jobId: "fresh-job",
+      action: "finished" as const,
+      status: "ok" as const,
+      summary: "fresh",
+    };
     const { older: olderFailure, state } = createCronRunsRace([currentEntry]);
 
     const olderLoad = loadCronRuns(state, null);
@@ -1809,10 +2388,10 @@ describe("cron controller", () => {
 
     const olderLoad = loadCronRuns(state, null);
     await expect(loadCronRuns(state, null)).resolves.toBe("error");
-    expect(state.cronError).toBe("Error: current cron history unavailable");
+    expect(state.cronError).toBe("current cron history unavailable");
 
     olderOverview.resolve({
-      entries: [{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale" }],
+      entries: [{ ts: 1, jobId: "stale-job", action: "finished", status: "ok", summary: "stale" }],
       total: 1,
       hasMore: false,
       nextOffset: null,
@@ -1820,7 +2399,7 @@ describe("cron controller", () => {
 
     await expect(olderLoad).resolves.toBe("skipped");
     expect(state.cronRuns).toEqual([]);
-    expect(state.cronError).toBe("Error: current cron history unavailable");
+    expect(state.cronError).toBe("current cron history unavailable");
   });
 
   it("scopes jobs and run history requests to the selected agent", async () => {
@@ -1854,10 +2433,10 @@ describe("cron controller", () => {
 
     await expect(loadCronRuns(state, null)).resolves.toBe("error");
 
-    expect(state.cronError).toBe("Error: cron.runs unavailable");
+    expect(state.cronError).toBe("cron.runs unavailable");
   });
 
-  it("runs cron job in due mode when requested", async () => {
+  it("preserves queued run feedback when due-mode history refresh fails", async () => {
     const request = vi.fn(async (method: string, payload?: unknown) => {
       if (method === "cron.run") {
         expectRecordFields(requireRecord(payload, "cron.run payload"), {
@@ -1867,7 +2446,7 @@ describe("cron controller", () => {
         return { ok: true, enqueued: true, runId: "run-due" };
       }
       if (method === "cron.runs") {
-        return { entries: [], total: 0, hasMore: false, nextOffset: null };
+        throw new Error("run history refresh unavailable");
       }
       return {};
     });
@@ -1879,6 +2458,7 @@ describe("cron controller", () => {
 
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
     expect(request).toHaveBeenCalledWith("cron.runs", expect.any(Object));
+    expect(state.cronError).toBe("Run queued. Run ID: run-due");
   });
 
   it.each([
@@ -2027,6 +2607,39 @@ describe("cron every-interval lossless round-trip", () => {
   });
 });
 
+describe("cron one-shot schedule precision", () => {
+  it("omits an unchanged minute but sends a genuinely changed minute", async () => {
+    const originalAt = "2030-01-02T03:04:56.789Z";
+    const original = createCronJob({
+      id: "job-at-precision",
+      name: "Precise one-shot",
+      schedule: { kind: "at", at: originalAt },
+      deleteAfterRun: true,
+    });
+
+    const unchanged = createCronEditHarness(original);
+    unchanged.state.cronForm.description = "metadata only";
+    const unchangedPatch = requestPatch(await unchanged.submit());
+    expect(unchangedPatch).not.toHaveProperty("schedule");
+
+    const changed = createCronEditHarness(original);
+    const originalMinute = new Date(originalAt);
+    originalMinute.setMinutes(originalMinute.getMinutes() + 1);
+    originalMinute.setSeconds(0, 0);
+    const year = originalMinute.getFullYear();
+    const month = String(originalMinute.getMonth() + 1).padStart(2, "0");
+    const day = String(originalMinute.getDate()).padStart(2, "0");
+    const hour = String(originalMinute.getHours()).padStart(2, "0");
+    const minute = String(originalMinute.getMinutes()).padStart(2, "0");
+    changed.state.cronForm.scheduleAt = `${year}-${month}-${day}T${hour}:${minute}`;
+    const changedPatch = requestPatch(await changed.submit());
+    expect(changedPatch.schedule).toEqual({
+      kind: "at",
+      at: originalMinute.toISOString(),
+    });
+  });
+});
+
 describe("loadCronFailingCount", () => {
   it("queries the unfiltered enabled+error total and stores it", async () => {
     const request = vi.fn(async () => ({ jobs: [], total: 4, offset: 0, limit: 1 }));
@@ -2044,6 +2657,7 @@ describe("loadCronFailingCount", () => {
   });
 
   it("refreshes after job mutations such as pause/resume", async () => {
+    const job = createCronJob({ id: "job-1", name: "Pause me" });
     const request = vi.fn(async (method: string, payload?: unknown) => {
       if (
         method === "cron.list" &&
@@ -2052,15 +2666,18 @@ describe("loadCronFailingCount", () => {
         return { jobs: [], total: 1, offset: 0, limit: 1 };
       }
       if (method === "cron.list") {
-        return { jobs: [], total: 0, offset: 0, hasMore: false };
+        return emptyCronListResponse();
       }
       if (method === "cron.status") {
         return { enabled: true, jobs: 0 };
       }
+      if (method === "cron.update") {
+        return { ...job, enabled: false, configRevision: "config-revision-2" };
+      }
       return {};
     });
-    const state = createStateWithRequest(request);
-    await toggleCronJob(state, { id: "job-1" } as never, false);
+    const state = createStateWithRequest(request, { cronJobs: [job] });
+    await toggleCronJob(state, job, false);
 
     expect(state.cronFailingCount).toBe(1);
   });

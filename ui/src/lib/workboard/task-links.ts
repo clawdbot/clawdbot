@@ -1,6 +1,8 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { taskTimestampMs } from "../tasks/data.ts";
 import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
   isActiveWorkboardCard,
@@ -40,14 +42,7 @@ export async function listWorkboardTasks(
 }
 
 export function taskUpdatedAtValue(task: WorkboardTaskSummary): number {
-  if (typeof task.updatedAt === "number") {
-    return task.updatedAt;
-  }
-  if (typeof task.updatedAt === "string") {
-    const parsed = Date.parse(task.updatedAt);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
+  return taskTimestampMs(task.updatedAt);
 }
 
 export function taskLifecycleSourceUpdatedAt(task: WorkboardTaskSummary): number | undefined {
@@ -56,9 +51,7 @@ export function taskLifecycleSourceUpdatedAt(task: WorkboardTaskSummary): number
 }
 
 export function sessionUpdatedAtValue(session: GatewaySessionRow): number | undefined {
-  return typeof session.updatedAt === "number" && Number.isFinite(session.updatedAt)
-    ? session.updatedAt
-    : undefined;
+  return asFiniteNumber(session.updatedAt);
 }
 
 export function taskSessionKeyMatchesCardSession(

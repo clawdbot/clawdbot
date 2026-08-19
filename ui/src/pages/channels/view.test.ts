@@ -87,6 +87,33 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
   };
 }
 
+describe("channels setup access", () => {
+  it("replaces setup actions with an admin-required notice for non-admin viewers", () => {
+    const onStartSetup = vi.fn();
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    props.canAdmin = false;
+    props.onStartSetup = onStartSetup;
+    const container = document.createElement("div");
+    render(renderChannels(props), container);
+
+    expect(container.textContent).toContain(
+      "Browsing only. Channel setup requires operator.admin access.",
+    );
+    expect(
+      [...container.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+    ).not.toContain("Set up");
+    expect(container.textContent).not.toContain("More channels…");
+    expect(onStartSetup).not.toHaveBeenCalled();
+  });
+});
+
 function createWhatsAppStatus(overrides: Partial<WhatsAppStatus> = {}): WhatsAppStatus {
   return {
     configured: true,

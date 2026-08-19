@@ -3,6 +3,10 @@ import {
   assignMcpCatalogSafeServerNames,
   type McpToolCatalog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexMcpServerStatus } from "./protocol.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
@@ -12,16 +16,6 @@ const MCP_STATUS_PAGE_SIZE = 100;
 const MCP_STATUS_MAX_PAGES = 100;
 type AgentHarnessMcpCatalogParams = Parameters<NonNullable<AgentHarness["loadMcpToolCatalog"]>>[0];
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function catalogTool(params: {
   serverName: string;
   safeServerName: string;
@@ -29,15 +23,16 @@ function catalogTool(params: {
   raw?: unknown;
   deniedBySession?: true;
 }): McpToolCatalog["tools"][number] {
-  const raw = asRecord(params.raw);
-  const description = readString(raw?.description);
+  const raw = asOptionalRecord(params.raw);
+  const description = normalizeOptionalString(raw?.description);
+  const title = normalizeOptionalString(raw?.title);
   return {
     serverName: params.serverName,
     safeServerName: params.safeServerName,
     toolName: params.toolName,
-    ...(readString(raw?.title) ? { title: readString(raw?.title) } : {}),
+    ...(title ? { title } : {}),
     ...(description ? { description } : {}),
-    inputSchema: (asRecord(raw?.inputSchema) ?? { type: "object" }) as never,
+    inputSchema: (asOptionalRecord(raw?.inputSchema) ?? { type: "object" }) as never,
     fallbackDescription: description ?? params.toolName,
     ...(params.deniedBySession ? { deniedBySession: true } : {}),
   };
@@ -157,7 +152,7 @@ async function loadCodexEffectiveMcpCatalogFromThread(params: {
   return buildCodexEffectiveMcpCatalog(statuses, params.toolOverrides);
 }
 
-/** Loads MCP inventory only from the already-bound Codex process and thread. */
+/** Loads MCP inventory from the bound Codex client while retaining its lease through all pages. */
 export async function loadCodexEffectiveMcpCatalog(
   params: AgentHarnessMcpCatalogParams,
   options: { bindingStore: CodexAppServerBindingStore },
@@ -178,7 +173,7 @@ export async function loadCodexEffectiveMcpCatalog(
     return undefined;
   }
   try {
-    return loadCodexEffectiveMcpCatalogFromThread({
+    return await loadCodexEffectiveMcpCatalogFromThread({
       client: retained.client,
       threadId: binding.threadId,
       mcpServerNames: params.mcpServerNames,

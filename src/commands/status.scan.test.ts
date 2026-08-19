@@ -70,7 +70,9 @@ function configureScanStatus(
     rows: [],
     details: [],
   });
-  mocks.callGateway.mockResolvedValue(null);
+  mocks.callGateway.mockImplementation(async ({ method }: { method?: string }) =>
+    method === "status" ? { degradedSecretOwners: [], degradedPlugins: [] } : null,
+  );
   mocks.getStatusCommandSecretTargetIds.mockReturnValue(new Set<string>());
 }
 
@@ -187,7 +189,9 @@ describe("scanStatus", () => {
       sourceConfig: cfg,
       resolvedConfig: cfg,
     });
-    mocks.callGateway.mockResolvedValue(liveChannelStatus);
+    mocks.callGateway.mockImplementation(async ({ method }: { method?: string }) =>
+      method === "status" ? { degradedSecretOwners: [], degradedPlugins: [] } : liveChannelStatus,
+    );
     mocks.probeGateway.mockResolvedValue({
       ok: true,
       url: "ws://127.0.0.1:18789",
@@ -202,8 +206,10 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: false, deep: true, timeoutMs: 5000 }, {} as never);
 
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(firstCallArg(mocks.callGateway, "callGateway args")).toStrictEqual({
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.callGateway.mock.calls.find(([call]) => call?.method === "channels.status")?.[0],
+    ).toStrictEqual({
       config: cfg,
       method: "channels.status",
       params: {
@@ -320,6 +326,11 @@ describe("scanStatus", () => {
   });
 
   it("keeps status --json on read-only channel metadata when channel config exists", async () => {
+    const resolvedConfig = createStatusScanConfig({
+      marker: "resolved-preload",
+      plugins: { enabled: false },
+      channels: { telegram: { enabled: false } },
+    });
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
@@ -327,11 +338,7 @@ describe("scanStatus", () => {
         plugins: { enabled: false },
         channels: { telegram: { enabled: false } },
       }),
-      resolvedConfig: createStatusScanConfig({
-        marker: "resolved-preload",
-        plugins: { enabled: false },
-        channels: { telegram: { enabled: false } },
-      }),
+      resolvedConfig,
       summary: createStatusSummary({ linkChannel: { linked: false } }),
     });
 
@@ -343,6 +350,7 @@ describe("scanStatus", () => {
     expect(mocks.probeGateway).toHaveBeenCalledOnce();
     expect(firstCallArg(mocks.probeGateway, "probeGateway args")).toStrictEqual({
       url: "ws://127.0.0.1:18789",
+      config: resolvedConfig,
       auth: {},
       timeoutMs: 2500,
       detailLevel: "presence",

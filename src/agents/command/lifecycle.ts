@@ -2,13 +2,11 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
-import {
-  buildAgentRunTerminalOutcomeFromLifecycleEvent,
-  type AgentRunTerminalOutcome,
-} from "../agent-run-terminal-outcome.js";
+import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
 import {
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "../run-termination.js";
@@ -27,18 +25,6 @@ function resolveTerminalLogLevel(
     return "info";
   }
   return outcome.status === "timeout" ? "warn" : "error";
-}
-
-export function resolveAgentRunLifecycleEndLogLevel(meta: {
-  aborted?: unknown;
-  error?: unknown;
-  stopReason?: unknown;
-  livenessState?: unknown;
-  timeoutPhase?: unknown;
-  providerStarted?: unknown;
-}): "info" | "warn" | "error" | undefined {
-  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "end", data: meta });
-  return resolveTerminalLogLevel(outcome);
 }
 
 export function applyAgentRunAbortMetadata<T extends { meta: object }>(
@@ -86,6 +72,7 @@ export function createAgentCommandLifecycle(params: {
     );
     const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
     const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
+    const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
     emitAgentEvent({
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration(),
@@ -106,7 +93,9 @@ export function createAgentCommandLifecycle(params: {
         ...(terminalDelivery ? { terminalDelivery } : {}),
         ...(terminalReceipt ? { terminalReceipt } : {}),
         ...(terminalReply ? { terminalReply } : {}),
-        ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
+        ...(stopReason === AGENT_RUN_SUPERSEDED_STOP_REASON
+          ? { aborted: true, stopReason }
+          : abortFields),
       },
     });
   };

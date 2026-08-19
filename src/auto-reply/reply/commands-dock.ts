@@ -12,7 +12,7 @@ import {
 import { resolveTextCommand } from "../commands-registry.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
-import { persistSessionEntry } from "./commands-session-store.js";
+import { persistCommandSession } from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const DOCK_KEY_PREFIX = "dock:";
@@ -165,7 +165,7 @@ export const handleDockCommand: CommandHandler = defineAuthorizedTextCommand(
       origin: sessionDeliveryOrigin(sessionEntry),
     });
     params.sessionEntry = sessionEntry;
-    const persisted = await persistSessionEntry({
+    const persisted = await persistCommandSession({
       ...params,
       touchedFields: ["delivery"],
     });

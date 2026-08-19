@@ -50,6 +50,10 @@ type DurableFinalDeliveryPayloadShape = {
 export type MessageReceiptSourceResult = {
   channel?: string;
   messageId?: string;
+  target?: {
+    kind: "chat" | "channel" | "room" | "conversation";
+    id: string;
+  };
   chatId?: string;
   channelId?: string;
   roomId?: string;
@@ -232,6 +236,7 @@ export type ChannelMessageSendPollContext<TConfig = OpenClawConfig> = Omit<
 export type ChannelMessageSendResult = {
   receipt: MessageReceipt;
   messageId?: string;
+  target?: MessageReceiptSourceResult["target"];
 };
 
 /** Discriminator for lifecycle hooks around a concrete adapter send attempt. */

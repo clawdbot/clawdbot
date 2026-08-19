@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveArchiveKind } from "../infra/archive.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { findBundledPluginSource, type BundledPluginSource } from "../plugins/bundled-sources.js";
 import { parseGitPluginSpec } from "../plugins/git-install.js";

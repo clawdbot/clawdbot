@@ -225,6 +225,22 @@ actor GatewayConnection {
             sessionProvider: sessionProvider)
         self.clientShutdown = clientShutdown
     }
+
+    init(
+        testEndpointProvider: @escaping EndpointProvider,
+        sessionBox: WebSocketSessionBox? = nil)
+    {
+        self.endpointProvider = testEndpointProvider
+        self.supportsSharedEndpointRecovery = false
+        self.activationBindingKeyProvider = { GatewayConnection.testingActivationBindingKey }
+        // Mock WebSocket routes do not exercise device authentication and must not
+        // depend on the process-global persisted identity store.
+        self.includeDeviceIdentity = false
+        self.sessionProvider = Self.resolveSessionProvider(
+            sessionBox: sessionBox,
+            sessionProvider: nil)
+        self.clientShutdown = { client in await client.shutdown() }
+    }
     #endif
 
     private static func resolveSessionProvider(
@@ -1045,7 +1061,17 @@ extension GatewayConnection {
     }
 
     static func defaultActivationBindingKey() -> SymmetricKey? {
-        GatewayActivationBindingKeyStore.loadOrCreate()
+        self.activationBindingKey(
+            launchPolicy: .current,
+            loadOrCreate: GatewayActivationBindingKeyStore.loadOrCreate)
+    }
+
+    static func activationBindingKey(
+        launchPolicy: AppLaunchRuntimePlan,
+        loadOrCreate: () -> SymmetricKey?) -> SymmetricKey?
+    {
+        guard launchPolicy.allowsGatewayUIKeychainAccess else { return nil }
+        return loadOrCreate()
     }
 
     private static func activationOwnershipFingerprint(

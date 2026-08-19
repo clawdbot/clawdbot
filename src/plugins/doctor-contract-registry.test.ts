@@ -14,7 +14,6 @@ import {
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 const doctorContractWarnMock = vi.hoisted(() => vi.fn());
-
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
   return {
@@ -104,7 +103,7 @@ describe("doctor-contract-registry module loader", () => {
   it.each([
     {
       name: "declared false skips loading",
-      doctorContract: { legacyConfigRules: false },
+      doctorContract: { configRepair: false },
       expectedRuleCount: 0,
       expectedLoadCount: 0,
     },
@@ -116,11 +115,11 @@ describe("doctor-contract-registry module loader", () => {
     },
     {
       name: "declared true loads the authoritative module",
-      doctorContract: { legacyConfigRules: true },
+      doctorContract: { configRepair: true },
       expectedRuleCount: 1,
       expectedLoadCount: 1,
     },
-  ])("gates doctor contract artifacts by surface: $name", (testCase) => {
+  ])("gates config-repair artifacts: $name", (testCase) => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
     mocks.createJiti.mockImplementation(() => () => ({
@@ -143,6 +142,33 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.createJiti).toHaveBeenCalledTimes(testCase.expectedLoadCount);
   });
 
+  it("loads a normalizer-only config-repair contract", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
+        config: { ...cfg, repaired: true },
+        changes: ["repaired config"],
+      }),
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "normalizer-only",
+          rootDir: pluginRoot,
+          doctorContract: { configRepair: true },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(applyPluginDoctorCompatibilityMigrations({}, { env: {} })).toEqual({
+      config: { repaired: true },
+      changes: ["repaired config"],
+    });
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
   it("records doctor contract load failures with plugin and artifact context", () => {
     const pluginRoot = makeTempDir();
     const contractSource = path.join(pluginRoot, "doctor-contract-api.ts");
@@ -155,7 +181,7 @@ describe("doctor-contract-registry module loader", () => {
         {
           id: "broken-doctor-plugin",
           rootDir: pluginRoot,
-          doctorContract: { legacyConfigRules: true },
+          doctorContract: { configRepair: true },
         },
       ],
       diagnostics: [],
@@ -298,21 +324,30 @@ describe("doctor-contract-registry module loader", () => {
     });
   });
 
-  it("loads session route-state owners from doctor contract modules", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      "module.exports = { sessionRouteStateOwners: [{ id: 'demo', label: 'Demo', providerIds: ['demo'], runtimeIds: ['demo-cli'], cliSessionKeys: ['demo-cli'], authProfilePrefixes: ['demo:'] }] };\n",
-      "utf-8",
-    );
+  it("loads session route-state owners from manifest records without loading modules", () => {
     mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      plugins: [
+        {
+          id: "test-plugin",
+          rootDir: "/plugins/test-plugin",
+          sessionRouteStateOwners: [
+            {
+              id: "demo",
+              label: "Demo",
+              providerIds: ["demo"],
+              runtimeIds: ["demo-cli"],
+              cliSessionKeys: ["demo-cli"],
+              authProfilePrefixes: ["demo:"],
+            },
+          ],
+        },
+      ],
       diagnostics: [],
     });
 
     expect(
       listPluginDoctorSessionRouteStateOwners({
-        workspaceDir: pluginRoot,
+        workspaceDir: "/workspace",
         env: {},
       }),
     ).toEqual([
@@ -325,6 +360,7 @@ describe("doctor-contract-registry module loader", () => {
         authProfilePrefixes: ["demo:"],
       },
     ]);
+    expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
   it("loads config-derived session-store agent IDs from doctor contract modules", () => {
@@ -351,23 +387,54 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["cards", "voice"]);
   });
 
-  it("loads multiple bundled CLI route-state owners from doctor contract modules", () => {
-    const anthropicRoot = makeTempDir();
-    const googleRoot = makeTempDir();
-    fs.writeFileSync(
-      path.join(anthropicRoot, "doctor-contract-api.cjs"),
-      "module.exports = { sessionRouteStateOwners: [{ id: 'anthropic', label: 'Anthropic', providerIds: ['anthropic', 'claude-cli'], runtimeIds: ['claude-cli'], cliSessionKeys: ['claude-cli'], authProfilePrefixes: ['anthropic:', 'claude-cli:'] }] };\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(googleRoot, "doctor-contract-api.cjs"),
-      "module.exports = { sessionRouteStateOwners: [{ id: 'google', label: 'Google', providerIds: ['google', 'google-antigravity', 'google-gemini-cli', 'google-vertex'], runtimeIds: ['google-gemini-cli'], cliSessionKeys: ['google-gemini-cli', 'gemini-cli'], authProfilePrefixes: ['google:', 'google-antigravity:', 'google-gemini-cli:', 'google-vertex:', 'gemini-cli:'] }] };\n",
-      "utf-8",
-    );
+  it("deduplicates manifest owners by first id and sorts them by id", () => {
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
-        { id: "anthropic", rootDir: anthropicRoot },
-        { id: "google", rootDir: googleRoot },
+        {
+          id: "google",
+          rootDir: "/plugins/google",
+          channels: [],
+          providers: ["google"],
+          sessionRouteStateOwners: [
+            {
+              id: "google",
+              label: "Google",
+              providerIds: ["google", "google-antigravity", "google-gemini-cli", "google-vertex"],
+              runtimeIds: ["google-gemini-cli"],
+              cliSessionKeys: ["google-gemini-cli", "gemini-cli"],
+              authProfilePrefixes: [
+                "google:",
+                "google-antigravity:",
+                "google-gemini-cli:",
+                "google-vertex:",
+                "gemini-cli:",
+              ],
+            },
+          ],
+        },
+        {
+          id: "anthropic",
+          rootDir: "/plugins/anthropic",
+          channels: [],
+          providers: ["anthropic"],
+          sessionRouteStateOwners: [
+            {
+              id: "anthropic",
+              label: "Anthropic",
+              providerIds: ["anthropic", "claude-cli"],
+              runtimeIds: ["claude-cli"],
+              cliSessionKeys: ["claude-cli"],
+              authProfilePrefixes: ["anthropic:", "claude-cli:"],
+            },
+          ],
+        },
+        {
+          id: "google-shadow",
+          rootDir: "/plugins/google-shadow",
+          channels: [],
+          providers: ["google-shadow"],
+          sessionRouteStateOwners: [{ id: "google", label: "Ignored duplicate" }],
+        },
       ],
       diagnostics: [],
     });
@@ -376,7 +443,7 @@ describe("doctor-contract-registry module loader", () => {
       listPluginDoctorSessionRouteStateOwners({
         workspaceDir: "/workspace",
         env: {},
-        pluginIds: ["anthropic", "google"],
+        pluginIds: ["anthropic", "google", "google-shadow"],
       }),
     ).toEqual([
       {
@@ -402,6 +469,7 @@ describe("doctor-contract-registry module loader", () => {
         ],
       },
     ]);
+    expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
   it("passes active config to manifest registry discovery", () => {
@@ -501,6 +569,167 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["ollama-cloud"]);
   });
 
+  it("collects distinct provider ids from every canonical model selector and model policy", () => {
+    const providerIds = collectRelevantDoctorPluginIds({
+      agents: {
+        defaults: {
+          model: {
+            primary: "default-primary/model",
+            fallbacks: ["default-fallback/model", 42],
+          },
+          utilityModel: "default-utility/model",
+          imageModel: "default-image/model",
+          voiceModel: "default-voice/model",
+          pdfModel: "default-pdf/model",
+          mediaModels: {
+            image: "media-image/model",
+            video: "media-video/model",
+            music: "media-music/model",
+          },
+          heartbeat: { model: "heartbeat/model" },
+          subagents: {
+            model: { primary: "subagent-primary/model", fallbacks: ["subagent-fallback/model"] },
+          },
+          compaction: {
+            model: "compaction/model",
+            memoryFlush: { model: "memory-flush/model" },
+          },
+          models: {
+            "default-map/model": {},
+            bare: {},
+          },
+          modelPolicy: { allow: ["default-policy/*", 42, "bare"] },
+        },
+        entries: {
+          worker: {
+            model: "entry-model/model",
+            models: { "entry-map/model": {} },
+            modelPolicy: { allow: ["entry-policy/model", null] },
+            tools: { exec: { reviewer: { model: "entry-reviewer/model" } } },
+            tts: { summaryModel: "entry-tts/model" },
+          },
+        },
+        list: [
+          {
+            id: "shadow",
+            model: "shadow-model/model",
+            modelPolicy: { allow: ["shadow-policy/model"] },
+          },
+        ],
+      },
+      tools: { exec: { reviewer: { model: "global-reviewer/model" } } },
+      hooks: {
+        mappings: [{ model: "hook-mapping/model" }, { model: 42 }],
+        gmail: { model: "hook-gmail/model" },
+      },
+      tts: { summaryModel: "tts-summary/model" },
+      channels: {
+        modelByChannel: { discord: { guild: "channel-override/model" } },
+        discord: {
+          voice: {
+            model: "discord-voice/model",
+            tts: { summaryModel: "discord-voice-tts/model" },
+          },
+          accounts: {
+            work: {
+              voice: {
+                model: "discord-account-voice/model",
+                tts: { summaryModel: "discord-account-tts/model" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(providerIds).toEqual(
+      [
+        "channel-override",
+        "compaction",
+        "default-fallback",
+        "default-image",
+        "default-map",
+        "default-pdf",
+        "default-policy",
+        "default-primary",
+        "default-utility",
+        "default-voice",
+        "discord",
+        "discord-account-tts",
+        "discord-account-voice",
+        "discord-voice",
+        "discord-voice-tts",
+        "entry-map",
+        "entry-model",
+        "entry-policy",
+        "entry-reviewer",
+        "entry-tts",
+        "global-reviewer",
+        "heartbeat",
+        "hook-gmail",
+        "hook-mapping",
+        "media-image",
+        "media-music",
+        "media-video",
+        "memory-flush",
+        "subagent-fallback",
+        "subagent-primary",
+        "tts-summary",
+      ].toSorted(),
+    );
+    expect(providerIds).not.toContain("shadow-model");
+    expect(providerIds).not.toContain("shadow-policy");
+  });
+
+  it("collects model and policy providers from the legacy list when entries is absent", () => {
+    expect(
+      collectRelevantDoctorPluginIds({
+        agents: {
+          list: [
+            {
+              id: "legacy",
+              model: "legacy-model/model",
+              modelPolicy: { allow: ["legacy-policy/*"] },
+            },
+          ],
+        },
+      }),
+    ).toEqual(["legacy-model", "legacy-policy"]);
+  });
+
+  it("does not collect shadow-list policy providers when entries is null", () => {
+    expect(
+      collectRelevantDoctorPluginIds({
+        agents: {
+          entries: null,
+          list: [{ id: "shadow", modelPolicy: { allow: ["shadow-policy/*"] } }],
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("excludes channel metadata and blank ids from full and touched doctor scans", () => {
+    const raw = {
+      channels: {
+        defaults: {},
+        modelByChannel: { discord: { guild: "openai/gpt-5.6-luna" } },
+        " ": {},
+        discord: {},
+      },
+    };
+
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["discord", "openai"]);
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw,
+        touchedPaths: [["channels", "modelByChannel", "discord", "guild"]],
+      }),
+    ).toStrictEqual(["openai"]);
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({ raw, touchedPaths: [["channels"]] }),
+    ).toEqual(["discord", "openai"]);
+  });
+
   it("collects provider ids from media model entries", () => {
     const raw = {
       tools: {
@@ -585,6 +814,42 @@ describe("doctor-contract-registry module loader", () => {
     });
   });
 
+  it("loads a provider doctor contract when a media preference is its only activation", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
+        config: { ...cfg, repaired: true },
+        changes: ["repaired configured provider model"],
+      }),
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "opencode",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: ["opencode"],
+          doctorContract: { configRepair: true },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = {
+      tools: { media: { image: { preferredModel: "opencode/hy3-free" } } },
+    };
+    const pluginIds = collectRelevantDoctorPluginIds(config);
+
+    expect(pluginIds).toEqual(["opencode"]);
+    expect(
+      applyPluginDoctorCompatibilityMigrations(config, { config, env: {}, pluginIds }),
+    ).toEqual({
+      config: { ...config, repaired: true },
+      changes: ["repaired configured provider model"],
+    });
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
       collectRelevantDoctorPluginIdsForTouchedPaths({
@@ -615,6 +880,55 @@ describe("doctor-contract-registry module loader", () => {
         ],
       }),
     ).toEqual(["discord", "elevenlabs", "memory-wiki", "ollama-cloud"]);
+  });
+
+  it("keeps all configured model and policy providers active during touched scans", () => {
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw: {
+          agents: {
+            defaults: {
+              model: { primary: "agent-primary/model", fallbacks: ["agent-fallback/model"] },
+            },
+            entries: {
+              worker: { modelPolicy: { allow: ["worker-policy/*"] } },
+            },
+          },
+          hooks: { gmail: { model: "gmail-model/model" } },
+          tts: { summaryModel: "untouched-tts/model" },
+          channels: {
+            modelByChannel: { slack: { room: "channel-model/model" } },
+            discord: { voice: { model: "untouched-voice/model" } },
+          },
+        },
+        touchedPaths: [
+          ["agents", "defaults", "model"],
+          ["agents", "entries", "worker", "modelPolicy", "allow", "0"],
+          ["hooks", "gmail", "model"],
+          ["channels", "modelByChannel", "slack", "room"],
+        ],
+      }),
+    ).toEqual([
+      "agent-fallback",
+      "agent-primary",
+      "channel-model",
+      "gmail-model",
+      "untouched-tts",
+      "untouched-voice",
+      "worker-policy",
+    ]);
+  });
+
+  it("does not infer touched-path ownership from dotted configured ids", () => {
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw: {
+          agents: { entries: { "worker.blue": { model: "provider.with.dots/model" } } },
+          plugins: { entries: { other: {} } },
+        },
+        touchedPaths: [["plugins", "entries", "other", "enabled"]],
+      }),
+    ).toEqual(["other", "provider.with.dots"]);
   });
 
   it("falls back to the full doctor-id set when touched paths are too broad", () => {

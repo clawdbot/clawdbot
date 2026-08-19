@@ -1,6 +1,7 @@
 // Slack tests cover approval handler plugin behavior.
 import type {
   ApprovalActionView,
+  ChannelApprovalKind,
   ApprovalMetadataView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -66,7 +67,7 @@ const ACTION_PRESENTATION = {
 } as const satisfies Record<ApprovalDecision, Pick<ApprovalActionView, "label" | "style">>;
 
 function buildApprovalAction(
-  approvalKind: "exec" | "plugin",
+  approvalKind: ChannelApprovalKind,
   approvalId: string,
   decision: ApprovalDecision,
 ): ApprovalActionView {
@@ -350,6 +351,9 @@ describe("slackApprovalNativeRuntime", () => {
     });
 
     expect(payload.text).toContain("*Exec approval required*");
+    expect((payload.blocks as Array<{ block_id?: string }>)[0]?.block_id).toBe(
+      "openclaw_approval_header",
+    );
     const actionsBlock = findSlackActionsBlock(
       payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
     );
@@ -376,6 +380,9 @@ describe("slackApprovalNativeRuntime", () => {
     });
 
     expect(payload.text).toContain("*Plugin approval required*");
+    expect((payload.blocks as Array<{ block_id?: string }>)[0]?.block_id).toBe(
+      "openclaw_approval_header",
+    );
     expect(payload.text).toContain("Share screen with Computer Use");
     expect(payload.text).toContain("*Approval ID:* plugin:req-1");
     expect(payload.text).not.toContain("*Command*");

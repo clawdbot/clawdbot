@@ -60,8 +60,10 @@ export const ConfigSchemaLookupParamsSchema = closedObject({
   path: ConfigSchemaLookupPathString,
 });
 
-/** Empty request payload for checking update/restart status. */
-export const UpdateStatusParamsSchema = closedObject({});
+/** Request payload for cached status or an explicit checkout refresh. */
+export const UpdateStatusParamsSchema = closedObject({
+  refreshCheckout: Type.Optional(Type.Boolean()),
+});
 
 const UpdateCommitSchema = closedObject({
   sha: NonEmptyString,
@@ -162,6 +164,14 @@ export const UpdateScheduleStateSchema = closedObject({
 export const UpdateStatusResultSchema = closedObject({
   sentinel: Type.Unknown(),
   updateAvailable: Type.Union([UpdateAvailableSchema, Type.Null()]),
+  effectiveChannel: Type.Optional(
+    Type.Union([
+      Type.Literal("stable"),
+      Type.Literal("extended-stable"),
+      Type.Literal("beta"),
+      Type.Literal("dev"),
+    ]),
+  ),
   schedule: Type.Optional(UpdateScheduleStateSchema),
 });
 

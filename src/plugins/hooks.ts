@@ -7,12 +7,13 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   expandToolGroups,
   normalizeToolList,
-  normalizeToolName,
+  normalizeToolPolicyName,
   readToolAllowlistIntersection,
 } from "../agents/tool-policy.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -86,8 +87,6 @@ import type {
   PluginHookSubagentContext,
   PluginHookSubagentDeliveryTargetEvent,
   PluginHookSubagentDeliveryTargetResult,
-  PluginHookSubagentSpawningEvent,
-  PluginHookSubagentSpawningResult,
   PluginHookSubagentEndedEvent,
   PluginHookSubagentProgressEvent,
   PluginHookSubagentSpawnedEvent,
@@ -417,7 +416,7 @@ export function createHookRunner(
     }
     return [...new Set(normalizeToolList([...normalizedLeft, ...normalizedRight]))].filter(
       (name) => {
-        const normalized = normalizeToolName(name);
+        const normalized = normalizeToolPolicyName(name);
         return (
           isToolAllowedByPolicyName(normalized, { allow: normalizedLeft }) &&
           isToolAllowedByPolicyName(normalized, { allow: normalizedRight })
@@ -565,24 +564,6 @@ export function createHookRunner(
     return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
   };
 
-  const mergeSubagentSpawningResult = (
-    acc: PluginHookSubagentSpawningResult | undefined,
-    next: PluginHookSubagentSpawningResult,
-  ): PluginHookSubagentSpawningResult => {
-    if (acc?.status === "error") {
-      return acc;
-    }
-    if (next.status === "error") {
-      return next;
-    }
-    const deliveryOrigin = acc?.deliveryOrigin ?? next.deliveryOrigin;
-    return {
-      status: "ok",
-      threadBindingReady: Boolean(acc?.threadBindingReady || next.threadBindingReady),
-      ...(deliveryOrigin ? { deliveryOrigin } : {}),
-    };
-  };
-
   const mergeSubagentDeliveryTargetResult = (
     acc: PluginHookSubagentDeliveryTargetResult | undefined,
     next: PluginHookSubagentDeliveryTargetResult,
@@ -614,13 +595,6 @@ export function createHookRunner(
 
   const getPluginPackageVersion = (pluginId: string): string | undefined =>
     registry.plugins.find((plugin) => plugin.id === pluginId)?.packageVersion;
-
-  const isPromiseLike = (value: unknown): value is PromiseLike<unknown> => {
-    if ((typeof value !== "object" && typeof value !== "function") || value === null) {
-      return false;
-    }
-    return typeof (value as { then?: unknown }).then === "function";
-  };
 
   const normalizePositiveTimeoutMs = (timeoutMs: number | undefined): number | undefined => {
     return clampPositiveTimerTimeoutMs(timeoutMs);
@@ -1438,23 +1412,6 @@ export function createHookRunner(
   // =========================================================================
 
   /**
-   * @deprecated Core prepares thread-bound subagent bindings through channel
-   * session-binding adapters before subagent_spawned fires. This remains only
-   * for older plugins that call the hook runner directly.
-   */
-  async function runSubagentSpawning(
-    event: PluginHookSubagentSpawningEvent,
-    ctx: PluginHookSubagentContext,
-  ): Promise<PluginHookSubagentSpawningResult | undefined> {
-    return runModifyingHook<"subagent_spawning", PluginHookSubagentSpawningResult>(
-      "subagent_spawning",
-      event,
-      ctx,
-      { mergeResults: mergeSubagentSpawningResult },
-    );
-  }
-
-  /**
    * Run subagent_delivery_target hook.
    * Runs sequentially so channel plugins can deterministically resolve routing.
    */
@@ -1690,7 +1647,6 @@ export function createHookRunner(
       event: PluginHookSessionEndEvent,
       ctx: PluginHookSessionContext,
     ): Promise<void> => runVoidHook("session_end", event, ctx),
-    runSubagentSpawning,
     runSubagentDeliveryTarget,
     runSubagentSpawned: async (
       event: PluginHookSubagentSpawnedEvent,
@@ -1739,10 +1695,6 @@ export type HookRunner = ReturnType<typeof createHookRunner>;
 
 export type SubagentLifecycleHookRunner = Pick<
   HookRunner,
-  | "hasHooks"
-  | "runSubagentSpawning"
-  | "runSubagentSpawned"
-  | "runSubagentProgress"
-  | "runSubagentEnded"
+  "hasHooks" | "runSubagentSpawned" | "runSubagentProgress" | "runSubagentEnded"
 >;
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

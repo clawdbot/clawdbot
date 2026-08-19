@@ -1,9 +1,9 @@
 // Setup migration stage tests cover isolated SQLite writes and promotion rollback.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
@@ -13,13 +13,7 @@ import {
   recoverSetupMigrationPromotion,
 } from "./setup.migration-stage.js";
 
-const tempRoots = new Set<string>();
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migration-stage-"));
-  tempRoots.add(root);
-  return root;
-}
+const tempRoots = createTempDirTracker();
 
 function configHash(config: unknown): string {
   return crypto.createHash("sha256").update(JSON.stringify(config)).digest("hex");
@@ -60,15 +54,12 @@ afterEach(async () => {
     ]);
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  for (const root of tempRoots) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-  tempRoots.clear();
+  tempRoots.cleanup();
 });
 
 describe("setup migration stage", () => {
   it("executes provider config mutations once and projects staged paths", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     const reportDir = path.join(stateDir, "migration", "claude", "attempt");
@@ -101,7 +92,7 @@ describe("setup migration stage", () => {
   });
 
   it("uses the most-specific path mapping when workspace lives under state", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(stateDir, "workspace");
     const stage = await createSetupMigrationStage({
@@ -144,7 +135,7 @@ describe("setup migration stage", () => {
   });
 
   it("routes staged auth writes to the staged shared registry", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const liveStateDir = path.join(root, "live-state");
     const stagedStateDir = path.join(root, "staged-state");
     const stagedAgentDir = path.join(stagedStateDir, "agents", "main", "agent");
@@ -182,7 +173,7 @@ describe("setup migration stage", () => {
   });
 
   it("promotes the final agent registry path after verification closes the handle", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     const reportDir = path.join(stateDir, "migration", "claude", "attempt");
@@ -222,7 +213,7 @@ describe("setup migration stage", () => {
   });
 
   it("rolls back promoted directories when the config commit fails", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     const reportDir = path.join(stateDir, "migration", "claude", "attempt");
@@ -257,7 +248,7 @@ describe("setup migration stage", () => {
   });
 
   it("journals pre-existing empty targets before promotion starts", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     const reportDir = path.join(stateDir, "migration", "claude", "attempt");
@@ -302,7 +293,7 @@ describe("setup migration stage", () => {
   });
 
   it("removes shared promotion parents after rollback", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const sharedRoot = path.join(stateDir, "shared");
     const workspaceDir = path.join(sharedRoot, "workspace");
@@ -339,7 +330,7 @@ describe("setup migration stage", () => {
   });
 
   it("rejects staged state that the promotion owner does not publish", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     const reportDir = path.join(stateDir, "migration", "claude", "attempt");
@@ -369,7 +360,7 @@ describe("setup migration stage", () => {
   });
 
   it("rejects overlapping workspace and agent promotion targets", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(stateDir, "agents", "main", "agent", "workspace");
     const reportDir = path.join(stateDir, "migration", "claude", "attempt");
@@ -395,7 +386,7 @@ describe("setup migration stage", () => {
   });
 
   it("rejects overlap through a state-directory symlink", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const stateAlias = path.join(root, "state-alias");
     await fs.mkdir(stateDir, { recursive: true });
@@ -424,7 +415,7 @@ describe("setup migration stage", () => {
   });
 
   it("rejects a report path that resolves inside a promotion target", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     const reportDir = path.join(stateDir, "migration", "claude", "attempt");
@@ -453,7 +444,7 @@ describe("setup migration stage", () => {
   });
 
   it("fails closed when an interrupted promotion already published data", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const reportDir = path.join(stateDir, "migration", "claude", "2026-07-21T000000Z");
     const stagedWorkspace = path.join(root, "staged-workspace");
@@ -499,7 +490,7 @@ describe("setup migration stage", () => {
   });
 
   it("restores a pre-existing empty target when recovery starts before its rename", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const reportDir = path.join(stateDir, "migration", "claude", "2026-07-21T000000Z");
     const stagedRoot = path.join(root, "staged-root");
@@ -548,7 +539,7 @@ describe("setup migration stage", () => {
   });
 
   it("reconciles an interrupted promotion after config commit", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const reportDir = path.join(stateDir, "migration", "claude", "2026-07-21T000001Z");
     const finalWorkspace = path.join(root, "workspace");
@@ -596,7 +587,7 @@ describe("setup migration stage", () => {
   });
 
   it("allows committed recovery after legitimate config changes", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const reportDir = path.join(stateDir, "migration", "claude", "2026-07-21T000002Z");
     const finalWorkspace = path.join(root, "workspace");
@@ -640,7 +631,7 @@ describe("setup migration stage", () => {
   });
 
   it("rejects committed recovery after the promoted target was reset", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const reportDir = path.join(stateDir, "migration", "claude", "2026-07-21T000002Z");
     const finalWorkspace = path.join(root, "workspace");
@@ -683,7 +674,7 @@ describe("setup migration stage", () => {
   });
 
   it("reconciles a config writer that commits and then throws", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     const reportDir = path.join(stateDir, "migration", "claude", "attempt");

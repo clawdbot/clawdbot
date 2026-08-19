@@ -1,4 +1,8 @@
 /** Builds and compares installed plugin index records for refresh decisions. */
+import {
+  createPluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -130,7 +134,10 @@ export function recordPluginInstallInRecords(
   records: Record<string, PluginInstallRecord>,
   update: PluginInstallUpdate,
 ): Record<string, PluginInstallRecord> {
-  return recordPluginInstall({ plugins: { installs: records } }, update).plugins?.installs ?? {};
+  return (
+    recordPluginInstall({ plugins: { installs: records } }, update).plugins?.installs ??
+    createPluginInstallRecordMap<PluginInstallRecord>()
+  );
 }
 
 /** Removes one plugin install record from an in-memory record map. */
@@ -138,6 +145,11 @@ export function removePluginInstallRecordFromRecords(
   records: Record<string, PluginInstallRecord>,
   pluginId: string,
 ): Record<string, PluginInstallRecord> {
-  const { [pluginId]: _removed, ...rest } = records;
-  return rest;
+  const remaining = createPluginInstallRecordMap<PluginInstallRecord>();
+  for (const [candidateId, record] of Object.entries(records)) {
+    if (candidateId !== pluginId) {
+      setPluginInstallRecordMapEntry(remaining, candidateId, record);
+    }
+  }
+  return remaining;
 }

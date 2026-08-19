@@ -16,7 +16,7 @@ import {
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
 import {
-  applyQaMergePatch,
+  applyQaSuiteGatewayConfigPatches,
   collectQaSuiteTransportPolicy,
   scenarioRequiresControlUi,
 } from "./suite-planning.js";
@@ -65,7 +65,7 @@ export async function runQaFlowSuiteStandard(
     alternateModel,
     fastMode,
     enabledPluginIds,
-    gatewayConfigPatch,
+    gatewayConfigPatches,
     gatewayRuntimeOptions,
     concurrency,
     progressEnabled,
@@ -141,9 +141,15 @@ export async function runQaFlowSuiteStandard(
       enabledPluginIds,
       allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
-      mutateConfig: gatewayConfigPatch
-        ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
-        : undefined,
+      mutateConfig:
+        gatewayConfigPatches.length > 0 || params?.mutateConfig
+          ? (cfg) => {
+              const patchedConfig = gatewayConfigPatches.length
+                ? (applyQaSuiteGatewayConfigPatches(cfg, gatewayConfigPatches) as OpenClawConfig)
+                : cfg;
+              return params?.mutateConfig ? params.mutateConfig(patchedConfig) : patchedConfig;
+            }
+          : undefined,
       // The gateway owns forced runtime, sandbox args, staged mock models, and provider keys.
       runtimeEnvPatch: mergeQaRuntimeEnvPatches(
         transport.createRuntimeEnvPatch?.(),

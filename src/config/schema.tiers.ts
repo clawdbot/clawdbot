@@ -3,7 +3,7 @@ import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js"
 
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
-cloudWorkers commands cron diagnostics discovery env gateway hooks logging mcp memory messages
+cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
 meta models nodeHost plugins proxy secrets security session skills surfaces talk tools transcripts
 tts ui update wizard
 `
@@ -33,7 +33,7 @@ agents.defaults.subagents.model agents.defaults.subagents.model.primary
 agents.defaults.sandbox.ssh.workspaceRoot
 agents.defaults.sandbox.workspaceRoot
 agents.defaults.thinkingDefault agents.defaults.userTimezone agents.defaults.voiceModel.primary
-agents.defaults.workspace agents.entries.*.default agents.entries.*.groupChat.mentionPatterns
+agents.defaults.workspace agents.entries.*.groupChat.mentionPatterns
 agents.entries.*.groupChat.unmentionedInbound agents.entries.*.identity
 agents.entries.*.memory.search.enabled agents.entries.*.memory.search.provider
 agents.entries.*.memory.search.rememberAcrossConversations agents.entries.*.memory.search.model
@@ -43,6 +43,7 @@ agents.entries.*.runtime.acp.agent agents.entries.*.runtime.type
 agents.entries.*.sandbox.ssh.workspaceRoot agents.entries.*.sandbox.workspaceRoot
 agents.entries.*.subagents.model agents.entries.*.subagents.model.primary agents.entries.*.workspace
 agents.entries.*.tools.alsoAllow agents.entries.*.tools.deny
+agents.entries.*.tools.github
 agents.entries.*.tools.exec.applyPatch.workspaceOnly agents.entries.*.tools.exec.host
 agents.entries.*.tools.exec.mode agents.entries.*.tools.exec.strictInlineEval
 agents.entries.*.tools.exec.reviewer.model agents.entries.*.tools.exec.reviewer.model.primary
@@ -132,8 +133,7 @@ hooks.mappings.*.agentId hooks.mappings.*.model hooks.token
 mcp.apps.enabled mcp.servers.*.args mcp.servers.*.auth mcp.servers.*.command
 mcp.servers.*.cwd mcp.servers.*.enabled mcp.servers.*.env mcp.servers.*.headers
 mcp.servers.*.oauth.authProfileId mcp.servers.*.transport mcp.servers.*.url
-memory.qmd.scope.default memory.qmd.scope.rules.*.action memory.search.enabled
-memory.search.model memory.search.provider memory.search.rememberAcrossConversations
+memory.search.enabled memory.search.model memory.search.provider memory.search.rememberAcrossConversations
 memory.search.remote.apiKey
 memory.search.sources models.providers.*.api models.providers.*.apiKey
 models.providers.*.auth models.providers.*.baseUrl models.providers.*.models.*.id
@@ -152,6 +152,7 @@ skills.workshop.autonomous.mode talk.provider talk.providers.*.apiKey
 talk.realtime.brain talk.realtime.mode talk.realtime.provider
 talk.realtime.model talk.realtime.providers.*.apiKey talk.realtime.speakerVoice talk.speechLocale
 tools.alsoAllow tools.deny tools.exec
+tools.github
 tools.fs tools.media.audio tools.media.image tools.media.video tools.message
 tools.exec.reviewer.model.primary tools.media.models.*.model
 tools.media.models.*.request.auth.token tools.profile tools.sessions
@@ -167,7 +168,10 @@ wizard.accessMode wizard.appRecommendations
   .trim()
   .split(/\s+/);
 
-const ADVANCED_TUNING_PATHS = new Set(["agents.defaults.heartbeat.every"]);
+const ADVANCED_TUNING_PATHS = new Set([
+  "agents.defaults.heartbeat.every",
+  "session.maintenance.preserveRecent",
+]);
 const CHANNEL_KERNEL_TIER_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
 
 function isPluginOwnedChannelTierPath(path: string): boolean {

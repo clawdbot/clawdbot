@@ -15,6 +15,7 @@ import { runProviderAuthWarmWorkerInput } from "./model-provider-auth.worker.js"
 const tempDirs: string[] = [];
 
 vi.mock("./prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogOwnerSnapshot: vi.fn(
     async (params: { agentDir: string; agentId?: string; config: OpenClawConfig }) => ({
       agentDir: params.agentDir,

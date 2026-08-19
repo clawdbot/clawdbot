@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Doctor repair for stale plugin-owned routing state persisted in session entries. */
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
@@ -113,7 +114,10 @@ function entryMayContainPluginSessionRouteState(sessionKey: string, entry: Sessi
   if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
     return false;
   }
-  const record = entry as unknown as Record<string, unknown>;
+  if (!isRecord(entry)) {
+    return false;
+  }
+  const record = entry;
   return (
     normalizeString(record.providerOverride) !== undefined ||
     normalizeString(record.modelOverride) !== undefined ||
@@ -511,7 +515,9 @@ export async function runPluginSessionStateDoctorRepairs(params: {
       }
       routeByAgentId.set(agentId, route);
     }
-    scanStore[sessionKey] = entry as unknown as Record<string, unknown>;
+    if (isRecord(entry)) {
+      scanStore[sessionKey] = entry;
+    }
     routes[sessionKey] = route;
   }
   if (Object.keys(scanStore).length === 0) {
@@ -537,14 +543,10 @@ export async function runPluginSessionStateDoctorRepairs(params: {
         const repairedAt = Date.now();
         const repairsByKey = new Map(repairs.map((repair) => [repair.key, repair]));
         await updateLegacySessionStore(params.absoluteStorePath, (currentStore) => {
-          const currentMutableStore = currentStore as unknown as Record<
-            string,
-            Record<string, unknown>
-          >;
           for (const [key, repair] of repairsByKey) {
-            const current = currentMutableStore[key];
+            const current = currentStore[key];
             if (
-              current &&
+              isRecord(current) &&
               applySessionRouteStateRepair({
                 sessionKey: key,
                 entry: current,

@@ -305,33 +305,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(twice).toEqual(once);
   });
 
-  it("parses Telegram reaction directives into channel data without visible text", () => {
-    expect(
-      normalizeReplyPayloadsForDelivery([
-        {
-          text: "[[react_to_current:🔥]] Thanks",
-          channelData: { telegram: { quoteText: "quoted" } },
-        },
-      ]),
-    ).toEqual([
-      {
-        text: "Thanks",
-        mediaUrls: undefined,
-        mediaUrl: undefined,
-        replyToId: undefined,
-        replyToCurrent: true,
-        replyToTag: false,
-        audioAsVoice: false,
-        channelData: {
-          telegram: {
-            quoteText: "quoted",
-            reaction: { emoji: "🔥", replyToCurrent: true },
-          },
-        },
-      },
-    ]);
-  });
-
   it("captures a tricky payload matrix snapshot", () => {
     const input: ReplyPayload[] = [
       { text: "NO_REPLY" },

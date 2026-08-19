@@ -46,6 +46,19 @@ describe("buildInlineProviderModels", () => {
     ]);
   });
 
+  it("preserves authored context windows and leaves omitted windows absent", () => {
+    const { contextWindow: _contextWindow, ...transportOnly } = makeModel("transport-only");
+    const result = buildInlineProviderModels({
+      proxy: {
+        baseUrl: "https://proxy.example.com/v1",
+        models: [transportOnly, { ...makeModel("authored-window"), contextWindow: 64_000 }],
+      },
+    });
+
+    expect(expectDefined(result[0], "transport-only model")).not.toHaveProperty("contextWindow");
+    expect(expectDefined(result[1], "authored-window model").contextWindow).toBe(64_000);
+  });
+
   it("inherits baseUrl from provider when model does not specify it", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {

@@ -1,5 +1,5 @@
 // Converts eligible portable question buttons into numbered reaction choices.
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import { readAskUserQuestionId, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { MessagePresentation } from "../interactive/payload.js";
 import { renderMessagePresentationFallbackText } from "../interactive/payload.js";
 import {
@@ -16,17 +16,6 @@ type QuestionReactionBinding = {
   questionId: string;
   optionValues: string[];
 };
-
-export function readAskUserQuestionId(
-  payload: Pick<ReplyPayload, "channelData">,
-): string | undefined {
-  const askUser = payload.channelData?.askUser;
-  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
-    return undefined;
-  }
-  const questionId = (askUser as { questionId?: unknown }).questionId;
-  return typeof questionId === "string" && questionId ? questionId : undefined;
-}
 
 export function readQuestionReactionBinding(
   payload: Pick<ReplyPayload, "channelData">,

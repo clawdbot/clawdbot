@@ -18,6 +18,7 @@ const {
   buildQaDockerHarnessImage,
   runQaDockerUp,
   defaultQaRuntimeModelForMode,
+  resolveQaRuntimeModelPair,
   readQaScenarioPack,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
@@ -32,6 +33,7 @@ const {
   runQaDockerUp: vi.fn(),
   defaultQaRuntimeModelForMode:
     vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
+  resolveQaRuntimeModelPair: vi.fn(),
   readQaScenarioPack: vi.fn<() => QaScenarioPack>(),
 }));
 
@@ -76,6 +78,7 @@ vi.mock("./docker-up.runtime.js", () => ({
 
 vi.mock("./model-selection.runtime.js", () => ({
   defaultQaRuntimeModelForMode,
+  resolveQaRuntimeModelPair,
 }));
 
 vi.mock("./scenario-catalog.js", async (importOriginal) => {
@@ -106,12 +109,29 @@ import { QaSuiteInfraError } from "./errors.js";
 import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
+import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import type { QaProviderModeInput } from "./run-config.js";
 import { expandQaScenarioExecutionCells } from "./scenario-lane.js";
 import type { QaSuiteRunParams } from "./suite.js";
 
 const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
+function resolveMockQaRuntimeModelPair(params: {
+  providerMode: string;
+  primaryModel?: string;
+  alternateModel?: string;
+}) {
+  const primaryModel =
+    params.primaryModel?.trim() || defaultQaRuntimeModelForMode(params.providerMode);
+  const alternateModel =
+    params.alternateModel?.trim() ||
+    (params.providerMode === "live-frontier"
+      ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
+        defaultQaRuntimeModelForMode(params.providerMode, { alternate: true }))
+      : defaultQaRuntimeModelForMode(params.providerMode, { alternate: true }));
+  return { primaryModel, alternateModel };
+}
+
 const QA_PASSING_SUITE_SCENARIO = {
   name: "channel chat baseline",
   status: "pass" as const,
@@ -340,6 +360,7 @@ describe("qa cli runtime", () => {
       (mode: string, options?: { alternate?: boolean }) =>
         defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
+    resolveQaRuntimeModelPair.mockImplementation(resolveMockQaRuntimeModelPair);
     readQaScenarioPack.mockClear();
     runQaSuite.mockImplementation(async (params) => {
       const observedCells = executionCellsForSuiteParams(params);
@@ -486,6 +507,84 @@ describe("qa cli runtime", () => {
     );
   });
 
+  it("rejects a direct suite summary with unaccounted outcomes", async () => {
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 2, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [{ status: "pass" }],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+      }),
+    );
+
+    await expect(runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" })).rejects.toMatchObject({
+      code: "summary_counts_invalid",
+    });
+  });
+
+  it("rejects a direct suite summary whose canonical evidence contradicts its counts", async () => {
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [{ status: "pass" }],
+        evidence: { entries: [{ result: { status: "fail" } }] },
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+      }),
+    );
+
+    await expect(runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" })).rejects.toMatchObject({
+      code: "summary_counts_invalid",
+    });
+  });
+
+  it("accepts a passing scenario with lower-level blocked and passing producer checks", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [{ status: "pass" }],
+        evidence: {
+          entries: [{ result: { status: "blocked" } }, { result: { status: "pass" } }],
+        },
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
   it("keeps a direct suite green for a real pass and a report-only optional tool skip", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
@@ -603,12 +702,10 @@ describe("qa cli runtime", () => {
         await fs.writeFile(
           suiteSummaryPath,
           JSON.stringify({
-            counts: {
-              total: 1,
-              passed: 0,
-              failed: 0,
-              skipped: summary === "required-skip" ? 1 : 0,
-            },
+            counts:
+              summary === "required-skip"
+                ? { total: 1, passed: 0, failed: 0, skipped: 1 }
+                : { total: 1 },
             scenarios: [
               {
                 name: "Required channel scenario",
@@ -3262,39 +3359,43 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: DEFAULT_LIVE_FRONTIER_MODEL,
-      alternateModel: DEFAULT_LIVE_FRONTIER_MODEL,
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
     });
   });
 
-  it("keeps an explicit manual primary model as the alternate default", async () => {
-    await runQaManualLaneCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "live-frontier",
-      primaryModel: "anthropic/claude-sonnet-4-6",
-      message: "read qa kickoff and reply short",
-    });
+  it.each(["anthropic/claude-sonnet-4-6", "openai/gpt-5.6-sol"])(
+    "keeps explicit manual primary %s single-model when the alternate is omitted",
+    async (primaryModel) => {
+      await runQaManualLaneCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "live-frontier",
+        primaryModel,
+        message: "read qa kickoff and reply short",
+      });
 
-    expect(runQaManualLane).toHaveBeenCalledWith({
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      transportId: "qa-channel",
-      providerMode: "live-frontier",
-      primaryModel: "anthropic/claude-sonnet-4-6",
-      alternateModel: "anthropic/claude-sonnet-4-6",
-      fastMode: undefined,
-      message: "read qa kickoff and reply short",
-      timeoutMs: undefined,
-    });
-  });
+      expect(runQaManualLane).toHaveBeenCalledWith({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        transportId: "qa-channel",
+        providerMode: "live-frontier",
+        primaryModel,
+        alternateModel: primaryModel,
+        fastMode: undefined,
+        message: "read qa kickoff and reply short",
+        timeoutMs: undefined,
+      });
+    },
+  );
 
   it("defaults manual frontier runs onto Codex OAuth when the runtime resolver prefers it", async () => {
-    defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
-      mode === "live-frontier"
-        ? "openai/gpt-5.6-luna"
-        : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
-    );
+    defaultQaRuntimeModelForMode.mockImplementation((mode, options) => {
+      if (mode === "live-frontier" && !options?.alternate) {
+        return "openai/gpt-5.6-luna";
+      }
+      return defaultQaProviderModelForMode(mode as QaProviderModeInput, options);
+    });
 
     await runQaManualLaneCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -3306,7 +3407,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-sol",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,

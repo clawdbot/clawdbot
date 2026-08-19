@@ -2,11 +2,11 @@ import { normalizeOptionalString as normalizeText } from "@openclaw/normalizatio
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import {
   buildConversationRef,
   normalizeConversationPeerId,
 } from "../../routing/conversation-ref.js";
-import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -74,8 +74,8 @@ function resolvePairedOriginPeerId(params: {
     !originChannel ||
     originChannel !== deliveryChannel ||
     normalizeChatType(origin?.chatType) !== params.kind ||
-    (normalizeAccountId(origin?.accountId) ?? "default") !==
-      (normalizeAccountId(params.deliveryContext?.accountId) ?? "default") ||
+    (normalizeOptionalAccountId(origin?.accountId) ?? "default") !==
+      (normalizeOptionalAccountId(params.deliveryContext?.accountId) ?? "default") ||
     normalizeThreadId(origin?.threadId) !== normalizeThreadId(params.deliveryContext?.threadId)
   ) {
     return undefined;
@@ -112,7 +112,7 @@ export function buildConversationIdentity(params: {
   if (!deliveryTarget) {
     return null;
   }
-  const accountId = normalizeAccountId(params.accountId) ?? "default";
+  const accountId = normalizeOptionalAccountId(params.accountId) ?? "default";
   const rawParent = normalizeText(params.parentConversationRef);
   const parentConversationRef = rawParent
     ? rawParent.startsWith("conv_")

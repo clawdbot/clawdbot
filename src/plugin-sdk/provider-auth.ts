@@ -16,8 +16,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import type { AuthProfileStore, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
@@ -110,7 +109,7 @@ export {
 } from "../plugins/provider-auth-helpers.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export { coerceSecretRef, hasConfiguredSecretInput } from "../config/types.secrets.js";
-export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+export { resolveDefaultSecretProviderAlias } from "./secret-provider-alias.js";
 export { resolveRequiredHomeDir } from "../infra/home-dir.js";
 export {
   normalizeOptionalSecretInput,

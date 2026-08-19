@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
@@ -31,6 +32,7 @@ type AcpReadyResolution = Extract<
 >;
 
 export async function runAcpAgentCommand(params: {
+  preparedRunAdmission: PreparedAgentRunAdmission;
   cfg: OpenClawConfig;
   deps: CliDeps;
   runtime: RuntimeEnv;
@@ -99,7 +101,9 @@ export async function runAcpAgentCommand(params: {
 
     const acpImageAttachments = resolveInlineAgentImageAttachments(params.opts.images);
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+    const admittedRunContext = await params.preparedRunAdmission.admit("acp");
     await params.acpManager.runTurn({
+      admittedRunContext,
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       provenance: params.provenance,

@@ -40,6 +40,25 @@ function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi 
 }
 
 describe("defineChannelPluginEntry", () => {
+  it("defers and memoizes config schema factories", () => {
+    const configSchema = {
+      schema: { type: "object" as const, additionalProperties: false },
+    };
+    const createConfigSchema = vi.fn(() => configSchema);
+    const entry = defineChannelPluginEntry({
+      id: "lazy-config-schema",
+      name: "Lazy Config Schema",
+      description: "lazy config schema test",
+      plugin: createChannelPlugin("lazy-config-schema"),
+      configSchema: createConfigSchema,
+    });
+
+    expect(createConfigSchema).not.toHaveBeenCalled();
+    expect(entry.configSchema).toBe(configSchema);
+    expect(entry.configSchema).toBe(configSchema);
+    expect(createConfigSchema).toHaveBeenCalledTimes(1);
+  });
+
   it("runs tool registrations without channel runtime wiring during tool discovery", () => {
     const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
@@ -164,6 +183,26 @@ describe("createChannelPluginBase", () => {
 });
 
 describe("createChatChannelPlugin", () => {
+  it("preserves DM routing through the declarative security shorthand", () => {
+    const dmRouting = {
+      resolveDmScope: () => "per-peer" as const,
+      resolveDmRoute: () => ({ kind: "core" as const }),
+    };
+    const plugin = createChatChannelPlugin({
+      base: createChannelPlugin("security-routing") as ChannelPlugin<{ accountId: string }>,
+      security: {
+        dm: {
+          channelKey: "security-routing",
+          resolvePolicy: () => "allowlist",
+          resolveAllowFrom: () => [],
+        },
+        dmRouting,
+      },
+    });
+
+    expect(plugin.security?.dmRouting).toBe(dmRouting);
+  });
+
   it("preserves account-scoped current-conversation binding support", () => {
     const conversationBindings: NonNullable<ChannelPlugin["conversationBindings"]> = {
       isCurrentConversationBindingSupported: ({ accountId }) => accountId !== "enterprise",

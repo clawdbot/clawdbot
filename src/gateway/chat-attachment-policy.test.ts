@@ -46,12 +46,25 @@ describe("resolveChatAttachmentMaxBytes", () => {
   });
 });
 
+// Frame budget mirrored from the policy module: base64 expands 4/3 and the
+// JSON envelope needs slack, so the advertised ceiling must fit one WS frame.
+const MAX_ADVERTISED_BYTES = Math.floor(((25 * MB - 256 * 1024) * 3) / 4);
+
 describe("resolveChatAttachmentPolicy", () => {
   it("advertises the configured ceiling with the image hydration cap applied", () => {
-    expect(resolveChatAttachmentPolicy(cfgWithMediaMaxMb(20))).toEqual({
-      maxBytes: 20 * MB,
+    expect(resolveChatAttachmentPolicy(cfgWithMediaMaxMb(10))).toEqual({
+      maxBytes: 10 * MB,
       maxImageBytes: MAX_IMAGE_BYTES,
     });
+  });
+
+  it("clamps the advertised ceiling to what one WS frame can carry as base64", () => {
+    // The 20MB default and any raised mediaMaxMb both exceed the frame budget:
+    // advertising them would let the client encode a frame the server
+    // hard-drops with 1009.
+    expect(resolveChatAttachmentPolicy({} as OpenClawConfig).maxBytes).toBe(MAX_ADVERTISED_BYTES);
+    expect(resolveChatAttachmentPolicy(cfgWithMediaMaxMb(50)).maxBytes).toBe(MAX_ADVERTISED_BYTES);
+    expect(MAX_ADVERTISED_BYTES).toBeLessThan(20 * MB);
   });
 
   it("clamps maxImageBytes to the configured ceiling when it is the smaller limit", () => {

@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
 import { toRepoRelativePath } from "../test-utils/repo-files.js";
-import { resolvePluginNpmProjectDir } from "./install-paths.js";
+import {
+  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmGenerationProjectDirPrefix,
+  resolvePluginNpmProjectDir,
+} from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
 import {
   cleanupTrackedTempDirsAsync,
@@ -13,6 +17,10 @@ import {
 } from "./test-helpers/fs-fixtures.js";
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
+import {
+  prepareConfigForPendingPluginDirectoryRemovalSet,
+  recordPluginPackageUninstallPlan,
+} from "./uninstall-package-plan.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   planPluginUninstall,
@@ -28,8 +36,19 @@ vi.mock("../process/exec.js", () => ({
 type PluginConfig = NonNullable<OpenClawConfig["plugins"]>;
 type PluginInstallRecord = NonNullable<PluginConfig["installs"]>[string];
 
-async function uninstallPlugin(params: Parameters<typeof planPluginUninstall>[0]) {
-  const plan = planPluginUninstall(params);
+async function uninstallPlugin(
+  params: Parameters<typeof planPluginUninstall>[0] & {
+    runtimePluginIds?: readonly string[];
+    runtimeLoadPaths?: readonly string[];
+  },
+) {
+  const { runtimePluginIds, runtimeLoadPaths, ...planParams } = params;
+  const plan = planPluginUninstall(
+    recordPluginPackageUninstallPlan(planParams, {
+      runtimePluginIds: runtimePluginIds ?? [params.pluginId],
+      ...(runtimeLoadPaths ? { runtimeLoadPaths } : {}),
+    }),
+  );
   if (!plan.ok) {
     return plan;
   }
@@ -249,6 +268,26 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   });
 }
 
+it("stages only runtime child entries while a package directory removal is pending", () => {
+  const staged = prepareConfigForPendingPluginDirectoryRemovalSet(
+    {
+      plugins: {
+        entries: {
+          "pack/one": { enabled: true },
+          "pack/two": { enabled: true },
+        },
+      },
+    },
+    ["pack/one", "pack/two"],
+  );
+
+  expect(staged.plugins?.entries).toEqual({
+    "pack/one": { enabled: false },
+    "pack/two": { enabled: false },
+  });
+  expect(staged.plugins?.entries).not.toHaveProperty("pack");
+});
+
 async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   const pluginDir = path.join(baseDir, pluginId);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -312,6 +351,53 @@ describe("resolveUninstallChannelConfigKeys", () => {
         channelIds: ["defaults", "discord", "discord", "modelByChannel", "slack"],
       }),
     ).toEqual(["discord", "slack"]);
+  });
+});
+
+describe("planPluginUninstall package ownership", () => {
+  it("removes every owned child policy while planning one owner install removal", () => {
+    const result = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: {
+            plugins: {
+              allow: ["pack/one", "pack/two", "other"],
+              deny: ["pack/two"],
+              entries: {
+                "pack/one": { enabled: true },
+                "pack/two": { enabled: false },
+                other: { enabled: true },
+              },
+              installs: {
+                pack: { source: "path", installPath: "/managed/pack" },
+              },
+              slots: { memory: "pack/two" },
+            },
+          },
+          pluginId: "pack",
+          deleteFiles: false,
+        },
+        { runtimePluginIds: ["pack/one", "pack/two"] },
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.directoryRemoval).toBeNull();
+    expect(result.config.plugins).toEqual({
+      allow: ["other"],
+      entries: { other: { enabled: true } },
+      slots: { memory: "memory-core" },
+    });
+    expect(result.actions).toMatchObject({
+      entry: true,
+      install: true,
+      allowlist: true,
+      denylist: true,
+      memorySlot: true,
+    });
   });
 });
 
@@ -1068,12 +1154,12 @@ describe("uninstallPlugin", () => {
       baseDir: tempDir,
     });
 
-    const plan = planPluginUninstall({
-      config,
-      pluginId,
-      deleteFiles: true,
-      extensionsDir,
-    });
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        { config, pluginId, deleteFiles: true, extensionsDir },
+        { runtimePluginIds: [pluginId] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {
@@ -1113,21 +1199,26 @@ describe("uninstallPlugin", () => {
     await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
     await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
 
-    const plan = planPluginUninstall({
-      config: createPluginConfig({
-        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
-        installs: {
-          "openclaw-kitchen-sink-fixture": {
-            source: "npm",
-            spec: "@openclaw/kitchen-sink@1.0.0",
-            installPath: pluginDir,
-          },
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
         },
-      }),
-      pluginId: "openclaw-kitchen-sink-fixture",
-      deleteFiles: true,
-      extensionsDir,
-    });
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {
@@ -1139,6 +1230,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "@openclaw/kitchen-sink",
+        rootKind: "legacy-shared",
       },
     });
 
@@ -1149,14 +1241,23 @@ describe("uninstallPlugin", () => {
     await expectPathAccessState(pluginDir, "missing");
   });
 
-  it("uninstalls per-plugin npm project packages through their project root", async () => {
+  it.each([
+    { name: "ordinary", generationKey: undefined },
+    { name: "generation", generationKey: "kitchen-sink-v2" },
+  ])("uninstalls $name per-plugin npm projects through their project root", async (fixture) => {
     const stateDir = path.join(tempDir, "state");
     const extensionsDir = path.join(stateDir, "extensions");
     const npmBaseDir = path.join(stateDir, "npm");
-    const npmRoot = resolvePluginNpmProjectDir({
-      npmDir: npmBaseDir,
-      packageName: "@openclaw/kitchen-sink",
-    });
+    const npmRoot = fixture.generationKey
+      ? resolvePluginNpmGenerationProjectDir({
+          npmDir: npmBaseDir,
+          packageName: "@openclaw/kitchen-sink",
+          generationKey: fixture.generationKey,
+        })
+      : resolvePluginNpmProjectDir({
+          npmDir: npmBaseDir,
+          packageName: "@openclaw/kitchen-sink",
+        });
     const pluginDir = path.join(npmRoot, "node_modules", "@openclaw", "kitchen-sink");
     const hoistedDir = path.join(npmRoot, "node_modules", "is-number");
     await fs.mkdir(pluginDir, { recursive: true });
@@ -1178,7 +1279,165 @@ describe("uninstallPlugin", () => {
     await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
     await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
 
-    const plan = planPluginUninstall({
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
+        },
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
+
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) {
+      throw new Error(plan.error);
+    }
+    expect(plan.directoryRemoval).toEqual({
+      target: npmRoot,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "@openclaw/kitchen-sink",
+        rootKind: "isolated-project",
+      },
+    });
+
+    const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+
+    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    await expectPathAccessState(pluginDir, "missing");
+    await expectPathAccessState(npmRoot, "missing");
+  });
+
+  it.each([
+    ["unrelated sibling", "noncanonical-sibling"],
+    [
+      "ordinary-name lookalike",
+      `${path.basename(
+        resolvePluginNpmProjectDir({
+          npmDir: "/managed/npm",
+          packageName: "@openclaw/kitchen-sink",
+        }),
+      )}-lookalike`,
+    ],
+    [
+      "malformed generation prefix",
+      `${path.basename(
+        resolvePluginNpmProjectDir({
+          npmDir: "/managed/npm",
+          packageName: "@openclaw/kitchen-sink",
+        }),
+      )}__openclaw-generation_g-0123456789abcdef`,
+    ],
+    [
+      "short generation suffix",
+      `${resolvePluginNpmGenerationProjectDirPrefix("@openclaw/kitchen-sink")}g-0123456789abcde`,
+    ],
+    [
+      "uppercase generation suffix",
+      `${resolvePluginNpmGenerationProjectDirPrefix("@openclaw/kitchen-sink")}g-0123456789abcdeF`,
+    ],
+    [
+      "generation suffix lookalike",
+      `${resolvePluginNpmGenerationProjectDirPrefix("@openclaw/kitchen-sink")}g-0123456789abcdef-extra`,
+    ],
+  ])("preserves a noncanonical npm project root ($name)", async (_name, projectName) => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmRoot = path.join(stateDir, "npm", "projects", projectName);
+    const pluginDir = path.join(npmRoot, "node_modules", "@openclaw", "kitchen-sink");
+    const siblingFile = path.join(npmRoot, "must-remain.txt");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "@openclaw/kitchen-sink": "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
+    await fs.writeFile(siblingFile, "preserve me");
+
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
+        },
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
+
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) {
+      throw new Error(plan.error);
+    }
+    expect(plan.directoryRemoval).toEqual({
+      target: pluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "@openclaw/kitchen-sink",
+        rootKind: "isolated-project",
+      },
+    });
+
+    const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+
+    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    await expectPathAccessState(pluginDir, "missing");
+    await expect(fs.readFile(siblingFile, "utf8")).resolves.toBe("preserve me");
+  });
+
+  it("does not follow a substituted npm projects directory", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmDir = path.join(stateDir, "npm");
+    const outsideProjectsDir = path.join(tempDir, "outside-projects");
+    await fs.mkdir(npmDir, { recursive: true });
+    await fs.mkdir(outsideProjectsDir, { recursive: true });
+    await fs.symlink(outsideProjectsDir, path.join(npmDir, "projects"), "dir");
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir,
+      packageName: "@openclaw/kitchen-sink",
+    });
+    const pluginDir = path.join(projectRoot, "node_modules", "@openclaw", "kitchen-sink");
+    const sentinel = path.join(projectRoot, "must-remain.txt");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(sentinel, "preserve me");
+
+    const result = await uninstallPlugin({
       config: createPluginConfig({
         entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
         installs: {
@@ -1194,25 +1453,235 @@ describe("uninstallPlugin", () => {
       extensionsDir,
     });
 
-    expect(plan.ok).toBe(true);
-    if (!plan.ok) {
-      throw new Error(plan.error);
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
     }
-    expect(plan.directoryRemoval).toEqual({
-      target: pluginDir,
-      cleanup: {
-        kind: "npm",
-        npmRoot,
-        packageName: "@openclaw/kitchen-sink",
-      },
+    expect(result.warnings).toEqual([]);
+    expect(result.actions.directory).toBe(false);
+    await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
+  });
+
+  it("does not follow a substituted canonical npm project directory", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmDir = path.join(stateDir, "npm");
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir,
+      packageName: "@openclaw/kitchen-sink",
     });
+    const outsideProjectRoot = path.join(tempDir, "outside-project");
+    const pluginDir = path.join(projectRoot, "node_modules", "@openclaw", "kitchen-sink");
+    const outsidePluginDir = path.join(
+      outsideProjectRoot,
+      "node_modules",
+      "@openclaw",
+      "kitchen-sink",
+    );
+    const sentinel = path.join(outsideProjectRoot, "must-remain.txt");
+    await fs.mkdir(path.dirname(projectRoot), { recursive: true });
+    await fs.mkdir(outsidePluginDir, { recursive: true });
+    await fs.writeFile(sentinel, "preserve me");
+    await fs.symlink(outsideProjectRoot, projectRoot, "dir");
+
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+        installs: {
+          "openclaw-kitchen-sink-fixture": {
+            source: "npm",
+            spec: "@openclaw/kitchen-sink@1.0.0",
+            installPath: pluginDir,
+          },
+        },
+      }),
+      pluginId: "openclaw-kitchen-sink-fixture",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.warnings).toEqual([]);
+    expect(result.actions.directory).toBe(false);
+    await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
+  });
+
+  it("rejects a symlinked package inside a canonical npm project", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmDir = path.join(stateDir, "npm");
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir,
+      packageName: "@openclaw/kitchen-sink",
+    });
+    const pluginDir = path.join(projectRoot, "node_modules", "@openclaw", "kitchen-sink");
+    const packageTarget = path.join(projectRoot, "node_modules", "package-target");
+    const sentinel = path.join(projectRoot, "must-remain.txt");
+    await fs.mkdir(path.dirname(pluginDir), { recursive: true });
+    await fs.mkdir(packageTarget, { recursive: true });
+    await fs.writeFile(path.join(projectRoot, "package.json"), "{}\n");
+    await fs.writeFile(sentinel, "preserve me");
+    await fs.symlink(packageTarget, pluginDir, "dir");
+
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
+        },
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok || !plan.directoryRemoval) {
+      throw new Error(plan.ok ? "missing removal" : plan.error);
+    }
+    expect(plan.directoryRemoval.target).toBe(pluginDir);
 
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
 
-    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    expectNpmUninstallCommand({ packageName: "@openclaw/kitchen-sink", npmRoot });
-    await expectPathAccessState(pluginDir, "missing");
+    expect(applied).toEqual({
+      directoryRemoved: false,
+      warnings: [`Refused to remove npm path without canonical package ownership: ${pluginDir}`],
+    });
+    await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
+    await expect(fs.lstat(pluginDir).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
   });
+
+  it.each(["canonical", "noncanonical"] as const)(
+    "revalidates %s npm project ownership after the removal plan is created",
+    async (layout) => {
+      const stateDir = path.join(tempDir, "state");
+      const extensionsDir = path.join(stateDir, "extensions");
+      const npmDir = path.join(stateDir, "npm");
+      const projectRoot =
+        layout === "canonical"
+          ? resolvePluginNpmProjectDir({
+              npmDir,
+              packageName: "@openclaw/kitchen-sink",
+            })
+          : path.join(npmDir, "projects", "noncanonical-race");
+      const pluginDir = path.join(projectRoot, "node_modules", "@openclaw", "kitchen-sink");
+      await fs.mkdir(pluginDir, { recursive: true });
+      const plan = planPluginUninstall(
+        recordPluginPackageUninstallPlan(
+          {
+            config: createPluginConfig({
+              installs: {
+                "openclaw-kitchen-sink-fixture": {
+                  source: "npm",
+                  spec: "@openclaw/kitchen-sink@1.0.0",
+                  installPath: pluginDir,
+                },
+              },
+            }),
+            pluginId: "openclaw-kitchen-sink-fixture",
+            deleteFiles: true,
+            extensionsDir,
+          },
+          { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+        ),
+      );
+      expect(plan.ok).toBe(true);
+      if (!plan.ok || !plan.directoryRemoval) {
+        throw new Error(plan.ok ? "missing removal" : plan.error);
+      }
+      expect(plan.directoryRemoval.target).toBe(layout === "canonical" ? projectRoot : pluginDir);
+
+      const outsideNpmDir = path.join(tempDir, "outside-npm-race");
+      const outsideProjectRoot = path.join(outsideNpmDir, "projects", path.basename(projectRoot));
+      const outsideTarget =
+        layout === "canonical"
+          ? outsideProjectRoot
+          : path.join(outsideProjectRoot, "node_modules", "@openclaw", "kitchen-sink");
+      const sentinel = path.join(outsideTarget, "must-remain.txt");
+      await fs.mkdir(outsideTarget, { recursive: true });
+      await fs.writeFile(sentinel, "preserve me");
+      await fs.rename(npmDir, `${npmDir}-original`);
+      await fs.symlink(outsideNpmDir, npmDir, "dir");
+
+      const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+
+      expect(applied.directoryRemoved).toBe(false);
+      expect(applied.warnings).toEqual([
+        `Refused to remove npm path without canonical package ownership: ${plan.directoryRemoval.target}`,
+      ]);
+      await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
+    },
+  );
+
+  it.each(["canonical", "noncanonical"] as const)(
+    "refuses $layout npm cleanup through a substituted manifest",
+    async (layout) => {
+      const stateDir = path.join(tempDir, "state");
+      const extensionsDir = path.join(stateDir, "extensions");
+      const npmDir = path.join(stateDir, "npm");
+      const npmRoot =
+        layout === "canonical"
+          ? resolvePluginNpmProjectDir({
+              npmDir,
+              packageName: "@openclaw/kitchen-sink",
+            })
+          : path.join(npmDir, "projects", "noncanonical-manifest");
+      const pluginDir = path.join(npmRoot, "node_modules", "@openclaw", "kitchen-sink");
+      const manifestPath = path.join(npmRoot, "package.json");
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.writeFile(manifestPath, "{}\n");
+      const plan = planPluginUninstall(
+        recordPluginPackageUninstallPlan(
+          {
+            config: createPluginConfig({
+              installs: {
+                "openclaw-kitchen-sink-fixture": {
+                  source: "npm",
+                  spec: "@openclaw/kitchen-sink@1.0.0",
+                  installPath: pluginDir,
+                },
+              },
+            }),
+            pluginId: "openclaw-kitchen-sink-fixture",
+            deleteFiles: true,
+            extensionsDir,
+          },
+          { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+        ),
+      );
+      expect(plan.ok).toBe(true);
+      if (!plan.ok || !plan.directoryRemoval) {
+        throw new Error(plan.ok ? "missing removal" : plan.error);
+      }
+      const expectedTarget = layout === "canonical" ? npmRoot : pluginDir;
+      expect(plan.directoryRemoval.target).toBe(expectedTarget);
+
+      const outsideManifest = path.join(tempDir, "outside-package.json");
+      await fs.writeFile(outsideManifest, '{"preserve":true}\n');
+      await fs.rm(manifestPath);
+      await fs.symlink(outsideManifest, manifestPath);
+
+      const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+
+      expect(applied.directoryRemoved).toBe(false);
+      expect(applied.warnings).toEqual([
+        `Refused to remove npm path without canonical package ownership: ${expectedTarget}`,
+      ]);
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      await expect(fs.readFile(outsideManifest, "utf8")).resolves.toBe('{"preserve":true}\n');
+      await expectPathAccessState(pluginDir, "exists");
+    },
+  );
 
   it("repairs remaining npm plugin openclaw peer links after npm uninstall prunes them", async () => {
     const stateDir = path.join(tempDir, "state");
@@ -1271,6 +1740,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "removed-plugin",
+        rootKind: "legacy-shared",
       },
     });
 
@@ -1379,6 +1849,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "removed-plugin",
+        rootKind: "legacy-shared",
       },
     });
 
@@ -1630,6 +2101,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "missing-plugin",
+        rootKind: "legacy-shared",
       },
     });
 

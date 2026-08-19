@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type MSTeamsQaOutboundActivity = {
   activity: Record<string, unknown>;
@@ -15,6 +16,8 @@ type ServerOptions = {
   nonce: string;
   onOutbound: (activity: MSTeamsQaOutboundActivity) => Promise<void>;
 };
+
+const AMBIGUOUS_GATEWAY_TIMEOUT_MARKER = "QA-MSTEAMS-AMBIGUOUS-504";
 
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -71,10 +74,19 @@ export async function startMSTeamsQaBotFrameworkServer(options: ServerOptions) {
         conversationId: route.conversationId,
         ...(route.threadId ? { threadId: route.threadId } : {}),
       });
-      sendJson(response, 200, { id: activityId });
+      // This fixture records the accepted activity before returning 504, modeling a gateway
+      // timeout whose upstream side effect cannot safely be replayed by the Teams adapter.
+      const acceptedButTimedOut =
+        typeof activity.text === "string" &&
+        activity.text.includes(AMBIGUOUS_GATEWAY_TIMEOUT_MARKER);
+      sendJson(
+        response,
+        acceptedButTimedOut ? 504 : 200,
+        acceptedButTimedOut ? { error: "gateway timeout after acceptance" } : { id: activityId },
+      );
     })().catch((error: unknown) => {
       sendJson(response, 500, {
-        error: error instanceof Error ? error.message : String(error),
+        error: coerceErrorMessage(error),
       });
     });
   });

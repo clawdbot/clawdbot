@@ -1,3 +1,7 @@
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -15,9 +19,39 @@ import {
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
 
+const visibleFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 1,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: true,
+} as const;
+
 describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
   it("uses resolved DM config for auto-topic-label overrides", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+      settledReceipt: visibleFinalReceipt,
+    });
     loadSessionStore.mockReturnValue({ s1: {} });
     const bot = createBot();
 
@@ -53,7 +87,10 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     loadSessionStore.mockReturnValue({
       [sessionKey]: { sessionId: "s1", updatedAt: 1 },
     });
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+      settledReceipt: visibleFinalReceipt,
+    });
     const bot = createBot();
     const base = "a".repeat(499);
     const rawBody = `${base}😀tail`;
@@ -294,6 +331,45 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
       });
 
       expect(finalDeliveryPayload().mediaUrls).toEqual([]);
+    });
+
+    it("does not restore block-sent legacy media when the final includes another attachment", async () => {
+      const sentMediaUrl = "/tmp/cat.jpg";
+      const remainingMediaUrl = "/tmp/dog.jpg";
+      deliverReplies.mockResolvedValue({ delivered: true });
+      deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+        status: "handled_visible",
+        delivery: { messageIds: ["101"], visibleReplySent: true },
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ mediaUrl: sentMediaUrl }, { kind: "block" });
+        await dispatcherOptions.deliver(
+          {
+            text: "Here are the images",
+            mediaUrls: [remainingMediaUrl],
+            mediaUrl: sentMediaUrl,
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "off",
+        telegramDeps: telegramDepsForTest,
+      });
+
+      const finalPayload = finalDeliveryPayload();
+      expect(finalPayload).toMatchObject({
+        text: "Here are the images",
+        mediaUrl: undefined,
+        mediaUrls: [remainingMediaUrl],
+      });
+      expect(
+        projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan([finalPayload]))[0]
+          ?.mediaUrls,
+      ).toEqual([remainingMediaUrl]);
     });
 
     it("preserves final media when block delivery reports no visible send", async () => {

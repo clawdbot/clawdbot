@@ -72,6 +72,17 @@ export class ManagerRuntimeHandleCache {
     }
   }
 
+  /** Drains every cached handle behind its session actor before process shutdown. */
+  async closeAll(params: { actorQueue: SessionActorQueue; reason: string }): Promise<void> {
+    await Promise.all(
+      this.runtimeCache.snapshot().map(({ actorKey }) =>
+        params.actorQueue.run(actorKey, async () => {
+          await this.close({ sessionKey: actorKey, reason: params.reason });
+        }),
+      ),
+    );
+  }
+
   /** Clears a cached handle only when the caller still owns the same runtime identifiers. */
   clearIfHandleMatches(params: { sessionKey: string; handle: AcpRuntimeHandle }): void {
     const cached = this.get(params.sessionKey);

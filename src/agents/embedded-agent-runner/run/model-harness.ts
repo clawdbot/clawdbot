@@ -1,4 +1,6 @@
 import type { Model } from "../../../llm/types.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
+import { resolveAuthoredModelContextTokens } from "../../context-resolution.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -31,18 +33,31 @@ export function resolveEmbeddedRunEffectiveModel(
     nativeModelOwned: boolean;
   },
 ) {
-  return resolveEmbeddedRuntimeModelPolicy({
+  const contextConfigProvider = resolveContextConfigProviderForRuntime({
+    provider: params.modelConfigProvider,
+    runtimeId: params.agentHarnessId,
+    config: params.runParams.config,
+  });
+  const resolved = resolveEmbeddedRuntimeModelPolicy({
     cfg: params.runParams.config,
     provider: params.provider,
-    contextConfigProvider: resolveContextConfigProviderForRuntime({
-      provider: params.modelConfigProvider,
-      runtimeId: params.agentHarnessId,
-      config: params.runParams.config,
-    }),
+    contextConfigProvider,
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
   });
+  const authoredContextTokenCap =
+    params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
+      ? undefined
+      : resolveAuthoredModelContextTokens({
+          cfg: params.runParams.config,
+          provider: contextConfigProvider,
+          model: params.modelId,
+        });
+  return {
+    ...resolved,
+    ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),
+  };
 }
 
 function buildHarnessModelProvider(

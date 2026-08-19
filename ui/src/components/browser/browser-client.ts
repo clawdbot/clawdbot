@@ -4,8 +4,11 @@
 // that is dispatched against the browser plugin's control routes, either
 // locally or via a browser-capable node. This module narrows the handful of
 // routes the browser panel needs and keeps route-path knowledge in one place.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
 
 const BROWSER_REQUEST_METHOD = "browser.request";
@@ -66,26 +69,22 @@ function browserRequest<T>(client: GatewayBrowserClient, envelope: BrowserReques
   return client.request<T>(BROWSER_REQUEST_METHOD, envelope);
 }
 
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function asFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+function stringOrEmpty(value: unknown): string {
+  return readStringValue(value) ?? "";
 }
 
 function normalizeTab(value: unknown): BrowserPanelTab | null {
   const record = asRecord(value);
-  const targetId = asString(record?.targetId);
+  const targetId = stringOrEmpty(record?.targetId);
   if (!targetId) {
     return null;
   }
-  const tabId = asString(record?.tabId);
+  const tabId = stringOrEmpty(record?.tabId);
   return {
     id: tabId || targetId,
     targetId,
-    title: asString(record?.title),
-    url: asString(record?.url),
+    title: stringOrEmpty(record?.title),
+    url: stringOrEmpty(record?.url),
   };
 }
 
@@ -129,8 +128,8 @@ export async function navigateBrowser(
     await browserRequest(client, { method: "POST", path: "/navigate", body: params }),
   );
   return {
-    targetId: asString(result?.targetId) || params.targetId || "",
-    url: asString(result?.url) || params.url,
+    targetId: stringOrEmpty(result?.targetId) || params.targetId || "",
+    url: stringOrEmpty(result?.url) || params.url,
   };
 }
 
@@ -145,14 +144,14 @@ export async function captureBrowserScreenshot(
       body: { targetId, type: "png" },
     }),
   );
-  const path = asString(result?.path);
+  const path = stringOrEmpty(result?.path);
   if (!path) {
     throw new Error(t("browser.errors.screenshotPathMissing"));
   }
   return {
     path,
-    targetId: asString(result?.targetId) || targetId,
-    url: asString(result?.url),
+    targetId: stringOrEmpty(result?.targetId) || targetId,
+    url: stringOrEmpty(result?.url),
   };
 }
 
@@ -181,6 +180,22 @@ export async function pressBrowserKey(
     method: "POST",
     path: "/act",
     body: { kind: "press", targetId: params.targetId, key: params.key },
+  });
+}
+
+export async function resizeBrowserViewport(
+  client: GatewayBrowserClient,
+  params: { targetId: string; width: number; height: number },
+) {
+  await browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
   });
 }
 
@@ -243,8 +258,8 @@ export async function readBrowserPageMetrics(
   return {
     cssWidth,
     cssHeight,
-    title: asString(result?.title),
-    url: asString(result?.url),
+    title: stringOrEmpty(result?.title),
+    url: stringOrEmpty(result?.url),
   };
 }
 
@@ -284,13 +299,13 @@ export async function inspectBrowserElementAt(
   }
   const rect = asRecord(result.rect);
   return {
-    tag: asString(result.tag),
-    id: asString(result.id),
+    tag: stringOrEmpty(result.tag),
+    id: stringOrEmpty(result.id),
     classes: Array.isArray(result.classes)
       ? result.classes.filter((value): value is string => typeof value === "string")
       : [],
-    role: asString(result.role),
-    name: asString(result.name),
+    role: stringOrEmpty(result.role),
+    name: stringOrEmpty(result.name),
     rect: {
       x: asFiniteNumber(rect?.x) ?? 0,
       y: asFiniteNumber(rect?.y) ?? 0,
@@ -307,17 +322,10 @@ export async function inspectBrowserElementAt(
  * same one chat history uses for local media previews).
  */
 export async function fetchBrowserScreenshotDataUrl(params: {
-  basePath: string;
+  resourceBasePath: string;
   authToken: string | null;
   path: string;
 }): Promise<string> {
-  const basePath =
-    params.basePath && params.basePath !== "/"
-      ? params.basePath.endsWith("/")
-        ? params.basePath.slice(0, -1)
-        : params.basePath
-      : "";
-  const search = new URLSearchParams({ source: params.path });
   const headers = new Headers({ Accept: "image/*" });
   if (params.authToken) {
     headers.set("Authorization", `Bearer ${params.authToken}`);
@@ -332,7 +340,7 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   );
   let blob: Blob;
   try {
-    const res = await fetch(`${basePath}/__openclaw__/assistant-media?${search.toString()}`, {
+    const res = await fetch(buildAssistantMediaUrl(params.path, params.resourceBasePath), {
       method: "GET",
       headers,
       credentials: "same-origin",

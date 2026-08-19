@@ -44,7 +44,7 @@ jobs:
           install-bun: "false"
 
       - name: Collect dated TODO candidates
-        run: node scripts/dated-todo-scan.mjs
+        run: node --import tsx scripts/dated-todo-scan.mts
 
       - name: Capture sweep date
         id: sweep-date

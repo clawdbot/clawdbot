@@ -5,12 +5,12 @@ import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 
 /** Successful channel send result normalized for core delivery accounting. */
 export type OutboundDeliveryResult = {
-  channel: Exclude<ChannelId, "none">;
+  channel: ChannelId;
   messageId: string;
-  chatId?: string;
-  channelId?: string;
-  roomId?: string;
-  conversationId?: string;
+  target?: {
+    kind: "chat" | "channel" | "room" | "conversation";
+    id: string;
+  };
   timestamp?: number;
   toJid?: string;
   pollId?: string;

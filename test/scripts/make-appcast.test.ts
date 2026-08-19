@@ -22,11 +22,13 @@ describe("make_appcast cleanup", () => {
     expect(setupBlock).toContain('rm -f "$NOTES_HTML"');
   });
 
-  it("adds the beta channel and refuses alpha releases", () => {
+  it("adds release-train channels and refuses alpha releases", () => {
     const script = readFileSync(scriptPath, "utf8");
 
     expect(script).toContain('if [[ "$VERSION" == *-beta.* || "$VERSION" == *.beta.* ]]; then');
     expect(script).toContain("CHANNEL_ARGS=(--channel beta)");
+    expect(script).toContain("CHANNEL_ARGS=(--channel extended-stable)");
+    expect(script).toContain('"${BASH_REMATCH[1]}" -ge 33');
     expect(script).toContain('if [[ "$VERSION" == *-alpha.* || "$VERSION" == *.alpha.* ]]; then');
     expect(script).toContain('"${CHANNEL_ARGS[@]}"');
   });

@@ -120,7 +120,7 @@ suite.define(() => {
 
         const configGetsBeforeLabsReset = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");
-        await codeModeRow.getByRole("button", { name: "Reset to default" }).click();
+        await codeModeRow.locator("wa-switch").click();
         const labsPatch = requestRaw(await gateway.waitForRequest("config.patch"));
         expect(labsPatch).toEqual({ tools: { codeMode: { enabled: null } } });
 

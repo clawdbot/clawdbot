@@ -99,7 +99,7 @@ describe("Gateway node pending work", () => {
               return;
             }
             void rejectBackgroundInvocation(node, event.payload, backgroundRequests).catch(
-              (error) => {
+              (error: unknown) => {
                 handlerErrors.push(error instanceof Error ? error : new Error(String(error)));
               },
             );
@@ -328,7 +328,6 @@ async function connectClient(params: {
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
     const finish = (error?: Error) => {
       if (settled) {
         return;
@@ -364,7 +363,7 @@ async function connectClient(params: {
       onConnectError: (error) => finish(error),
       onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
     });
-    timeout = setTimeout(
+    const timeout = setTimeout(
       () => finish(new Error(`Gateway client connection timed out:\n${params.gateway.logs()}`)),
       REQUEST_TIMEOUT_MS,
     );

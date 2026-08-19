@@ -32,7 +32,7 @@ function isExpandableWorkspaceResult(result: SearchResult): boolean {
     normalizedPath.split("/").every((segment) => segment && segment !== "." && segment !== "..");
   const workspaceMemoryPath =
     normalizedPath === "MEMORY.md" || normalizedPath.startsWith("memory/");
-  // workspace.get is workspace-contained; sessions/* and qmd/* are logical manager paths.
+  // workspace.get is workspace-contained; sessions/* are logical manager paths.
   return result.source === "memory" && safeRelativePath && workspaceMemoryPath;
 }
 

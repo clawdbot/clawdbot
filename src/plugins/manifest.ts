@@ -7,6 +7,7 @@ import { normalizeTrimmedStringList } from "../../packages/normalization-core/sr
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
@@ -213,8 +214,7 @@ export function loadPluginManifest(
   const doctorContract = rawDoctorContract
     ? (Object.fromEntries(
         [
-          "legacyConfigRules",
-          "normalizeCompatibilityConfig",
+          "configRepair",
           "resolveSessionStoreAgentIds",
           "sessionRouteStateOwners",
           "stateMigrations",
@@ -261,14 +261,21 @@ export function loadPluginManifest(
     syntheticAuthRefs: normalizeTrimmedStringList(raw.syntheticAuthRefs),
     nonSecretAuthMarkers: normalizeTrimmedStringList(raw.nonSecretAuthMarkers),
     commandAliases: normalizeManifestCommandAliases(raw.commandAliases),
+    cliCommands: setupNormalizers.normalizeManifestCliCommands(raw.cliCommands),
     providerUsageAuthEnvVars: capabilityNormalizers.normalizeStringListRecord(
       raw.providerUsageAuthEnvVars,
     ),
-    providerAuthAliases: capabilityNormalizers.normalizeStringRecord(raw.providerAuthAliases),
+    providerAuthAliases: capabilityNormalizers.normalizeManifestStringRecord(
+      raw.providerAuthAliases,
+    ),
     providerAuthChoices: setupNormalizers.normalizeProviderAuthChoices(raw.providerAuthChoices),
     activation: setupNormalizers.normalizeManifestActivation(raw.activation),
     setup: setupNormalizers.normalizeManifestSetup(raw.setup),
     doctorContract,
+    sessionRouteStateOwners:
+      raw.sessionRouteStateOwners === undefined
+        ? undefined
+        : coerceDoctorSessionRouteStateOwners(raw.sessionRouteStateOwners),
     qaRunners: setupNormalizers.normalizeManifestQaRunners(raw.qaRunners),
   };
   const dashboardResult = setupNormalizers.normalizeManifestDashboard(raw.dashboard);

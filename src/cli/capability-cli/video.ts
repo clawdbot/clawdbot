@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import type { Command } from "commander";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
   assertOkOrThrowHttpError,
   assertProviderBinaryResponseContent,
@@ -39,6 +39,7 @@ import {
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
   requireProviderModelOverride,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
 } from "./shared.js";
@@ -116,13 +117,15 @@ async function runVideoGenerate(params: {
   audio?: boolean;
   watermark?: boolean;
   timeoutMs?: number;
+  agent?: string;
 }) {
   requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer video.generate",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video.generate");
+  const agentDir = resolveAgentDir(cfg, agentId);
   const result = await generateVideo({
     cfg,
     agentDir,
@@ -272,6 +275,10 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--watermark", "Request provider watermark when supported")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
+    .option(
+      "--agent <id>",
+      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -286,6 +293,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+          agent: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -310,10 +318,12 @@ export function registerVideoCapabilityCommands(capability: Command): void {
   video
     .command("providers")
     .description("List video generation and description providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
+        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
         const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
         );
@@ -322,7 +332,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
             available: true,
             configured:
               selectedGenerationProvider === provider.id ||
-              providerHasGenericConfig({ cfg, providerId: provider.id }),
+              providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
             selected: selectedGenerationProvider === provider.id,
             id: provider.id,
             label: provider.label,
@@ -334,7 +344,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
             .filter((provider) => provider.capabilities?.includes("video"))
             .map((provider) => ({
               available: true,
-              configured: providerHasGenericConfig({ cfg, providerId: provider.id }),
+              configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
               selected: false,
               id: provider.id,
               capabilities: provider.capabilities,

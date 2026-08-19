@@ -1,82 +1,46 @@
 ---
 summary: "Zoom meetings plugin: join meetings as a Chrome browser guest"
+doc-schema-version: 1
 read_when:
   - You want an OpenClaw agent to join a Zoom meeting
-  - You are configuring Chrome, BlackHole, or SoX for Zoom meeting talk-back
+  - You need Zoom-specific guest policy or manual-action guidance
 title: "Zoom meetings plugin"
 ---
 
-The `zoom-meetings` plugin joins Zoom meeting links as a guest through the Zoom Web App in the OpenClaw Chrome profile. It accepts meeting links under `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`. It does not create meetings, dial in, use the Zoom Meeting SDK, or capture audio/video recordings.
+The `zoom-meetings` plugin joins `zoom.us/j/...` links and account subdomains
+such as `example.zoom.us/j/...` as a guest through the Zoom Web App in the
+OpenClaw Chrome profile. It does not create meetings, dial in, use the Zoom
+Meeting SDK, or capture audio/video recordings.
 
-## Setup
+Use [Meeting plugins](/plugins/meeting-plugins) for shared installation, modes,
+Chrome and virtual-audio setup, transcripts, remote-node requirements, and
+verification.
 
-Talk-back uses the same local audio prerequisites as the [Google Meet plugin](/plugins/google-meet): macOS, the `BlackHole 2ch` virtual audio device, and SoX.
+## Handle Zoom policy and manual actions
 
-```bash
-openclaw plugins install @openclaw/zoom-meetings
-openclaw gateway restart
-brew install blackhole-2ch sox
-sudo reboot
-system_profiler SPAudioDataType | grep -i BlackHole
-command -v sox
-```
+The browser adapter chooses **Join from browser**, fills the guest name, turns
+the camera off, configures the microphone, and clicks **Join**. It grants the
+`app.zoom.us` origin microphone and speaker-selection permissions before
+navigation. In-call state uses Zoom's Leave control.
 
-The plugin is enabled by default after installation. Add an entry only to customize it, then check setup:
+Zoom can disable browser join or require authentication, email verification, a
+passcode, CAPTCHA completion, host admission, or browser device permissions.
+The plugin reports these as `manualAction`; complete the requested step in the
+same OpenClaw Chrome profile, then retry status or speech. It does not bypass
+Zoom policy.
 
-```json5
-{
-  plugins: {
-    entries: {
-      "zoom-meetings": {
-        config: {
-          defaultMode: "agent",
-          chrome: { guestName: "OpenClaw Agent" },
-        },
-      },
-    },
-  },
-}
-```
+The Zoom Web App has been live-validated with an official test meeting through
+the interstitial, iframe guest-name entry, microphone/camera controls, browser
+and macOS media permissions, in-call detection, live captions, and host-ended
+detection. Lobby and authentication states retain text fallbacks when no stable
+DOM identifier is available.
 
-Run `openclaw plugins disable zoom-meetings` if you do not want the plugin active.
+## Tool and Gateway surface
 
-```bash
-openclaw zoommeetings setup
-openclaw zoommeetings join 'https://zoom.us/j/1234567890'
-```
-
-Use `chromeNode.node` to run Chrome, BlackHole, and SoX on a paired macOS node. The node must allow `zoommeetings.chrome` and `browser.proxy`.
-
-## Modes
-
-| Mode         | Behavior                                                                    |
-| ------------ | --------------------------------------------------------------------------- |
-| `agent`      | Realtime transcription consults the configured OpenClaw agent; TTS replies. |
-| `bidi`       | A realtime voice model listens and replies directly.                        |
-| `transcribe` | Observe-only join with live-caption transcript snapshots.                   |
-
-Zoom live captions are enabled after admission in every mode so OpenClaw can
-persist meeting notes. The `transcript` action still returns the bounded live
-buffer only for `transcribe` sessions. On leave, OpenClaw stores the durable
-transcript and derived summary in the shared state database; list or export
-them with [`openclaw transcripts`](/cli/transcripts).
-
-Automatic notes are enabled by default. Set `transcripts.enabled: false` to
-disable durable notes globally; explicit `transcribe` mode still exposes only
-its bounded live tail.
-
-## Guest join limits
-
-The browser adapter chooses **Join from browser**, fills the guest name, turns the camera off, configures the microphone for the selected mode, and clicks **Join**. Zoom Web App runs under `app.zoom.us`; the plugin grants that origin microphone and speaker-selection permissions before navigation. In-call state uses Zoom's Leave control. Lobby, sign-in, passcode, CAPTCHA, and device-permission states return explicit manual-action reasons.
-
-Zoom host and account policy can disable browser join, require authentication or email verification, show a CAPTCHA, or require host admission. Complete that step in the OpenClaw Chrome profile, then retry status or speech. The plugin does not bypass Zoom policy.
-
-The Zoom Web App has been live-validated with an official Zoom test meeting for the app interstitial, iframe guest-name entry, prejoin microphone and camera controls, join, browser and macOS media permissions, in-call detection, live-caption enablement, and host-ended detection. Lobby and authentication states depend on host policy and retain text fallbacks when no stable DOM identifier is available.
-
-## Tool and gateway surface
-
-The `zoom_meetings` agent tool supports `join`, `leave`, `status`, `transcript`, and `speak`. Gateway methods use the `zoommeetings.*` prefix. The node command is `zoommeetings.chrome`.
+The `zoom_meetings` tool supports `join`, `leave`, `status`, `transcript`, and
+`speak`. Gateway methods use `zoommeetings.*`; the node command is
+`zoommeetings.chrome`.
 
 ## Related
 
-- [Meeting plugins overview](/plugins/meeting-plugins)
+- [Meeting plugins](/plugins/meeting-plugins)

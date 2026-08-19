@@ -1,11 +1,20 @@
-import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Feishu ingress tests cover debounce ownership and constituent claim settlement.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import * as dedup from "./dedup.js";
 import type { FeishuMessageEvent } from "./event-types.js";
-import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
+import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 
 type MessageReceiveHandlerContext = Parameters<typeof createFeishuMessageReceiveHandler>[0];
@@ -369,5 +378,145 @@ describe("Feishu durable ingress debounce lifecycle", () => {
 
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(second.calls.adopted).not.toHaveBeenCalled();
+  });
+
+  it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 0, 2);
+    vi.setSystemTime(now);
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-abandon-"));
+    const stateDir = await fs.realpath(created);
+    type Queue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
+    type Payload = Parameters<Queue["enqueue"]>[1];
+    const queue = createChannelIngressQueueForTests<Payload>({
+      channelId: "feishu",
+      accountId: "default",
+      stateDir,
+    });
+    const event = {
+      ...createTextEvent("evt-abandon-retry", "om-abandon-retry", "retry me"),
+      event_type: "im.message.receive_v1",
+    };
+    const handleMessage = vi.fn(async () => {
+      throw new Error("Feishu dispatch failed before adoption");
+    });
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockImplementation(async () => ({
+      kind: "claimed",
+      handle: createClaim(`retry-${handleMessage.mock.calls.length}`),
+    }));
+
+    const createIntegratedIngress = () => {
+      const channelRuntime = {
+        commands: { isControlCommandMessage: () => false },
+        debounce: {
+          resolveInboundDebounceMs: () => 0,
+          createInboundDebouncer,
+        },
+      } as unknown as PluginRuntime["channel"];
+      const handler = createFeishuMessageReceiveHandler({
+        cfg: {} as ClawdbotConfig,
+        channelRuntime,
+        accountId: "default",
+        runtime: createNonExitingRuntimeEnv(),
+        chatHistories: new Map(),
+        handleMessage,
+        resolveDebounceText: () => "retry me",
+        hasProcessedMessage: vi.fn(async () => false),
+        getBotOpenId: () => "ou-bot",
+        resolveIngressLifecycle: (data) => ingress.resolveLifecycle(data),
+      });
+      const ingress = createFeishuDurableIngress({
+        accountId: "default",
+        queue,
+        dispatcher: { invoke: async (data: unknown) => await handler(data as never) } as never,
+        runtime: { error: vi.fn(), log: vi.fn() },
+        pollIntervalMs: 500,
+      });
+      return ingress;
+    };
+    const pendingAttempt = async (attempts: number) => {
+      let observed: Awaited<ReturnType<typeof queue.listPending>>[number] | undefined;
+      await vi.waitFor(async () => {
+        const pending = await queue.listPending({ limit: "all" });
+        expect(pending).toEqual([
+          expect.objectContaining({
+            id: "evt-abandon-retry",
+            attempts,
+            lastAttemptAt: expect.any(Number),
+            lastError: "turn-abandoned",
+          }),
+        ]);
+        observed = pending[0];
+      });
+      const lastAttemptAt = observed?.lastAttemptAt;
+      if (lastAttemptAt === undefined) {
+        throw new Error(`Missing Feishu retry timestamp for attempt ${attempts}`);
+      }
+      return { ...observed, lastAttemptAt };
+    };
+
+    try {
+      const first = createIntegratedIngress();
+      first.start();
+      await first.invokeWebhook(event);
+      const firstAttempt = await pendingAttempt(1);
+      expect(handleMessage).toHaveBeenCalledTimes(1);
+      await first.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
+      const blocked = createIntegratedIngress();
+      blocked.start();
+      await blocked.invokeWebhook(event);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handleMessage).toHaveBeenCalledTimes(1);
+      await blocked.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
+      const second = createIntegratedIngress();
+      second.start();
+      await second.invokeWebhook(event);
+      const secondAttempt = await pendingAttempt(2);
+      expect(handleMessage).toHaveBeenCalledTimes(2);
+      await second.stop();
+
+      for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await queue.claim("evt-abandon-retry", { ownerId: `seed-${attempt}` });
+        if (!claim) {
+          throw new Error(`Expected Feishu seed claim ${attempt}`);
+        }
+        await queue.release(claim, {
+          lastError: "turn-abandoned",
+          releasedAt: secondAttempt.lastAttemptAt,
+        });
+      }
+
+      vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
+      const threshold = createIntegratedIngress();
+      threshold.start();
+      await threshold.invokeWebhook(event);
+      const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+      expect(handleMessage).toHaveBeenCalledTimes(3);
+      await threshold.stop();
+
+      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
+      const beyond = createIntegratedIngress();
+      beyond.start();
+      await beyond.invokeWebhook(event);
+      const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
+      expect(handleMessage).toHaveBeenCalledTimes(4);
+      await beyond.stop();
+
+      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
+      const blockedRestart = createIntegratedIngress();
+      blockedRestart.start();
+      await blockedRestart.invokeWebhook(event);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handleMessage).toHaveBeenCalledTimes(4);
+      await blockedRestart.stop();
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
   });
 });

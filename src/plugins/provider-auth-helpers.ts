@@ -4,7 +4,11 @@ import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
-import { upsertAuthProfile, upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import {
+  upsertAuthProfile,
+  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
+} from "../agents/auth-profiles/profiles.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,8 +25,6 @@ import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 const resolveAuthAgentDir = (agentDir?: string, config?: OpenClawConfig) =>
   agentDir ?? resolveDefaultAgentDir(config ?? {});
@@ -138,15 +140,6 @@ export function upsertApiKeyProfile(params: {
     agentDir: resolveAuthAgentDir(params.agentDir, params.options?.config),
   });
   return profileId;
-}
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
 }
 
 export function applyAuthProfileConfig(

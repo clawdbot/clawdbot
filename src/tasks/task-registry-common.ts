@@ -281,11 +281,14 @@ export function mapAgentRunTerminalOutcomeToTaskStatus(
 export function resolveTaskLifecycleTerminalError(params: {
   runtime: TaskRuntime;
   status: TaskStatus;
+  terminalReason?: AgentRunTerminalOutcome["reason"];
   error?: string;
 }): string | undefined {
   // A runner abort can race either an accepted task cancellation or a real
   // completion. Keep it provisional until the task-control owner decides.
-  return params.runtime === "subagent" && params.status === "cancelled"
+  return params.runtime === "subagent" &&
+    params.status === "cancelled" &&
+    params.terminalReason !== "superseded"
     ? SUBAGENT_KILL_TASK_ERROR
     : params.error;
 }

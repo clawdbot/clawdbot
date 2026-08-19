@@ -168,17 +168,17 @@ These commands sit beside the main test suites when you need QA-lab realism.
 CI runs QA Lab in dedicated workflows. Agentic parity is nested under
 `QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
 Broad validation should use `Full Release Validation` with
-`rerun_group=qa-parity` or the release-checks QA group. Stable/default release
-checks keep exhaustive live/Docker soak behind `run_release_soak=true`; the
-`full` profile forces soak on. `QA-Lab - All Lanes` runs nightly on `main` and
-from manual dispatch with the mock parity lane, live Matrix lane,
-Convex-managed live Telegram lane, and Convex-managed live Discord lane as
-parallel jobs. Scheduled QA and release checks run the catalog-derived Matrix
-selection through the shared live adapter. `OpenClaw Release Checks` runs parity plus the
-reusable Matrix live-adapter lane and Telegram lane before release approval. Release
+`rerun_group=qa-parity` or the release-checks QA group. Stable/full,
+soak-enabled, and explicit `qa`/`qa-live` release checks include the QA-live
+Matrix and Telegram lanes. Bounded beta-publish `all` without soak runs parity
+but defers those live lanes to postpublish-confidence. `QA-Lab - All Lanes` runs
+nightly on `main` and from manual dispatch with the mock parity lane, live
+Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
+lane as parallel jobs. Scheduled QA and selected release checks run the
+catalog-derived Matrix selection through the shared live adapter. Release
 transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
-avoid normal provider-plugin startup. These live transport gateways
-disable memory search; memory behavior stays covered by the QA parity suites.
+avoid normal provider-plugin startup. These live transport gateways disable
+memory search; memory behavior stays covered by the QA parity suites.
 
 Full release live media shards use
 `ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, which already has
@@ -420,7 +420,7 @@ gh workflow run package-acceptance.yml --ref main \
     homeserver. Source-checkout only - packaged installs do not ship
     `qa-lab`.
   - Full CLI, profile/scenario catalog, env vars, and artifact layout:
-    [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-smoke-lanes).
+    [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-live-lane).
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the
     driver and SUT bot tokens from env.
@@ -495,7 +495,7 @@ table through the Mantis GitHub App when `pr_number` is set.
 
 Live transport lanes share one standard contract so new transports do not
 drift; the per-lane coverage matrix lives in
-[QA overview - Live transport coverage](/concepts/qa-e2e-automation#live-transport-coverage).
+[QA overview - Live transport coverage](/concepts/qa-e2e-automation#buzz%2C-discord%2C-slack%2C-telegram%2C-and-whatsapp-qa-reference).
 `qa-channel` is the broad synthetic suite and is not part of that matrix.
 
 ### Shared Telegram credentials via Convex (v1)
@@ -741,7 +741,7 @@ Native dependency policy:
       committed diff and prints wall time plus macOS max RSS.
     - `pnpm test:perf:changed:bench -- --worktree` benchmarks the current
       dirty tree by routing the changed file list through
-      `scripts/test-projects.mjs` and the root Vitest config.
+      `scripts/test-projects.mts` and the root Vitest config.
     - `pnpm test:perf:profile:main` writes a main-thread CPU profile for
       Vitest/Vite startup and transform overhead.
     - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for
@@ -781,10 +781,10 @@ Native dependency policy:
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`, and bundled-plugin E2E tests under `extensions/`
 - Runtime defaults:
   - Uses Vitest `threads` with `isolate: false`, matching the rest of the repo.
-  - Uses adaptive workers (CI: up to 2, local: 1 by default).
+  - Uses one worker by default to keep non-isolated gateway state deterministic.
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
-  - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
+  - `OPENCLAW_E2E_WORKERS=<n>` to opt into parallel workers (capped at 16).
   - `OPENCLAW_E2E_VERBOSE=1` to re-enable verbose console output.
 - Scope:
   - Multi-instance gateway end-to-end behavior
@@ -882,9 +882,9 @@ These Docker runners split into two buckets:
   `OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=45000`, and
   `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Set `OPENCLAW_LIVE_MAX_MODELS`
   or the gateway env vars when you explicitly want a smaller cap or larger scan.
-- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. If a single lane is heavier than the active caps, the scheduler can still start it when the pool is empty and then keeps it running alone until capacity is available again. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=5`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` (and other `OPENCLAW_DOCKER_ALL_<RESOURCE>_LIMIT` overrides) only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
+- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mts`; planner logic lives in `scripts/lib/docker-e2e-plan.mts`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. If a single lane is heavier than the active caps, the scheduler can still start it when the pool is empty and then keeps it running alone until capacity is available again. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=5`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` (and other `OPENCLAW_DOCKER_ALL_<RESOURCE>_LIMIT` overrides) only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
 - `Package Acceptance` is the GitHub-native package gate for "does this installable tarball work as a product?" It resolves one candidate package from `source=npm`, `source=ref`, `source=url`, `source=trusted-url`, or `source=artifact`, uploads it as `package-under-test`, then runs the reusable Docker E2E lanes against that exact tarball instead of repacking the selected ref. Profiles are ordered by breadth: `smoke`, `package`, `product`, and `full` (plus `custom` for an explicit lane list). See [Testing updates and plugins](/help/testing-updates-plugins) for the package/update/plugin contract, published-upgrade survivor matrix, release defaults, and failure triage.
-- Build and release checks run `scripts/check-cli-bootstrap-imports.mjs` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if that pre-dispatch bootstrap graph statically imports any external package (Commander, prompt UI, undici, logging, and similar startup-heavy deps all count) before command dispatch; it also caps the bundled gateway run chunk at 70 KB and rejects static imports of known cold gateway paths (`control-ui-assets`, `diagnostic-stability-bundle`, `onboard-helpers`, `process-respawn`, `restart-sentinel`, `server-close`, `server-reload-handlers`) from that chunk. `scripts/release-check.ts` separately smoke-tests the packed CLI with `--help`, `onboard --help`, `doctor --help`, `status --json --timeout 1`, `config schema`, and `models list --provider openai`.
+- Build and release checks run `scripts/check-cli-bootstrap-imports.mts` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if that pre-dispatch bootstrap graph statically imports any external package (Commander, prompt UI, undici, logging, and similar startup-heavy deps all count) before command dispatch; it also caps the bundled gateway run chunk at 70 KB and rejects static imports of known cold gateway paths (`control-ui-assets`, `diagnostic-stability-bundle`, `onboard-helpers`, `process-respawn`, `restart-sentinel`, `server-close`, `server-reload-handlers`) from that chunk. `scripts/release-check.ts` separately smoke-tests the packed CLI with `--help`, `onboard --help`, `doctor --help`, `status --json --timeout 1`, `config schema`, and `models list --provider openai`.
 - Package Acceptance legacy compatibility is capped at `2026.4.25` (`2026.4.25-beta.*` included). Through that cutoff, the harness tolerates only shipped-package metadata gaps: omitted private QA inventory entries, missing `gateway install --wrapper`, missing patch files in the tarball-derived git fixture, missing persisted `update.channel`, legacy plugin install-record locations, missing marketplace install-record persistence, and config metadata migration during `plugins update`. For packages after `2026.4.25`, those paths are strict failures.
 - Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:npm-onboard-channel-agent`, `test:docker:release-user-journey`, `test:docker:release-typed-onboarding`, `test:docker:release-media-memory`, `test:docker:release-upgrade-user-journey`, `test:docker:release-plugin-marketplace`, `test:docker:skill-install`, `test:docker:update-channel-switch`, `test:docker:upgrade-survivor`, `test:docker:published-upgrade-survivor`, `test:docker:session-runtime-context`, `test:docker:agents-delete-shared-workspace`, `test:docker:gateway-network`, `test:docker:browser-cdp-snapshot`, `test:docker:mcp-channels`, `test:docker:agent-bundle-mcp-tools`, `test:docker:cron-mcp-cleanup`, `test:docker:plugins`, `test:docker:plugin-update`, `test:docker:plugin-lifecycle-matrix`, and `test:docker:config-reload` boot one or more real containers and verify higher-level integration paths.
 - Docker/Bash E2E lanes that install the packed OpenClaw tarball through `scripts/lib/openclaw-e2e-instance.sh` cap `npm install` at `OPENCLAW_E2E_NPM_INSTALL_TIMEOUT` (default `600s`; set `0` to disable the wrapper for debugging).

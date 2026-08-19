@@ -223,7 +223,7 @@ describe("stageSandboxMedia", () => {
       });
 
       const stagedPath = ctx.media?.[0]?.path ?? "";
-      const stagedRelativePath = path.relative(workspaceDir, stagedPath);
+      const stagedRelativePath = path.relative(workspaceDir, stagedPath).replaceAll(path.sep, "/");
       expect(stagedRelativePath).toMatch(
         new RegExp(`^media/inbound/openclaw-staged-[0-9a-f-]+/${fileName}$`),
       );
@@ -352,6 +352,67 @@ describe("stageSandboxMedia", () => {
   });
 
   it.each([
+    { label: "lowercase", rewrite: (value: string) => value },
+    { label: "uppercase", rewrite: (value: string) => value.replace(/^file:/u, "FILE:") },
+    {
+      label: "uppercase single-slash",
+      rewrite: (value: string) => value.replace(/^file:\/\/\//u, "FILE:/"),
+    },
+  ])("stages $label local file URLs from the media root", async ({ rewrite }) => {
+    await withSandboxMediaTempHome("openclaw-staging-file-url-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const sourceDir = join(home, ".openclaw", "media", "cache");
+      const fileName = "café photo.png";
+      const sourcePath = join(sourceDir, fileName);
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(sourcePath, "image-bytes");
+      const sourceUrl = rewrite(pathToFileURL(sourcePath).href);
+      const { ctx, sessionCtx } = createSandboxMediaContexts(sourceUrl);
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = `media/inbound/${fileName}`;
+      expect(result.staged).toEqual(new Map([[0, stagedPath]]));
+      expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
+      expect(sessionCtx.media).toEqual(ctx.media);
+      await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("image-bytes");
+    });
+  });
+
+  it.each([
+    "FILE://server/share/photo.png",
+    "FILE:///C:/media%2Fphoto.png",
+    "FILE:///C:/media%5Cphoto.png",
+    "FILE:/C:/media%2Fphoto.png",
+    "FILE:/C:/media%5Cphoto.png",
+    "FILE:////server/share/photo.png",
+  ])("rejects unsafe uppercase file URL before staging: %s", async (sourceUrl) => {
+    await withSandboxMediaTempHome("openclaw-staging-file-url-", async (home) => {
+      const { cfg, workspaceDir } = await setupSandboxWorkspace(home);
+      const { ctx, sessionCtx } = createSandboxMediaContexts(sourceUrl);
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      expect(result.staged).toEqual(new Map());
+      expect(ctx.media?.[0]?.path).toBe(sourceUrl);
+      expect(ctx.media?.[0]?.workspaceDir).toBeUndefined();
+      expect(sessionCtx.media).toEqual(ctx.media);
+    });
+  });
+
+  it.each([
     { name: "failed slot before staged slot", allowedIndex: 1, blockedIndex: 0 },
     { name: "staged slot before failed slot", allowedIndex: 0, blockedIndex: 1 },
   ])("updates facts positionally: $name", async ({ allowedIndex, blockedIndex }) => {
@@ -476,12 +537,21 @@ describe("stageSandboxMedia", () => {
       const outsideDir = join(home, "outside");
       const outsideInboundDir = join(outsideDir, "inbound");
       await fs.mkdir(outsideInboundDir, { recursive: true });
-      const victimPath = join(outsideDir, "victim.txt");
+      const victimPath =
+        process.platform === "win32"
+          ? join(outsideInboundDir, basename(mediaPath))
+          : join(outsideDir, "victim.txt");
       await fs.writeFile(victimPath, "ORIGINAL");
 
       await fs.mkdir(sandboxDir, { recursive: true });
-      await fs.symlink(outsideDir, join(sandboxDir, "media"));
-      await fs.symlink(victimPath, join(outsideInboundDir, basename(mediaPath)));
+      await fs.symlink(
+        outsideDir,
+        join(sandboxDir, "media"),
+        process.platform === "win32" ? "junction" : undefined,
+      );
+      if (process.platform !== "win32") {
+        await fs.symlink(victimPath, join(outsideInboundDir, basename(mediaPath)));
+      }
 
       const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
       await stageSandboxMedia({

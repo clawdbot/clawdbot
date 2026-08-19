@@ -10,9 +10,10 @@ import {
   type ArchiveEntryKind,
 } from "openclaw/plugin-sdk/archive";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
-import { humanSize, readBoolean, readClampedInt } from "../shared/params.js";
+import { humanSize, readClampedInt } from "../shared/params.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
   DIR_FETCH_HARD_MAX_BYTES,
@@ -134,7 +135,7 @@ export function createDirFetchTool(): AnyAgentTool {
         hardMin: 1,
         hardMax: DIR_FETCH_HARD_MAX_BYTES,
       });
-      const includeDotfiles = readBoolean(params, "includeDotfiles", false);
+      const includeDotfiles = asBoolean(params.includeDotfiles) ?? false;
 
       const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
         node,

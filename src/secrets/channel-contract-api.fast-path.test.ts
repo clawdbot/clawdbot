@@ -28,6 +28,13 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+  resolvePluginMetadataSnapshot: (params: unknown) => {
+    const snapshot = loadPluginMetadataSnapshotMock(params);
+    return {
+      ...snapshot,
+      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
+    };
+  },
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
@@ -69,6 +76,10 @@ describe("channel contract api explicit fast path", () => {
       artifactBasename: "contract-api.js",
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(loadPluginMetadataSnapshotMock.mock.calls[0]?.[0]).not.toHaveProperty("workspaceDir");
+    expect(loadPluginMetadataSnapshotMock.mock.calls[0]?.[0]).toMatchObject({
+      config: {},
+      workspaceDir: expect.any(String),
+      allowWorkspaceScopedCurrent: true,
+    });
   });
 });

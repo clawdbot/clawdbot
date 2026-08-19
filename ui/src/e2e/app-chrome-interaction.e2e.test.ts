@@ -1,4 +1,4 @@
-// Control UI tests cover contextual scrollbars and native-style text selection.
+// Control UI tests cover the canonical scrollbar profile and native-style text selection.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
@@ -38,18 +38,9 @@ async function dragAcross(page: Page, locator: Locator): Promise<string> {
 async function readFocusOutline(locator: Locator) {
   return locator.evaluate((element) => {
     const styles = getComputedStyle(element);
-    const colorProbe = document.createElement("span");
-    colorProbe.style.color = "var(--muted-strong)";
-    document.body.append(colorProbe);
-    const mutedStrongColor = getComputedStyle(colorProbe).color;
-    colorProbe.remove();
     return {
       focusVisible: element.matches(":focus-visible"),
-      mutedStrongColor,
-      outlineColor: styles.outlineColor,
-      outlineOffset: styles.outlineOffset,
       outlineStyle: styles.outlineStyle,
-      outlineWidth: styles.outlineWidth,
     };
   });
 }
@@ -66,7 +57,7 @@ async function captureUiProof(page: Page, fileName: string) {
 }
 
 suite.define(() => {
-  it("uses compact sidebar scrollbars and keeps selection in chat and inputs", async () => {
+  it("uses one canonical scrollbar profile and keeps selection in chat and inputs", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
     }
@@ -87,16 +78,28 @@ suite.define(() => {
               content: [{ type: "text", text: "Selectable transcript content" }],
             },
           ],
+          models: [
+            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+            ...Array.from({ length: 24 }, (_value, index) => ({
+              id: `scroll-model-${index + 1}`,
+              name: `Scroll Model ${index + 1}`,
+              provider: "openai",
+            })),
+          ],
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const transcript = page.getByText("Selectable transcript content", { exact: true });
         await transcript.waitFor();
+        await page.locator('[data-chat-model-select="true"]').click();
+        const modelOptions = page.locator(".chat-controls__model-options");
+        await expect.poll(() => modelOptions.isVisible()).toBe(true);
         const chatStyles = await page.evaluate(() => {
           const sidebar = document.querySelector<HTMLElement>(".sidebar");
           const sessions = document.querySelector<HTMLElement>(".sidebar-shell__body");
           const thread = document.querySelector<HTMLElement>(".chat-thread");
-          if (!sidebar || !sessions || !thread) {
+          const modelPicker = document.querySelector<HTMLElement>(".chat-controls__model-options");
+          if (!sidebar || !sessions || !thread || !modelPicker) {
             throw new Error("Missing chat interaction surface");
           }
           return {
@@ -104,14 +107,21 @@ suite.define(() => {
             chatScrollbar: getComputedStyle(thread, "::-webkit-scrollbar").width,
             sidebarSelection: getComputedStyle(sidebar).userSelect,
             sidebarScrollbar: getComputedStyle(sessions, "::-webkit-scrollbar").width,
+            modelPickerScrollbar: getComputedStyle(modelPicker, "::-webkit-scrollbar").width,
           };
         });
+        // One canonical width everywhere: the sidebar no longer overrides
+        // --scrollbar-size down to 6px, and the model picker (which used to
+        // inherit the raw document default with no width of its own) now
+        // reports the same value as every other sampled surface.
         expect(chatStyles).toEqual({
           chatSelection: "text",
           chatScrollbar: "12px",
           sidebarSelection: "none",
-          sidebarScrollbar: "6px",
+          sidebarScrollbar: "12px",
+          modelPickerScrollbar: "12px",
         });
+        await page.keyboard.press("Escape");
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
         const thread = page.locator(".chat-thread");
         expect(await readFocusOutline(thread)).toMatchObject({
@@ -136,11 +146,8 @@ suite.define(() => {
         const focusedOutline = await readFocusOutline(thread);
         expect(focusedOutline).toMatchObject({
           focusVisible: true,
-          outlineOffset: "-2px",
-          outlineStyle: "solid",
-          outlineWidth: "2px",
+          outlineStyle: "none",
         });
-        expect(focusedOutline.outlineColor).toBe(focusedOutline.mutedStrongColor);
         await captureUiProof(page, "02-chat-thread-keyboard-focus.png");
 
         await page.setViewportSize({ height: 650, width: 1440 });
@@ -177,7 +184,7 @@ suite.define(() => {
           contentScrollbar: "12px",
           contentSelection: "none",
           inputSelection: "text",
-          sidebarScrollbar: "6px",
+          sidebarScrollbar: "12px",
           sidebarSelection: "none",
         });
 
@@ -198,5 +205,111 @@ suite.define(() => {
         await captureUiProof(page, "03-settings-contextual-scrollbars.png");
       },
     );
+  });
+
+  it("resolves the scrollbar thumb from theme tokens and captures dark/light proof", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(uiProofArtifactDir, { recursive: true });
+    }
+    const thumbColorByScheme: Record<"dark" | "light", string> = { dark: "", light: "" };
+    for (const colorScheme of ["dark", "light"] as const) {
+      await suite.withPage(
+        {
+          colorScheme,
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1440 },
+        },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            historyMessages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "Selectable transcript content" }],
+              },
+            ],
+            models: [
+              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+              ...Array.from({ length: 24 }, (_value, index) => ({
+                id: `scroll-model-${index + 1}`,
+                name: `Scroll Model ${index + 1}`,
+                provider: "openai",
+              })),
+            ],
+          });
+
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.getByText("Selectable transcript content", { exact: true }).waitFor();
+          thumbColorByScheme[colorScheme] = await page.evaluate(
+            () => getComputedStyle(document.body, "::-webkit-scrollbar-thumb").backgroundColor,
+          );
+          // Chat transcript + session sidebar together, before opening anything.
+          await captureUiProof(page, `chat-transcript-sidebar-${colorScheme}.png`);
+
+          // The headline complaint surface: the light-DOM chat model picker.
+          await page.locator('[data-chat-model-select="true"]').click();
+          const modelOptions = page.locator(".chat-controls__model-options");
+          await expect.poll(() => modelOptions.isVisible()).toBe(true);
+          await captureUiProof(page, `model-picker-${colorScheme}.png`);
+          await page.keyboard.press("Escape");
+
+          // The shadow-DOM lane: a Web Awesome ::part() menu picks up the same
+          // profile through the grouped rule in base.css.
+          const composer = page.locator(".agent-chat__input");
+          await composer.getByRole("button", { name: "Add attachment" }).click();
+          const capabilityMenu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+          await expect
+            .poll(() =>
+              capabilityMenu.evaluate((node) => (node as HTMLElement & { open: boolean }).open),
+            )
+            .toBe(true);
+          // Regression guard: base.css's ::-webkit-scrollbar* rules do not cross
+          // a shadow boundary on their own. Only the grouped ::part() rule gives
+          // this menu's shadow-root scrollbar the canonical width and a real
+          // thumb color instead of silently falling back to the UA default.
+          const shadowScrollbar = await capabilityMenu.evaluate((node) => {
+            const part = (node as HTMLElement).shadowRoot?.querySelector('[part~="menu"]');
+            if (!part) {
+              return null;
+            }
+            return {
+              width: getComputedStyle(part, "::-webkit-scrollbar").width,
+              thumbBackground: getComputedStyle(part, "::-webkit-scrollbar-thumb").backgroundColor,
+            };
+          });
+          expect(shadowScrollbar).toEqual({ width: "12px", thumbBackground: expect.any(String) });
+          expect(shadowScrollbar?.thumbBackground).not.toBe("rgba(0, 0, 0, 0)");
+          await captureUiProof(page, `capability-menu-shadow-dom-${colorScheme}.png`);
+
+          // Genericity guard, not a second sample of the menu above: base.css
+          // reaches these parts through bare wa-dropdown/wa-select/wa-popover
+          // selectors, so every Web Awesome scroll part rendered on this page
+          // must report the canonical width -- including the ones no stylesheet
+          // names. A class allowlist would leave some at the platform default.
+          const shadowScrollbarWidths = await page.evaluate(() => {
+            // One part per host tag, matching the base.css rule exactly: sampling
+            // whichever part came first would read a part that rule never targets.
+            const partSelectorByTag: Record<string, string> = {
+              "WA-DROPDOWN": '[part~="menu"]',
+              "WA-POPOVER": '[part~="body"]',
+              "WA-SELECT": '[part~="listbox"]',
+            };
+            const hosts = document.querySelectorAll("wa-dropdown, wa-select, wa-popover");
+            return Array.from(hosts, (host) => {
+              const partSelector = partSelectorByTag[host.tagName];
+              const part = partSelector ? host.shadowRoot?.querySelector(partSelector) : null;
+              return part ? getComputedStyle(part, "::-webkit-scrollbar").width : null;
+            }).filter((width): width is string => width !== null);
+          });
+          expect(shadowScrollbarWidths.length).toBeGreaterThan(1);
+          expect([...new Set(shadowScrollbarWidths)]).toEqual(["12px"]);
+        },
+      );
+    }
+    // Same source (--muted), different value per mode: the token derivation
+    // covers dark and light without a hand-written color pair.
+    expect(thumbColorByScheme.dark).not.toBe(thumbColorByScheme.light);
+    expect(thumbColorByScheme.dark).not.toBe("");
+    expect(thumbColorByScheme.light).not.toBe("");
   });
 });

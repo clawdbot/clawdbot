@@ -8,8 +8,10 @@ import {
   installCronTestHooks,
 } from "./service.test-harness.js";
 import { locked } from "./service/locked.js";
+import { add, remove } from "./service/ops-mutations.js";
+import { status } from "./service/ops-read.js";
 import { createCronServiceState } from "./service/state.js";
-import { loadCronStore } from "./store.js";
+import * as cronStoreModule from "./store.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-" });
@@ -63,7 +65,7 @@ describe("CronService", () => {
     });
 
     await cronB.start();
-    expect((await loadCronStore(aliasedStorePath)).jobs).toHaveLength(1);
+    expect((await cronStoreModule.loadCronStore(aliasedStorePath)).jobs).toHaveLength(1);
 
     vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
     await vi.runOnlyPendingTimersAsync();
@@ -147,12 +149,71 @@ describe("CronService", () => {
     await addJob(cronA, "first-cached-service-job");
     await addJob(cronB, "second-cached-service-job");
 
-    expect((await loadCronStore(store.storePath)).jobs.map((job) => job.id)).toEqual([
-      "first-cached-service-job",
-      "second-cached-service-job",
-    ]);
+    expect(
+      (await cronStoreModule.loadCronStore(store.storePath)).jobs.map((job) => job.id),
+    ).toEqual(["first-cached-service-job", "second-cached-service-job"]);
     cronA.stop();
     cronB.stop();
+    await store.cleanup();
+  });
+
+  it("re-arms a stale service after a missing remove reloads an earlier job", async () => {
+    const store = await makeStorePath();
+    const createState = () => {
+      const enqueueSystemEvent = vi.fn();
+      const state = createCronServiceState({
+        storePath: store.storePath,
+        cronEnabled: true,
+        log: noopLogger,
+        enqueueSystemEvent,
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      return { state, enqueueSystemEvent };
+    };
+    const stale = createState();
+    const writer = createState();
+    await status(stale.state);
+    await status(writer.state);
+    const baseMs = Date.parse("2025-12-13T00:00:00.000Z");
+    const addAtJob = (state: ReturnType<typeof createCronServiceState>, id: string, atMs: number) =>
+      add(state, {
+        id,
+        name: id,
+        enabled: true,
+        schedule: { kind: "at", at: new Date(atMs).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: id },
+      });
+
+    await addAtJob(stale.state, "later-job", baseMs + 60_000);
+    const staleTimer = stale.state.timer;
+    await addAtJob(writer.state, "earlier-job", baseMs + 10_000);
+    if (writer.state.timer) {
+      clearTimeout(writer.state.timer);
+      writer.state.timer = null;
+    }
+    const previousRevision = cronStoreModule.getCronJobsStoreRevision(store.storePath);
+    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+    persist.mockClear();
+
+    await expect(remove(stale.state, "missing-job")).resolves.toEqual({
+      ok: true,
+      removed: false,
+    });
+
+    expect(persist).not.toHaveBeenCalled();
+    expect(cronStoreModule.getCronJobsStoreRevision(store.storePath)).toBe(previousRevision);
+    expect(stale.state.timer).not.toBe(staleTimer);
+    expect(stale.state.store?.jobs.map((job) => job.id)).toEqual(["later-job", "earlier-job"]);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(stale.enqueueSystemEvent).toHaveBeenCalledWith("earlier-job", expect.any(Object));
+    if (stale.state.timer) {
+      clearTimeout(stale.state.timer);
+    }
     await store.cleanup();
   });
 });

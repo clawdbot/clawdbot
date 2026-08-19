@@ -61,6 +61,11 @@
       "import": "./dist/types.mjs",
       "default": "./dist/types.mjs"
     },
+    "./provider-types": {
+      "types": "./dist/provider-types.d.mts",
+      "import": "./dist/provider-types.mjs",
+      "default": "./dist/provider-types.mjs"
+    },
     "./validation": {
       "types": "./dist/validation.d.mts",
       "import": "./dist/validation.mjs",
@@ -75,6 +80,11 @@
       "types": "./dist/internal/openai.d.mts",
       "import": "./dist/internal/openai.mjs",
       "default": "./dist/internal/openai.mjs"
+    },
+    "./internal/openai-responses-payload-policy": {
+      "types": "./dist/internal/openai-responses-payload-policy.d.mts",
+      "import": "./dist/internal/openai-responses-payload-policy.mjs",
+      "default": "./dist/internal/openai-responses-payload-policy.mjs"
     },
     "./internal/retry-after": {
       "types": "./dist/internal/retry-after.d.mts",
@@ -99,6 +109,10 @@
     "openai": "6.49.0",
     "partial-json": "0.1.7",
     "typebox": "1.3.6"
+  },
+  "devDependencies": {
+    "@openclaw/model-catalog-core": "workspace:*",
+    "@openclaw/normalization-core": "workspace:*"
   },
   "engines": {
     "node": ">=22.19.0"

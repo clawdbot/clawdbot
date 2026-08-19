@@ -275,7 +275,7 @@ function resolveSessionEntryCandidates(params: {
   };
 }
 
-export function resolveSessionStoreEntry(params: {
+export function resolveSessionStoreEntryCore(params: {
   store: Record<string, SessionEntry>;
   sessionKey: string;
 }): {

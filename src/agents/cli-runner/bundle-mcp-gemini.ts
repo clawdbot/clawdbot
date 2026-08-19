@@ -8,7 +8,7 @@ import {
   decodeHeaderEnvPlaceholder,
   isRecord,
   normalizeBundleMcpServerConfig,
-  normalizeStringRecord,
+  normalizeMcpStringRecord,
 } from "../bundle-mcp-adapter.js";
 import { withOpenClawMcpCaptureHeader, writeTemporaryBundleMcpJson } from "./bundle-mcp-runtime.js";
 
@@ -81,7 +81,7 @@ function normalizeGeminiServerConfig(
   deniedTools: readonly string[] | undefined,
 ): Record<string, unknown> {
   const next = normalizeBundleMcpServerConfig(server, GEMINI_MCP_SERVER_FIELDS);
-  const headers = normalizeStringRecord(server.headers);
+  const headers = normalizeMcpStringRecord(server.headers);
   if (headers) {
     next.headers = Object.fromEntries(
       Object.entries(headers).map(([name, value]) => [

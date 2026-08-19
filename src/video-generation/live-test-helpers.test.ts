@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import {
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  parseCsvFilter,
+  parseVideoProviderFilter,
   parseProviderModelMap,
   redactLiveApiKey,
   resolveConfiguredLiveVideoModels,
@@ -24,9 +24,9 @@ describe("video-generation live-test helpers", () => {
   });
 
   it("parses provider filters and treats empty/all as unfiltered", () => {
-    expect(parseCsvFilter()).toBeNull();
-    expect(parseCsvFilter("all")).toBeNull();
-    expect(parseCsvFilter(" google , openai ")).toEqual(new Set(["google", "openai"]));
+    expect(parseVideoProviderFilter()).toBeNull();
+    expect(parseVideoProviderFilter("all")).toBeNull();
+    expect(parseVideoProviderFilter(" google , openai ")).toEqual(new Set(["google", "openai"]));
   });
 
   it("parses provider model overrides by provider id", () => {

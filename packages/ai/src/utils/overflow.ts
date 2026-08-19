@@ -10,7 +10,7 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
 }
 
 /**
- * Regex patterns to detect context overflow errors from different providers.
+ * Canonical scoped patterns for context overflow errors from different providers.
  *
  * These patterns match error messages returned when the input exceeds
  * the model's context window.
@@ -41,9 +41,10 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
  *   input filling the context window.
  * - Ollama: Some deployments truncate silently, others return errors like "prompt too long; exceeded max context length by X tokens"
  */
-const OVERFLOW_PATTERNS = [
+const ASSISTANT_OVERFLOW_PATTERNS = [
   /prompt is too long/i, // Anthropic token overflow
   /request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
+  /input length and `?max_tokens`? exceed context limit: [\d,]+ \+ [\d,]+ > [\d,]+/i, // Anthropic direct API
   /input is too long for requested model/i, // Amazon Bedrock
   /exceeds the context window/i, // OpenAI (Completions & Responses API)
   /exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\d,]+ tokens?|\s*\([\d,]+\))/i, // OpenAI-compatible proxies (LiteLLM)
@@ -70,9 +71,72 @@ const OVERFLOW_PATTERNS = [
   /^413\s*(?:status code)?\s*\(no body\)/i, // Cerebras: 413 with no body
 ];
 
+const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
+  /request_too_large/i, // Anthropic request byte-size overflow
+  /context_overflow/i,
+  CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
+  /invalid_argument[\s\S]*maximum number of tokens/i, // Google/Vertex
+  /request exceeds the maximum size/i, // Anthropic
+  /context length exceeded/i,
+  /maximum context length/i,
+  /prompt is too long/i,
+  /prompt too long/i,
+  /exceeds model context window/i,
+  /model token limit/i,
+  /input exceeds[\s\S]*maximum number of tokens/i,
+  /^(?=[\s\S]*context window)(?=[\s\S]*ran out of (?:room|space))/i, // Codex
+  /request size exceeds[\s\S]*context window/i,
+  /context overflow:/i,
+  /exceed context limit/i,
+  /exceeds the model'?s maximum context/i,
+  /max_tokens[\s\S]*exceed[\s\S]*context/i,
+  /input length[\s\S]*exceed[\s\S]*context/i,
+  /413[\s\S]*too large/i,
+  /context_window_exceeded/i,
+  // FIXED(refactor-06): PR 2 removed the embedded-429 false positive; this is provider overflow.
+  /input length [\d,]+\s+tokens? exceeds the model limit/i,
+  /上下文过长|上下文超出|上下文长度超|超出最大上下文|请压缩上下文/,
+];
+
+const PROVIDER_FALLBACK_OVERFLOW_PATTERNS = [
+  /\binput token count exceeds the maximum number of input tokens\b/i, // AWS Bedrock
+  /\binput is too long for this model\b/i, // AWS Bedrock stream errors
+  /\binput exceeds the maximum number of tokens\b/i, // Google Vertex / Gemini
+  /\bollama error:\s*context length exceeded(?:,\s*too many tokens)?\b/i,
+  /\btotal tokens?.*exceeds? (?:the )?(?:model(?:'s)? )?(?:max|maximum|limit)/i, // Cohere
+  /\b(?:request|prompt) \(\d[\d,]*\s*tokens?\) exceeds (?:the )?available context size\b/i, // llama.cpp
+  /\binput (?:is )?too long for (?:the )?model\b/i,
+];
+
+const CONTEXT_OVERFLOW_PATTERN_SCOPES = {
+  "assistant-error": ASSISTANT_OVERFLOW_PATTERNS,
+  "failover-explicit": FAILOVER_EXPLICIT_OVERFLOW_PATTERNS,
+  "provider-fallback": PROVIDER_FALLBACK_OVERFLOW_PATTERNS,
+  "failover-hint": [
+    /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|prompt.*(too (?:large|long)|exceed|over|limit|max(?:imum)?)|(?:request|input).*(?:context|window|length|token).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i,
+  ],
+  "context-window-too-small": [/context window.*(too small|minimum is)/i],
+  "tpm-rate-limit-hint": [/\btpm\b|tokens per minute/i],
+  "rate-limit-hint": [
+    /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b|tokens per day/i,
+  ],
+} as const;
+
+export type ContextOverflowMessageScope = keyof typeof CONTEXT_OVERFLOW_PATTERN_SCOPES;
+
+/** Match one canonical context-overflow wording scope without applying caller policy. */
+export function matchesContextOverflowMessage(
+  errorMessage: string,
+  scope: ContextOverflowMessageScope,
+): boolean {
+  return CONTEXT_OVERFLOW_PATTERN_SCOPES[scope].some((pattern: RegExp) =>
+    pattern.test(errorMessage),
+  );
+}
+
 /**
  * Patterns that indicate non-overflow errors (e.g. rate limiting, server errors).
- * Error messages matching unknown of these are excluded from overflow detection
+ * Error messages matching any of these are excluded from overflow detection
  * even if they also match an OVERFLOW_PATTERN.
  *
  * Example: Bedrock formats throttling errors as "ThrottlingException: Too many tokens,
@@ -142,7 +206,7 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * 1. Send a request that exceeds the model's context window
  * 2. Check the errorMessage in the response
  * 3. Create a regex pattern that matches the error
- * 4. The pattern should be added to OVERFLOW_PATTERNS in this file, or
+ * 4. The pattern should be added to the appropriate canonical scope in this file, or
  *    check the errorMessage yourself before calling this function
  *
  * @param message - The assistant message to check
@@ -156,7 +220,7 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
     const errorMessage = message.errorMessage;
     // Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
     const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(errorMessage));
-    if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(errorMessage))) {
+    if (!isNonOverflow && matchesContextOverflowMessage(errorMessage, "assistant-error")) {
       return true;
     }
   }

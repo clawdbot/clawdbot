@@ -4,14 +4,16 @@ import {
   expireStaleReplyOperation,
   type ReplyOperation,
 } from "../../../auto-reply/reply/reply-run-registry.js";
-import { isAgentRunRestartAbortReason } from "../../run-termination.js";
+import {
+  isAgentRunRestartAbortReason,
+  isAgentRunSupersededAbortReason,
+} from "../../run-termination.js";
 import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 
 const mocks = vi.hoisted(() => ({
-  buildSubscriptionParams: vi.fn(),
   clearActiveRun: vi.fn(),
   notifyToolActivity: vi.fn(),
   runBeforeFinalizeHook: vi.fn(),
@@ -26,9 +28,6 @@ vi.mock("../runs.js", () => ({
   clearActiveEmbeddedRun: mocks.clearActiveRun,
   setActiveEmbeddedRun: mocks.setActiveRun,
 }));
-vi.mock("./attempt.subscription-cleanup.js", () => ({
-  buildEmbeddedSubscriptionParams: mocks.buildSubscriptionParams,
-}));
 vi.mock("./tool-activity-heartbeat.js", () => ({
   notifyToolActivity: mocks.notifyToolActivity,
 }));
@@ -39,9 +38,9 @@ vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({
 import {
   createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
-} from "./attempt-abort.js";
+} from "./attempt-finalize.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
-import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 function prepareCatalogExecutor(
   projections: ToolSearchTargetTranscriptProjection[],
@@ -74,6 +73,7 @@ function prepareCatalogExecutor(
     hookRunner: undefined as never,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
+    diagnosticOwner: {} as never,
     clientToolCallSlots: [],
     toolSearchTargetTranscriptProjections: projections,
     isReplaySafeTool: () => false,
@@ -101,13 +101,38 @@ function prepareCatalogExecutor(
 describe("prepareEmbeddedAttemptStream", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.buildSubscriptionParams.mockImplementation((params) => params);
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
       runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
       isCompacting: vi.fn(() => false),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
+  });
+
+  it("retains exact heartbeat preemption on the embedded queue handle", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-output-schema",
+      turnKind: "heartbeat",
+      resetTriggered: false,
+    });
+    try {
+      const prepared = prepareCatalogExecutor([], { replyOperation: operation });
+
+      expect(prepared.queueHandle.preemptByVisibleTurn?.()).toBe(true);
+      expect(operation.result).toEqual({
+        kind: "aborted",
+        code: "aborted_for_supersession",
+      });
+      expect(mocks.setActiveRun).toHaveBeenCalledWith(
+        "session-output-schema",
+        expect.objectContaining({ preemptByVisibleTurn: expect.any(Function) }),
+        "agent:main:main",
+        undefined,
+      );
+    } finally {
+      operation.complete();
+    }
   });
 
   it("uses the persisted assistant entry id and closes steering during revision settlement", async () => {
@@ -135,6 +160,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
       clientToolCallSlots: [],
       toolSearchTargetTranscriptProjections: [],
       isReplaySafeTool: () => false,
@@ -155,7 +181,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       builtinToolNames: new Set(),
       replaySafeToolNames: new Set(),
     });
-    const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
     };
     const decision = subscriptionInput.onBeforeTerminalDelivery?.({
@@ -213,6 +239,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
       clientToolCallSlots: [],
       toolSearchTargetTranscriptProjections: [],
       isReplaySafeTool: () => false,
@@ -234,7 +261,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       replaySafeToolNames: new Set(),
     });
     const queued = prepared.queueHandle.queueMessage("new user input");
-    const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
     };
 
@@ -268,7 +295,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       sandboxSessionKey: "agent:main:main",
     });
 
-    expect(mocks.buildSubscriptionParams).toHaveBeenCalledWith(
+    expect(mocks.subscribe).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:internal-session-effects:companion-run",
       }),
@@ -491,7 +518,6 @@ describe("prepareEmbeddedAttemptStream", () => {
     const markExternalAbort = vi.fn();
     const markAborted = vi.fn();
     const abortActiveSession = vi.fn(async () => {});
-    const releaseHeldLockForAbort = vi.fn(async () => {});
     const abortState = {
       markAborted,
       markExternalAbort,
@@ -522,7 +548,6 @@ describe("prepareEmbeddedAttemptStream", () => {
       isProbeSession: true,
       log: { warn: vi.fn() },
       runAbortController,
-      sessionLockController: { releaseHeldLockForAbort },
       state: abortState,
     });
     externalAbortController.setRunAbort(abortRun);
@@ -553,11 +578,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect(onAttemptAbort).toHaveBeenCalledOnce();
       expect(markAborted).toHaveBeenCalledOnce();
       expect(abortActiveSession).toHaveBeenCalledOnce();
-      expect(releaseHeldLockForAbort).toHaveBeenCalledOnce();
-      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
-        reason: undefined,
-        terminal: true,
-      });
+      expect(isAgentRunSupersededAbortReason(runAbortController.signal.reason)).toBe(true);
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
       expect(operation.abortSignal.aborted).toBe(true);
     } finally {

@@ -41,7 +41,7 @@ import {
 } from "./thread-fingerprints.js";
 import {
   CodexAdoptedThreadActiveError,
-  CodexRingZeroAttestationError,
+  CodexRestrictedToolSurfaceAttestationError,
   CodexThreadBindingConflictError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
@@ -55,7 +55,7 @@ import {
   resolveCodexAppServerThreadModelSelection,
 } from "./thread-model-selection.js";
 import {
-  attestCodexRingZeroThreadHasNoMcpServers,
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildThreadResumeParams,
   buildThreadStartParams,
 } from "./thread-requests.js";
@@ -78,7 +78,8 @@ type ThreadRequestContext = {
   environmentSelectionFingerprint?: string;
   hostSystemAgentActive: boolean;
   ringZeroActive: boolean;
-  ringZeroInheritedMcpServerNames: string[];
+  restrictedToolSurface: boolean;
+  restrictedToolSurfaceInheritedMcpServerNames: string[];
   nativeSkillIsolation?: CodexNativeSkillIsolation;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
   normalizeBindingModelProvider: (
@@ -91,6 +92,7 @@ type ThreadRequestContext = {
 type ResumeThreadContext = ThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
   clearCurrentBinding: (operation: string) => Promise<void>;
+  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
   prebuiltFinalConfigPatch?: {
     configPatch?: JsonObject;
     nativeHookRelayGeneration?: string;
@@ -139,7 +141,8 @@ export async function resumeExistingCodexThread(
     environmentSelectionFingerprint,
     hostSystemAgentActive,
     ringZeroActive,
-    ringZeroInheritedMcpServerNames,
+    restrictedToolSurface,
+    restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
@@ -163,9 +166,10 @@ export async function resumeExistingCodexThread(
     // Codex rebuilds effective config on thread/resume, so replay the app
     // allowlist persisted at thread/start or plugin tools disappear after one turn.
     const pluginAppsConfigPatch =
-      params.pluginThreadConfig?.enabled && resumeBinding.pluginAppPolicyContext
+      context.prebuiltPluginThreadConfig?.configPatch ??
+      (params.pluginThreadConfig?.enabled && resumeBinding.pluginAppPolicyContext
         ? buildCodexPluginAppsConfigPatchFromPolicyContext(resumeBinding.pluginAppPolicyContext)
-        : undefined;
+        : undefined);
     const resumeConfig = applyCodexNativeSkillIsolation(
       mergeCodexThreadConfigs(
         params.config,
@@ -178,6 +182,7 @@ export async function resumeExistingCodexThread(
     const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
       buildThreadResumeParams(params.params, {
         threadId: resumeBinding.threadId,
+        cwd: params.cwd,
         authProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
@@ -191,7 +196,9 @@ export async function resumeExistingCodexThread(
         nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
         webSearchAllowed: params.webSearchAllowed,
         hostSystemAgentActive,
-        ringZeroInheritedMcpServerNames,
+        restrictedToolSurfaceInheritedMcpServerNames,
+        shellEnvironment: params.shellEnvironment,
+        disableLoginShell: params.disableLoginShell,
       }),
     );
     const requestModelProvider =
@@ -226,18 +233,23 @@ export async function resumeExistingCodexThread(
         signal: params.signal,
       }),
     );
-    if (ringZeroActive || isMessageOnlyCodexSourceReply(params.params)) {
+    if (
+      ringZeroActive ||
+      isMessageOnlyCodexSourceReply(params.params) ||
+      params.params.pluginHarnessToolPolicyRestricted === true
+    ) {
       try {
-        await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
-          attestCodexRingZeroThreadHasNoMcpServers(
+        await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
+          attestCodexRestrictedToolSurfaceMcpServersDisabled(
             params.client,
             response.thread.id,
+            resumeParams.config,
             params.signal,
           ),
         );
       } catch (error) {
         await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-        throw new CodexRingZeroAttestationError(error);
+        throw new CodexRestrictedToolSurfaceAttestationError(error);
       }
     }
     throwIfAborted();
@@ -268,6 +280,7 @@ export async function resumeExistingCodexThread(
       configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
+      nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
       networkProxyProfileName: params.appServer.networkProxy?.profileName,
       networkProxyConfigFingerprint,
       nativeHookRelayGeneration:
@@ -276,9 +289,13 @@ export async function resumeExistingCodexThread(
         resumeBinding.connectionScope === "supervision"
           ? buildCodexAppServerConnectionFingerprint(params.appServer, params.params.agentDir)
           : params.appServerRuntimeFingerprint,
-      pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
-      pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
-      pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
+      pluginAppsFingerprint:
+        context.prebuiltPluginThreadConfig?.fingerprint ?? resumeBinding.pluginAppsFingerprint,
+      pluginAppsInputFingerprint:
+        context.prebuiltPluginThreadConfig?.inputFingerprint ??
+        resumeBinding.pluginAppsInputFingerprint,
+      pluginAppPolicyContext:
+        context.prebuiltPluginThreadConfig?.policyContext ?? resumeBinding.pluginAppPolicyContext,
       contextEngine: contextEngineBinding,
       environmentSelectionFingerprint,
     } satisfies Partial<Omit<CodexAppServerThreadBinding, "threadId">>;
@@ -348,8 +365,8 @@ export async function resumeExistingCodexThread(
     if (isCodexAppServerStartSelectionChangedError(error)) {
       throw error;
     }
-    if (error instanceof CodexRingZeroAttestationError) {
-      await clearCurrentBinding("retiring a failed ring-zero thread attestation");
+    if (error instanceof CodexRestrictedToolSurfaceAttestationError) {
+      await clearCurrentBinding("retiring a failed restricted-tool-surface attestation");
       throw error;
     }
     if (error instanceof CodexAdoptedThreadActiveError) {
@@ -415,7 +432,8 @@ export async function startFreshCodexThread(
     environmentSelectionFingerprint,
     hostSystemAgentActive,
     ringZeroActive,
-    ringZeroInheritedMcpServerNames,
+    restrictedToolSurface,
+    restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
@@ -461,7 +479,9 @@ export async function startFreshCodexThread(
       model: startModelSelection.model,
       modelProvider: startModelProvider,
       hostSystemAgentActive,
-      ringZeroInheritedMcpServerNames,
+      restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: params.shellEnvironment,
+      disableLoginShell: params.disableLoginShell,
     }),
   );
   const requestModelProvider =
@@ -509,10 +529,19 @@ export async function startFreshCodexThread(
     }
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
-  if (ringZeroActive || isMessageOnlyCodexSourceReply(params.params)) {
+  if (
+    ringZeroActive ||
+    isMessageOnlyCodexSourceReply(params.params) ||
+    params.params.pluginHarnessToolPolicyRestricted === true
+  ) {
     try {
-      await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
-        attestCodexRingZeroThreadHasNoMcpServers(params.client, response.thread.id, params.signal),
+      await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
+        attestCodexRestrictedToolSurfaceMcpServersDisabled(
+          params.client,
+          response.thread.id,
+          startParams.config,
+          params.signal,
+        ),
       );
     } catch (error) {
       await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
@@ -558,6 +587,7 @@ export async function startFreshCodexThread(
       cwd: params.cwd,
       ...(rolloutPath ? { rolloutPath } : {}),
       authProfileId: params.params.authProfileId,
+      agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
       model: response.model ?? startParams.model ?? params.params.modelId,
       modelProvider: bindingModelProvider,
       dynamicToolsFingerprint,
@@ -569,6 +599,7 @@ export async function startFreshCodexThread(
       configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
+      nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
       networkProxyProfileName: params.appServer.networkProxy?.profileName,
       networkProxyConfigFingerprint,
       nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -648,6 +679,7 @@ export async function startFreshCodexThread(
     cwd: params.cwd,
     ...(rolloutPath ? { rolloutPath } : {}),
     authProfileId: params.params.authProfileId,
+    agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider:
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,

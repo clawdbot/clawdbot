@@ -9,7 +9,10 @@ import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
-import { loadSessionStoreEntry, resolveStorePath } from "./dispatch-from-config.runtime.js";
+import {
+  loadSessionStoreEntry,
+  resolveSessionStorePathCore,
+} from "./dispatch-from-config.runtime.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { isSlackDirectRoutedThreadTurn } from "./routed-delivery-thread.js";
 
@@ -66,7 +69,7 @@ export function resolveSessionStoreLookup(
     return {};
   }
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   try {
     const entry = loadSessionStoreEntry({
       agentId,
