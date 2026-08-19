@@ -5,7 +5,10 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   readToolApprovalReviewOutcome,
@@ -20,7 +23,6 @@ import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import {
-  type AgentRunRenderItem,
   isPendingSendMessage,
   persistedMessageEntryId,
   type AssistantMessageExpansionState,
@@ -59,14 +61,9 @@ type ActiveContinuation = {
   options: StreamGroupOptions;
 };
 
-type MessageActions =
-  | { kind: "all" }
-  | { kind: "none" }
-  | { kind: "terminal"; messageKey: string | null };
-
 type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
 
-export type RenderMessageGroupOptions = {
+type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;
@@ -114,7 +111,6 @@ export type RenderMessageGroupOptions = {
   rewindDisabled?: boolean;
   activeContinuation?: ActiveContinuation;
   turnRecap?: TurnRecap;
-  messageActions?: MessageActions;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -432,16 +428,17 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     }
   }
   const lastMessageIndex = group.messages.length - 1;
-  const messageActions = opts.messageActions ?? { kind: "all" };
-  const footerActionIndex =
-    messageActions.kind === "terminal" && messageActions.messageKey
-      ? group.messages.findIndex((message) => message.key === messageActions.messageKey)
-      : lastMessageIndex;
+  const ownsRunFrame = group.runId !== undefined;
+  const runFrameActive = ownsRunFrame && Boolean(group.isStreaming || opts.activeContinuation);
+  const lastMessage = group.messages[lastMessageIndex]?.message;
+  const runFrameHasTerminalAssistant =
+    !ownsRunFrame ||
+    (lastMessage !== undefined &&
+      normalizeRoleForGrouping(normalizeMessage(lastMessage).role) === "assistant");
   const footerActionDetails =
-    messageActions.kind === "none" || footerActionIndex < 0
+    runFrameActive || !runFrameHasTerminalAssistant
       ? null
-      : (messageActionDetails[footerActionIndex] ?? null);
-  const footerActionKey = group.messages[footerActionIndex]?.key;
+      : (messageActionDetails[lastMessageIndex] ?? null);
   const hasUserFooterActions =
     normalizedRole === "user" &&
     Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onRewind);
@@ -517,7 +514,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
               opts.onOpenSidebar,
             )}
-            ${actionDetails && index < lastMessageIndex && messageActions.kind === "all"
+            ${actionDetails && index < lastMessageIndex && !ownsRunFrame
               ? html`
                   <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
                     ${renderMessageActionButtons(actionDetails, opts)}
@@ -566,68 +563,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           </div>`}
     </div>
   `;
-}
-
-export function renderAgentRunGroup(
-  item: AgentRunRenderItem,
-  opts: RenderMessageGroupOptions,
-  streamOpts: StreamGroupOptions,
-) {
-  const messages: MessageGroup["messages"] = [];
-  let activeContinuation: ActiveContinuation | undefined;
-  let senderLabel: string | null | undefined;
-  let timestamp = Number.POSITIVE_INFINITY;
-  for (const part of item.parts) {
-    if (part.kind === "group") {
-      messages.push(...part.messages);
-      senderLabel ??= part.senderLabel;
-      timestamp = Math.min(timestamp, part.timestamp);
-      continue;
-    }
-    const streamParts = part.parts.filter((streamPart) => streamPart.kind === "stream");
-    messages.push(
-      ...streamParts.map((streamPart) => ({
-        key: streamPart.key,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: streamPart.text }],
-          timestamp: streamPart.startedAt,
-        },
-      })),
-    );
-    const statusParts = part.parts.filter((streamPart) => streamPart.kind !== "stream");
-    if (statusParts.length > 0) {
-      activeContinuation = { parts: statusParts, options: streamOpts };
-    }
-    for (const streamPart of part.parts) {
-      timestamp = Math.min(timestamp, streamPart.startedAt);
-    }
-  }
-  if (messages.length === 0) {
-    return activeContinuation
-      ? renderStreamGroupParts(activeContinuation.parts, activeContinuation.options, "standalone")
-      : nothing;
-  }
-  return renderMessageGroup(
-    {
-      kind: "group",
-      key: item.key,
-      role: "assistant",
-      senderLabel,
-      messages,
-      timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
-      isStreaming: item.state === "active",
-      runId: item.runId,
-    },
-    {
-      ...opts,
-      activeContinuation,
-      messageActions:
-        item.state === "active"
-          ? { kind: "none" }
-          : { kind: "terminal", messageKey: item.actionMessageKey },
-    },
-  );
 }
 
 // ── Per-message metadata (tokens, cost, model, context %) ──

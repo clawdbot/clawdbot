@@ -2605,6 +2605,122 @@ describe("chat loading skeleton", () => {
     ).toBe(7_200);
   });
 
+  it("keeps multi-part run usage current when only output tokens change", () => {
+    const runId = "run-composed";
+    const assistant = {
+      kind: "group",
+      key: "group:assistant:run-start",
+      role: "assistant",
+      messages: [
+        {
+          key: "message:assistant:run-start",
+          message: { role: "assistant", content: "Starting the work.", timestamp: 1 },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+      runId,
+    };
+    const tool = {
+      kind: "group",
+      key: "group:tool:run-work",
+      role: "tool",
+      messages: [
+        {
+          key: "message:tool:run-work",
+          message: { role: "toolResult", content: "Tool complete.", timestamp: 2 },
+        },
+      ],
+      timestamp: 2,
+      isStreaming: false,
+      runId,
+    };
+    const reading = {
+      kind: "reading-indicator",
+      key: "reading:run-composed",
+      startedAt: 1,
+      runId,
+    };
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      assistant,
+      tool,
+      reading,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    const container = document.createElement("div");
+
+    renderChatInto(container, { canAbort: true, runId, runOutputTokens: 5_500, stream: null });
+    renderMessageGroupMock.mockClear();
+    renderChatInto(container, { canAbort: true, runId, runOutputTokens: 7_200, stream: null });
+
+    expect(renderMessageGroupMock).toHaveBeenCalledOnce();
+    expect(
+      renderMessageGroupMock.mock.calls[0]?.[1].activeContinuation?.options.runOutputTokens,
+    ).toBe(7_200);
+    expect(renderMessageGroupMock.mock.calls[0]?.[0].isStreaming).toBe(false);
+  });
+
+  it("keeps the completed recap on one composed multi-part run", () => {
+    const runId = "run-composed";
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      {
+        kind: "group",
+        key: "group:assistant:run-start",
+        role: "assistant",
+        messages: [
+          {
+            key: "message:assistant:run-start",
+            message: { role: "assistant", content: "Starting the work.", timestamp: 1 },
+          },
+        ],
+        timestamp: 1,
+        isStreaming: false,
+        runId,
+      },
+      {
+        kind: "group",
+        key: "group:tool:run-work",
+        role: "tool",
+        messages: [
+          {
+            key: "message:tool:run-work",
+            message: { role: "toolResult", content: "Tool complete.", timestamp: 2 },
+          },
+        ],
+        timestamp: 2,
+        isStreaming: false,
+        runId,
+      },
+      {
+        kind: "group",
+        key: "group:assistant:run-finish",
+        role: "assistant",
+        messages: [
+          {
+            key: "message:assistant:run-finish",
+            message: { role: "assistant", content: "Finished the work.", timestamp: 3 },
+          },
+        ],
+        timestamp: 3,
+        isStreaming: false,
+        runId,
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runtimeMs: 5_000,
+      outputTokens: 42,
+    });
+
+    const container = renderChatView();
+
+    expect(renderMessageGroupMock).toHaveBeenCalledOnce();
+    expect(renderMessageGroupMock.mock.calls[0]?.[0].messages).toHaveLength(3);
+    expect(renderMessageGroupMock.mock.calls[0]?.[1].turnRecap).toEqual({
+      runtimeMs: 5_000,
+      outputTokens: 42,
+    });
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
+  });
+
   it("releases the embedded recap when a later reply becomes the settled turn", () => {
     const firstReply = {
       kind: "group",

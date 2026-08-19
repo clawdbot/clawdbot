@@ -490,7 +490,7 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
 }
 
 type RenderChatItem = ChatItem | MessageGroup;
-export type StreamRunRenderItem = {
+type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;
   runId?: string;
@@ -498,6 +498,12 @@ export type StreamRunRenderItem = {
     Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" }>
   >;
 };
+
+type AgentRunPart = MessageGroup | StreamRunRenderItem;
+
+function streamPartRunId(part: StreamRunRenderItem["parts"][number]): string | undefined {
+  return part.kind === "question" ? undefined : part.runId;
+}
 
 export function coalesceStreamRuns(
   items: RenderChatItem[],
@@ -509,18 +515,20 @@ export function coalesceStreamRuns(
   const flush = () => {
     const [first] = run;
     if (first) {
+      const runId = streamPartRunId(first);
       result.push({
         kind: "stream-run",
         key: `stream-run:${first.key}`,
         parts: run,
-        ...(first.runId ? { runId: first.runId } : {}),
+        ...(runId ? { runId } : {}),
       });
       run = [];
     }
   };
   for (const item of items) {
     if (item.kind === "stream" || item.kind === "reading-indicator") {
-      if (run.length > 0 && run[0]?.runId !== item.runId) {
+      const first = run[0];
+      if (first && streamPartRunId(first) !== item.runId) {
         flush();
       }
       run.push(item);
@@ -533,105 +541,112 @@ export function coalesceStreamRuns(
   return result;
 }
 
-type AgentRunRenderItemBase = {
-  kind: "agent-run";
-  key: string;
-  runId: string;
-  parts: Array<MessageGroup | StreamRunRenderItem>;
-};
-
-export type AgentRunRenderItem =
-  | (AgentRunRenderItemBase & { state: "active" })
-  | (AgentRunRenderItemBase & { state: "terminal"; actionMessageKey: string | null });
-
-function agentRunPartId(item: RenderChatItem | StreamRunRenderItem): string | undefined {
+function composableRunId(item: AgentRunPart): string | undefined {
   if (item.kind === "group" && (item.role === "assistant" || item.role === "tool")) {
+    if (
+      chatItemStartsUserTurn(item) ||
+      item.messages.some(({ message }) => asRecord(message)?.stopReason === "error")
+    ) {
+      return undefined;
+    }
     return item.runId;
   }
   return item.kind === "stream-run" ? item.runId : undefined;
 }
 
-function agentRunPartStartsBoundary(item: RenderChatItem | StreamRunRenderItem): boolean {
-  return item.kind === "group" && chatItemStartsUserTurn(item);
+function streamMessage(part: Extract<StreamRunRenderItem["parts"][number], { kind: "stream" }>) {
+  return {
+    key: part.key,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: part.text }],
+      timestamp: part.startedAt,
+    },
+  };
 }
 
-function agentRunHasAssistantContent(parts: AgentRunRenderItem["parts"]): boolean {
-  return parts.some(
-    (part) =>
-      part.kind === "stream-run" ||
-      (part.role === "assistant" && assistantGroupHasVisibleReplyContent(part)),
-  );
-}
-
-function terminalAgentRunMessageKey(parts: AgentRunRenderItem["parts"]): string | null {
-  const lastPart = parts.at(-1);
-  if (
-    lastPart?.kind !== "group" ||
-    lastPart.role !== "assistant" ||
-    !assistantGroupHasVisibleReplyContent(lastPart)
-  ) {
-    return null;
-  }
-  return lastPart.messages.at(-1)?.key ?? null;
-}
-
-export function coalesceAgentRunItems(
+/** Compose one authoritative run into the existing MessageGroup owner. */
+export function coalesceAgentRunGroups(
   items: Array<RenderChatItem | StreamRunRenderItem>,
-  activeRunId?: string | null,
-): Array<RenderChatItem | StreamRunRenderItem | AgentRunRenderItem> {
-  const result: Array<RenderChatItem | StreamRunRenderItem | AgentRunRenderItem> = [];
+): Array<RenderChatItem | StreamRunRenderItem> {
+  const result: Array<RenderChatItem | StreamRunRenderItem> = [];
   let runId: string | undefined;
-  let parts: AgentRunRenderItem["parts"] = [];
+  let parts: AgentRunPart[] = [];
   const flush = () => {
     const first = parts[0];
     if (!first || !runId) {
       return;
     }
-    if (parts.length === 1 || !agentRunHasAssistantContent(parts)) {
-      result.push(...parts);
+    if (parts.length === 1) {
+      result.push(first);
     } else {
-      const base = {
-        kind: "agent-run",
-        key: `agent-run:${runId}:${first.key}`,
+      const messages: MessageGroup["messages"] = [];
+      const status: StreamRunRenderItem["parts"] = [];
+      let assistant: MessageGroup | undefined;
+      let firstGroupKey: string | undefined;
+      let timestamp = Number.POSITIVE_INFINITY;
+      let isStreaming = false;
+      let statusKey: string | undefined;
+      for (const part of parts) {
+        if (part.kind === "group") {
+          firstGroupKey ??= part.key;
+          assistant ??= part.role === "assistant" ? part : undefined;
+          messages.push(...part.messages);
+          timestamp = Math.min(timestamp, part.timestamp);
+          isStreaming ||= part.isStreaming;
+          continue;
+        }
+        statusKey ??= part.key;
+        for (const stream of part.parts) {
+          timestamp = Math.min(timestamp, stream.startedAt);
+          if (stream.kind === "stream") {
+            messages.push(streamMessage(stream));
+            isStreaming ||= stream.isStreaming;
+          } else {
+            status.push(stream);
+          }
+        }
+      }
+      result.push({
+        kind: "group",
+        key: firstGroupKey ?? first.key,
+        role: assistant ? "assistant" : "tool",
+        senderLabel: assistant?.senderLabel,
+        replyToSender: assistant?.replyToSender,
+        messages,
+        timestamp,
+        isStreaming,
         runId,
-        parts,
-      } as const;
-      result.push(
-        runId === activeRunId
-          ? { ...base, state: "active" }
-          : {
-              ...base,
-              state: "terminal",
-              actionMessageKey: terminalAgentRunMessageKey(parts),
-            },
-      );
+      });
+      if (statusKey && status.length > 0) {
+        result.push({ kind: "stream-run", key: statusKey, parts: status, runId });
+      }
     }
-    parts = [];
     runId = undefined;
+    parts = [];
   };
-
   for (const item of items) {
-    const itemRunId = agentRunPartId(item);
+    if (item.kind !== "group" && item.kind !== "stream-run") {
+      flush();
+      result.push(item);
+      continue;
+    }
+    const itemRunId = composableRunId(item);
     if (!itemRunId) {
       flush();
       result.push(item);
       continue;
     }
-    if (runId && (runId !== itemRunId || agentRunPartStartsBoundary(item))) {
+    if (runId && runId !== itemRunId) {
       flush();
     }
     runId = itemRunId;
     parts.push(item);
-    if (
-      item.kind === "stream-run" &&
-      item.parts.some((part) => part.kind === "reading-indicator")
-    ) {
-      flush();
-    }
   }
   flush();
   return result;
 }
+
 /** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
 type WorkGroupRenderItem = {
   kind: "work-group";
@@ -646,7 +661,7 @@ type ActivityRunRenderItem = {
   groups: MessageGroup[];
 };
 
-type TurnRenderItem = RenderChatItem | StreamRunRenderItem | AgentRunRenderItem;
+type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
@@ -736,12 +751,7 @@ export function collapseCompletedTurnWork(
   const turns: TurnRenderItem[][] = [];
   let currentTurn: TurnRenderItem[] = [];
   for (const item of items) {
-    if (
-      item.kind !== "stream-run" &&
-      item.kind !== "agent-run" &&
-      chatItemStartsUserTurn(item) &&
-      currentTurn.length > 0
-    ) {
+    if (item.kind !== "stream-run" && chatItemStartsUserTurn(item) && currentTurn.length > 0) {
       turns.push(currentTurn);
       currentTurn = [];
     }
