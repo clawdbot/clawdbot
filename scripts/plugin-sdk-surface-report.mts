@@ -303,7 +303,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared harness visible-source-reply guidance.
       // +1: typed guarded-fetch redirect error for direct-only plugin delivery.
       // -1: remove the test-only channel activity reset export.
-      4335,
+      // +1: capability-gated node resolver for plugin-owned device tools.
+      4336,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -390,7 +391,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     runtimes render the same guidance instead of diverging prompt copies.
       // +1: shared harness visible-source-reply guidance.
       // -1: remove the test-only channel activity reset export.
-      2577,
+      // +1: capability-gated node resolver for plugin-owned device tools.
+      2578,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

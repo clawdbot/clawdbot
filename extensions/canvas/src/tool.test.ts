@@ -1,17 +1,25 @@
+import type { NodeListNode } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCanvasTool } from "./tool.js";
 
 const mocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(async () => ({})),
-  listNodes: vi.fn(async () => []),
-  resolveNodeIdFromList: vi.fn(() => "mac-1"),
+  listNodes: vi.fn<() => Promise<NodeListNode[]>>(async () => []),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   callGatewayTool: mocks.callGatewayTool,
   listNodes: mocks.listNodes,
-  resolveNodeIdFromList: mocks.resolveNodeIdFromList,
 }));
+
+const eligibleMac = {
+  nodeId: "mac-1",
+  displayName: "Studio",
+  platform: "macos",
+  connected: true,
+  commands: ["canvas.present", "canvas.hide", "canvas.navigate"],
+};
 
 const actions = [
   { args: { action: "present" }, command: "canvas.present" },
@@ -23,8 +31,7 @@ describe("Canvas presenter tool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.callGatewayTool.mockResolvedValue({});
-    mocks.listNodes.mockResolvedValue([]);
-    mocks.resolveNodeIdFromList.mockReturnValue("mac-1");
+    mocks.listNodes.mockResolvedValue([eligibleMac]);
   });
 
   it.each(actions)("invokes $command with the default deadline", async ({ args, command }) => {
@@ -108,7 +115,6 @@ describe("Canvas presenter tool", () => {
       timeoutMs: 120_000,
     });
 
-    expect(mocks.resolveNodeIdFromList).toHaveBeenCalledWith([], "Studio", true);
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
       {
@@ -118,6 +124,27 @@ describe("Canvas presenter tool", () => {
       },
       expect.objectContaining({ command: "canvas.hide", timeoutMs: 120_000 }),
     );
+  });
+
+  it("rejects an explicit legacy non-macOS Canvas node", async () => {
+    mocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "legacy-android",
+        displayName: "Old Canvas",
+        platform: "android",
+        connected: true,
+        commands: ["canvas.present"],
+      },
+      eligibleMac,
+    ]);
+
+    await expect(
+      createCanvasTool().execute("tool-call", {
+        action: "present",
+        node: "legacy-android",
+      }),
+    ).rejects.toThrow('node "legacy-android" is not an eligible Canvas panel');
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("rejects malformed presenter arguments before invoking a node", async () => {

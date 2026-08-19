@@ -3,20 +3,12 @@ import { selectDefaultNodeFromList } from "openclaw/plugin-sdk/agent-harness-run
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { CANVAS_PRESENT_COMMAND, isEligibleCanvasNode } from "./node-eligibility.js";
 
 const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
 
 type CanvasRuntimeNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
 type WidgetPresenter = Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0];
-
-function isEligibleCanvasNode(node: CanvasRuntimeNode): boolean {
-  const commands = node.invocableCommands ?? node.commands ?? [];
-  return (
-    // macOS is the only panel whose resolver handles hosted document paths;
-    // other platforms' Canvas surfaces are being retired.
-    node.platform === "macos" && node.connected === true && commands.includes("canvas.present")
-  );
-}
 
 async function selectCanvasNode(
   nodesRuntime: PluginRuntime["nodes"],
@@ -84,7 +76,7 @@ export function createCanvasWidgetPresenter(nodesRuntime: PluginRuntime["nodes"]
       try {
         await nodesRuntime.invoke({
           nodeId: node.nodeId,
-          command: "canvas.present",
+          command: CANVAS_PRESENT_COMMAND,
           params: { url: document.hostedUrl },
           timeoutMs: DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
           idempotencyKey: randomUUID(),

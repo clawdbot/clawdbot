@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import {
   callGatewayTool,
   listNodes,
-  resolveNodeIdFromList,
+  type NodeListNode,
+  resolveEligibleNodeFromList,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import {
@@ -12,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { CANVAS_PRESENT_COMMAND, isEligibleCanvasNode } from "./node-eligibility.js";
 import { CanvasToolSchema } from "./tool-schema.js";
 
 type CanvasToolOptions = {
@@ -29,12 +31,29 @@ function readGatewayCallOptions(params: Record<string, unknown>) {
   };
 }
 
-async function resolveNodeId(
+const CANVAS_NODE_MESSAGES: Parameters<typeof resolveEligibleNodeFromList>[3] = {
+  ineligibleExact: (query, eligibleIds) =>
+    `node "${query}" is not an eligible Canvas panel (requires a connected macOS node advertising ${CANVAS_PRESENT_COMMAND}; eligible node ids: ${eligibleIds})`,
+  nameResolveFailed: (reason, eligibleIds) =>
+    `${reason} (eligible Canvas panel node ids: ${eligibleIds})`,
+  noneEligible: () =>
+    `no eligible Canvas panel (requires a connected macOS node advertising ${CANVAS_PRESENT_COMMAND})`,
+  multipleEligible: (eligible) =>
+    `multiple eligible Canvas panels connected; pass node explicitly: ${eligible
+      .map((node) => node.nodeId)
+      .join(", ")}`,
+};
+
+async function resolveCanvasNode(
   opts: ReturnType<typeof readGatewayCallOptions>,
   query?: string,
-  allowDefault = false,
-): Promise<string> {
-  return resolveNodeIdFromList(await listNodes(opts), query, allowDefault);
+): Promise<NodeListNode> {
+  return resolveEligibleNodeFromList(
+    await listNodes(opts),
+    query,
+    isEligibleCanvasNode,
+    CANVAS_NODE_MESSAGES,
+  );
 }
 
 /** Creates the model-facing Canvas tool used to invoke paired node canvas commands. */
@@ -52,7 +71,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
       const nodeQuery = readStringParam(params, "node", { trim: true });
 
       const invoke = async (command: string, invokeParams?: Record<string, unknown>) => {
-        const nodeId = await resolveNodeId(gatewayOpts, nodeQuery, true);
+        const nodeId = (await resolveCanvasNode(gatewayOpts, nodeQuery)).nodeId;
         const timeoutMs =
           clampPositiveTimerTimeoutMs(
             gatewayOpts.timeoutMs ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
@@ -98,7 +117,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           ) {
             invokeParams.placement = placement;
           }
-          const { node } = await invoke("canvas.present", invokeParams);
+          const { node } = await invoke(CANVAS_PRESENT_COMMAND, invokeParams);
           return jsonResult({ ok: true, node, ...(presentTarget ? { url: presentTarget } : {}) });
         }
         case "hide": {
