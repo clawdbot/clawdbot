@@ -14,7 +14,11 @@ import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessi
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  interruptSessionWorkAdmissions,
+  isCompetingSessionWorkAdmissionActive,
+} from "../../sessions/session-lifecycle-admission.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
@@ -408,26 +412,45 @@ export async function admitChatSend(params: {
     return { ok: false as const };
   }
   let interruptedActiveRun = false;
+  let interruptionSettled = true;
   if (runInterruptTarget) {
     interruptedActiveRun = true;
-    const interruption = await interruptReplyRunTarget(
-      runInterruptTarget,
-      REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+    interruptionSettled = (
+      await interruptReplyRunTarget(runInterruptTarget, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
+    ).settled;
+  } else if (p.queueMode === "interrupt") {
+    const identities = [sessionKey, backingSessionId, admittedSessionId];
+    // The fallback runs inside the new admission so the lifecycle owner excludes itself.
+    // A captured reply operation never falls through to this identity-scoped path.
+    const fallback = await gatewayWorkAdmission.run(async () => {
+      if (!isCompetingSessionWorkAdmissionActive(storePath, identities)) {
+        return { interrupted: false, settled: true };
+      }
+      return {
+        interrupted: true,
+        settled: await interruptSessionWorkAdmissions({
+          scope: storePath,
+          identities,
+          timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+        }),
+      };
+    });
+    interruptedActiveRun = fallback.interrupted;
+    interruptionSettled = fallback.settled;
+  }
+  if (!interruptionSettled) {
+    activeRunAbort.cleanup({ force: true });
+    gatewayWorkAdmission.release();
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        "Previous run is still shutting down. Please try again in a moment.",
+        { retryable: true, retryAfterMs: 250 },
+      ),
     );
-    if (!interruption.settled) {
-      activeRunAbort.cleanup({ force: true });
-      gatewayWorkAdmission.release();
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "Previous run is still shutting down. Please try again in a moment.",
-          { retryable: true, retryAfterMs: 250 },
-        ),
-      );
-      return { ok: false as const };
-    }
+    return { ok: false as const };
   }
   // Reserved here, while the request's root is provably live, rather than after the ACK: the
   // detached dispatch must keep that root until terminal persistence settles or restart drain

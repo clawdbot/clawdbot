@@ -18,6 +18,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -432,6 +433,52 @@ describe("gateway server chat", () => {
         interruptedActiveRun: true,
       });
       await waitForAgentRunDrained("idem-chat-interrupt-active");
+    });
+  });
+
+  test("chat.send interrupt drains a non-reply session admission before dispatching", async () => {
+    await withMainSessionStore(async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const onInterrupt = vi.fn();
+      const interrupted = createDeferred();
+      const activeAdmission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: ["agent:main:main", "sess-main"],
+        assertAllowed: () => {},
+        onInterrupt: () => {
+          onInterrupt();
+          interrupted.resolve(undefined);
+        },
+      });
+      const activeWork = activeAdmission.run(async () => {
+        await interrupted.promise;
+        activeAdmission.release();
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "replace non-reply session work",
+          queueMode: "interrupt",
+          idempotencyKey: "idem-chat-interrupt-non-reply",
+        });
+
+        expect(res.ok).toBe(true);
+        expect(onInterrupt).toHaveBeenCalledOnce();
+        expect(res.payload).toMatchObject({
+          runId: "idem-chat-interrupt-non-reply",
+          status: "started",
+          interruptedActiveRun: true,
+        });
+        await waitForAgentRunDrained("idem-chat-interrupt-non-reply");
+      } finally {
+        interrupted.resolve(undefined);
+        activeAdmission.release();
+        await activeWork;
+      }
     });
   });
 
