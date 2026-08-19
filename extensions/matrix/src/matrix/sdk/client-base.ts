@@ -535,6 +535,10 @@ export abstract class MatrixClientBase {
     return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
   }
 
+  async freezeSyncCursorPersistence(): Promise<void> {
+    await this.syncStore?.freezeSyncCursorPersistence();
+  }
+
   protected async ensureStartedForCryptoControlPlane(): Promise<void> {
     if (this.started) {
       return;
@@ -579,7 +583,7 @@ export abstract class MatrixClientBase {
       .catch(noop);
   }
 
-  async stopAndPersist(): Promise<void> {
+  async stopAndPersist(options: { persistSyncCursor?: boolean } = {}): Promise<void> {
     if (this.stopPersistPromise) {
       await this.stopPersistPromise;
       return;
@@ -594,8 +598,12 @@ export abstract class MatrixClientBase {
         databasePrefix: this.cryptoDatabasePrefix,
         strict: true,
       });
-      this.syncStore?.markCleanShutdown();
-      await this.syncStore?.flush();
+      if (options.persistSyncCursor === false) {
+        this.syncStore?.discardPendingSyncCursorPersistence();
+      } else {
+        this.syncStore?.markCleanShutdown();
+        await this.syncStore?.flush();
+      }
     })();
     await this.stopPersistPromise;
   }

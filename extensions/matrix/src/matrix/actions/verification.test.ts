@@ -269,6 +269,36 @@ describe("matrix verification actions", () => {
     expect(withStartedActionClientMock).not.toHaveBeenCalled();
   });
 
+  it("starts authoritative verification status through the shared lease", async () => {
+    const leaseStart = vi.fn(async () => undefined);
+    const directStart = vi.fn(async () => undefined);
+    const prepareForOneOff = vi.fn(async () => undefined);
+    const getOwnDeviceVerificationStatus = vi.fn(async () => ({
+      ...mockVerifiedOwnerStatus(),
+      serverDeviceKnown: true,
+    }));
+    withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run(
+        {
+          crypto: { listVerifications: vi.fn(async () => []) },
+          getOwnDeviceVerificationStatus,
+          prepareForOneOff,
+          start: directStart,
+        },
+        undefined,
+        leaseStart,
+      );
+    });
+
+    const status = await getMatrixVerificationStatus({ readiness: "started" });
+
+    expect(status.verified).toBe(true);
+    expect(leaseStart).toHaveBeenCalledTimes(1);
+    expect(directStart).not.toHaveBeenCalled();
+    expect(prepareForOneOff).not.toHaveBeenCalled();
+    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(2);
+  });
+
   it("fails closed before local Matrix prep when the current device is gone", async () => {
     const prepareForOneOff = vi.fn(async () => undefined);
     const getOwnDeviceVerificationStatus = vi.fn(async () => ({
@@ -354,13 +384,13 @@ describe("matrix verification actions", () => {
     expect(withStartedActionClientMock).not.toHaveBeenCalled();
   });
 
-  it("restores room-key backup without startup crypto auto-repair", async () => {
+  it("restores room-key backup through a started shared lease", async () => {
     const restoreRoomKeyBackup = vi.fn(async () => ({
       success: true,
       imported: 1,
       total: 1,
     }));
-    withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
       return await run({ restoreRoomKeyBackup });
     });
 
@@ -368,8 +398,8 @@ describe("matrix verification actions", () => {
 
     expect(restored.success).toBe(true);
     expect(restoreRoomKeyBackup).toHaveBeenCalledWith({ recoveryKey: "key" });
-    expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
-    expect(withStartedActionClientMock).not.toHaveBeenCalled();
+    expect(withStartedActionClientMock).toHaveBeenCalledTimes(1);
+    expect(withResolvedActionClientMock).not.toHaveBeenCalled();
   });
 
   it("rehydrates DM verification requests before follow-up actions", async () => {

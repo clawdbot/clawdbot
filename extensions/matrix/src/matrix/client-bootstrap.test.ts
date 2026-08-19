@@ -11,6 +11,7 @@ const {
   getMatrixRuntimeMock,
   acquireSharedMatrixClientMock,
   sharedLeaseReleaseMock,
+  sharedLeaseStartMock,
   isBunRuntimeMock,
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
@@ -114,6 +115,21 @@ describe("client bootstrap", () => {
         expect(abortSignal).toBe(lease.abortSignal);
       },
     );
+  });
+
+  it("exposes deferred startup through the shared lease owner", async () => {
+    const clientStart = vi.fn(async () => undefined);
+    const sharedClient = Object.assign(createMockMatrixClient(), { start: clientStart });
+    setAcquiredMatrixClient(sharedClient);
+    sharedLeaseStartMock.mockResolvedValue(undefined);
+
+    await withResolvedRuntimeMatrixClient(
+      { cfg: TEST_CFG, accountId: "default", readiness: "none" },
+      async (_client, _abortSignal, start) => await start(),
+    );
+
+    expect(sharedLeaseStartMock).toHaveBeenCalledTimes(1);
+    expect(clientStart).not.toHaveBeenCalled();
   });
 
   it("does not borrow or stop an explicitly injected client", async () => {

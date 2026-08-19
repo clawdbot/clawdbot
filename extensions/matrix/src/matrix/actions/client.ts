@@ -1,5 +1,8 @@
 // Matrix plugin module implements client behavior.
-import { withResolvedRuntimeMatrixClient } from "../client-bootstrap.js";
+import {
+  type MatrixRuntimeClientTask,
+  withResolvedRuntimeMatrixClient,
+} from "../client-bootstrap.js";
 import { resolveMatrixRoomId } from "../send.js";
 import type { MatrixActionClient, MatrixActionClientOpts } from "./types.js";
 
@@ -7,7 +10,7 @@ type MatrixActionClientStopMode = "stop" | "persist" | "discard";
 
 export async function withResolvedActionClient<T>(
   opts: MatrixActionClientOpts,
-  run: (client: MatrixActionClient["client"], abortSignal?: AbortSignal) => Promise<T>,
+  run: MatrixRuntimeClientTask<T>,
   mode: MatrixActionClientStopMode = "stop",
 ): Promise<T> {
   return await withResolvedRuntimeMatrixClient(opts, run, mode);
@@ -15,7 +18,7 @@ export async function withResolvedActionClient<T>(
 
 export async function withStartedActionClient<T>(
   opts: MatrixActionClientOpts,
-  run: (client: MatrixActionClient["client"], abortSignal?: AbortSignal) => Promise<T>,
+  run: MatrixRuntimeClientTask<T>,
 ): Promise<T> {
   return await withResolvedActionClient({ ...opts, readiness: "started" }, run, "persist");
 }

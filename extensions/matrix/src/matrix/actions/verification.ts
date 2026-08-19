@@ -495,13 +495,13 @@ export async function getMatrixVerificationStatus(
   const readiness = opts.readiness ?? "prepared";
   return await withResolvedActionClient(
     { ...opts, readiness: "none" },
-    async (client) => {
+    async (client, _abortSignal, start) => {
       const preflight = await readMatrixVerificationStatus(client, opts);
       if (readiness === "none" || preflight.serverDeviceKnown === false) {
         return preflight;
       }
       if (readiness === "started") {
-        await client.start();
+        await start();
       } else {
         await client.prepareForOneOff();
       }
@@ -552,7 +552,7 @@ export async function restoreMatrixRoomKeyBackup(
     recoveryKey?: string;
   } = {},
 ) {
-  return await withResolvedActionClient(
+  return await withStartedActionClient(
     opts,
     async (client) =>
       await client.restoreRoomKeyBackup({

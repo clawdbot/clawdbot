@@ -1389,6 +1389,39 @@ describe("MatrixClient request hardening", () => {
     }
   });
 
+  it("persists crypto without rewriting a detached generation's sync cursor", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-store-"));
+    clearMatrixSyncApiForNeverStartedClient();
+
+    try {
+      const client = new MatrixClient("https://matrix.example.org", "token", {
+        storageRootDir: tempDir,
+      });
+      const store = lastCreateClientOpts?.store as
+        | {
+            discardPendingSyncCursorPersistence: () => void;
+            flush: () => Promise<void>;
+            markCleanShutdown: () => void;
+          }
+        | undefined;
+      if (!store) {
+        throw new Error("expected Matrix sync store");
+      }
+      const discardSpy = vi.spyOn(store, "discardPendingSyncCursorPersistence");
+      const flushSpy = vi.spyOn(store, "flush");
+      const markCleanSpy = vi.spyOn(store, "markCleanShutdown");
+
+      await client.stopAndPersist({ persistSyncCursor: false });
+
+      expect(discardSpy).toHaveBeenCalledTimes(1);
+      expect(markCleanSpy).not.toHaveBeenCalled();
+      expect(flushSpy).not.toHaveBeenCalled();
+      expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("persists crypto before marking and flushing the clean sync cursor", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-store-"));
     clearMatrixSyncApiForNeverStartedClient();

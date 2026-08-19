@@ -13,6 +13,11 @@ type ResolvedRuntimeMatrixClient = {
 
 type MatrixRuntimeClientReadiness = "none" | "prepared" | "started";
 type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist" | "discard";
+export type MatrixRuntimeClientTask<T> = (
+  client: MatrixClient,
+  abortSignal: AbortSignal | undefined,
+  start: () => Promise<void>,
+) => Promise<T>;
 
 const loadMatrixSharedClientRuntimeDeps = createLazyRuntimeModule(() =>
   import("./client.js").then((clientModule) => ({
@@ -107,13 +112,18 @@ export async function withResolvedRuntimeMatrixClient<T>(
     accountId?: string | null;
     readiness?: MatrixRuntimeClientReadiness;
   },
-  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
+  run: MatrixRuntimeClientTask<T>,
   stopMode: ResolvedRuntimeMatrixClientStopMode = "stop",
 ): Promise<T> {
   const resolved = await resolveRuntimeMatrixClientWithReadiness(opts);
+  const lease = resolved.lease;
   try {
-    return await run(resolved.client, resolved.lease?.abortSignal);
+    return await run(
+      resolved.client,
+      lease?.abortSignal,
+      lease ? () => lease.start() : () => resolved.client.start(),
+    );
   } finally {
-    await resolved.lease?.release({ mode: stopMode });
+    await lease?.release({ mode: stopMode });
   }
 }
