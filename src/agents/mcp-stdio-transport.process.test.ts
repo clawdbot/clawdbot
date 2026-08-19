@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -46,9 +47,7 @@ describe.skipIf(process.platform === "win32")("OpenClaw stdio process-group owne
         expect(isPidAlive(descendantPid)).toBe(false);
       } finally {
         await transport.forceClose();
-        if (descendantPid && isPidAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
+        killPidIfAlive(descendantPid || undefined);
       }
     },
   );
@@ -83,9 +82,7 @@ describe.skipIf(process.platform === "win32")("OpenClaw stdio process-group owne
         await vi.waitFor(() => expect(isPidAlive(descendantPid)).toBe(false));
       } finally {
         await transport.forceClose();
-        if (descendantPid && isPidAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
+        killPidIfAlive(descendantPid || undefined);
       }
     },
   );
