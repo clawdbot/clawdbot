@@ -449,7 +449,7 @@ describe("matrix onboarding", () => {
       onText: async (message) => {
         if (message === "Matrix invite auto-join allowlist (comma-separated)") {
           inviteAllowlistPrompts += 1;
-          return inviteAllowlistPrompts === 1 ? "Project Room" : "#ops:example.org";
+          return inviteAllowlistPrompts === 1 ? "!, Project Room" : "#ops:example.org";
         }
         throw new Error(`unexpected text prompt: ${message}`);
       },
@@ -472,7 +472,7 @@ describe("matrix onboarding", () => {
     expect(notes.join("\n")).toContain(
       "Use only stable Matrix invite targets for auto-join: !roomId:server (or the suffixless !roomId form on room version 12+), #alias:server, or *.",
     );
-    expect(notes.join("\n")).toContain("Invalid: Project Room");
+    expect(notes.join("\n")).toContain("Invalid: !, Project Room");
   });
 
   it("accepts a room version 12 auto-join target (no :server suffix) on the first entry", async () => {

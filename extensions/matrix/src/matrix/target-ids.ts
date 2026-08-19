@@ -56,7 +56,8 @@ export function isMatrixQualifiedUserId(raw: string): boolean {
  * IDs and aliases still do.
  */
 export function isMatrixRoomId(raw: string): boolean {
-  return raw.trim().startsWith("!");
+  const trimmed = raw.trim();
+  return trimmed.startsWith("!") && trimmed.length > 1;
 }
 
 export function normalizeMatrixResolvableTarget(raw: string): string {
