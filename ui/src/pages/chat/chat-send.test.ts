@@ -2463,6 +2463,70 @@ describe("handleSendChat", () => {
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
+  it("serializes large attachment data URLs without a full-payload regex", async () => {
+    const base64 = "A".repeat(64 * 1024);
+    const file = new File(["pdf"], "large.pdf", { type: "application/pdf" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "large-att",
+        mimeType: "application/pdf",
+        fileName: "large.pdf",
+        sizeBytes: file.size,
+      },
+      dataUrl: `data:application/pdf;base64,${base64}`,
+      file,
+    });
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": { status: "started" },
+      },
+      chatAttachments: [attachment],
+      chatMessage: "summarize",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      host.request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    const attachments = payload.attachments as Array<Record<string, unknown>>;
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.content).toBe(base64);
+    expect(attachments[0]?.mimeType).toBe("application/pdf");
+  });
+
+  it("drops attachments whose stored data URL has no base64 payload", async () => {
+    const file = new File(["pdf"], "broken.pdf", { type: "application/pdf" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "broken-att",
+        mimeType: "application/pdf",
+        fileName: "broken.pdf",
+        sizeBytes: file.size,
+      },
+      dataUrl: "data:application/pdf;base64,",
+      file,
+    });
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": { status: "started" },
+      },
+      chatAttachments: [attachment],
+      chatMessage: "summarize",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      host.request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.attachments).toStrictEqual([]);
+  });
+
   it("preserves edited attachments when attachments change during a delayed send", async () => {
     const switchUpdate = createDeferred<boolean>();
 

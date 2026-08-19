@@ -3,7 +3,6 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -314,6 +313,21 @@ export function isValidAttachmentBase64(value: string): boolean {
   return true;
 }
 
+// Index/slice parsing only: a capture regex spanning a multi-megabyte payload
+// can overflow the V8 regex stack before size validation runs (#90098).
+function stripBase64DataUrlPrefix(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("data:")) {
+    return trimmed;
+  }
+  const marker = ";base64,";
+  const markerIndex = trimmed.indexOf(marker);
+  if (markerIndex <= "data:".length) {
+    return trimmed;
+  }
+  return trimmed.slice(markerIndex + marker.length);
+}
+
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
   if (Math.abs(buffer.byteLength - estimatedBytes) > 3) {
     throw new Error(
@@ -376,13 +390,7 @@ function normalizeAttachment(
     throw new Error(`attachment ${label}: only image/* supported`);
   }
 
-  let base64 = content.trim();
-  if (opts.stripDataUrlPrefix) {
-    const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
-    if (dataUrlMatch) {
-      base64 = expectDefined(dataUrlMatch[1], "data url match capture group 1");
-    }
-  }
+  const base64 = opts.stripDataUrlPrefix ? stripBase64DataUrlPrefix(content) : content.trim();
   return { label, mime, base64 };
 }
 
