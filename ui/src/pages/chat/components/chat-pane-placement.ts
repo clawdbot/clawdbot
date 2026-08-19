@@ -3,7 +3,10 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerSessionPlacementEnglish } from "../../../i18n/locales/en-session-placement.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
+
+registerSessionPlacementEnglish();
 
 export function renderChatPanePlacement(props: {
   session: GatewaySessionRow | undefined;
