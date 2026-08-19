@@ -390,11 +390,11 @@ describe("Telegram Desktop recorder remote contract", () => {
     ).rejects.toThrow("permission denied reading the remote Docker socket");
   });
 
-  it("refuses to record when the target chat has no message to open", async () => {
+  it("opens the target chat before recording starts", async () => {
     const root = makeTempDir();
     const sshRun = vi.fn(async ({ command }: { command: string }) => {
       if (command.includes("telegram-login-qr.png")) {
-        return { stderr: "", stdout: "tg://login?token=target-chat-precondition" };
+        return { stderr: "", stdout: "tg://login?token=open-target-chat" };
       }
       if (command.includes("getwindowgeometry")) {
         return { stderr: "", stdout: "635 40 650 1000" };
@@ -410,39 +410,40 @@ describe("Telegram Desktop recorder remote contract", () => {
         sshPort: "22",
         sshUser: "user",
       })),
-      runCommand: vi.fn<RunCommand>(async ({ args }) => ({
+      runCommand: vi.fn<RunCommand>(async () => ({
         stderr: "",
-        stdout: JSON.stringify(
-          args.includes("transcript")
-            ? { messages: [], ok: true }
-            : { ok: true, session: { id: 91234, isPasswordPending: false } },
-        ),
+        stdout: JSON.stringify({ ok: true, session: { id: 91234, isPasswordPending: false } }),
       })),
       scpFromRemote: vi.fn(async () => undefined),
       sshRun,
     } satisfies RecorderOperations;
 
-    await expect(
-      startRecorder(
-        root,
-        {
-          command: "start",
-          chat: "-1001234567890",
-          crabboxClass: "standard",
-          idleTimeout: "1h",
-          json: false,
-          leaseId: "cbx_borrowed",
-          outputDir: "out",
-          provider: "docker",
-          recordFps: 24,
-          ttl: "2h",
-          userDriver: ["python3", "driver.py"],
-        },
-        operations,
-      ),
-    ).rejects.toThrow();
-    expect(sshRun.mock.calls.some(([call]) => call.command.includes("x11grab"))).toBe(false);
-    expect(fs.existsSync(path.join(root, "out", "recorder.json"))).toBe(false);
+    await startRecorder(
+      root,
+      {
+        command: "start",
+        chat: "-1001234567890",
+        crabboxClass: "standard",
+        idleTimeout: "1h",
+        json: false,
+        leaseId: "cbx_borrowed",
+        outputDir: "out",
+        provider: "docker",
+        recordFps: 24,
+        ttl: "2h",
+        userDriver: ["python3", "driver.py"],
+      },
+      operations,
+    );
+
+    // Capturing before the chat is open records the account's own chat list, so the order
+    // of these two calls is the privacy contract, not an implementation detail.
+    const openIndex = sshRun.mock.calls.findIndex(([call]) =>
+      call.command.includes("tg://privatepost?channel=1234567890"),
+    );
+    const captureIndex = sshRun.mock.calls.findIndex(([call]) => call.command.includes("x11grab"));
+    expect(openIndex).toBeGreaterThanOrEqual(0);
+    expect(captureIndex).toBeGreaterThan(openIndex);
   });
 
   it("fetches the undecodable login screen when login attempts run out", async () => {
