@@ -36,6 +36,12 @@ type SessionHandoffRedemptionCarrier = {
   [AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION]: SessionHandoffRedemption;
 };
 
+function hasSessionHandoffRedemption(
+  identity: object,
+): identity is object & SessionHandoffRedemptionCarrier {
+  return AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION in identity;
+}
+
 type SessionHandoffPayload = Readonly<{
   context: AgentRuntimeSessionHandoffContext;
   executionIdentity?: ExecutionIdentityAdmissionToken;
@@ -151,19 +157,15 @@ export function consumeAgentRuntimeSessionHandoff(
   identity: object,
   target: AgentRuntimeSessionHandoffTarget,
 ): AgentRuntimeSessionHandoffContext | undefined {
-  return AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION in identity
-    ? (identity as SessionHandoffRedemptionCarrier)[
-        AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION
-      ].consume(target)
+  return hasSessionHandoffRedemption(identity)
+    ? identity[AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION].consume(target)
     : undefined;
 }
 
 /** Revalidate the consumed one-shot handoff until target admission is durable. */
 export function validateConsumedAgentRuntimeSessionHandoff(identity: object): boolean {
   return (
-    AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION in identity &&
-    (identity as SessionHandoffRedemptionCarrier)[
-      AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION
-    ].validateConsumed()
+    hasSessionHandoffRedemption(identity) &&
+    identity[AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION].validateConsumed()
   );
 }

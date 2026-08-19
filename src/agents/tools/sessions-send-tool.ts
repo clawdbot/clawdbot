@@ -196,6 +196,8 @@ const SessionsSendOutputSchema = Type.Union([
 ]);
 
 type GatewayCaller = AgentToolGatewayRequestCaller;
+type AgentRunResponse = { runId?: string };
+type AgentRunCaller = (request: Parameters<GatewayCaller>[0]) => Promise<AgentRunResponse>;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
 const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
 const NO_REPLY_MESSAGE = "No visible reply or pending announcement. Continue or retry if needed.";
@@ -378,7 +380,7 @@ function shouldFallbackCronRunScopedActiveDelivery(
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
-  callAgent: GatewayCaller;
+  callAgent: AgentRunCaller;
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
@@ -453,7 +455,7 @@ async function startAgentRun(params: {
         fallbackSessionKey &&
         shouldFallbackCronRunScopedActiveDelivery(queueOutcome)
       ) {
-        const response = await params.callAgent<{ runId: string }>({
+        const response = await params.callAgent({
           method: "agent",
           params: {
             ...params.sendParams,
@@ -474,7 +476,7 @@ async function startAgentRun(params: {
         formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
       throw new Error(queueSummary);
     }
-    const response = await params.callAgent<{ runId: string }>({
+    const response = await params.callAgent({
       method: "agent",
       params: params.sendParams,
       ...agentRequestOptions,
@@ -509,7 +511,7 @@ export function createSessionsSendTool(opts?: {
   callAgentWithHandoff?: (
     request: Parameters<GatewayCaller>[0],
     context: AgentRuntimeSessionHandoffContext,
-  ) => Promise<unknown>;
+  ) => Promise<AgentRunResponse>;
   /** Backend-derived target incarnation; never sourced from model arguments. */
   expectedTargetSessionId?: string;
   /** Backend-owned downstream operation id; never sourced from model arguments. */
@@ -542,26 +544,26 @@ export function createSessionsSendTool(opts?: {
             requester: { ...opts.handoffContext.requester },
           }
         : undefined;
-      const agentCall: GatewayCaller = handoffContext
-        ? async <T = Record<string, unknown>>(request: Parameters<GatewayCaller>[0]) => {
+      const agentCall: AgentRunCaller = handoffContext
+        ? async (request) => {
             const signal =
               request.signal && operationSignal && request.signal !== operationSignal
                 ? AbortSignal.any([request.signal, operationSignal])
                 : (request.signal ?? operationSignal);
             const handoffRequest = signal ? { ...request, signal } : request;
             if (opts?.callAgentWithHandoff) {
-              return (await opts.callAgentWithHandoff(handoffRequest, handoffContext)) as T;
+              return await opts.callAgentWithHandoff(handoffRequest, handoffContext);
             }
             if (!authority) {
               throw new Error("sessions_send policy handoff requires trusted caller identity");
             }
-            return await callSessionHandoffAgent<T>({
+            return await callSessionHandoffAgent({
               request: handoffRequest,
               authority,
               context: handoffContext,
             });
           }
-        : gatewayCall;
+        : async (request) => await gatewayCall<AgentRunResponse>(request);
       const message = readToolStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =

@@ -1,5 +1,4 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
   getActiveAgentRunDelegatedAuthority,
@@ -139,26 +138,6 @@ export function getWorkerTurnExecutionIdentityCapability(
     store.validateTurnClaim(bound.claim)
     ? bound.capability
     : undefined;
-}
-
-/** Revalidate the bound worker owners around one trusted Gateway tool call. */
-export async function runWithWorkerTurnGatewayCaller<T>(
-  capability: WorkerTurnExecutionIdentityCapability,
-  run: (identity: WorkerTurnExecutionIdentity) => Promise<T>,
-): Promise<T> {
-  return await capability.run(async (identity) =>
-    withGatewayToolCallerIdentity(
-      {
-        agentId: identity.agentId,
-        sessionKey: identity.sessionKey,
-        operationalRunInstance: identity.operationalRunInstance,
-        executionIdentityToken: identity.executionIdentityToken,
-        workerTurnClaim: identity.turnClaim,
-        workerTurnExecutionIdentityCapability: capability,
-      },
-      () => run(identity),
-    ),
-  );
 }
 
 export function attachWorkerTurnExecutionIdentityStore(store: object, path: string): void {

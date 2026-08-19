@@ -1,5 +1,7 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRuntimeSessionHandoffContext } from "../../gateway/agent-runtime-session-handoff.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import { toErrorObject } from "../../infra/errors.js";
 import {
   type GatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -8,15 +10,15 @@ import { runWithGatewaySessionHandoffContext } from "./gateway-session-handoff-c
 import { callGatewayTool } from "./gateway.js";
 
 /** Launch one derived agent run with source authority outside model-authored params. */
-export async function callSessionHandoffAgent<T>(params: {
+export async function callSessionHandoffAgent(params: {
   request: CallGatewayOptions;
   authority: GatewayToolCallerIdentity;
   context: AgentRuntimeSessionHandoffContext;
-}): Promise<T> {
+}): Promise<{ runId: string }> {
   if (params.request.method !== "agent") {
     throw new Error("session handoff authority is valid only for agent runs");
   }
-  const requestParams = (params.request.params ?? {}) as Record<string, unknown>;
+  const requestParams = asNullableRecord(params.request.params) ?? {};
   const sessionKey =
     typeof requestParams.sessionKey === "string" ? requestParams.sessionKey.trim() : "";
   const runId =
@@ -24,10 +26,10 @@ export async function callSessionHandoffAgent<T>(params: {
   if (!sessionKey || !runId) {
     throw new Error("session handoff requires an exact target session and idempotency key");
   }
-  const invoke = (extra: Parameters<typeof callGatewayTool<T>>[3]) =>
+  const invoke = (extra: Parameters<typeof callGatewayTool<{ runId: string }>>[3]) =>
     withGatewayToolCallerIdentity(params.authority, () =>
       runWithGatewaySessionHandoffContext(params.context, () =>
-        callGatewayTool<T>(
+        callGatewayTool<{ runId: string }>(
           "agent",
           { timeoutMs: params.request.timeoutMs ?? undefined },
           params.request.params,
@@ -48,14 +50,14 @@ export async function callSessionHandoffAgent<T>(params: {
     return await invoke(extra);
   }
 
-  return await new Promise<T>((resolve, reject) => {
+  return await new Promise<{ runId: string }>((resolve, reject) => {
     let accepted = false;
     const finalRequest = invoke({
       ...extra,
       expectFinal: true,
-      onAccepted: (payload) => {
+      onAccepted: () => {
         accepted = true;
-        resolve(payload as T);
+        resolve({ runId });
       },
     });
     void finalRequest.then(
@@ -68,7 +70,7 @@ export async function callSessionHandoffAgent<T>(params: {
         // After acceptance, the outer agent.wait owns terminal projection. This
         // retained request exists only to keep exact-run cancellation armed.
         if (!accepted) {
-          reject(error);
+          reject(toErrorObject(error, "Session handoff agent request failed"));
         }
       },
     );

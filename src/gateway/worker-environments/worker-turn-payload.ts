@@ -42,7 +42,6 @@ import {
   type AgentRuntimeIdentityTokenParams,
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
@@ -89,7 +88,7 @@ type PrepareWorkerAgentRuntimeIdentityParams = Omit<
 > & {
   runtimeInstanceId: string;
   turn: SessionPlacementTurnParams;
-  placements: WorkerSessionPlacementStore;
+  placements: Parameters<typeof bindWorkerTurnExecutionIdentity>[0];
 };
 
 export async function prepareWorkerAgentRuntimeIdentity(

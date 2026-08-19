@@ -9,6 +9,7 @@ import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import {
   assertSupportedTurn,
   fitLaunchDescriptorWithRuntimeIdentity,
@@ -180,23 +181,36 @@ describe("assertSupportedTurn", () => {
 describe("prepareWorkerAgentRuntimeIdentity", () => {
   it("preserves the original requester across chained worker handoffs", async () => {
     const admittedRunContext = createTestAdmittedRunContext("run-worker-handoff");
+    const turnClaim: WorkerSessionTurnClaim = {
+      sessionId: "worker-target",
+      claimId: "claim-worker-handoff",
+      runId: "run-worker-handoff",
+      placementGeneration: 1,
+      owner: { kind: "worker", environmentId: "worker-runtime", ownerEpoch: 1 },
+    };
+    const turn: SessionPlacementTurnParams = {
+      sessionId: "worker-target",
+      sessionFile: "/tmp/worker-target.jsonl",
+      workspaceDir: "/tmp/worker-target",
+      prompt: "continue",
+      timeoutMs: 1_000,
+      runId: "run-worker-handoff",
+      admittedRunContext,
+      messageProvider: "internal",
+      senderId: "worker-target",
+      trustedSessionHandoff: {
+        inheritedToolPolicy: { version: 1, allow: ["sessions_send"], deny: [] },
+        requester: { messageProvider: "whatsapp", senderId: "guest" },
+      },
+    };
 
     await prepareWorkerAgentRuntimeIdentity({
       runtimeInstanceId: "worker-runtime",
       agentId: "main",
       sessionKey: "agent:main:worker-target",
-      turnClaim: {} as never,
-      placements: {} as never,
-      turn: {
-        runId: "run-worker-handoff",
-        admittedRunContext,
-        messageProvider: "internal",
-        senderId: "worker-target",
-        trustedSessionHandoff: {
-          inheritedToolPolicy: { version: 1, allow: ["sessions_send"], deny: [] },
-          requester: { messageProvider: "whatsapp", senderId: "guest" },
-        },
-      } as SessionPlacementTurnParams,
+      turnClaim,
+      placements: { validateTurnClaim: () => true },
+      turn,
     });
 
     expect(workerIdentityMocks.bind).toHaveBeenCalledWith(

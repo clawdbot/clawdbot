@@ -6,7 +6,10 @@ import type {
   WorkerSessionToolResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
-import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  runWithWorkerTurnGatewayCaller,
+} from "../../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
@@ -26,7 +29,6 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
 import {
   getWorkerTurnExecutionIdentityCapability,
-  runWithWorkerTurnGatewayCaller,
   type WorkerTurnExecutionIdentity,
 } from "./placement-turn-claim-events.js";
 import type { WorkerPlacementDispatchContract } from "./service-contract.js";

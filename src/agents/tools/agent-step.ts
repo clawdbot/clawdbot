@@ -76,7 +76,7 @@ export async function runAgentStep(params: {
   } as const;
   const response = handoffContext
     ? params.authority
-      ? await callSessionHandoffAgent<{ runId?: string }>({
+      ? await callSessionHandoffAgent({
           request,
           authority: params.authority,
           context: handoffContext,

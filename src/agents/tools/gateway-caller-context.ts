@@ -4,7 +4,10 @@ import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-iden
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
-import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
+import type {
+  WorkerTurnExecutionIdentity,
+  WorkerTurnExecutionIdentityCapability,
+} from "../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   claimAdmittedRunContinuation,
@@ -223,6 +226,26 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
     },
     run,
+  );
+}
+
+/** Revalidate the bound worker owners around one trusted Gateway tool call. */
+export async function runWithWorkerTurnGatewayCaller<T>(
+  capability: WorkerTurnExecutionIdentityCapability,
+  run: (identity: WorkerTurnExecutionIdentity) => Promise<T>,
+): Promise<T> {
+  return await capability.run(async (identity) =>
+    withGatewayToolCallerIdentity(
+      {
+        agentId: identity.agentId,
+        sessionKey: identity.sessionKey,
+        operationalRunInstance: identity.operationalRunInstance,
+        executionIdentityToken: identity.executionIdentityToken,
+        workerTurnClaim: identity.turnClaim,
+        workerTurnExecutionIdentityCapability: capability,
+      },
+      () => run(identity),
+    ),
   );
 }
 
