@@ -25,7 +25,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Google Meet tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin, { testing as googleMeetPluginTesting } from "./index.js";
+import plugin from "./index.js";
 import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
 import { resolveGoogleMeetConfig, type GoogleMeetConfig } from "./src/config.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
@@ -38,6 +38,7 @@ import {
   fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
+import { testing as googleMeetPluginTesting } from "./src/plugin-registration.js";
 import {
   meetAudioBridge,
   meetBrowserState,
