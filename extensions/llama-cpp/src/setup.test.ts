@@ -15,9 +15,9 @@ const mocks = vi.hoisted(() => ({
   resolvePaths: vi.fn(() => ({ presetPath: "/runtime/models.ini" })),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  removeAuthProfilesWithLock: mocks.removeProfiles,
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
+  removeProviderAuthProfilesWithLock: mocks.removeProfiles,
 }));
 
 vi.mock("./managed-server.js", async (importOriginal) => ({
@@ -291,6 +291,7 @@ describe("llama.cpp managed setup", () => {
       order: { "llama-cpp": undefined },
     });
     expect(mocks.removeProfiles).toHaveBeenCalledWith({
+      provider: "llama-cpp",
       profileIds: ["llama-cpp:default"],
       agentDir: ctx.agentDir,
     });

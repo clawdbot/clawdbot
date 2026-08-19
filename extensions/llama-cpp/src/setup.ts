@@ -6,7 +6,7 @@ import type {
   ProviderAuthContext,
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { removeAuthProfilesWithLock } from "openclaw/plugin-sdk/provider-auth";
+import { removeProviderAuthProfilesWithLock } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -261,7 +261,8 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
       embeddingModelPath,
       port: readConfiguredPort(managedExisting),
     });
-    const updated = await removeAuthProfilesWithLock({
+    const updated = await removeProviderAuthProfilesWithLock({
+      provider: LLAMA_CPP_PROVIDER_ID,
       profileIds: [LLAMA_CPP_DEFAULT_PROFILE_ID],
       agentDir: ctx.agentDir,
     });
