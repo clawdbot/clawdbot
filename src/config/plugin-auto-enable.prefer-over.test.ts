@@ -10,6 +10,7 @@ const tempRoots: string[] = [];
 
 function writeCatalogEntry(entry: {
   name?: string;
+  plugin?: { id: string };
   channel: { id: string; preferOver: string[] };
 }): string {
   // macOS `os.tmpdir()` is a symlink, and the reader resolves symlinks before the bounded read.
@@ -20,7 +21,13 @@ function writeCatalogEntry(entry: {
     catalogPath,
     JSON.stringify({
       entries: [
-        { ...(entry.name ? { name: entry.name } : {}), openclaw: { channel: entry.channel } },
+        {
+          ...(entry.name ? { name: entry.name } : {}),
+          openclaw: {
+            ...(entry.plugin ? { plugin: entry.plugin } : {}),
+            channel: entry.channel,
+          },
+        },
       ],
     }),
     "utf-8",
@@ -171,5 +178,61 @@ describe("resolveChannelPreferOverIds", () => {
         env: { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath },
       }),
     ).toEqual(["from-manifest"]);
+  });
+});
+
+// ClawSweeper P2 on #123209: the shipped catalog names QQBot as package
+// `@tencent-connect/openclaw-qqbot` with `openclaw.plugin.id` of `openclaw-qqbot`. A record
+// installed from a workspace or path carries the plugin id without that package name, so matching
+// on package name alone loses the attribution and ownership silently falls back to origin order.
+describe("catalog attribution by manifest plugin id", () => {
+  const recordOf = (record: { id: string; packageName?: string }) =>
+    record as unknown as Parameters<typeof resolveChannelPreferOverIds>[0]["record"];
+
+  it("attributes a catalog preference by plugin id when the package name is absent", () => {
+    const catalogPath = writeCatalogEntry({
+      name: "@tencent-connect/openclaw-qqbot",
+      plugin: { id: "openclaw-qqbot" },
+      channel: { id: "qqbot", preferOver: ["qqbot"] },
+    });
+    const env = { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath };
+
+    expect(
+      resolveChannelPreferOverIds({
+        record: recordOf({ id: "openclaw-qqbot" }),
+        channelId: "qqbot",
+        env,
+      }),
+    ).toEqual(["qqbot"]);
+  });
+
+  it("still attributes by package name when the ids differ", () => {
+    const catalogPath = writeCatalogEntry({
+      name: "@tencent-connect/openclaw-qqbot",
+      plugin: { id: "openclaw-qqbot" },
+      channel: { id: "qqbot", preferOver: ["qqbot"] },
+    });
+    const env = { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath };
+
+    expect(
+      resolveChannelPreferOverIds({
+        record: recordOf({ id: "qqbot-fork", packageName: "@tencent-connect/openclaw-qqbot" }),
+        channelId: "qqbot",
+        env,
+      }),
+    ).toEqual(["qqbot"]);
+  });
+
+  it("withholds the preference from a claimant the entry does not name", () => {
+    const catalogPath = writeCatalogEntry({
+      plugin: { id: "openclaw-qqbot" },
+      channel: { id: "qqbot", preferOver: ["qqbot"] },
+    });
+    const env = { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath };
+
+    // Named like the channel, which is exactly what the id heuristic would have accepted.
+    expect(
+      resolveChannelPreferOverIds({ record: recordOf({ id: "qqbot" }), channelId: "qqbot", env }),
+    ).toEqual([]);
   });
 });

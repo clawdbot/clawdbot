@@ -21,6 +21,7 @@ const log = createSubsystemLogger("config/plugin-catalog");
 type ExternalCatalogChannelEntry = {
   id: string;
   preferOver: string[];
+  pluginId?: string;
   packageName?: string;
 };
 
@@ -76,8 +77,19 @@ function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChanne
     const preferOver = Array.isArray(channel.preferOver)
       ? channel.preferOver.filter((value): value is string => typeof value === "string")
       : [];
+    // `openclaw.plugin.id` is the catalog's canonical plugin identity, matching the precedence
+    // `resolveOfficialExternalPluginId` uses. A package name is how the entry is installed, which
+    // a workspace or path install can leave unset or different on the resulting record.
+    const pluginId = isRecord(entry.openclaw.plugin)
+      ? normalizeOptionalString(entry.openclaw.plugin.id)
+      : undefined;
     const packageName = normalizeOptionalString(entry.name);
-    channels.push({ id, preferOver, ...(packageName ? { packageName } : {}) });
+    channels.push({
+      id,
+      preferOver,
+      ...(pluginId ? { pluginId } : {}),
+      ...(packageName ? { packageName } : {}),
+    });
   }
   return channels;
 }
@@ -174,13 +186,23 @@ function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
 function ownsChannelLevelDeclaration(
   record: PluginManifestRecord | undefined,
   channelId: string,
-  packageName?: string,
+  catalogIdentity?: Pick<ExternalCatalogChannelEntry, "pluginId" | "packageName">,
 ): boolean {
   if (!record) {
     return true;
   }
+  const pluginId = catalogIdentity?.pluginId;
+  if (pluginId && record.id === pluginId) {
+    return true;
+  }
+  const packageName = catalogIdentity?.packageName;
   if (packageName) {
     return record.packageName === packageName || record.id === packageName;
+  }
+  if (pluginId) {
+    // The entry named a plugin and this record is not it. Falling through to the channel-id
+    // heuristic here would hand the declaration to whichever claimant is named like the channel.
+    return false;
   }
   return record.id === channelId || normalizeChatChannelId(record.id) === channelId;
 }
@@ -206,7 +228,7 @@ export function resolveChannelPreferOverIds(params: {
   const catalogEntry = resolveExternalCatalogEntry(params.channelId, params.env);
   if (
     catalogEntry?.preferOver.length &&
-    ownsChannelLevelDeclaration(params.record, params.channelId, catalogEntry.packageName)
+    ownsChannelLevelDeclaration(params.record, params.channelId, catalogEntry)
   ) {
     return catalogEntry.preferOver;
   }
