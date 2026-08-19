@@ -386,10 +386,16 @@ function normalizeWorkspace(
   if (kind === "dir" && (!workspacePath || !isAbsoluteWorkspacePath(workspacePath))) {
     throw new Error("dir workspace path must be absolute.");
   }
-  const branch = normalizeBoundedString(record.branch, fallback?.branch, 160, "workspace branch");
+  const workspaceFallback = workspacePath === fallback?.path ? fallback : undefined;
+  const branch = normalizeBoundedString(
+    record.branch,
+    workspaceFallback?.branch,
+    160,
+    "workspace branch",
+  );
   const sourcePath = normalizeBoundedString(
     record.sourcePath,
-    fallback?.sourcePath,
+    workspaceFallback?.sourcePath,
     2000,
     "workspace source path",
   );
@@ -398,7 +404,7 @@ function normalizeWorkspace(
   }
   const sourceBranch = normalizeBoundedString(
     record.sourceBranch,
-    fallback?.sourceBranch,
+    workspaceFallback?.sourceBranch,
     160,
     "workspace source branch",
   );

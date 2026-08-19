@@ -7,6 +7,11 @@ import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import {
+  cleanupWorkboardCardWorktree,
+  isWorkboardWorktreeCleanupCandidate,
+  type WorkboardWorktreeCleanupRuntime,
+} from "./dispatcher-workspace.js";
+import {
   workboardCardMatchesLifecycleLink,
   workboardCardSessionLookupKey,
 } from "./session-link.js";
@@ -17,6 +22,7 @@ import type { WorkboardStore } from "./store.js";
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
+const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 // Keep readiness across plugin-only reloads, while the singleton lifecycle
 // clears it before an in-process Gateway restart starts replacement services.
 const workboardLifecycleGatewayState = resolveGlobalSingleton(
@@ -123,7 +129,7 @@ async function syncWorkboardLifecycleEvent(params: {
   observation: WorkboardLifecycleObservation;
   now: number;
   onMatched?: WorkboardLifecycleMatchHandler;
-}): Promise<number> {
+}): Promise<{ cards: readonly WorkboardCard[]; count: number }> {
   const cards = (await params.store.list()).filter(
     (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
   );
@@ -153,11 +159,12 @@ async function syncWorkboardLifecycleEvent(params: {
       ...(params.source.sessionKey ? { sessionKey: params.source.sessionKey } : {}),
     }),
   ]);
-  return (await updates).filter(Boolean).length;
+  return { cards, count: (await updates).filter(Boolean).length };
 }
 
 export async function syncWorkboardSubagentEnded(params: {
   store: WorkboardStore;
+  worktrees?: WorkboardWorktreeCleanupRuntime;
   event: {
     targetSessionKey: string;
     runId?: string;
@@ -168,7 +175,7 @@ export async function syncWorkboardSubagentEnded(params: {
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
-  return await syncWorkboardLifecycleEvent({
+  const synced = await syncWorkboardLifecycleEvent({
     store: params.store,
     source: { sessionKey: params.event.targetSessionKey, runId: params.event.runId },
     observation: {
@@ -178,6 +185,19 @@ export async function syncWorkboardSubagentEnded(params: {
     now,
     ...(params.onMatched ? { onMatched: params.onMatched } : {}),
   });
+  if (params.worktrees) {
+    for (const matched of synced.cards) {
+      const card = await params.store.get(matched.id);
+      if (card) {
+        await cleanupWorkboardCardWorktree({
+          store: params.store,
+          worktrees: params.worktrees,
+          card,
+        });
+      }
+    }
+  }
+  return synced.count;
 }
 
 export async function syncWorkboardAgentEnded(params: {
@@ -188,19 +208,21 @@ export async function syncWorkboardAgentEnded(params: {
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
-  return await syncWorkboardLifecycleEvent({
-    store: params.store,
-    source: {
-      sessionKey: params.context.sessionKey,
-      runId: params.event.runId ?? params.context.runId,
-    },
-    observation: {
-      state: params.event.success ? "succeeded" : "failed",
-      sourceUpdatedAt: now,
-    },
-    now,
-    ...(params.onMatched ? { onMatched: params.onMatched } : {}),
-  });
+  return (
+    await syncWorkboardLifecycleEvent({
+      store: params.store,
+      source: {
+        sessionKey: params.context.sessionKey,
+        runId: params.event.runId ?? params.context.runId,
+      },
+      observation: {
+        state: params.event.success ? "succeeded" : "failed",
+        sourceUpdatedAt: now,
+      },
+      now,
+      ...(params.onMatched ? { onMatched: params.onMatched } : {}),
+    })
+  ).count;
 }
 
 function lifecycleFromSession(
@@ -243,6 +265,7 @@ function lifecycleFromSession(
 
 async function syncWorkboardLifecycleSessions(params: {
   store: WorkboardStore;
+  cards?: readonly WorkboardCard[];
   sessions: readonly WorkboardLifecycleSession[];
   complete?: boolean;
   now?: number;
@@ -266,7 +289,7 @@ async function syncWorkboardLifecycleSessions(params: {
     }
   }
   let count = 0;
-  for (const card of await params.store.list()) {
+  for (const card of params.cards ?? (await params.store.list())) {
     if (card.metadata?.archivedAt) {
       continue;
     }
@@ -381,6 +404,7 @@ export async function readWorkboardLifecycleSessions(
 
 export function createWorkboardLifecycleService(params: {
   store: WorkboardStore;
+  worktrees?: WorkboardWorktreeCleanupRuntime;
   readSessions: (
     options: WorkboardLifecycleSessionReadOptions,
   ) => Promise<WorkboardLifecycleSessionSnapshot>;
@@ -389,6 +413,31 @@ export function createWorkboardLifecycleService(params: {
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let begin: (() => void) | undefined;
+  let cleanupCursor = 0;
+  const cleanupWorktrees = async (
+    cards: readonly WorkboardCard[],
+    warn: (message: string) => void,
+  ) => {
+    if (!params.worktrees) {
+      return;
+    }
+    const candidates = cards.filter(isWorkboardWorktreeCleanupCandidate);
+    const start = cleanupCursor % Math.max(candidates.length, 1);
+    const rotated = [...candidates.slice(start), ...candidates.slice(0, start)];
+    const batch = rotated.slice(0, WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT);
+    cleanupCursor = candidates.length === 0 ? 0 : (start + batch.length) % candidates.length;
+    for (const card of batch) {
+      try {
+        await cleanupWorkboardCardWorktree({
+          store: params.store,
+          worktrees: params.worktrees,
+          card,
+        });
+      } catch (error) {
+        warn(`workboard worktree cleanup failed for card ${card.id}: ${String(error)}`);
+      }
+    }
+  };
   const stop = () => {
     generation += 1;
     begin = undefined;
@@ -404,27 +453,39 @@ export function createWorkboardLifecycleService(params: {
       let begun = false;
       const reconcile = async () => {
         try {
-          const cards = await params.store.list();
-          if (
-            generation !== owner ||
-            !cards.some((card) => needsWorkboardLifecycleReconciliation(card))
-          ) {
+          let cards = await params.store.list();
+          if (generation !== owner) {
             return;
           }
-          const snapshot = await params.readSessions({
-            includeUnknown: cards.some(
-              (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
-            ),
-          });
+          if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
+            try {
+              const snapshot = await params.readSessions({
+                includeUnknown: cards.some(
+                  (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
+                ),
+              });
+              if (generation !== owner) {
+                return;
+              }
+              await syncWorkboardLifecycleSessions({
+                store: params.store,
+                cards,
+                ...snapshot,
+                now: params.now?.() ?? Date.now(),
+              });
+              if (generation !== owner) {
+                return;
+              }
+              cards = await params.store.list();
+            } catch (error) {
+              ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
+            }
+          }
           if (generation === owner) {
-            await syncWorkboardLifecycleSessions({
-              store: params.store,
-              ...snapshot,
-              now: params.now?.() ?? Date.now(),
-            });
+            await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));
           }
         } catch (error) {
-          ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
+          ctx.logger.warn(`workboard lifecycle recovery failed: ${String(error)}`);
         } finally {
           if (generation === owner) {
             timer = setTimeout(() => void reconcile(), WORKBOARD_LIFECYCLE_SWEEP_MS);

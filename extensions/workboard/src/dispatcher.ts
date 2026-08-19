@@ -14,6 +14,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
 import {
   assertRestrictedWorkboardTarget,
+  cleanupWorkboardCardWorktree,
   managedWorktreeName,
   resolveDispatchWorkspaceAccess,
   type ResolveAgentWorkspaceRuntime,
@@ -589,25 +590,6 @@ async function runWorkboardDispatch(
         )
         .catch(() => undefined);
     } catch (error) {
-      if (
-        !runStarted &&
-        materializedWorkspace?.kind === "worktree" &&
-        materializedWorkspace.path &&
-        params.worktrees
-      ) {
-        await params.worktrees
-          .removeIfLossless({
-            path: materializedWorkspace.path,
-            ownerKind: "workboard",
-            ownerId: card.id,
-          })
-          .catch(() => undefined);
-        if (workspaceMutation) {
-          await params.store
-            .compensateWorkspaceMutation(workspaceMutation.before, workspaceMutation.after)
-            .catch(() => undefined);
-        }
-      }
       const message = formatErrorMessage(error);
       startFailures.push({ cardId: card.id, title: card.title, error: message });
       if (!claimValue || runStarted) {
@@ -626,6 +608,17 @@ async function runWorkboardDispatch(
         );
       } catch {
         // Leave the original start failure visible; dispatch will diagnose stale claims later.
+      }
+      if (params.worktrees) {
+        const failedCard = await params.store.get(card.id).catch(() => undefined);
+        if (failedCard) {
+          await cleanupWorkboardCardWorktree({
+            store: params.store,
+            worktrees: params.worktrees,
+            card: failedCard,
+            ...(workspaceMutation ? { workspaceMutation } : {}),
+          }).catch(() => undefined);
+        }
       }
     }
   }
