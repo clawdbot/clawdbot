@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -36,7 +37,12 @@ vi.mock("../session-event-payload.js", () => ({
     sessionRow: { key: string; label: string };
     hasActiveRun?: boolean;
     activeRunIds?: string[];
-  }) => ({ key: sessionRow.key, label: sessionRow.label, hasActiveRun, activeRunIds }),
+  }) => ({
+    key: sessionRow.key,
+    label: sessionRow.label,
+    ...(hasActiveRun === undefined ? {} : { hasActiveRun }),
+    ...(activeRunIds === undefined ? {} : { activeRunIds }),
+  }),
 }));
 
 const { emitSessionsChanged, flushPendingSessionsChangedEvents, readSessionsMutationVersion } =
@@ -200,6 +206,25 @@ describe("sessions.changed coalescing", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  it("omits active run ids when lifecycle projection owns only aggregate liveness", () => {
+    const sessionKey = "agent:main:projected";
+    const context = createContext();
+    registerAgentRunContext("hidden-worker-run", {
+      isControlUiVisible: false,
+      projectSessionActive: true,
+      sessionKey,
+    });
+    try {
+      emitSessionsChanged(context, { reason: "update", sessionKey });
+
+      const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+      expect(payload).toMatchObject({ hasActiveRun: true });
+      expect(payload).not.toHaveProperty("activeRunIds");
+    } finally {
+      clearAgentRunContext("hidden-worker-run");
+    }
   });
 
   it("advances the mutation fence without loading rows when nobody receives events", () => {

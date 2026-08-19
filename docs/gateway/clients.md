@@ -146,13 +146,14 @@ current in-memory run state:
 3. If `inFlightRun` is present, adopt its `runId`, buffered `text`, and optional
    `plan`. Adopt the run even when `text` is empty.
 4. Treat `sessionInfo.hasActiveRun` as aggregate direct-session activity.
-   `activeRunIds`, when present, contains known exact active run identities and
-   can be empty while aggregate activity is still true. Omission means the field
-   was not projected and provides no identity information. In incremental merge
-   events, replace the cached list when the field is present; an empty array is
-   the tombstone that clears prior exact identities. Correlate only a run ID the
-   client owns locally or received from a request, history response, or event,
-   and never select the first list entry as an owner.
+   `activeRunIds`, when present, is the complete exact active set; an empty array
+   therefore proves the session is idle. When `hasActiveRun` is true and
+   `activeRunIds` is omitted, another runtime owner is active but its exact run
+   identities are unavailable. In incremental merge events, omission is not a
+   replacement value; replace the cached list only when the field is present,
+   including an empty-array tombstone. Correlate only a run ID the client owns
+   locally or received from a request, history response, or event, and never
+   select the first list entry as an owner.
 5. Show an observer headline or run-inspector link only when the observer digest's
    exact `runId` is present in `activeRunIds`. Aggregate activity alone does not
    make a retained digest current.
