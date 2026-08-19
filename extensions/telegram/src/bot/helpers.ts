@@ -29,6 +29,7 @@ import {
 } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
+import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
   buildSenderLabel,
@@ -53,6 +54,7 @@ export type {
   TelegramMediaKind,
   TelegramTextEntity,
 } from "./body-helpers.js";
+export type { TelegramThreadSpec } from "../thread-spec.js";
 export {
   buildSenderLabel,
   buildSenderName,
@@ -97,12 +99,6 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
 function hadUnsafeTelegramText(raw: unknown, sanitized: string): boolean {
   return typeof raw === "string" && raw.trim().length > 0 && sanitized.trim().length === 0;
 }
-
-export type TelegramThreadSpec = {
-  id?: number;
-  /** dm is the historical bot-private topic scope. */
-  scope: "direct-messages" | "dm" | "forum" | "none";
-};
 
 type TelegramThreadParams = {
   direct_messages_topic_id?: number;

@@ -16,15 +16,12 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
-import {
-  buildTelegramParentPeer,
-  shouldUseTelegramDmThreadSession,
-  type TelegramThreadSpec,
-} from "./bot/helpers.js";
+import { buildTelegramParentPeer, shouldUseTelegramDmThreadSession } from "./bot/helpers.js";
 import {
   resolveTelegramDirectPeerId,
   resolveTelegramNamedAccountBaseSessionKey,
 } from "./dm-session-key.js";
+import type { TelegramThreadSpec } from "./thread-spec.js";
 import { buildTelegramConversationId } from "./topic-conversation.js";
 
 type TelegramResolvedRoute = ReturnType<typeof resolveAgentRoute>;

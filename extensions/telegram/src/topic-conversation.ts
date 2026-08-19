@@ -1,11 +1,12 @@
 // Telegram plugin module implements scoped topic conversation serialization.
-import type { TelegramThreadSpec } from "./bot/helpers.js";
+
 import {
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
   parseTelegramTarget,
   type TelegramTarget,
 } from "./targets.js";
+import type { TelegramThreadSpec } from "./thread-spec.js";
 
 export type ParsedTelegramTopicConversation = {
   chatId: string;
