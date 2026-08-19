@@ -23,6 +23,7 @@ async function setupHarness(
   const sessionRoot = path.join(root, "private");
   const credentialFile = path.join(root, "credential.json");
   const observerSocket = path.join(root, "observer.sock");
+  const recorderControlLog = path.join(root, "recorder-control.json");
   const recorderLog = path.join(root, "recorder.log");
   const recorderCommand = path.join(root, "recorder");
   fs.mkdirSync(outputRoot);
@@ -35,7 +36,7 @@ async function setupHarness(
   writeJson(path.join(root, "mock-response.json"), { chunkDelayMs: 0, text: "initial" });
   fs.writeFileSync(
     recorderCommand,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}\n${options.failRecorder ? "exit 1\n" : ""}`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}\ncp ${JSON.stringify(path.join(root, "mock-response.json"))} ${JSON.stringify(recorderControlLog)}\n${options.failRecorder ? "exit 1\n" : ""}`,
     { mode: 0o755 },
   );
   writeJson(path.join(sessionRoot, "candidate.active.json"), {
@@ -128,6 +129,7 @@ async function setupHarness(
       OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD: recorderCommand,
     },
     outputRoot,
+    recorderControlLog,
     recorderLog,
     requests,
     sessionRoot,
@@ -180,6 +182,17 @@ describe("Telegram Mantis free-form lane", () => {
       expect(fs.readFileSync(harness.recorderLog, "utf8")).toContain(
         `view --session ${path.join(path.dirname(harness.outputRoot), "attempt", "recorder.json")} --message-id 101`,
       );
+      expect(JSON.parse(fs.readFileSync(harness.recorderControlLog, "utf8"))).toMatchObject({
+        hold: true,
+      });
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(path.dirname(harness.outputRoot), "mock-response.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ hold: false });
       expect(result.stdout).not.toContain("secret-sut-token");
     } finally {
       await harness.close();
@@ -211,6 +224,14 @@ describe("Telegram Mantis free-form lane", () => {
       );
       expect(state.sendCount).toBe(1);
       expect(state.invocations.at(-1)).toMatchObject({ command: "send" });
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(path.dirname(harness.outputRoot), "mock-response.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ hold: false });
     } finally {
       await harness.close();
     }

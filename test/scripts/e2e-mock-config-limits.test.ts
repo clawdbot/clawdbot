@@ -217,6 +217,37 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
+  it("holds a lane response until the recorder reveals the outbound message", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-hold-"));
+    const control = join(root, "response.json");
+    try {
+      await writeFile(
+        control,
+        JSON.stringify({ chunkDelayMs: 0, hold: true, text: "visible after reveal" }),
+      );
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        let settled = false;
+        const request = fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "wait until visible", stream: false }),
+        }).then(async (response) => {
+          settled = true;
+          return await response.json();
+        });
+        await delay(75);
+        expect(settled).toBe(false);
+        await writeFile(
+          control,
+          JSON.stringify({ chunkDelayMs: 0, hold: false, text: "visible after reveal" }),
+        );
+        expect((await request).output?.[0]?.content?.[0]?.text).toBe("visible after reveal");
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("drives the MCP App fixture tool before returning the visible marker", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
       const first = await fetch(`${baseUrl}/v1/responses`, {

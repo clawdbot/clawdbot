@@ -26,6 +26,11 @@ const configSchema = z.object({
   mockResponse: z.string().min(1).max(100_000),
   mockResponseChunkDelayMs: z.number().int().positive().max(60_000).optional(),
 });
+const mockResponseControlSchema = z.object({
+  chunkDelayMs: z.number().int().min(0).max(60_000),
+  hold: z.boolean().optional(),
+  text: z.string().min(1).max(100_000),
+});
 const credentialSchema = z.object({
   groupId: z.string().regex(/^-100\d+$/u),
   sutToken: z.string().min(1),
@@ -544,6 +549,25 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
     const bot = z
       .object({ id: z.union([z.string(), z.number()]).transform(String) })
       .parse(await telegramBotApi(credential.sutToken, "getMe"));
+    const clearedChat = z
+      .object({
+        chatId: z.union([z.string(), z.number()]).transform(String),
+        mode: z.enum(["all", "self"]),
+        ok: z.literal(true),
+      })
+      .parse(
+        JSON.parse(
+          await runCommandOutput(requiredEnv("OPENCLAW_TELEGRAM_USER_DRIVER_CMD"), [
+            "clear-chat",
+            "--chat",
+            credential.groupId,
+            "--json",
+          ]),
+        ),
+      );
+    if (clearedChat.chatId !== credential.groupId) {
+      throw new Error("The user driver cleared a different Telegram chat.");
+    }
     startup.recorderRequested = true;
     saveStartup(roots.sessionRoot, startup);
     const [sutResult, recorderResult] = await Promise.allSettled([
@@ -642,7 +666,12 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
       startedAt: startup.startedAt,
       sut: sutRuntimeSchema.parse(sut),
     };
-    appendInvocation(state, "start", { config: configFile.relative, repoRoot }, 0);
+    appendInvocation(
+      state,
+      "start",
+      { config: configFile.relative, historyClearMode: clearedChat.mode, repoRoot },
+      0,
+    );
     saveActive(roots.sessionRoot, state);
     fs.rmSync(startupFile(roots.sessionRoot, lane));
     outputJson({
@@ -846,6 +875,24 @@ async function revealSentMessage(
   return sent.messageId;
 }
 
+async function sendVisibleMessage(
+  state: ActiveSession,
+  values: Map<string, string>,
+  roots: Roots,
+  secret: string,
+): Promise<{ response: ObserverResponse; revealedMessageId: string }> {
+  setMockResponseHold(state, true);
+  try {
+    const response = await send(state, values, roots.outputRoot, secret);
+    saveActive(roots.sessionRoot, state);
+    const revealedMessageId = await revealSentMessage(state, response);
+    saveActive(roots.sessionRoot, state);
+    return { response, revealedMessageId };
+  } finally {
+    setMockResponseHold(state, false);
+  }
+}
+
 async function observe(
   state: ActiveSession,
   values: Map<string, string>,
@@ -882,11 +929,8 @@ function updateMockResponse(
   const chunkDelayMs = values.has("--chunk-delay-ms")
     ? numberOption(values, "--chunk-delay-ms", 60_000)
     : 0;
-  const control = fs.lstatSync(state.sut.mockResponseControl);
-  if (!control.isFile() || control.isSymbolicLink() || control.nlink !== 1) {
-    throw new Error("The private mock response control is no longer a regular file.");
-  }
-  writeJsonAtomic(state.sut.mockResponseControl, { chunkDelayMs, text });
+  const current = readMockResponseControl(state);
+  writeJsonAtomic(state.sut.mockResponseControl, { chunkDelayMs, hold: current.hold, text });
   const textSha256 = createHash("sha256").update(text).digest("hex");
   appendInvocation(state, "mock", {
     bytes: Buffer.byteLength(text),
@@ -895,6 +939,18 @@ function updateMockResponse(
     textSha256,
   });
   return { bytes: Buffer.byteLength(text), chunkDelayMs, textSha256 };
+}
+
+function readMockResponseControl(state: ActiveSession): z.infer<typeof mockResponseControlSchema> {
+  const control = fs.lstatSync(state.sut.mockResponseControl);
+  if (!control.isFile() || control.isSymbolicLink() || control.nlink !== 1) {
+    throw new Error("The private mock response control is no longer a regular file.");
+  }
+  return mockResponseControlSchema.parse(readJson(state.sut.mockResponseControl));
+}
+
+function setMockResponseHold(state: ActiveSession, hold: boolean): void {
+  writeJsonAtomic(state.sut.mockResponseControl, { ...readMockResponseControl(state), hold });
 }
 
 async function observerAction(
@@ -1345,18 +1401,13 @@ async function main(): Promise<void> {
     if (cli.command === "mock") {
       outputJson(updateMockResponse(state, cli.values, roots.outputRoot));
     } else if (cli.command === "send") {
-      const sent = await send(state, cli.values, roots.outputRoot, credential.sutToken);
-      saveActive(roots.sessionRoot, state);
-      const revealedMessageId = await revealSentMessage(state, sent);
-      outputJson({ ...sent, revealedMessageId });
+      const sent = await sendVisibleMessage(state, cli.values, roots, credential.sutToken);
+      outputJson({ ...sent.response, revealedMessageId: sent.revealedMessageId });
     } else if (cli.command === "turn") {
-      const sent = await send(state, cli.values, roots.outputRoot, credential.sutToken);
-      saveActive(roots.sessionRoot, state);
-      const revealedMessageId = await revealSentMessage(state, sent);
-      saveActive(roots.sessionRoot, state);
+      const sent = await sendVisibleMessage(state, cli.values, roots, credential.sutToken);
       cli.values.set("--seconds", cli.values.get("--observe-seconds") ?? "15");
       outputJson({
-        sent: { ...sent, revealedMessageId },
+        sent: { ...sent.response, revealedMessageId: sent.revealedMessageId },
         observed: await observe(state, cli.values, credential.sutToken),
       });
     } else if (cli.command === "observe") {

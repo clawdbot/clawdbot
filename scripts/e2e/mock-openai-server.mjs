@@ -25,9 +25,9 @@ const initialResponseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
   : 0;
 const responseControl = process.env.MOCK_RESPONSE_CONTROL;
 
-function currentResponse() {
+function readCurrentResponse() {
   if (!responseControl) {
-    return { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs };
+    return { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs, hold: false };
   }
   const value = JSON.parse(readFileSync(responseControl, "utf8"));
   if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
@@ -37,7 +37,19 @@ function currentResponse() {
   if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 60_000) {
     throw new Error("mock response control chunkDelayMs is invalid");
   }
-  return { text: value.text, chunkDelayMs };
+  if (value.hold !== undefined && typeof value.hold !== "boolean") {
+    throw new Error("mock response control hold is invalid");
+  }
+  return { text: value.text, chunkDelayMs, hold: value.hold ?? false };
+}
+
+async function currentResponse() {
+  let response = readCurrentResponse();
+  while (response.hold) {
+    await delay(25);
+    response = readCurrentResponse();
+  }
+  return response;
 }
 
 function splitResponseText(text) {
@@ -612,7 +624,7 @@ const server = http.createServer((req, res) => {
           return;
         }
       }
-      const response = currentResponse();
+      const response = await currentResponse();
       const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       if (body.stream === false) {
         writeJson(res, 200, {
@@ -660,7 +672,7 @@ const server = http.createServer((req, res) => {
         writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
         return;
       }
-      const response = currentResponse();
+      const response = await currentResponse();
       const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;

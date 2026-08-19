@@ -24,6 +24,8 @@ class Client:
         return self.updates.pop(0) if self.updates else None
     def request(self, payload, timeout=20):
         self.requests.append(payload)
+        if payload.get("@type") == "getChat":
+            return {"id": payload["chat_id"], "can_be_deleted_only_for_self": True, "can_be_deleted_for_all_users": True}
         return {"@type": "ok"}
 
 class Driver:
@@ -53,6 +55,9 @@ with tempfile.TemporaryDirectory() as root:
     public.mkdir()
     private.mkdir()
     driver = Driver()
+    clear_driver = object.__new__(module.UserDriver)
+    clear_driver.client = Client()
+    clear_mode = clear_driver.clear_chat_history(-100123)
     observer = module.UserObserver(driver, -100123, 99, private / "events.ndjson", public)
     (public / "proof.txt").write_text("visible media")
     staged_media = Path(observer.resolve_media("proof.txt"))
@@ -163,6 +168,8 @@ with tempfile.TemporaryDirectory() as root:
     child.wait(timeout=10)
     print(json.dumps({
         "bystanderError": bystander_error,
+        "clearMode": clear_mode,
+        "clearRequests": clear_driver.client.requests,
         "deleted": deleted,
         "events": observer.events,
         "mediaError": media_error,
@@ -210,6 +217,13 @@ describe("Telegram user observer", () => {
     expect(value.truncated).toBe(true);
     expect(value.terminated).toBe(true);
     expect(value.bystanderError).toBe("Message 125 was not observed in this session.");
+    expect(value.clearMode).toBe("self");
+    expect(value.clearRequests).toContainEqual({
+      "@type": "deleteChatHistory",
+      chat_id: -100123,
+      remove_from_chat_list: false,
+      revoke: false,
+    });
     expect(value.mediaError).toBe(
       "Media must be a regular file inside the Mantis output directory.",
     );

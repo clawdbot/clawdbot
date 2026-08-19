@@ -394,6 +394,25 @@ class UserDriver:
                 f"Chat not found for tester account: {chat}. Add the QA user to the group, or configure the TDLib chat id from `user-driver.py chats --json`."
             ) from error
 
+    def clear_chat_history(self, chat_id):
+        chat = self.client.request({"@type": "getChat", "chat_id": chat_id}, timeout=10)
+        delete_for_self = bool(chat.get("can_be_deleted_only_for_self"))
+        delete_for_all = bool(chat.get("can_be_deleted_for_all_users"))
+        if not delete_for_self and not delete_for_all:
+            raise DriverError("The QA chat cannot be cleared before recording.")
+        # Desktop uses this same account. Prefer a local clear so privacy isolation does not
+        # destroy the shared QA group's history for other participants.
+        revoke = not delete_for_self
+        self.client.request(
+            {
+                "@type": "deleteChatHistory",
+                "chat_id": chat_id,
+                "remove_from_chat_list": False,
+                "revoke": revoke,
+            }
+        )
+        return "all" if revoke else "self"
+
     def text_content(self, text):
         return {
             "@type": "inputMessageText",
@@ -1208,6 +1227,15 @@ def command_send(args):
     )
 
 
+def command_clear_chat(args):
+    config, bot_config = load_config()
+    driver = UserDriver(config, bot_config)
+    driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
+    chat_id = driver.resolve_chat(args.chat)
+    mode = driver.clear_chat_history(chat_id)
+    print_result({"ok": True, "chatId": chat_id, "mode": mode}, args.json, args.output)
+
+
 def command_wait(args):
     config, bot_config = load_config()
     driver = UserDriver(config, bot_config)
@@ -1381,6 +1409,11 @@ def main():
     send.add_argument("--reply-to")
     send.add_argument("--thread-id", type=int, default=0)
     send.set_defaults(func=command_send)
+
+    clear_chat = sub.add_parser("clear-chat", help=argparse.SUPPRESS)
+    add_common(clear_chat)
+    clear_chat.add_argument("--chat", required=True)
+    clear_chat.set_defaults(func=command_clear_chat)
 
     wait = sub.add_parser("wait")
     add_common(wait)

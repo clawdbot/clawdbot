@@ -354,6 +354,10 @@ describe("Telegram Desktop recorder remote contract", () => {
   it("keeps the SSH failure text after exhausting login attempts", async () => {
     const root = makeTempDir();
     let qrAttempt = 0;
+    const runCommand = vi.fn<RunCommand>(async () => ({
+      stderr: "",
+      stdout: JSON.stringify({ ok: true, session: { id: 91234, isPasswordPending: false } }),
+    }));
     const operations = {
       createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
       createMotionPreview: vi.fn(async () => ({})),
@@ -363,10 +367,7 @@ describe("Telegram Desktop recorder remote contract", () => {
         sshPort: "22",
         sshUser: "user",
       })),
-      runCommand: vi.fn<RunCommand>(async () => ({
-        stderr: "",
-        stdout: JSON.stringify({ ok: true, session: { id: 91234, isPasswordPending: false } }),
-      })),
+      runCommand,
       scpFromRemote: vi.fn(async () => undefined),
       sshRun: vi.fn(async ({ command }: { command: string }) => {
         if (command.includes("telegram-login-qr.png")) {
@@ -399,9 +400,12 @@ describe("Telegram Desktop recorder remote contract", () => {
         operations,
       ),
     ).rejects.toThrow("permission denied reading the remote Docker socket");
+    expect(
+      runCommand.mock.calls.filter(([call]) => call.args.includes("terminate-session")),
+    ).toHaveLength(6);
   });
 
-  it("hides prior chat history before recording starts", async () => {
+  it("hides the prepared chat before recording starts", async () => {
     const root = makeTempDir();
     const sshRun = vi.fn(async ({ command }: { command: string }) => {
       if (command.includes("telegram-login-qr.png")) {
@@ -447,8 +451,8 @@ describe("Telegram Desktop recorder remote contract", () => {
       operations,
     );
 
-    // The target opens before capture to remove the chat list, then the whole window stays
-    // hidden until the lane focuses its first session-owned outbound message.
+    // The target opens before capture to remove the chat list. The lane clears it before
+    // recorder startup, and it stays hidden until the first session-owned outbound message.
     const openIndex = sshRun.mock.calls.findIndex(([call]) =>
       call.command.includes("tg://privatepost?channel=1234567890"),
     );
@@ -476,7 +480,10 @@ describe("Telegram Desktop recorder remote contract", () => {
         sshPort: "22",
         sshUser: "user",
       })),
-      runCommand: vi.fn<RunCommand>(async () => ({ stderr: "", stdout: "" })),
+      runCommand: vi.fn<RunCommand>(async () => ({
+        stderr: "",
+        stdout: JSON.stringify({ ok: true }),
+      })),
       scpFromRemote,
       sshRun: vi.fn(async ({ command }: { command: string }) => {
         if (command.includes("telegram-login-qr.png")) {
@@ -631,6 +638,25 @@ describe("Telegram Desktop recorder remote contract", () => {
       redactValues: [link],
     });
   });
+
+  it("publishes a confirmed session handle before rejecting 2FA", async () => {
+    const onSessionConfirmed = vi.fn();
+    const run = vi.fn<RunCommand>(async () => ({
+      stderr: "",
+      stdout: JSON.stringify({ ok: true, session: { id: 91234, isPasswordPending: true } }),
+    }));
+
+    await expect(
+      confirmQrLink({
+        cwd: "/repo",
+        link: "tg://login?token=pending-2fa",
+        onSessionConfirmed,
+        run,
+        userDriver: ["python3", "driver.py"],
+      }),
+    ).rejects.toThrow("requires a 2FA password");
+    expect(onSessionConfirmed).toHaveBeenCalledWith("91234");
+  });
 });
 
 describe("Telegram Desktop recorder window geometry", () => {
@@ -710,13 +736,12 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     expect(fs.statSync(screenshot).mode & 0o040).toBe(0o040);
   });
 
-  it("recovers a recorder interrupted after provisioning", async () => {
+  it("sweeps unrecorded Desktop sessions after interrupted provisioning", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
     fs.writeFileSync(
       `${sessionPath}.starting`,
       `${JSON.stringify({
-        desktopSessionId: "91234",
         leaseId: "cbx_interrupted",
         leaseOwned: true,
         provider: "docker",
@@ -735,7 +760,7 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       recoverRecorderStartup(root, { command: "recover", sessionPath }, { runCommand }),
     ).resolves.toEqual({ recovered: true });
     expect(calls).toContainEqual({
-      args: ["driver.py", "terminate-session", "--session-id", "91234", "--json"],
+      args: ["driver.py", "terminate-desktop-sessions", "--json"],
       command: "python3",
     });
     expect(

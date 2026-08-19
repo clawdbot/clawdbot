@@ -243,6 +243,7 @@ function driverCommand(userDriver: string[], args: string[]) {
 export async function confirmQrLink(params: {
   cwd: string;
   link: string;
+  onSessionConfirmed?: (desktopSessionId: string) => void;
   run?: RunCommand;
   userDriver: string[];
 }): Promise<string> {
@@ -253,10 +254,12 @@ export async function confirmQrLink(params: {
     redactValues: [params.link],
   });
   const confirmed = confirmedQrSchema.parse(JSON.parse(result.stdout));
+  const desktopSessionId = String(confirmed.session.id);
+  params.onSessionConfirmed?.(desktopSessionId);
   if (confirmed.session.isPasswordPending) {
     throw new Error("Telegram Desktop QR login requires a 2FA password.");
   }
-  return String(confirmed.session.id);
+  return desktopSessionId;
 }
 
 async function desktopReachedMainWindow(params: {
@@ -281,6 +284,7 @@ async function desktopReachedMainWindow(params: {
 async function authorizeDesktop(params: {
   cwd: string;
   inspect: CrabboxInspect;
+  onDesktopSessionChanged: (desktopSessionId: string | undefined) => void;
   operations: RecorderOperations;
   outputDir: string;
   userDriver: string[];
@@ -323,6 +327,7 @@ async function authorizeDesktop(params: {
     const desktopSessionId = await confirmQrLink({
       cwd: params.cwd,
       link,
+      onSessionConfirmed: params.onDesktopSessionChanged,
       run: params.operations.runCommand,
       userDriver: params.userDriver,
     });
@@ -336,6 +341,13 @@ async function authorizeDesktop(params: {
       return desktopSessionId;
     }
     lastFailure = mainWindow.error;
+    await terminateDesktopSession({
+      cwd: params.cwd,
+      desktopSessionId,
+      run: params.operations.runCommand,
+      userDriver: params.userDriver,
+    });
+    params.onDesktopSessionChanged(undefined);
   }
   const detail = lastFailure === undefined ? "" : `: ${coerceErrorMessage(lastFailure)}`;
   // The screen the QR read could not decode is the only thing that separates "Telegram
@@ -425,6 +437,16 @@ async function terminateDesktopSession(params: {
   z.object({ ok: z.literal(true) }).parse(JSON.parse(result.stdout));
 }
 
+async function terminateDesktopSessions(params: {
+  cwd: string;
+  run: RunCommand;
+  userDriver: string[];
+}): Promise<void> {
+  const command = driverCommand(params.userDriver, ["terminate-desktop-sessions", "--json"]);
+  const result = await params.run({ ...command, cwd: params.cwd });
+  z.object({ ok: z.literal(true) }).parse(JSON.parse(result.stdout));
+}
+
 async function assertLocalTelegramImage(params: { cwd: string; run: RunCommand }): Promise<void> {
   try {
     await params.run({
@@ -456,6 +478,7 @@ export async function startRecorder(
   const startupPath = recorderStartupPath(sessionPath);
   let leaseId = opts.leaseId;
   const leaseOwned = !opts.leaseId;
+  let desktopAuthorizationRequested = false;
   let desktopSessionId: string | undefined;
   const startup: RecorderStartup = {
     leaseId,
@@ -514,15 +537,19 @@ export async function startRecorder(
       inspect,
       run: operations.runCommand,
     });
+    desktopAuthorizationRequested = true;
     desktopSessionId = await authorizeDesktop({
       cwd,
       inspect,
+      onDesktopSessionChanged: (sessionId) => {
+        desktopSessionId = sessionId;
+        startup.desktopSessionId = sessionId;
+        writeRecorderStartup(startupPath, startup);
+      },
       operations,
       outputDir,
       userDriver: opts.userDriver,
     });
-    startup.desktopSessionId = desktopSessionId;
-    writeRecorderStartup(startupPath, startup);
     // Always open the target chat before recording: at the recorder's width Telegram shows
     // either the chat list or one conversation, and the list is the QA account's own.
     await operations.sshRun({
@@ -545,8 +572,8 @@ export async function startRecorder(
       stdio: "pipe",
     });
     const windowGeometry = parseWindowGeometry(geometry.stdout);
-    // Recording begins on a hidden Telegram window. The first session-owned send maps and
-    // focuses it, so a reused QA chat can never contribute old history to public frames.
+    // The lane clears prior history before recorder start. Keep the empty chat hidden until
+    // the first session-owned send is ready, so setup frames reveal neither account UI nor chat.
     await operations.sshRun({
       command: renderHideTelegramWindow(),
       cwd,
@@ -589,14 +616,14 @@ export async function startRecorder(
     return { session, sessionPath };
   } catch (error) {
     const cleanupErrors: string[] = [];
-    if (desktopSessionId) {
+    if (desktopAuthorizationRequested) {
       try {
-        await terminateDesktopSession({
+        await terminateDesktopSessions({
           cwd,
-          desktopSessionId,
           run: operations.runCommand,
           userDriver: opts.userDriver,
         });
+        desktopSessionId = undefined;
         startup.desktopSessionId = undefined;
         writeRecorderStartup(startupPath, startup);
       } catch (cleanupError) {
@@ -642,19 +669,16 @@ export async function recoverRecorderStartup(
   const startup = recorderStartupSchema.parse(JSON.parse(fs.readFileSync(startupPath, "utf8")));
   const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
   const errors: string[] = [];
-  if (startup.desktopSessionId) {
-    try {
-      await terminateDesktopSession({
-        cwd,
-        desktopSessionId: startup.desktopSessionId,
-        run: operations.runCommand,
-        userDriver: startup.userDriver,
-      });
-      startup.desktopSessionId = undefined;
-      writeRecorderStartup(startupPath, startup);
-    } catch (error) {
-      errors.push(`terminate Telegram Desktop session: ${coerceErrorMessage(error)}`);
-    }
+  try {
+    await terminateDesktopSessions({
+      cwd,
+      run: operations.runCommand,
+      userDriver: startup.userDriver,
+    });
+    startup.desktopSessionId = undefined;
+    writeRecorderStartup(startupPath, startup);
+  } catch (error) {
+    errors.push(`terminate Telegram Desktop sessions: ${coerceErrorMessage(error)}`);
   }
   if (startup.leaseId && startup.leaseOwned) {
     try {

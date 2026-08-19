@@ -476,7 +476,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish --focus-message-id ID`");
     expect(prompt).toContain("`block --missing-primitive NAME --reason TEXT`");
-    expect(prompt).toContain("Recording starts with Telegram hidden");
+    expect(prompt).toContain("clears the QA account's local chat history");
+    expect(prompt).toContain("hold the model");
     expect(prompt).toContain("session-owned outbound message");
     expect(prompt).toContain("This proof has no skipped lane");
     expect(prompt).not.toContain("--sut-container");
@@ -799,6 +800,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       stopSession.indexOf("destroyMantisSut(state.sut)"),
     );
     const startSession = laneScript.slice(laneScript.indexOf("async function startLane"));
+    expect(startSession.indexOf('"clear-chat"')).toBeLessThan(
+      startSession.indexOf("Promise.allSettled"),
+    );
     expect(startSession.indexOf("Promise.allSettled")).toBeLessThan(
       startSession.indexOf('"serve"'),
     );
@@ -878,6 +882,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(sutScript).toContain(
       'const requestLog = path.join(config.tempRoot, "mock-openai-requests.ndjson")',
     );
+    expect(wrapper).toContain(
+      'export MOCK_RESPONSE_CONTROL="$runtime_source/mock-control/response.json"',
+    );
+    const forwardedEnv = wrapper.slice(
+      wrapper.indexOf("forwarded_env=("),
+      wrapper.indexOf("docker_env=()"),
+    );
+    expect(forwardedEnv).toContain("MOCK_RESPONSE_CONTROL");
     expect(wrapper).toContain("refusing to destroy a running SUT container");
     expect(wrapper).toContain('destroy_bounded_filesystem "$runtime_root"');
     expect(wrapper).toContain('create_runtime_claim "$container_name" "$runtime_source"');
