@@ -120,7 +120,7 @@ describe("cleanupSessionStateForTest", () => {
     try {
       await started.promise;
       let cleanupSettled = false;
-      cleanupPromise = cleanupSessionStateForTest().then(() => {
+      cleanupPromise = cleanupSessionStateForTest({ stateDir: fixtureRoot }).then(() => {
         cleanupSettled = true;
       });
 
