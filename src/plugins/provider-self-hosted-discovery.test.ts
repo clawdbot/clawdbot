@@ -165,6 +165,76 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
     ).toBe(8);
   });
 
+  it("bounds concurrent property probes and keeps results associated by model", async () => {
+    const models = Array.from({ length: 10 }, (_, index) => ({
+      id: `model-${index}`,
+      status: { value: "loaded" },
+    }));
+    let active = 0;
+    let maxActive = 0;
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.endsWith("/health")) {
+        return guarded(new Response(null, { status: 200 }));
+      }
+      if (url.endsWith("/models")) {
+        return guarded(new Response(JSON.stringify({ data: models })));
+      }
+      const modelId = new URL(url).searchParams.get("model");
+      const index = Number(modelId?.replace("model-", ""));
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10 - index);
+      });
+      active -= 1;
+      return guarded(new Response(JSON.stringify({ n_ctx: 8_000 + index })));
+    });
+
+    const result = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama-server",
+      healthPath: "/health",
+      modelsPathOrder: "server-first",
+      routerModelProps: true,
+      rawResult: true,
+    });
+
+    expect(maxActive).toBe(8);
+    expect(result.kind === "success" ? result.rows.map((row) => row.props?.n_ctx) : []).toEqual(
+      models.map((_, index) => 8_000 + index),
+    );
+  });
+
+  it("caps property probes at 200 models", async () => {
+    const models = Array.from({ length: 201 }, (_, index) => ({
+      id: `model-${index}`,
+      status: { value: "loaded" },
+    }));
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.endsWith("/health")) {
+        return guarded(new Response(null, { status: 200 }));
+      }
+      if (url.endsWith("/models")) {
+        return guarded(new Response(JSON.stringify({ data: models })));
+      }
+      return guarded(new Response(JSON.stringify({ n_ctx: 8192 })));
+    });
+
+    const result = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama-server",
+      healthPath: "/health",
+      modelsPathOrder: "server-first",
+      routerModelProps: true,
+      rawResult: true,
+    });
+
+    expect(result.kind === "success" ? result.rows : []).toHaveLength(201);
+    expect(
+      fetchWithSsrFGuardMock.mock.calls.filter(([call]) => call.url.includes("/props?")).length,
+    ).toBe(200);
+  });
+
   it("keeps explicit Authorization ahead of ambient API-key discovery", async () => {
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(guarded(new Response(null, { status: 200 })))
