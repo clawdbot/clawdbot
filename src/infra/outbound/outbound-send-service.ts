@@ -5,7 +5,7 @@ import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-iden
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type { DurableMessageSendIntent } from "../../channels/message/types.js";
+import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -143,7 +143,7 @@ async function sendCoreMessage(params: {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   bestEffort?: boolean;
-  replyToId?: string;
+  reply?: OutboundReplyFacts;
   threadId?: string | number;
   queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
   payloads?: SendMessageParams["payloads"];
@@ -171,7 +171,7 @@ async function sendCoreMessage(params: {
     accountId: params.ctx.accountId ?? undefined,
     conversationType: params.ctx.conversationType,
     conversationReadOrigin: params.ctx.conversationReadOrigin,
-    replyToId: params.replyToId,
+    reply: params.reply,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
@@ -298,8 +298,7 @@ async function preparePluginSendPayload(params: {
   ctx: OutboundSendContext;
   to: string;
   payload: ReplyPayload;
-  replyToId?: string;
-  replyToIdSource?: "explicit" | "implicit";
+  reply?: OutboundReplyFacts;
   threadId?: string | number;
 }): Promise<PluginSendPayloadPreparation> {
   const plugin = params.ctx.plugin;
@@ -314,8 +313,8 @@ async function preparePluginSendPayload(params: {
     ctx: createChannelActionContext({ ctx: params.ctx, action: "send" }),
     to: params.to,
     payload: params.payload,
-    replyToId: params.replyToId,
-    replyToIdSource: params.replyToIdSource,
+    replyToId: params.reply?.replyToId,
+    replyToIdSource: params.reply?.source,
     threadId: params.threadId,
   });
   // A null result is an ownership decision: the provider-native payload cannot
@@ -338,8 +337,7 @@ export async function executeSendAction(params: {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   bestEffort?: boolean;
-  replyToId?: string;
-  replyToIdSource?: "explicit" | "implicit";
+  reply?: OutboundReplyFacts;
   threadId?: string | number;
 }): Promise<{
   handledBy: "plugin" | "core";
@@ -368,8 +366,7 @@ export async function executeSendAction(params: {
         ctx: params.ctx,
         to: params.to,
         payload: defaultPayload,
-        replyToId: params.replyToId,
-        replyToIdSource: params.replyToIdSource,
+        reply: params.reply,
         threadId: params.threadId,
       });
   const channelPlugin = params.ctx.plugin;

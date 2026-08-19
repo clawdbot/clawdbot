@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { updateDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
 import {
@@ -856,6 +857,32 @@ describe("delivery-queue storage", () => {
 
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
     });
+
+    it.each([
+      ["first", { source: "implicit", replyToId: "legacy-root", mode: "first" }],
+      ["batched", { source: "implicit", replyToId: "legacy-root", mode: "first" }],
+      ["all", { source: "implicit", replyToId: "legacy-root", mode: "all" }],
+      ["off", undefined],
+    ] as const)(
+      "normalizes legacy %s reply fields at the storage boundary",
+      async (mode, reply) => {
+        const id = await enqueueTextDelivery({
+          channel: "forum",
+          to: "2",
+          payloads: [{ text: "reply" }],
+        });
+        updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir(), (entry) => ({
+          ...entry,
+          replyToId: "legacy-root",
+          replyToMode: mode,
+        }));
+
+        const loaded = await loadPendingDelivery(id, tmpDir());
+        expect(loaded?.reply).toEqual(reply);
+        expect(loaded).not.toHaveProperty("replyToId");
+        expect(loaded).not.toHaveProperty("replyToMode");
+      },
+    );
 
     it("persists gateway caller scopes for replay", async () => {
       const id = await enqueueTextDelivery(

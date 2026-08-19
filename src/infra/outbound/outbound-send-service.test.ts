@@ -1091,8 +1091,7 @@ describe("executeSendAction", () => {
       to: "channel:123",
       message: "hello",
       payload: { text: "hello", presentation },
-      replyToId: "reply-1",
-      replyToIdSource: "explicit",
+      reply: { replyToId: "reply-1", source: "explicit" },
       threadId: "thread-1",
     });
 
@@ -1109,7 +1108,7 @@ describe("executeSendAction", () => {
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       channel: "discord",
       queuePolicy: "best_effort",
-      replyToId: "reply-1",
+      reply: { replyToId: "reply-1", source: "explicit" },
       threadId: "thread-1",
       conversationReadOrigin: "delegated",
     });

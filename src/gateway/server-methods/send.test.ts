@@ -4125,6 +4125,30 @@ describe("gateway send mirroring", () => {
     expect(actionCall).not.toHaveProperty("mediaReadFile");
   });
 
+  it("passes authenticated reply facts into provider action dispatch", async () => {
+    registerMessageActionPlugin({ registrySuffix: "message-action-reply-facts" });
+    const reply = {
+      replyToId: "source-message-1",
+      source: "implicit",
+      mode: "first",
+    } as const;
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: { to: "123", message: "reply" },
+        reply,
+        agentId: "work",
+        idempotencyKey: "idem-message-action-reply-facts",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(lastDispatchChannelMessageActionCall()?.reply).toEqual(reply);
+  });
+
   it("uses signed sender group policy without granting gateway send host reads", async () => {
     const plugin = registerMessageActionPlugin({
       chatType: "group",

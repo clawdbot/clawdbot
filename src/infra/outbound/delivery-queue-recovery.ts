@@ -298,8 +298,7 @@ function buildRecoveryDeliverParams(
     preparedBatch: entry.preparedBatch,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
-    replyToId: entry.replyToId,
-    replyToMode: entry.replyToMode,
+    reply: entry.reply,
     formatting: entry.formatting,
     identity: entry.identity,
     bestEffort: entry.bestEffort,
@@ -461,8 +460,8 @@ function buildReconciledCommitContext(params: {
     replyToId:
       params.entry.effectiveReplyToId !== undefined
         ? params.entry.effectiveReplyToId
-        : params.entry.replyToId,
-    replyToMode: params.entry.replyToMode,
+        : params.entry.reply?.replyToId,
+    replyToMode: params.entry.reply?.source === "implicit" ? params.entry.reply.mode : undefined,
     threadId: params.entry.threadId,
     silent: params.entry.silent,
     result,

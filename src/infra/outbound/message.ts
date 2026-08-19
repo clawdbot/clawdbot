@@ -10,7 +10,7 @@ import {
   type DurableMessageBatchSendResult,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
-import type { DurableMessageSendIntent } from "../../channels/message/types.js";
+import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import type { ChannelPlugin, ChannelPollResult } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
@@ -39,6 +39,7 @@ import {
   projectOutboundPayloadPlanForMirror,
   type NormalizedOutboundPayload,
 } from "./payloads.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
 
@@ -88,6 +89,7 @@ type MessageSendParams = {
   /** Known destination conversation kind prepared by the caller. */
   conversationType?: ChatType;
   conversationReadOrigin?: "delegated" | "direct-operator";
+  reply?: OutboundReplyFacts;
   replyToId?: string;
   threadId?: string | number;
   dryRun?: boolean;
@@ -325,6 +327,7 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
+  const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
   const prepared = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
     : await resolveRequiredChannel({ cfg, channel: params.channel });
@@ -402,7 +405,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         agentId: params.agentId,
         channel: outboundChannel,
         payloads: normalizedPayloads,
-        replyToId: params.replyToId,
+        replyToId: reply?.replyToId,
         threadId: params.threadId,
         silent: params.silent,
       });
@@ -417,7 +420,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       accountId: params.accountId,
       conversationReadOrigin: params.conversationReadOrigin,
       payloads: normalizedPayloads,
-      replyToId: params.replyToId,
+      reply,
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
@@ -486,7 +489,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       accountId: params.accountId,
       agentId: params.agentId,
       channel,
-      replyToId: params.replyToId,
+      replyToId: reply?.replyToId,
       threadId: params.threadId != null ? String(params.threadId) : undefined,
       forceDocument: params.forceDocument,
       silent: params.silent,

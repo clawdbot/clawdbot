@@ -50,6 +50,7 @@ import {
   projectPreparedOutboundBatchForStorage,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 export type {
   LegacyQueuedDelivery,
@@ -103,6 +104,20 @@ type QueuedDeliveryAdmissionPayload = QueuedDeliveryPayload & {
   initialProducerClaim?: InitialDeliveryProducerClaim;
 };
 
+type StoredQueuedDelivery = QueuedDelivery & Parameters<typeof normalizeOutboundReplyFacts>[0];
+
+function normalizeStoredQueuedDelivery(entry: StoredQueuedDelivery): QueuedDelivery {
+  const { replyToId, replyToMode, reply: storedReply, ...current } = entry;
+  const reply = normalizeOutboundReplyFacts({ reply: storedReply, replyToId, replyToMode });
+  return { ...current, ...(reply ? { reply } : {}) };
+}
+
+function loadStoredQueuedDeliveries(queueName: string, stateDir?: string): QueuedDelivery[] {
+  return (loadDeliveryQueueEntries(queueName, stateDir) as StoredQueuedDelivery[]).map(
+    normalizeStoredQueuedDelivery,
+  );
+}
+
 function createQueuedDelivery(
   params: QueuedDeliveryAdmissionPayload,
   id: string,
@@ -121,8 +136,7 @@ function createQueuedDelivery(
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatchFromLowLevelInput(params)),
     renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    reply: params.reply,
     formatting: params.formatting,
     identity: params.identity,
     bestEffort: params.bestEffort,
@@ -428,7 +442,7 @@ function updateQueuedDelivery(
       },
       () => {
         updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir, (entry) =>
-          update(entry as QueuedDelivery),
+          update(normalizeStoredQueuedDelivery(entry as StoredQueuedDelivery)),
         );
       },
     );
@@ -438,7 +452,7 @@ function updateQueuedDelivery(
     return;
   }
   updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir, (entry) =>
-    update(entry as QueuedDelivery),
+    update(normalizeStoredQueuedDelivery(entry as StoredQueuedDelivery)),
   );
 }
 
@@ -530,12 +544,18 @@ export async function markDeliveryPlatformOutcomeUnknown(
 export const loadPendingDelivery = async (
   id: string,
   stateDir?: string,
-): Promise<QueuedDelivery | null> =>
-  loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir) as QueuedDelivery | null;
+): Promise<QueuedDelivery | null> => {
+  const entry = loadDeliveryQueueEntry(
+    OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    stateDir,
+  ) as StoredQueuedDelivery | null;
+  return entry ? normalizeStoredQueuedDelivery(entry) : null;
+};
 
 /** Load all pending delivery entries from the queue. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
-  return loadDeliveryQueueEntries(OUTBOUND_DELIVERY_QUEUE_NAME, stateDir) as QueuedDelivery[];
+  return loadStoredQueuedDeliveries(OUTBOUND_DELIVERY_QUEUE_NAME, stateDir);
 }
 
 /** One-time migration inventory; normal recovery never reads the legacy namespace. */
@@ -548,10 +568,7 @@ export function loadLegacyPendingDeliveries(stateDir?: string): LegacyQueuedDeli
 
 /** Prepared legacy rows awaiting media staging and canonical publication. */
 export function loadPendingDeliveryMigrations(stateDir?: string): QueuedDelivery[] {
-  return loadDeliveryQueueEntries(
-    OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-    stateDir,
-  ) as QueuedDelivery[];
+  return loadStoredQueuedDeliveries(OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME, stateDir);
 }
 
 /** Claimed pre-D4 rows whose modifying policy has not safely published yet. */

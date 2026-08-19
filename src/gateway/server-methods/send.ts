@@ -12,14 +12,12 @@ import {
   validatePollParams,
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { MessageActionParams } from "../../../packages/gateway-protocol/src/index.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type {
-  ChannelPlugin,
-  ChannelThreadingToolContext,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -90,7 +88,6 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type MessageActionToolContext = Omit<ChannelThreadingToolContext, "currentChatType">;
 type MessageOperationPrefix = "message.action" | "poll" | "send";
 
 type MessageOperationRoute = {
@@ -910,22 +907,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(p, validateMessageActionParams, "message.action", respond)) {
       return;
     }
-    const request = p as {
-      channel: string;
-      action: string;
-      params: Record<string, unknown>;
-      accountId?: string;
-      requesterAccountId?: string;
-      requesterSenderId?: string;
-      senderIsOwner?: boolean;
-      sessionKey?: string;
-      sessionId?: string;
-      inboundTurnKind?: "user_request" | "room_event";
-      agentId?: string;
-      toolContext?: MessageActionToolContext;
-      conversationReadOrigin?: "direct-operator";
-      idempotencyKey: string;
-    };
+    const request = p as MessageActionParams;
     const trustedContext = resolveTrustedMessageActionToolContext({ client, request });
     if (!trustedContext.ok) {
       respond(false, undefined, trustedContext.error);
@@ -1041,6 +1023,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             sessionId: trustedContext.sessionId,
             agentId,
             toolContext: trustedContext.toolContext,
+            replyToIsExplicit: request.reply?.source === "explicit",
             idempotencyKey: request.idempotencyKey,
             toolCallId: trustedContext.sourceReplyToolCallId,
             ...(trustedContext.sourceReplyFinal !== undefined
@@ -1067,11 +1050,16 @@ export const sendHandlers: GatewayRequestHandlers = {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
           const gatewayClientScopes = client?.connect?.scopes ?? [];
+          const inboundEventKind =
+            request.inboundTurnKind === "room_event" || request.inboundTurnKind === "user_request"
+              ? request.inboundTurnKind
+              : undefined;
           const handled = await dispatchChannelMessageAction({
             channel,
             action: request.action as never,
             cfg,
             params: request.params,
+            reply: request.reply,
             accountId,
             ...selectMessageActionRequesterIdentity(trustedContext),
             senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
@@ -1080,7 +1068,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             conversationReadOrigin,
             sessionKey,
             sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
-            inboundEventKind: request.inboundTurnKind,
+            inboundEventKind,
             agentId,
             mediaAccess,
             mediaLocalRoots: mediaAccess.localRoots,

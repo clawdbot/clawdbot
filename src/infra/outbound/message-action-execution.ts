@@ -7,6 +7,7 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "../../agents/tools/common.js";
+import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -289,6 +290,7 @@ export async function executeGatewayAction(params: {
   channel: ChannelId;
   channelPlugin?: ChannelPlugin;
   action: ChannelMessageActionName;
+  reply?: OutboundReplyFacts;
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionGateway;
@@ -334,6 +336,7 @@ export async function executeGatewayAction(params: {
     sessionId: params.input.sessionId,
     agentId: params.agentId,
     toolContext: params.input.messageActionAuthorization?.toolContext,
+    replyToIsExplicit: params.reply?.source === "explicit",
     idempotencyKey,
     sourceReplyFinal: params.input.sourceReplyFinal,
     toolCallId: params.input.sourceReplyToolCallId,
@@ -359,6 +362,7 @@ export async function executeGatewayAction(params: {
         channel: params.channel,
         action: params.action,
         params: params.params,
+        ...(params.reply ? { reply: params.reply } : {}),
         accountId: params.accountId ?? undefined,
         senderIsOwner: params.input.senderIsOwner,
         sessionKey: params.input.sessionKey,
