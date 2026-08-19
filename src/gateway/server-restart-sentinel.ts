@@ -28,14 +28,13 @@ import {
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
-  drainPendingSessionDeliveries,
+  drainPendingSessionDelivery,
   recoverPendingSessionDeliveries,
   type SessionDeliveryRecoveryLogger,
   type SettleSessionDeliveryFn,
 } from "../infra/session-delivery-queue-recovery.js";
 import {
   enqueueSessionDelivery,
-  loadPendingSessionDelivery,
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   SessionDeliveryDeadLetteredError,
@@ -406,10 +405,11 @@ async function drainRestartContinuationQueue(params: {
   log: SessionDeliveryRecoveryLogger;
 }) {
   for (let attempt = 1; attempt <= RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS; attempt += 1) {
-    await drainPendingSessionDeliveries({
-      drainKey: `restart-continuation:${params.entryId}`,
+    const queued = await drainPendingSessionDelivery({
+      id: params.entryId,
       logLabel: "restart continuation",
       log: params.log,
+      bypassBackoff: true,
       deliver: (entry, context = {}) =>
         deliverQueuedSessionDelivery({
           deps: params.deps,
@@ -417,13 +417,8 @@ async function drainRestartContinuationQueue(params: {
           ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
         }),
       onSettled: settleQueuedSessionDelivery,
-      selectEntry: (entry) => ({
-        match: entry.id === params.entryId,
-        bypassBackoff: true,
-      }),
     });
 
-    const queued = await loadPendingSessionDelivery(params.entryId);
     if (!isRestartContinuationBusyRetry(queued)) {
       return;
     }

@@ -1,10 +1,13 @@
 /** Process-wide listener counts used to avoid telemetry work without consumers. */
+import type { DiagnosticEventPayload } from "./diagnostic-events.js";
 
 const DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
 );
 
 type DiagnosticEventListenerPresence = {
+  broadInterestCount: number;
+  eventInterestDeltas: Map<DiagnosticEventPayload["type"], number>;
   marker: symbol;
   internalCount: number;
   trustedCount: number;
@@ -19,9 +22,14 @@ function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
     (existing as Partial<DiagnosticEventListenerPresence>).marker ===
       DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY
   ) {
-    return existing as DiagnosticEventListenerPresence;
+    const state = existing as DiagnosticEventListenerPresence;
+    state.broadInterestCount ??= 0;
+    state.eventInterestDeltas ??= new Map();
+    return state;
   }
   const state: DiagnosticEventListenerPresence = {
+    broadInterestCount: 0,
+    eventInterestDeltas: new Map(),
     marker: DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
     internalCount: 0,
     trustedCount: 0,
@@ -33,6 +41,56 @@ function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
     writable: false,
   });
   return state;
+}
+
+export type InternalDiagnosticEventInterest = Readonly<{
+  include?: readonly DiagnosticEventPayload["type"][];
+  exclude?: readonly DiagnosticEventPayload["type"][];
+}>;
+
+function updateEventInterestDelta(
+  state: DiagnosticEventListenerPresence,
+  type: DiagnosticEventPayload["type"],
+  delta: number,
+): void {
+  const next = (state.eventInterestDeltas.get(type) ?? 0) + delta;
+  if (next === 0) {
+    state.eventInterestDeltas.delete(type);
+  } else {
+    state.eventInterestDeltas.set(type, next);
+  }
+}
+
+export function updateInternalDiagnosticEventInterest(
+  interest: InternalDiagnosticEventInterest | undefined,
+  delta: 1 | -1,
+): void {
+  const state = getDiagnosticEventListenerPresence();
+  if (interest?.include) {
+    for (const type of new Set(interest.include)) {
+      if (!interest.exclude?.includes(type)) {
+        updateEventInterestDelta(state, type, delta);
+      }
+    }
+    return;
+  }
+  state.broadInterestCount += delta;
+  for (const type of new Set(interest?.exclude ?? [])) {
+    updateEventInterestDelta(state, type, -delta);
+  }
+}
+
+export function hasInternalDiagnosticEventInterest(type: DiagnosticEventPayload["type"]): boolean {
+  const state = getDiagnosticEventListenerPresence();
+  return state.broadInterestCount + (state.eventInterestDeltas.get(type) ?? 0) > 0;
+}
+
+export function resetInternalDiagnosticEventListenerPresence(): void {
+  const state = getDiagnosticEventListenerPresence();
+  state.internalCount = 0;
+  state.trustedCount = 0;
+  state.broadInterestCount = 0;
+  state.eventInterestDeltas.clear();
 }
 
 export function setInternalDiagnosticEventListenerCounts(

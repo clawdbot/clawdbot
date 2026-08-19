@@ -40,6 +40,8 @@ type FailSessionDeliveryMock =
   typeof import("../infra/session-delivery-queue-storage.js").failSessionDelivery;
 type RecoverPendingSessionDeliveriesMock =
   typeof import("../infra/session-delivery-queue-recovery.js").recoverPendingSessionDeliveries;
+type DrainPendingSessionDeliveryMock =
+  typeof import("../infra/session-delivery-queue-recovery.js").drainPendingSessionDelivery;
 type AppendAssistantMessageToSessionTranscriptMock =
   typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript;
 
@@ -173,7 +175,7 @@ const mocks = vi.hoisted(() => {
     removeCronRunContinuationSessionIfIdle: vi.fn(async () => {}),
     settleCorrelatedSubagentDelivery: vi.fn(async () => {}),
     loadPendingSessionDelivery: vi.fn(),
-    drainPendingSessionDeliveries: vi.fn(),
+    drainPendingSessionDelivery: vi.fn<DrainPendingSessionDeliveryMock>(),
     recoverPendingSessionDeliveries: vi.fn<RecoverPendingSessionDeliveriesMock>(),
     resolveAgentConfig: vi.fn(() => undefined),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-test-workspace"),
@@ -252,11 +254,11 @@ vi.mock("../infra/session-delivery-queue-storage.js", async (importOriginal) => 
 vi.mock("../infra/session-delivery-queue-recovery.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../infra/session-delivery-queue-recovery.js")>();
-  mocks.drainPendingSessionDeliveries.mockImplementation(actual.drainPendingSessionDeliveries);
+  mocks.drainPendingSessionDelivery.mockImplementation(actual.drainPendingSessionDelivery);
   mocks.recoverPendingSessionDeliveries.mockImplementation(actual.recoverPendingSessionDeliveries);
   return {
     ...actual,
-    drainPendingSessionDeliveries: mocks.drainPendingSessionDeliveries,
+    drainPendingSessionDelivery: mocks.drainPendingSessionDelivery,
     recoverPendingSessionDeliveries: mocks.recoverPendingSessionDeliveries,
   };
 });
@@ -676,7 +678,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.removeCronRunContinuationSessionIfIdle.mockClear();
     mocks.settleCorrelatedSubagentDelivery.mockClear();
     mocks.loadPendingSessionDelivery.mockClear();
-    mocks.drainPendingSessionDeliveries.mockClear();
+    mocks.drainPendingSessionDelivery.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
     mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
     mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue(null);
@@ -728,8 +730,10 @@ describe("scheduleRestartSentinelWake", () => {
   it("uses the same producer settlement callback for targeted recovery", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    const targeted = mocks.drainPendingSessionDeliveries.mock.calls[0]?.[0];
+    const targeted = mocks.drainPendingSessionDelivery.mock.calls[0]?.[0];
     expect(targeted?.onSettled).toBe(settleQueuedSessionDelivery);
+    expect(targeted).toMatchObject({ bypassBackoff: true, id: expect.any(String) });
+    expect(targeted).not.toHaveProperty("drainKey");
   });
 
   it("enqueues the sentinel note and wakes the session even when outbound delivery succeeds", async () => {
@@ -2656,7 +2660,7 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.clearRestartSentinelIfRevision).not.toHaveBeenCalled();
-    expect(mocks.drainPendingSessionDeliveries).not.toHaveBeenCalled();
+    expect(mocks.drainPendingSessionDelivery).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith("startup task failed", {
       source: "restart-sentinel",
       sessionKey: "agent:main:main",
@@ -2777,7 +2781,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
       expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-      expect(mocks.drainPendingSessionDeliveries).not.toHaveBeenCalled();
+      expect(mocks.drainPendingSessionDelivery).not.toHaveBeenCalled();
     },
   );
 
