@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  readCodexProxyPort,
   runSutContainerAction,
   waitForLog,
   writeSutConfig,
@@ -13,13 +12,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Telegram Mantis SUT", () => {
-  it("keeps the Codex config read failure text", () => {
-    const root = tempDirs.make("telegram-mantis-codex-home-");
-    fs.mkdirSync(path.join(root, "config.toml"));
-
-    expect(() => readCodexProxyPort(root)).toThrow(/EISDIR/u);
-  });
-
   it("keeps stderr when a container action is terminated", () => {
     expect(() =>
       runSutContainerAction("stop", "openclaw-telegram-sut-test", "/tmp/runtime", () => ({

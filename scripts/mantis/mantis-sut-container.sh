@@ -527,8 +527,10 @@ readonly network_probe_script='
     socket.on("timeout", () => { socket.destroy(); resolve(false); });
   });
   (async () => {
+    // Port 9 need not be open: the INPUT reject counter below proves the host-bound
+    // packet hit our isolation rule, while a closed port alone cannot satisfy the check.
     const blocked = await Promise.all([
-      connects("codex-host", Number(process.env.PROXY_PORT)),
+      connects("runner-host", 9),
       connects("10.0.0.1", 80),
       connects("100.100.100.200", 80),
       connects("169.254.169.254", 80),
@@ -555,11 +557,9 @@ readonly build_command='
 
 run_network_probe() {
   local network_name="$1"
-  local proxy_port="$2"
   "$docker_bin" run --rm --network "$network_name" "${container_security_args[@]}" \
     "${runtime_resource_args[@]}" \
-    --add-host codex-host:host-gateway \
-    --env PROXY_PORT="$proxy_port" \
+    --add-host runner-host:host-gateway \
     "$image" node -e "$network_probe_script"
   local subnet
   subnet="$(network_subnet "$network_name")"
@@ -696,8 +696,7 @@ case "$command" in
     trap - EXIT INT TERM
     ;;
   check)
-    [[ $# -eq 1 ]] || die "check expects a proxy port"
-    require_port "$1"
+    [[ $# -eq 0 ]] || die "check expects no arguments"
     network_name="openclaw-mantis-check-$$"
     create_public_only_network "$network_name"
     # shellcheck disable=SC2329
@@ -705,24 +704,22 @@ case "$command" in
       cleanup_network "$network_name"
     }
     trap cleanup_check EXIT INT TERM
-    run_network_probe "$network_name" "$1"
+    run_network_probe "$network_name"
     cleanup_network "$network_name"
     trap - EXIT INT TERM
     ;;
   run)
-    [[ $# -eq 7 ]] \
-      || die "run expects name, lane, repo root, runtime root, gateway port, mock port, and proxy port"
+    [[ $# -eq 6 ]] \
+      || die "run expects name, lane, repo root, runtime root, gateway port, and mock port"
     container_name="$1"
     lane="$2"
     repo_root="$(realpath -e "$3")"
     runtime_source="$4"
     gateway_port="$5"
     mock_port="$6"
-    proxy_port="$7"
     require_container_name "$container_name"
     require_port "$gateway_port"
     require_port "$mock_port"
-    require_port "$proxy_port"
     [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
       || die "invalid runtime root"
     create_runtime_claim "$container_name" "$runtime_source"
@@ -822,7 +819,7 @@ case "$command" in
       return "$result"
     }
     trap cleanup_run EXIT INT TERM
-    run_network_probe "$network_name" "$proxy_port"
+    run_network_probe "$network_name"
     require_runtime_claim_active "$container_name"
       "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${runtime_resource_args[@]}" \

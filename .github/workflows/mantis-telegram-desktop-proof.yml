@@ -291,7 +291,6 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           exec env -i \
-            CODEX_HOME="/tmp/mantis-codex-home-${GITHUB_RUN_ID}" \
             HOME=/var/lib/mantis-sut \
             OPENCLAW_BUILD_PRIVATE_QA=1 \
             OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
@@ -616,8 +615,8 @@ jobs:
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
           codex_home="/tmp/mantis-codex-home-${GITHUB_RUN_ID}"
           sudo install -d -m 0770 -o codex -g codex "$codex_home"
-          sudo setfacl -m u:runner:rwx,u:codex:rwx,u:mantis-sut:r-x "$codex_home"
-          sudo setfacl -d -m u:runner:rwx,u:codex:rwx,u:mantis-sut:r-X "$codex_home"
+          sudo setfacl -m u:runner:rwx,u:codex:rwx "$codex_home"
+          sudo setfacl -d -m u:runner:rwx,u:codex:rwx "$codex_home"
           workspace_parent="$(dirname "$GITHUB_WORKSPACE")"
           while [ "$workspace_parent" != "/" ]; do
             sudo setfacl -m u:codex:--x,u:mantis-sut:--x "$workspace_parent"

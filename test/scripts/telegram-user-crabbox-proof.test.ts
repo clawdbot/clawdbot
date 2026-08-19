@@ -16,7 +16,6 @@ import {
   createOpenClawGatewaySpawnSpec,
   parseArgs,
   processTargetExists,
-  readCodexProxyPort,
   readLogAfterOffset,
   readLogTail,
   readTelegramUserProofLogTailBytes,
@@ -166,7 +165,6 @@ describe("telegram user Crabbox proof log polling", () => {
     const repoRoot = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const runtimeRoot = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const spec = createContainerizedSutSpawnSpec({
-      codexProxyPort: 43123,
       containerName: "openclaw-telegram-sut-test",
       gatewayEnv: {
         TELEGRAM_BOT_TOKEN: "telegram-burner-token",
@@ -183,6 +181,8 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(spec.args).toContain("/usr/local/sbin/openclaw-mantis-sut-container");
     expect(spec.args).toContain("run");
     expect(spec.args).toContain("candidate");
+    expect(spec.args.at(-2)).toBe("19042");
+    expect(spec.args.at(-1)).toBe("19043");
     expect(spec.args).not.toContain("docker");
     expect(spec.args.join("\n")).not.toContain("--preserve-env");
     expect(spec.args.join("\n")).not.toContain("CODEX_HOME");
@@ -194,20 +194,6 @@ describe("telegram user Crabbox proof log polling", () => {
       mockResponseText: "streamed response",
       telegramBotToken: "telegram-burner-token",
     });
-  });
-
-  it("reads only the loopback Responses proxy port from Codex config", () => {
-    const codexHome = makeTempDir(tempDirs, "openclaw-telegram-proof-");
-    fs.writeFileSync(
-      path.join(codexHome, "config.toml"),
-      '[model_providers.codex-action-responses-proxy]\nbase_url = "http://127.0.0.1:43123/v1"\n',
-    );
-    expect(readCodexProxyPort(codexHome)).toBe(43123);
-    fs.writeFileSync(
-      path.join(codexHome, "config.toml"),
-      '[model_providers.codex-action-responses-proxy]\nbase_url = "https://api.openai.com/v1"\n',
-    );
-    expect(readCodexProxyPort(codexHome)).toBeUndefined();
   });
 
   it("requires successful privileged SUT teardown commands", () => {

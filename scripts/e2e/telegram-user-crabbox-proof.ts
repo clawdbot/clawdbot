@@ -58,7 +58,6 @@ export { COMMAND_TIMEOUT_MS, runCommand, selectCrabboxSshPort };
 export {
   createContainerizedSutSpawnSpec,
   createOpenClawGatewaySpawnSpec,
-  readCodexProxyPort,
   runSutContainerAction,
   waitForLog,
   writeSutConfig,

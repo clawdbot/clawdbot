@@ -764,7 +764,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain("--memory 8g");
     expect(wrapper).toContain("--cpus 4");
     expect(wrapper).toContain("--memory 16g");
-    expect(sutScript).toContain("requireCodexProxyPort");
+    expect(sutScript).not.toContain("CODEX_HOME");
+    expect(sutScript).not.toContain("codexProxyPort");
+    expect(wrapper).toContain('connects("runner-host", 9)');
+    expect(wrapper).toContain("--add-host runner-host:host-gateway");
+    expect(wrapper).not.toContain("PROXY_PORT");
     const stopSession = laneScript.slice(laneScript.indexOf("async function stopActiveLane"));
     expect(stopSession.indexOf("stopMantisSut(state.sut)")).toBeLessThan(
       stopSession.indexOf("preserveMantisSutRuntimeArtifacts(state.sut"),

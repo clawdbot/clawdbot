@@ -416,7 +416,6 @@ export async function waitForLog(
 }
 
 export function createContainerizedSutSpawnSpec(params: {
-  codexProxyPort: number;
   containerName: string;
   gatewayPort: number;
   mockPort: number;
@@ -451,7 +450,6 @@ export function createContainerizedSutSpawnSpec(params: {
       params.runtimeRoot,
       String(params.gatewayPort),
       String(params.mockPort),
-      String(params.codexProxyPort),
     ],
     command: "sudo",
     inputPath,
@@ -461,36 +459,6 @@ export function createContainerizedSutSpawnSpec(params: {
       shell: false,
     } satisfies SpawnOptionsWithoutStdio,
   };
-}
-
-export function readCodexProxyPort(codexHome: string): number | undefined {
-  let config: string;
-  try {
-    config = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
-  } catch (error) {
-    throw new Error(`Could not read Codex config: ${coerceErrorMessage(error)}`, { cause: error });
-  }
-  const section = config.match(
-    /\[model_providers\.codex-action-responses-proxy\]([\s\S]*?)(?=\n\[|$)/u,
-  )?.[1];
-  const match = section?.match(/base_url\s*=\s*"http:\/\/127\.0\.0\.1:(\d+)\/v1"/u);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  const port = Number.parseInt(match[1], 10);
-  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : undefined;
-}
-
-function requireCodexProxyPort(): number {
-  const codexHome = process.env.CODEX_HOME?.trim();
-  if (!codexHome) {
-    throw new Error("Fork SUT isolation requires CODEX_HOME for the proxy boundary check.");
-  }
-  const proxyPort = readCodexProxyPort(codexHome);
-  if (!proxyPort) {
-    throw new Error("Fork SUT isolation could not resolve the Codex Responses proxy port.");
-  }
-  return proxyPort;
 }
 
 type SutContainerAction = "destroy" | "stop";
@@ -602,7 +570,6 @@ export async function startMantisSut(params: {
   const gatewayEnv = createMantisGatewayEnv({ ...config, sutToken: params.sutToken });
   const containerName = `openclaw-telegram-sut-${randomUUID()}`;
   const spec = createContainerizedSutSpawnSpec({
-    codexProxyPort: requireCodexProxyPort(),
     containerName,
     gatewayEnv,
     gatewayPort: params.gatewayPort,
