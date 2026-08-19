@@ -53,6 +53,61 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toEqual({ subtitle: "Waiting for a concurrency slot", narration: undefined });
   });
 
+  it.each(["stuck", "waiting-on-user"] as const)(
+    "keeps a %s observer headline when previews are hidden",
+    (health) => {
+      // isCriticalObserverHealth owns these two states; the chat pane announces them
+      // too, so a display preference must not silence them in the sidebar.
+      expect(
+        resolveSidebarSessionSubtitle({
+          session: {
+            ...workSession(),
+            hasActiveRun: true,
+            activeRunIds: ["run-1"],
+            status: "running",
+          },
+          hasDisplay: false,
+          displaySubtitle: undefined,
+          sidebarLiveActivity: true,
+          showPreview: false,
+          narrationLine: "Using bash",
+          observerDigest: {
+            runId: "run-1",
+            headline: "Blocked on a missing credential",
+            health,
+            updatedAt: 2_000,
+            revision: 1,
+          },
+        }),
+      ).toEqual({ subtitle: "Blocked on a missing credential", narration: undefined });
+    },
+  );
+
+  it("still hides a non-critical observer headline when previews are hidden", () => {
+    expect(
+      resolveSidebarSessionSubtitle({
+        session: {
+          ...workSession(),
+          hasActiveRun: true,
+          activeRunIds: ["run-1"],
+          status: "running",
+        },
+        hasDisplay: false,
+        displaySubtitle: undefined,
+        sidebarLiveActivity: true,
+        showPreview: false,
+        narrationLine: undefined,
+        observerDigest: {
+          runId: "run-1",
+          headline: "Running checks",
+          health: "on-track",
+          updatedAt: 2_000,
+          revision: 1,
+        },
+      }),
+    ).toEqual({ subtitle: undefined, narration: undefined });
+  });
+
   it("keeps the concurrency-slot explanation when previews are hidden", () => {
     // Without it a queued run reads as an idle session: a visible non-outcome.
     expect(
