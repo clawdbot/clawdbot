@@ -237,6 +237,87 @@ describe("llama-server provider catalog", () => {
     });
   });
 
+  it("moves a refreshed dynamic scope to the newest eviction position", async () => {
+    discoverMock.mockResolvedValue(success());
+    const contexts = Array.from(
+      { length: 101 },
+      (_, index) =>
+        ({
+          config: {},
+          provider: "llama-server",
+          modelId: "org/model:Q4",
+          modelRegistry: {},
+          agentRuntimeId: `refresh-runtime-${index}`,
+          providerConfig: {
+            baseUrl: "http://localhost:8080/v1",
+            api: "openai-completions",
+          },
+        }) as unknown as ProviderPrepareDynamicModelContext,
+    );
+
+    for (const ctx of contexts.slice(0, 100)) {
+      await prepareLlamaServerDynamicModels(ctx);
+    }
+    await prepareLlamaServerDynamicModels(contexts[0]!);
+    await prepareLlamaServerDynamicModels(contexts[100]!);
+
+    expect(resolveLlamaServerDynamicModel(contexts[0]!)).toMatchObject({ id: "org/model:Q4" });
+    expect(resolveLlamaServerDynamicModel(contexts[1]!)).toBeUndefined();
+  });
+
+  it("keeps dynamic snapshots separate when only the endpoint changes", async () => {
+    discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce({
+      ...success(),
+      models: [{ ...model(), config: { ...model().config, name: "second endpoint" } }],
+    });
+    const base = {
+      config: {},
+      provider: "llama-server",
+      modelId: "org/model:Q4",
+      modelRegistry: {},
+      agentRuntimeId: "endpoint-runtime",
+      authProfileId: "endpoint-profile",
+    };
+    const first = {
+      ...base,
+      providerConfig: { baseUrl: "http://localhost:8080/v1", api: "openai-completions" },
+    } as unknown as ProviderPrepareDynamicModelContext;
+    const second = {
+      ...base,
+      providerConfig: { baseUrl: "http://localhost:8081/v1", api: "openai-completions" },
+    } as unknown as ProviderPrepareDynamicModelContext;
+
+    await prepareLlamaServerDynamicModels(first);
+    await prepareLlamaServerDynamicModels(second);
+
+    expect(resolveLlamaServerDynamicModel(first)?.name).toBe("org/model:Q4");
+    expect(resolveLlamaServerDynamicModel(second)?.name).toBe("second endpoint");
+  });
+
+  it("clears a scope snapshot when its refresh cannot discover the server", async () => {
+    discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce({
+      kind: "unreachable",
+      endpoint: { origin: "http://localhost:8080", inferenceBaseUrl: "http://localhost:8080/v1" },
+      error: new Error("offline"),
+    });
+    const ctx = {
+      config: {},
+      provider: "llama-server",
+      modelId: "org/model:Q4",
+      modelRegistry: {},
+      agentRuntimeId: "failed-refresh-runtime",
+      providerConfig: {
+        baseUrl: "http://localhost:8080/v1",
+        api: "openai-completions",
+      },
+    } as unknown as ProviderPrepareDynamicModelContext;
+
+    await prepareLlamaServerDynamicModels(ctx);
+    expect(resolveLlamaServerDynamicModel(ctx)).toMatchObject({ id: "org/model:Q4" });
+    await prepareLlamaServerDynamicModels(ctx);
+    expect(resolveLlamaServerDynamicModel(ctx)).toBeUndefined();
+  });
+
   it("refreshes and resolves dynamic model ids containing slashes", async () => {
     discoverMock.mockResolvedValue(success());
     const ctx = {

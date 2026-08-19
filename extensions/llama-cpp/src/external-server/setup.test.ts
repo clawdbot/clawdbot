@@ -15,11 +15,11 @@ import {
 
 const discoverMock = vi.hoisted(() => vi.fn());
 const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
-const updateAuthProfileStoreMock = vi.hoisted(() => vi.fn());
+const removeProviderAuthProfilesWithLockMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  updateAuthProfileStoreWithLock: updateAuthProfileStoreMock,
+  removeProviderAuthProfilesWithLock: removeProviderAuthProfilesWithLockMock,
 }));
 
 vi.mock("./discovery.js", async (importOriginal) => ({
@@ -87,8 +87,8 @@ describe("llama-server setup", () => {
     discoverMock.mockReset();
     runtimeApiKeyMock.mockReset();
     runtimeApiKeyMock.mockResolvedValue(undefined);
-    updateAuthProfileStoreMock.mockReset();
-    updateAuthProfileStoreMock.mockResolvedValue({ version: 1, profiles: {} });
+    removeProviderAuthProfilesWithLockMock.mockReset();
+    removeProviderAuthProfilesWithLockMock.mockResolvedValue({ version: 1, profiles: {} });
   });
 
   it("detects a running local server without writing config", async () => {
@@ -224,9 +224,10 @@ describe("llama-server setup", () => {
     expect(provider?.apiKey).toBeUndefined();
     expect(provider?.headers).toEqual({ "X-Tenant": "one" });
     expect(result.defaultModel).toBe("llama-server/qwen/model:Q4_K_M");
-    expect(updateAuthProfileStoreMock).toHaveBeenCalledWith({
+    expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
       agentDir: undefined,
-      updater: expect.any(Function),
+      provider: "llama-server",
+      profileIds: ["llama-server:default"],
     });
     expect(result.configPatch?.auth).toBeUndefined();
   });
@@ -444,9 +445,10 @@ describe("llama-server setup", () => {
     expect(configured?.agents?.defaults?.model).toEqual(
       expect.objectContaining({ primary: "llama-server/qwen/model:Q4_K_M" }),
     );
-    expect(updateAuthProfileStoreMock).toHaveBeenCalledWith({
+    expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
       agentDir: undefined,
-      updater: expect.any(Function),
+      provider: "llama-server",
+      profileIds: ["llama-server:default"],
     });
     expect(configured?.auth).toEqual({ profiles: {}, order: undefined });
   });

@@ -1,14 +1,17 @@
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildLlamaServerAuthHeaders } from "./auth.js";
 import {
   LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS,
   LLAMA_SERVER_DISCOVERY_TIMEOUT_MS,
+  LLAMA_SERVER_PROVIDER_ID,
 } from "./defaults.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import {
@@ -53,32 +56,8 @@ type FetchJsonResult =
   | { kind: "unreachable"; error: unknown }
   | { kind: "invalid-response"; error: unknown };
 
-type CachedDiscovery = {
-  expiresAt: number;
-  result: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
-};
-
-const discoveryCache = new Map<string, CachedDiscovery>();
-const LLAMA_SERVER_DISCOVERY_CACHE_MAX_ENTRIES = 100;
 const LLAMA_SERVER_ROUTER_PROPS_MAX_MODELS = 200;
 const LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY = 8;
-
-function cacheDiscovery(key: string, entry: CachedDiscovery, now: number): void {
-  for (const [cachedKey, cached] of discoveryCache) {
-    if (cached.expiresAt <= now) {
-      discoveryCache.delete(cachedKey);
-    }
-  }
-  discoveryCache.delete(key);
-  discoveryCache.set(key, entry);
-  while (discoveryCache.size > LLAMA_SERVER_DISCOVERY_CACHE_MAX_ENTRIES) {
-    const oldest = discoveryCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    discoveryCache.delete(oldest.value);
-  }
-}
 
 async function fetchJson(params: {
   url: string;
@@ -131,17 +110,15 @@ async function fetchJson(params: {
 }
 
 function readModelRows(body: unknown): LlamaServerModelWire[] {
-  if (!isRecord(body)) {
+  const record = asOptionalRecord(body);
+  if (!record) {
     throw new Error("llama-server model list must be an object");
   }
-  const data = body.data;
+  const data = record.data;
   if (!Array.isArray(data)) {
     throw new Error("llama-server model list must contain data[]");
   }
-  return data.filter(
-    (entry): entry is LlamaServerModelWire =>
-      Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
-  );
+  return data.filter((entry): entry is LlamaServerModelWire => isRecord(entry));
 }
 
 function shouldReadProps(row: LlamaServerModelWire): boolean {
@@ -178,8 +155,7 @@ async function readModelProps(params: {
   return result.kind === "response" && result.ok && isRecord(result.body) ? result.body : undefined;
 }
 
-/** Discovers llama-server models without loading, waking, or unloading them. */
-export async function discoverLlamaServer(params: {
+type DiscoverLlamaServerParams = {
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -187,23 +163,12 @@ export async function discoverLlamaServer(params: {
   cacheTtlMs?: number;
   signal?: AbortSignal;
   fetchGuard?: LlamaServerFetchGuard;
-}): Promise<LlamaServerDiscoveryResult> {
-  const endpoint = resolveLlamaServerEndpoint(params.baseUrl);
-  const normalizedApiKey = params.apiKey?.trim();
-  const hasCredentialScope =
-    Boolean(normalizedApiKey && !isNonSecretApiKeyMarker(normalizedApiKey)) ||
-    Boolean(params.headers && Object.keys(params.headers).length > 0);
-  const cacheTtlMs = hasCredentialScope
-    ? 0
-    : Math.max(0, params.cacheTtlMs ?? LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS);
-  const cached = discoveryCache.get(endpoint.origin);
-  if (cacheTtlMs > 0 && cached) {
-    if (cached.expiresAt > Date.now()) {
-      return cached.result;
-    }
-    discoveryCache.delete(endpoint.origin);
-  }
+};
 
+async function loadLlamaServerDiscovery(
+  params: DiscoverLlamaServerParams,
+  endpoint: ReturnType<typeof resolveLlamaServerEndpoint>,
+): Promise<LlamaServerDiscoveryResult> {
   const timeoutMs = params.timeoutMs ?? LLAMA_SERVER_DISCOVERY_TIMEOUT_MS;
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const healthResult = await fetchJson({
@@ -296,40 +261,35 @@ export async function discoverLlamaServer(params: {
     .map((row, index) => (shouldReadProps(row) ? index : -1))
     .filter((index) => index >= 0)
     .slice(0, LLAMA_SERVER_ROUTER_PROPS_MAX_MODELS);
-  for (
-    let offset = 0;
-    offset < propsRowIndexes.length;
-    offset += LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY
-  ) {
-    const remainingMs = propsDeadline - Date.now();
-    if (remainingMs <= 0) {
-      break;
-    }
-    const results = await Promise.all(
-      propsRowIndexes
-        .slice(offset, offset + LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY)
-        .map(async (index) => {
-          const row = rows[index];
-          if (!row) {
-            return undefined;
-          }
-          const props = await readModelProps({
-            row,
-            routerMode,
-            origin: endpoint.origin,
-            apiKey: params.apiKey,
-            headers: params.headers,
-            timeoutMs: Math.min(timeoutMs, remainingMs),
-            signal: params.signal,
-            fetchGuard,
-          });
-          return props ? ([index, props] as const) : undefined;
-        }),
-    );
-    for (const result of results) {
-      if (result) {
-        propsByRowIndex.set(...result);
+  const { results: propsResults } = await runTasksWithConcurrency({
+    limit: LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY,
+    errorMode: "stop",
+    throwOnError: true,
+    tasks: propsRowIndexes.map((index) => async () => {
+      const remainingMs = propsDeadline - Date.now();
+      if (remainingMs <= 0) {
+        return undefined;
       }
+      const row = rows[index];
+      if (!row) {
+        return undefined;
+      }
+      const props = await readModelProps({
+        row,
+        routerMode,
+        origin: endpoint.origin,
+        apiKey: params.apiKey,
+        headers: params.headers,
+        timeoutMs: Math.min(timeoutMs, remainingMs),
+        signal: params.signal,
+        fetchGuard,
+      });
+      return props ? ([index, props] as const) : undefined;
+    }),
+  });
+  for (const result of propsResults) {
+    if (result) {
+      propsByRowIndex.set(...result);
     }
   }
   const models = rows.flatMap((row, index) => {
@@ -338,9 +298,29 @@ export async function discoverLlamaServer(params: {
   });
 
   const fetchedAt = Date.now();
-  const result = { kind: "success", endpoint, health, models, fetchedAt } as const;
-  if (cacheTtlMs > 0) {
-    cacheDiscovery(endpoint.origin, { result, expiresAt: fetchedAt + cacheTtlMs }, fetchedAt);
+  return { kind: "success", endpoint, health, models, fetchedAt };
+}
+
+/** Discovers llama-server models without loading, waking, or unloading them. */
+export async function discoverLlamaServer(
+  params: DiscoverLlamaServerParams,
+): Promise<LlamaServerDiscoveryResult> {
+  const endpoint = resolveLlamaServerEndpoint(params.baseUrl);
+  const normalizedApiKey = params.apiKey?.trim();
+  const hasCredentialScope =
+    Boolean(normalizedApiKey && !isNonSecretApiKeyMarker(normalizedApiKey)) ||
+    Boolean(params.headers && Object.keys(params.headers).length > 0);
+  const cacheTtlMs = hasCredentialScope
+    ? 0
+    : Math.max(0, params.cacheTtlMs ?? LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS);
+  const load = async () => await loadLlamaServerDiscovery(params, endpoint);
+  if (cacheTtlMs === 0) {
+    return await load();
   }
-  return result;
+  return await getCachedLiveCatalogValue({
+    keyParts: [LLAMA_SERVER_PROVIDER_ID, endpoint.origin],
+    load,
+    shouldCache: (result) => result.kind === "success",
+    ttlMs: cacheTtlMs,
+  });
 }

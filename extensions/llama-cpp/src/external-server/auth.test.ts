@@ -7,6 +7,13 @@ import {
 } from "./auth.js";
 
 describe("llama-server auth", () => {
+  it.each([undefined, null, [], "Bearer proxy-token"])(
+    "rejects a non-record authorization header container: %j",
+    (headers) => {
+      expect(hasLlamaServerAuthorizationHeader(headers)).toBe(false);
+    },
+  );
+
   it("uses synthetic runtime auth for no-auth and header-only providers", () => {
     expect(
       shouldUseLlamaServerSyntheticAuth({ baseUrl: "http://localhost:8080/v1", models: [] }),
@@ -70,5 +77,18 @@ describe("llama-server auth", () => {
         headers: config.models.providers["llama-server"].headers,
       }),
     ).resolves.toEqual({ "X-Proxy-Key": "proxy-token" });
+  });
+
+  it("filters and trims plain provider headers without config", async () => {
+    await expect(
+      resolveLlamaServerProviderHeaders({
+        headers: {
+          "X-Proxy-Key": " proxy-token ",
+          "X-Empty": " ",
+          "X-Invalid": 42,
+        },
+      }),
+    ).resolves.toEqual({ "X-Proxy-Key": "proxy-token" });
+    await expect(resolveLlamaServerProviderHeaders({ headers: [] })).resolves.toBeUndefined();
   });
 });

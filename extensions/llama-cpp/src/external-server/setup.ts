@@ -9,7 +9,7 @@ import {
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   normalizeOptionalSecretInput,
-  updateAuthProfileStoreWithLock,
+  removeProviderAuthProfilesWithLock,
   upsertAuthProfileWithLock,
   type OpenClawConfig,
   type SecretInput,
@@ -242,47 +242,10 @@ function buildSetupResult(params: {
 }
 
 async function removeDefaultAuthProfile(agentDir?: string): Promise<void> {
-  const updated = await updateAuthProfileStoreWithLock({
+  const updated = await removeProviderAuthProfilesWithLock({
     agentDir,
-    updater: (store) => {
-      let changed = false;
-      if (store.profiles[PROFILE_ID]) {
-        delete store.profiles[PROFILE_ID];
-        changed = true;
-      }
-      if (store.usageStats?.[PROFILE_ID]) {
-        delete store.usageStats[PROFILE_ID];
-        changed = true;
-      }
-      for (const [provider, order] of Object.entries(store.order ?? {})) {
-        const next = order.filter((profileId) => profileId !== PROFILE_ID);
-        if (next.length === order.length) {
-          continue;
-        }
-        changed = true;
-        if (next.length > 0) {
-          store.order![provider] = next;
-        } else {
-          delete store.order![provider];
-        }
-      }
-      for (const [provider, profileId] of Object.entries(store.lastGood ?? {})) {
-        if (profileId === PROFILE_ID) {
-          delete store.lastGood![provider];
-          changed = true;
-        }
-      }
-      if (store.order && Object.keys(store.order).length === 0) {
-        store.order = undefined;
-      }
-      if (store.lastGood && Object.keys(store.lastGood).length === 0) {
-        store.lastGood = undefined;
-      }
-      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
-        store.usageStats = undefined;
-      }
-      return changed;
-    },
+    provider: LLAMA_SERVER_PROVIDER_ID,
+    profileIds: [PROFILE_ID],
   });
   if (!updated) {
     throw new Error(

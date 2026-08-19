@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   ProviderCatalogContext,
   ProviderPrepareDynamicModelContext,
@@ -23,13 +24,7 @@ const LLAMA_SERVER_DYNAMIC_MODEL_MAX_SCOPES = 100;
 function cacheDynamicModels(key: string, models: ProviderRuntimeModel[]): void {
   dynamicModels.delete(key);
   dynamicModels.set(key, models);
-  while (dynamicModels.size > LLAMA_SERVER_DYNAMIC_MODEL_MAX_SCOPES) {
-    const oldest = dynamicModels.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    dynamicModels.delete(oldest.value);
-  }
+  pruneMapToMaxSize(dynamicModels, LLAMA_SERVER_DYNAMIC_MODEL_MAX_SCOPES);
 }
 
 function dynamicModelScopeKey(

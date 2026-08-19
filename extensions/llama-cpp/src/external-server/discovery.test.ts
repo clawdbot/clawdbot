@@ -1,5 +1,6 @@
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverLlamaServer } from "./discovery.js";
 
 type LlamaServerFetchGuard = typeof fetchWithSsrFGuard;
@@ -40,6 +41,10 @@ function json(value: unknown, status = 200): Response {
 }
 
 describe("llama-server discovery", () => {
+  beforeEach(() => {
+    clearLiveCatalogCacheForTests();
+  });
+
   it("discovers a single model and reads runtime properties", async () => {
     const { guard, requests } = createFetchGuard({
       "http://localhost:8080/health": json({ status: "ok" }),
@@ -201,6 +206,60 @@ describe("llama-server discovery", () => {
     expect(requests.filter((url) => url.includes("/props?"))).toHaveLength(8);
   });
 
+  it("keeps router properties associated with their model when probes finish out of order", async () => {
+    const rows = [0, 1, 2].map((index) => ({
+      id: `model-${index}`,
+      object: "model",
+      status: { value: "loaded" },
+    }));
+    const routes: Record<string, RouteValue> = {
+      "http://localhost:8080/health": json({ status: "ok" }),
+      "http://localhost:8080/models": json({ data: rows }),
+    };
+    for (const [index, row] of rows.entries()) {
+      routes[`http://localhost:8080/props?model=${row.id}&autoload=false`] = async () => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, (2 - index) * 5);
+        });
+        return json({ default_generation_settings: { n_ctx: 8_000 + index } });
+      };
+    }
+    const { guard } = createFetchGuard(routes);
+
+    const result = await discoverTest({
+      baseUrl: "http://localhost:8080",
+      fetchGuard: guard,
+    });
+
+    expect(
+      result.kind === "success" ? result.models.map((model) => model.config.contextWindow) : [],
+    ).toEqual([8_000, 8_001, 8_002]);
+  });
+
+  it("caps router property probes at 200 models", async () => {
+    const rows = Array.from({ length: 205 }, (_, index) => ({
+      id: `model-${index}`,
+      object: "model",
+      status: { value: "loaded" },
+    }));
+    const routes: Record<string, RouteValue> = {
+      "http://localhost:8080/health": json({ status: "ok" }),
+      "http://localhost:8080/models": json({ data: rows }),
+    };
+    for (const row of rows.slice(0, 200)) {
+      routes[`http://localhost:8080/props?model=${row.id}&autoload=false`] = json({});
+    }
+    const { guard, requests } = createFetchGuard(routes);
+
+    const result = await discoverTest({
+      baseUrl: "http://localhost:8080",
+      fetchGuard: guard,
+    });
+
+    expect(result.kind === "success" ? result.models : []).toHaveLength(205);
+    expect(requests.filter((url) => url.includes("/props?"))).toHaveLength(200);
+  });
+
   it("falls back to /v1/models for an older compatible server", async () => {
     const { guard } = createFetchGuard({
       "http://localhost:8080/health": json({ status: "ok" }),
@@ -311,6 +370,131 @@ describe("llama-server discovery", () => {
       cacheTtlMs: 30_000,
     });
     expect(guard).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent discovery for the same uncredentialed endpoint", async () => {
+    let releaseHealth: ((response: Response) => void) | undefined;
+    const { guard } = createFetchGuard({
+      "http://localhost:8080/health": () =>
+        new Promise<Response>((resolve) => {
+          releaseHealth = resolve;
+        }),
+      "http://localhost:8080/models": () => json({ data: [] }),
+    });
+
+    const first = discoverTest({
+      baseUrl: "http://localhost:8080",
+      apiKey: "custom-local",
+      fetchGuard: guard,
+      cacheTtlMs: 30_000,
+    });
+    const second = discoverTest({
+      baseUrl: "http://localhost:8080",
+      apiKey: "custom-local",
+      fetchGuard: guard,
+      cacheTtlMs: 30_000,
+    });
+
+    expect(releaseHealth).toBeDefined();
+    expect(guard).toHaveBeenCalledTimes(1);
+    releaseHealth?.(json({ status: "ok" }));
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ kind: "success" }),
+      expect.objectContaining({ kind: "success" }),
+    ]);
+    expect(guard).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads cached discovery after its configured TTL", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const { guard } = createFetchGuard({
+        "http://localhost:8080/health": () => json({ status: "ok" }),
+        "http://localhost:8080/models": () => json({ data: [] }),
+      });
+
+      await discoverTest({
+        baseUrl: "http://localhost:8080",
+        apiKey: "custom-local",
+        fetchGuard: guard,
+        cacheTtlMs: 100,
+      });
+      vi.setSystemTime(1_101);
+      await discoverTest({
+        baseUrl: "http://localhost:8080",
+        apiKey: "custom-local",
+        fetchGuard: guard,
+        cacheTtlMs: 100,
+      });
+
+      expect(guard).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retain unsuccessful discovery results", async () => {
+    const { guard } = createFetchGuard({
+      "http://localhost:8080/health": () => json({ error: "unauthorized" }, 401),
+    });
+
+    for (let index = 0; index < 2; index += 1) {
+      await discoverTest({
+        baseUrl: "http://localhost:8080",
+        apiKey: "custom-local",
+        fetchGuard: guard,
+        cacheTtlMs: 30_000,
+      });
+    }
+
+    expect(guard).toHaveBeenCalledTimes(2);
+  });
+
+  it("bypasses an existing endpoint cache when a real API key is supplied", async () => {
+    const { guard } = createFetchGuard({
+      "http://localhost:8080/health": () => json({ status: "ok" }),
+      "http://localhost:8080/models": () => json({ data: [] }),
+    });
+
+    await discoverTest({
+      baseUrl: "http://localhost:8080",
+      apiKey: "custom-local",
+      fetchGuard: guard,
+      cacheTtlMs: 30_000,
+    });
+    await discoverTest({
+      baseUrl: "http://localhost:8080",
+      apiKey: "real-secret",
+      fetchGuard: guard,
+      cacheTtlMs: 30_000,
+    });
+
+    expect(guard).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps uncredentialed discovery caches isolated by endpoint", async () => {
+    const { guard } = createFetchGuard({
+      "http://localhost:8080/health": json({ status: "ok" }),
+      "http://localhost:8080/models": json({ data: [] }),
+      "http://localhost:8081/health": json({ status: "ok" }),
+      "http://localhost:8081/models": json({ data: [] }),
+    });
+
+    await discoverTest({
+      baseUrl: "http://localhost:8080",
+      apiKey: "custom-local",
+      fetchGuard: guard,
+      cacheTtlMs: 30_000,
+    });
+    await discoverTest({
+      baseUrl: "http://localhost:8081",
+      apiKey: "custom-local",
+      fetchGuard: guard,
+      cacheTtlMs: 30_000,
+    });
+
+    expect(guard).toHaveBeenCalledTimes(4);
   });
 
   it("bounds cached endpoint discovery", async () => {

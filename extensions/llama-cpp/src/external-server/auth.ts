@@ -8,13 +8,15 @@ import {
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LLAMA_SERVER_LOCAL_AUTH_MARKER, LLAMA_SERVER_PROVIDER_ID } from "./defaults.js";
 
 export function hasLlamaServerAuthorizationHeader(headers: unknown): boolean {
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+  const record = asOptionalRecord(headers);
+  if (!record) {
     return false;
   }
-  return Object.entries(headers).some(
+  return Object.entries(record).some(
     ([name, value]) =>
       name.trim().toLowerCase() === "authorization" && hasConfiguredSecretInput(value),
   );
@@ -56,11 +58,12 @@ export async function resolveLlamaServerProviderHeaders(params: {
   env?: NodeJS.ProcessEnv;
   headers?: unknown;
 }): Promise<Record<string, string> | undefined> {
-  if (!params.headers || typeof params.headers !== "object" || Array.isArray(params.headers)) {
+  const headers = asOptionalRecord(params.headers);
+  if (!headers) {
     return undefined;
   }
   const resolved: Record<string, string> = {};
-  for (const [name, value] of Object.entries(params.headers)) {
+  for (const [name, value] of Object.entries(headers)) {
     if (!params.config) {
       if (typeof value === "string" && value.trim()) {
         resolved[name] = value.trim();
