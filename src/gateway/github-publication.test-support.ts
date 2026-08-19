@@ -76,7 +76,7 @@ export const BASE_HEAD = "a".repeat(40);
 export const OLD_HEAD = "b".repeat(40);
 export const NEW_HEAD = "c".repeat(40);
 export const WORKSPACE_TREE = "d".repeat(40);
-const OLD_HEAD_TREE = "e".repeat(40);
+const BASE_TREE = "e".repeat(40);
 
 export function commandResult(stdout = "", code = 0) {
   return {
@@ -234,7 +234,10 @@ export function installGitHubPublicationTestHarness(): void {
           return commandResult(`${WORKSPACE_TREE}\n`);
         }
         if (command === "git rev-parse HEAD^{tree}") {
-          return commandResult(`${OLD_HEAD_TREE}\n`);
+          return commandResult(`${WORKSPACE_TREE}\n`);
+        }
+        if (command === `git rev-parse ${BASE_HEAD}^{tree}`) {
+          return commandResult(`${BASE_TREE}\n`);
         }
         if (command === "git rev-parse HEAD^") {
           return commandResult(`${OLD_HEAD}\n`);

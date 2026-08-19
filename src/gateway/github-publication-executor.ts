@@ -368,6 +368,36 @@ export async function executeGitHubPublication(params: {
     const baseBranch = repositoryTarget.fork
       ? repositoryTarget.pullRequest.defaultBranch
       : parseBaseBranch(worktree.baseRef, repositoryTarget.pullRequest.defaultBranch);
+    if (!repositoryTarget.fork && branch === baseBranch) {
+      throw new Error("GitHub publication branch changed to its pull request base.");
+    }
+    const baseCandidates = [worktree.baseRef, `refs/remotes/origin/${baseBranch}`];
+    let baseCommit: string | undefined;
+    for (const candidate of baseCandidates) {
+      const resolved = await step(
+        async () =>
+          await runCommand(
+            ["git", "rev-parse", "--verify", "--end-of-options", `${candidate}^{commit}`],
+            { cwd: worktree.path },
+          ),
+      );
+      if (resolved.code === 0) {
+        baseCommit = resolved.stdout.toString("utf8").trim();
+        break;
+      }
+    }
+    if (!baseCommit) {
+      throw new Error("GitHub publication workspace base could not be verified.");
+    }
+    const baseTree = await step(
+      async () =>
+        await requireCommand(["git", "rev-parse", `${baseCommit}^{tree}`], {
+          cwd: worktree.path,
+        }),
+    );
+    if (baseTree === workspaceTree) {
+      throw new Error("GitHub publication has no changes to publish.");
+    }
     row = params.updatePublishingFacts({
       row,
       repository,
@@ -405,65 +435,63 @@ export async function executeGitHubPublication(params: {
           cwd: worktree.path,
         });
       });
-      if (workspaceTree !== currentTree) {
-        const attribution = resolveGitCoauthorAttribution({
-          agentId: row.agent_id,
-          config: currentGitHubPublicationConfig(),
-          excludeAccountId: identity.account.accountId,
-          sessionKey: row.session_key,
-          storePath: loaded.storePath,
-        });
-        const title = row.title?.trim() || `Publish ${branch}`;
-        const message = appendLines(title, [...(attribution?.trailers ?? []), marker]);
-        const timestamp = new Date(row.created_at_ms).toISOString();
-        identity = await refreshIdentity();
-        const authorEnv = {
-          ...identity.env,
-          GIT_AUTHOR_NAME: identity.account.login,
-          GIT_COMMITTER_NAME: identity.account.login,
-          GIT_AUTHOR_EMAIL: `${identity.account.accountId}+${identity.account.login}@users.noreply.github.com`,
-          GIT_COMMITTER_EMAIL: `${identity.account.accountId}+${identity.account.login}@users.noreply.github.com`,
-          GIT_AUTHOR_DATE: timestamp,
-          GIT_COMMITTER_DATE: timestamp,
-        };
-        const commit = await step(
-          async () =>
-            await requireCommand(["git", "commit-tree", workspaceTree, "-p", headCommit], {
-              cwd: worktree.path,
-              env: authorEnv,
-              input: `${message}\n`,
-            }),
-        );
-        const symbolicBranch = await step(
-          async () =>
-            await runCommand(["git", "symbolic-ref", "--quiet", `refs/heads/${branch}`], {
-              cwd: worktree.path,
-            }),
-        );
-        if (symbolicBranch.code === 0) {
-          throw new Error("GitHub publication workspace branch ref became symbolic.");
-        }
-        if (symbolicBranch.code !== 1) {
-          throw new Error("GitHub publication workspace branch ref could not be verified.");
-        }
-        await step(async () => {
-          await requireCommand(
-            [
-              "git",
-              "-c",
-              `core.hooksPath=${os.devNull}`,
-              "-c",
-              "core.fsmonitor=false",
-              "update-ref",
-              `refs/heads/${branch}`,
-              commit,
-              headCommit,
-            ],
-            { cwd: worktree.path },
-          );
-        });
-        headCommit = commit;
+      const attribution = resolveGitCoauthorAttribution({
+        agentId: row.agent_id,
+        config: currentGitHubPublicationConfig(),
+        excludeAccountId: identity.account.accountId,
+        sessionKey: row.session_key,
+        storePath: loaded.storePath,
+      });
+      const title = row.title?.trim() || `Publish ${branch}`;
+      const message = appendLines(title, [...(attribution?.trailers ?? []), marker]);
+      const timestamp = new Date(row.created_at_ms).toISOString();
+      identity = await refreshIdentity();
+      const authorEnv = {
+        ...identity.env,
+        GIT_AUTHOR_NAME: identity.account.login,
+        GIT_COMMITTER_NAME: identity.account.login,
+        GIT_AUTHOR_EMAIL: `${identity.account.accountId}+${identity.account.login}@users.noreply.github.com`,
+        GIT_COMMITTER_EMAIL: `${identity.account.accountId}+${identity.account.login}@users.noreply.github.com`,
+        GIT_AUTHOR_DATE: timestamp,
+        GIT_COMMITTER_DATE: timestamp,
+      };
+      const commit = await step(
+        async () =>
+          await requireCommand(["git", "commit-tree", workspaceTree, "-p", headCommit], {
+            cwd: worktree.path,
+            env: authorEnv,
+            input: `${message}\n`,
+          }),
+      );
+      const symbolicBranch = await step(
+        async () =>
+          await runCommand(["git", "symbolic-ref", "--quiet", `refs/heads/${branch}`], {
+            cwd: worktree.path,
+          }),
+      );
+      if (symbolicBranch.code === 0) {
+        throw new Error("GitHub publication workspace branch ref became symbolic.");
       }
+      if (symbolicBranch.code !== 1) {
+        throw new Error("GitHub publication workspace branch ref could not be verified.");
+      }
+      await step(async () => {
+        await requireCommand(
+          [
+            "git",
+            "-c",
+            `core.hooksPath=${os.devNull}`,
+            "-c",
+            "core.fsmonitor=false",
+            "update-ref",
+            `refs/heads/${branch}`,
+            commit,
+            headCommit,
+          ],
+          { cwd: worktree.path },
+        );
+      });
+      headCommit = commit;
     }
     row = params.updatePublishingFacts({
       row,
@@ -474,25 +502,6 @@ export async function executeGitHubPublication(params: {
       workspaceTree,
       headCommit,
     });
-
-    const baseCandidates = [worktree.baseRef, `refs/remotes/origin/${baseBranch}`];
-    let baseCommit: string | undefined;
-    for (const candidate of baseCandidates) {
-      const resolved = await step(
-        async () =>
-          await runCommand(
-            ["git", "rev-parse", "--verify", "--end-of-options", `${candidate}^{commit}`],
-            { cwd: worktree.path },
-          ),
-      );
-      if (resolved.code === 0) {
-        baseCommit = resolved.stdout.toString("utf8").trim();
-        break;
-      }
-    }
-    if (baseCommit === headCommit) {
-      throw new Error("GitHub publication has no changes to publish.");
-    }
 
     await step(async () => await assertSafeGitPublicationConfig(worktree.path));
     const httpsRemote = `https://github.com/${pushRepository}.git`;
