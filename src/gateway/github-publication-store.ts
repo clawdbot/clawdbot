@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -41,13 +42,7 @@ export function ensureGitHubPublicationStore(): void {
 }
 
 export function hasGitHubPublicationStore(): boolean {
-  return Boolean(
-    openOpenClawStateDatabase()
-      .db.prepare(
-        "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'github_publication_requests'",
-      )
-      .get(),
-  );
+  return tableExists(openOpenClawStateDatabase().db, "github_publication_requests");
 }
 
 export function claimGitHubPublicationExecution(
