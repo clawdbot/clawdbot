@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 /** Matches the default persisted channel-history time window. */
-export const CHANNEL_HISTORY_MEDIA_TTL_MS = 24 * 60 * 60_000;
+const CHANNEL_HISTORY_MEDIA_TTL_MS = 24 * 60 * 60_000;
 /** Aggregate fixed budget for restart-safe channel-history attachments. */
 const CHANNEL_HISTORY_MEDIA_MAX_BYTES = 512 * 1024 * 1024;
 /** Aggregate fixed file-count budget for restart-safe channel-history attachments. */
