@@ -444,9 +444,9 @@ async function resolveConfiguredTuiLaunchTarget(
     }
     return { kind: "onboarding" };
   }
-  const { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } =
+  const { listAgentIds, resolveAgentEffectiveModelPrimary } =
     await import("../agents/agent-scope.js");
-  if (!resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config))) {
+  if (!listAgentIds(config).some((agentId) => resolveAgentEffectiveModelPrimary(config, agentId))) {
     return { kind: "onboarding" };
   }
   return { kind: "tui", local: true };
