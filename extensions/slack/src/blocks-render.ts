@@ -29,6 +29,7 @@ import {
   hasSlackDataVisualizationBlock,
   SLACK_DATA_VISUALIZATION_BLOCKS_MAX,
 } from "./data-visualization.js";
+import { chunkSlackMrkdwnText } from "./format.js";
 import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 import {
   SLACK_ACTION_BLOCK_ELEMENTS_MAX,
@@ -259,13 +260,19 @@ export function buildSlackInteractiveBlocks(
       if (!trimmed) {
         return state;
       }
-      state.blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: truncateSlackText(trimmed, SLACK_SECTION_TEXT_MAX),
-        },
-      });
+      // Legacy interactive text arrives already-rendered as Slack mrkdwn, so chunk
+      // it losslessly across section blocks instead of truncating — a long prompt
+      // or explanation accompanying controls must not silently lose its tail. The
+      // 50-block message limit is enforced later by the reply renderer's segmentation.
+      for (const chunk of chunkSlackMrkdwnText(trimmed, SLACK_SECTION_TEXT_MAX)) {
+        state.blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: chunk,
+          },
+        });
+      }
       return state;
     }
     if (block.type === "buttons") {

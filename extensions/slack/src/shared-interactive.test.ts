@@ -76,26 +76,67 @@ describe("buildSlackInteractiveBlocks", () => {
     ]);
   });
 
+  it("chunks long interactive text across sections instead of truncating", () => {
+    const text = "y".repeat(3100);
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [{ type: "text", text }],
+    });
+    const sections = blocks.filter(
+      (block): block is { type: "section"; text: { type: "mrkdwn"; text: string } } =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: string }).type === "section",
+    );
+
+    // The full authored text is preserved in order across lossless section blocks.
+    expect(sections.map((section) => section.text.text).join("")).toBe(text);
+    // No single section exceeds the Slack Block Kit limit.
+    for (const section of sections) {
+      expect(section.text.text.length).toBeLessThanOrEqual(3000);
+    }
+  });
+
   it("truncates Slack render strings to Block Kit limits", () => {
     const long = "x".repeat(120);
     const blocks = buildSlackInteractiveBlocks({
       blocks: [
-        { type: "text", text: "y".repeat(3100) },
         { type: "select", placeholder: long, options: [{ label: long, value: "valid" }] },
         { type: "buttons", buttons: [{ label: long, value: long }] },
       ],
     });
-    const section = blocks[0] as { text?: { text?: string } };
-    const selectBlock = blocks[1] as {
+    const selectBlock = blocks[0] as {
       elements?: Array<{ placeholder?: { text?: string } }>;
     };
-    const buttonBlock = blocks[2] as {
+    const buttonBlock = blocks[1] as {
       elements?: Array<{ value?: string }>;
     };
 
-    expect((section.text?.text ?? "").length).toBeLessThanOrEqual(3000);
     expect((selectBlock.elements?.[0]?.placeholder?.text ?? "").length).toBeLessThanOrEqual(75);
     expect(buttonBlock.elements?.[0]?.value).toBe(long);
+  });
+
+  it("preserves surrogate pairs when chunking long interactive text with emoji", () => {
+    // Astral characters (emoji) are encoded as a UTF-16 surrogate pair; chunking
+    // must not split a pair across two sections, which would emit a lone
+    // surrogate half that serializes to an invalid Slack payload.
+    const emoji = "\u{1F680}"; // 🚀 — one astral code point, two UTF-16 units
+    const text = emoji.repeat(1600); // 3200 UTF-16 units -> must span >1 section
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [{ type: "text", text }],
+    });
+    const sections = blocks.filter(
+      (block): block is { type: "section"; text: { type: "mrkdwn"; text: string } } =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: string }).type === "section",
+    );
+
+    expect(sections.map((section) => section.text.text).join("")).toBe(text);
+    // No chunk carries a lone surrogate half.
+    for (const section of sections) {
+      expect(section.text.text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+      expect(section.text.text).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    }
   });
 
   it.each([
