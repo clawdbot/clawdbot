@@ -107,4 +107,66 @@ describe("runTasksWithConcurrency", () => {
     expect(onTaskError).toHaveBeenNthCalledWith(1, firstErr, 0);
     expect(onTaskError).toHaveBeenNthCalledWith(2, secondErr, 2);
   });
+
+  it("rejects early and stops scheduling new work in stop mode", async () => {
+    const err = new Error("boom");
+    const releaseInFlight = Promise.withResolvers<void>();
+    const inFlightSettled = Promise.withResolvers<void>();
+    const started: number[] = [];
+    const run = runTasksWithConcurrency({
+      tasks: [
+        async () => {
+          started.push(0);
+          await releaseInFlight.promise;
+          inFlightSettled.resolve();
+          return 10;
+        },
+        async () => {
+          started.push(1);
+          throw err;
+        },
+        async () => {
+          started.push(2);
+          return 30;
+        },
+      ],
+      limit: 2,
+      errorMode: "stop",
+      throwOnError: true,
+    });
+
+    await expect(run).rejects.toBe(err);
+    releaseInFlight.resolve();
+    await inFlightSettled.promise;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(started).toEqual([0, 1]);
+  });
+
+  it("keeps scheduling after an early rejection in continue mode", async () => {
+    const err = new Error("boom");
+    const completed = Promise.withResolvers<void>();
+    const started: number[] = [];
+    const run = runTasksWithConcurrency({
+      tasks: [
+        async () => {
+          started.push(0);
+          throw err;
+        },
+        async () => {
+          started.push(1);
+          completed.resolve();
+          return 20;
+        },
+      ],
+      limit: 1,
+      errorMode: "continue",
+      throwOnError: true,
+    });
+
+    await expect(run).rejects.toBe(err);
+    await completed.promise;
+    expect(started).toEqual([0, 1]);
+  });
 });

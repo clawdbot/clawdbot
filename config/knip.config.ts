@@ -266,7 +266,6 @@ const bundledPluginIgnoredRuntimeDependencies = [
 
 const rootBundledPluginRuntimeDependencies = [
   "@anthropic-ai/sdk",
-  "@anthropic-ai/vertex-sdk",
   "@google/genai",
   "@grammyjs/runner",
   "@grammyjs/transformer-throttler",
@@ -274,16 +273,11 @@ const rootBundledPluginRuntimeDependencies = [
   "@mozilla/readability",
   "@silvia-odwyer/photon-node",
   "@trycua/cua-driver",
-  "@slack/bolt",
-  "@slack/types",
-  "@slack/web-api",
   "grammy",
   "linkedom",
   "minimatch",
   "node-edge-tts",
-  "openshell",
   "clawpdf",
-  "tokenjuice",
 ] as const;
 
 // Root installation and build workflows deliberately mirror these dependencies from their
