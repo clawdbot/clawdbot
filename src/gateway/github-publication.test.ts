@@ -153,6 +153,7 @@ describe("Gateway GitHub publication", () => {
           JSON.stringify([
             {
               url: "https://github.com/openclaw/openclaw/pull/125201",
+              userId: 42,
               headSha: NEW_HEAD,
               headRef: BRANCH,
               baseRef: "main",
@@ -265,11 +266,12 @@ describe("Gateway GitHub publication", () => {
       if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=open")) {
         pullLookups += 1;
         return commandResult(
-          pullLookups === 1
+          pullLookups < 3
             ? "[]\n"
             : JSON.stringify([
                 {
                   url: "https://github.com/openclaw/openclaw/pull/125203",
+                  userId: 42,
                   headSha: NEW_HEAD,
                   headRef: BRANCH,
                   baseRef: "main",
@@ -299,7 +301,7 @@ describe("Gateway GitHub publication", () => {
       url: "https://github.com/openclaw/openclaw/pull/125203",
     });
     expect(mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("POST"))).toHaveLength(1);
-    expect(pullLookups).toBe(2);
+    expect(pullLookups).toBe(3);
   });
 
   it("does not reuse an open pull request targeting a different base branch", async () => {
@@ -311,6 +313,7 @@ describe("Gateway GitHub publication", () => {
           JSON.stringify([
             {
               url: "https://github.com/openclaw/openclaw/pull/old-base",
+              userId: 42,
               headSha: NEW_HEAD,
               headRef: BRANCH,
               baseRef: "release",
@@ -789,6 +792,9 @@ describe("Gateway GitHub publication", () => {
         if (command.startsWith("gh api repos/openclaw/openclaw --jq {fork, default_branch")) {
           return commandResult('{"fork":false,"default_branch":"main"}\n');
         }
+        if (command === "gh api repos/openclaw/openclaw/git/ref/heads/main --jq {ref: .ref}") {
+          return commandResult('{"ref":"refs/heads/main"}\n');
+        }
         if (command === "git show -s --format=%B HEAD") {
           return commandResult(`Resume the publication\n\nOpenClaw-Publication: ${requestId}\n`);
         }
@@ -806,6 +812,9 @@ describe("Gateway GitHub publication", () => {
         }
         if (command === "git rev-parse --verify --end-of-options origin/main^{commit}") {
           return commandResult(`${BASE_HEAD}\n`);
+        }
+        if (command === `git rev-parse ${BASE_HEAD}^{tree}`) {
+          return commandResult(`${"e".repeat(40)}\n`);
         }
         if (
           command.startsWith(
@@ -825,6 +834,7 @@ describe("Gateway GitHub publication", () => {
               ? JSON.stringify([
                   {
                     url: "https://github.com/openclaw/openclaw/pull/125200",
+                    userId: 42,
                     headSha: NEW_HEAD,
                     headRef: BRANCH,
                     baseRef: "main",

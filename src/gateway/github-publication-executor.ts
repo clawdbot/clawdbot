@@ -15,6 +15,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
+import { parseGitHubPublicationPullRequests } from "./github-publication-pull-requests.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
@@ -371,6 +372,27 @@ export async function executeGitHubPublication(params: {
     if (!repositoryTarget.fork && branch === baseBranch) {
       throw new Error("GitHub publication branch changed to its pull request base.");
     }
+    const remoteBaseResult = await step(
+      async () =>
+        await runCommand(
+          ["gh", "api", `repos/${repository}/git/ref/heads/${baseBranch}`, "--jq", "{ref: .ref}"],
+          { env: identity.env },
+        ),
+    );
+    let remoteBaseRef: string | undefined;
+    if (remoteBaseResult.code === 0) {
+      try {
+        remoteBaseRef = readNonBlankString(
+          parseJsonObject(remoteBaseResult.stdout.toString("utf8"), "GitHub base branch lookup")
+            .ref,
+        );
+      } catch {
+        remoteBaseRef = undefined;
+      }
+    }
+    if (remoteBaseRef !== `refs/heads/${baseBranch}`) {
+      throw new Error("GitHub publication workspace base branch could not be verified.");
+    }
     const baseCandidates = [worktree.baseRef, `refs/remotes/origin/${baseBranch}`];
     let baseCommit: string | undefined;
     for (const candidate of baseCandidates) {
@@ -397,6 +419,39 @@ export async function executeGitHubPublication(params: {
     );
     if (baseTree === workspaceTree) {
       throw new Error("GitHub publication has no changes to publish.");
+    }
+    const loadOpenPullRequests = async () => {
+      const lookupIdentity = await refreshIdentity();
+      const raw = await requireCommand(
+        [
+          "gh",
+          "api",
+          "--method",
+          "GET",
+          `repos/${repository}/pulls`,
+          "-f",
+          `head=${repositoryTarget.push.owner}:${branch}`,
+          "-f",
+          `base=${baseBranch}`,
+          "-f",
+          "state=open",
+          "--jq",
+          "map({url: .html_url, userId: .user.id, headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref})",
+        ],
+        { env: lookupIdentity.env },
+      );
+      const candidates = parseGitHubPublicationPullRequests(raw);
+      return {
+        accountId: lookupIdentity.account.accountId,
+        candidates,
+      };
+    };
+    const initialPullRequests = await step(loadOpenPullRequests);
+    const occupiedPullRequest = initialPullRequests.candidates.find(
+      (candidate) => candidate.headRef === branch && candidate.baseRef === baseBranch,
+    );
+    if (occupiedPullRequest && occupiedPullRequest.userId !== initialPullRequests.accountId) {
+      throw new Error("GitHub pull request is owned by another account.");
     }
     row = params.updatePublishingFacts({
       row,
@@ -564,42 +619,15 @@ export async function executeGitHubPublication(params: {
     }
 
     const findPullRequest = async (): Promise<string | undefined> => {
-      const lookupIdentity = await refreshIdentity();
-      const raw = await requireCommand(
-        [
-          "gh",
-          "api",
-          "--method",
-          "GET",
-          `repos/${repository}/pulls`,
-          "-f",
-          `head=${repositoryTarget.push.owner}:${branch}`,
-          "-f",
-          `base=${baseBranch}`,
-          "-f",
-          "state=open",
-          "--jq",
-          "map({url: .html_url, headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref})",
-        ],
-        { env: lookupIdentity.env },
-      );
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        return undefined;
-      }
-      if (!Array.isArray(parsed)) {
-        return undefined;
-      }
-      const exact = parsed.find(
+      const pullRequests = await loadOpenPullRequests();
+      const exact = pullRequests.candidates.find(
         (candidate) =>
-          isRecord(candidate) &&
+          candidate.userId === pullRequests.accountId &&
           candidate.headSha === headCommit &&
           candidate.headRef === branch &&
           candidate.baseRef === baseBranch,
       );
-      return isRecord(exact) ? readNonBlankString(exact.url) : undefined;
+      return exact?.url;
     };
     let pullRequestUrl = await step(findPullRequest);
     if (!pullRequestUrl) {

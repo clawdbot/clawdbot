@@ -221,6 +221,11 @@ export function installGitHubPublicationTestHarness(): void {
         ) {
           return commandResult('{"fork":false,"default_branch":"main"}\n');
         }
+        const baseRefPrefix = "gh api repos/openclaw/openclaw/git/ref/heads/";
+        if (command.startsWith(baseRefPrefix)) {
+          const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
+          return commandResult(JSON.stringify({ ref: `refs/heads/${branch}` }));
+        }
         if (command === "git show -s --format=%B HEAD") {
           return commandResult("existing commit\n");
         }
