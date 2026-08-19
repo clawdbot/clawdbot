@@ -4,6 +4,9 @@ import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 type OpenClawCodingToolsFactory =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
+type ExecAliasParams =
+  | { host: "gateway"; processAliasAvailable: boolean }
+  | { host: "node"; node?: string };
 
 export const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 export const CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME = "node_process";
@@ -26,10 +29,11 @@ export function isCodexDynamicToolExcluded(
 
 export function createExecAliasDynamicTool(
   execTool: OpenClawDynamicTool,
-  params: { host: "gateway" | "node"; node?: string },
+  params: ExecAliasParams,
 ): OpenClawDynamicTool {
   const pinnedNode = params.host === "node" ? params.node?.trim() : undefined;
   const nodeAlias = params.host === "node";
+  const gatewayProcessAliasAvailable = params.host === "gateway" && params.processAliasAvailable;
   const name = nodeAlias ? CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME : CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME;
   const description = nodeAlias
     ? pinnedNode
@@ -38,7 +42,9 @@ export function createExecAliasDynamicTool(
     : "Run a shell command through OpenClaw on the Gateway host for OpenClaw-managed Gateway environment access, including Secret Store agent-readable environment values and protected egress sentinels. Native Codex shell remains preferred for ordinary local work. This tool always uses OpenClaw host=gateway internally and follows Gateway exec approval and allowlist policy.";
   const followupText = nodeAlias
     ? "Use remote-node background-session control (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up when available."
-    : "Use gateway_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
+    : gatewayProcessAliasAvailable
+      ? "Use gateway_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up."
+      : "Background session follow-up is unavailable because gateway_process is not exposed. Rerun without background=true and set yieldMs high enough to wait for completion.";
   return {
     ...execTool,
     name,

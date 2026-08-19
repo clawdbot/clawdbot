@@ -562,16 +562,20 @@ function addGatewayShellDynamicToolsIfAvailable(
   if (!execTool || execExcluded || existingNames.has(CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME)) {
     return filteredTools;
   }
-  const toolsToAppend = [createExecAliasDynamicTool(execTool, { host: "gateway" })];
   const processExcluded = isCodexDynamicToolExcluded(input.pluginConfig, [
     "process",
     CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
   ]);
-  if (
-    processTool &&
-    !processExcluded &&
-    !existingNames.has(CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME)
-  ) {
+  const processAliasAvailable = Boolean(
+    processTool && !processExcluded && !existingNames.has(CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME),
+  );
+  const toolsToAppend = [
+    createExecAliasDynamicTool(execTool, {
+      host: "gateway",
+      processAliasAvailable,
+    }),
+  ];
+  if (processAliasAvailable && processTool) {
     toolsToAppend.push(createProcessAliasDynamicTool(processTool, "gateway"));
   }
   return [...filteredTools, ...toolsToAppend];

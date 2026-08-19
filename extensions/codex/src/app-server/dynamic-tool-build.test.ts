@@ -1301,8 +1301,18 @@ describe("Codex app-server dynamic tool build", () => {
     { excluded: "exec", expected: ["message"] },
     { excluded: "gateway_exec", expected: ["message"] },
   ])("applies the partial Gateway shell exclusion for $excluded", async (testCase) => {
+    const execTool = createRuntimeDynamicTool("exec");
+    vi.mocked(execTool.execute).mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: "Command still running (session exec-1, pid 123). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+        },
+      ],
+      details: { status: "running" },
+    });
     setOpenClawCodingToolsFactoryForTests(() => [
-      createRuntimeDynamicTool("exec"),
+      execTool,
       createRuntimeDynamicTool("process"),
       createRuntimeDynamicTool("message"),
     ]);
@@ -1318,6 +1328,16 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(testCase.expected);
+    const gatewayExec = tools.find((tool) => tool.name === "gateway_exec");
+    if (gatewayExec) {
+      const result = await gatewayExec.execute("gateway-call", { command: "sleep 60" });
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "Command still running (session exec-1, pid 123). Background session follow-up is unavailable because gateway_process is not exposed. Rerun without background=true and set yieldMs high enough to wait for completion.",
+        },
+      ]);
+    }
   });
 
   it("exposes pinned node shell tools for node-targeted Codex app-server runs", async () => {
