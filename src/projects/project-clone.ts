@@ -46,11 +46,6 @@ export async function materializeProjectClone(
       "Use a GitHub HTTPS or git@github.com repository URL. Local paths and file URLs are not accepted.",
     );
   }
-  const existing = existingCanonicalProject(input.cfg, parsed.url, options);
-  if (existing) {
-    return existing;
-  }
-
   const env = options.env ?? process.env;
   const fingerprint = sha256HexPrefixCore(parsed.url, 16);
   return await withOpenClawStateLease(
@@ -65,9 +60,24 @@ export async function materializeProjectClone(
       operationLabel: "projects.clone.lease",
     },
     async (lease) => {
-      const raced = existingCanonicalProject(input.cfg, parsed.url, options);
-      if (raced) {
-        return raced;
+      // Keep clone as the outer lease and take one candidate checkout lease at a time. A row that
+      // moves roots while we wait must be retried under its new root instead of returned stale.
+      while (true) {
+        const candidate = existingCanonicalProject(input.cfg, parsed.url, options);
+        if (!candidate) {
+          break;
+        }
+        const existing = await withProjectCheckoutLifecycle(
+          candidate.repoRoot,
+          options,
+          async () => {
+            const current = existingCanonicalProject(input.cfg, parsed.url, options);
+            return current?.repoRoot === candidate.repoRoot ? current : undefined;
+          },
+        );
+        if (existing) {
+          return existing;
+        }
       }
       const displayName = input.name?.trim() || parsed.name;
       const directoryName = slugifyWorktreeTitle(displayName) ?? "project";

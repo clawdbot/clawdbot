@@ -330,9 +330,29 @@ export function removeProjectCheckoutReference(
       executeSqliteQuerySync(sqlite, db.deleteFrom("projects").where("id", "=", project.id));
       const sibling = executeSqliteQueryTakeFirstSync(
         sqlite,
-        db.selectFrom("projects").select("id").where("repo_root", "=", project.repoRoot),
+        db
+          .selectFrom("projects")
+          .selectAll()
+          .where("repo_root", "=", project.repoRoot)
+          .orderBy("id", "asc"),
       );
-      return sibling ? "remaining" : "final";
+      if (!sibling) {
+        return "final";
+      }
+      if (sibling.source === "registered") {
+        executeSqliteQuerySync(
+          sqlite,
+          db
+            .updateTable("projects")
+            .set({
+              source: "cloned",
+              origin_url: sibling.origin_url ?? current.origin_url,
+              updated_at_ms: Date.now(),
+            })
+            .where("id", "=", sibling.id),
+        );
+      }
+      return "remaining";
     },
     options,
     { operationLabel: "projects.registry.checkout-reference.remove" },

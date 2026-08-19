@@ -444,12 +444,23 @@ test("projects.remove preserves a cloned checkout while a duplicate registry row
           (id, display_name, repo_root, origin_url, source, created_at_ms, updated_at_ms)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run("shared-managed-copy", "Shared managed copy", repo, originUrl, "cloned", now, now);
+      .run("shared-managed-copy", "Shared managed copy", repo, null, "registered", now, now);
 
     expect(
       await invokeProjectMethod("projects.remove", { id: project.id, deleteCheckout: true }),
     ).toMatchObject({ ok: true, payload: { removed: true } });
     await expect(fs.stat(repo)).resolves.toBeDefined();
+
+    const listed = await invokeProjectMethod("projects.list", {}, {}, ["operator.write"]);
+    const survivor = (
+      listed?.payload as { projects?: Array<Record<string, unknown>> } | undefined
+    )?.projects?.find((candidate) => candidate.id === "shared-managed-copy");
+    expect(survivor).toMatchObject({
+      id: "shared-managed-copy",
+      repoRoot: repo,
+      originUrl,
+      source: "cloned",
+    });
 
     expect(
       await invokeProjectMethod("projects.remove", {

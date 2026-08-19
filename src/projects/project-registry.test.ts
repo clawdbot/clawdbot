@@ -204,6 +204,52 @@ describe("project registry", () => {
     expect(listProjectRegistry({} as OpenClawConfig, options)).toHaveLength(2);
   });
 
+  it("serializes an existing cloned-project return with checkout deletion", async () => {
+    const root = tempDirs.make("openclaw-project-existing-delete-race-");
+    const stateDir = path.join(root, "state");
+    const originUrl = "https://github.com/acme/existing-delete-race.git";
+    const checkout = await initializeRepository(
+      path.join(stateDir, "projects", "0123456789abcdef"),
+      "existing-delete-race",
+    );
+    const options = {
+      path: path.join(stateDir, "openclaw.sqlite"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    };
+    const project = await registerClonedProjectRegistry(
+      { path: checkout, name: "Existing delete race", originUrl },
+      options,
+    );
+    const deletionReady = createDeferred();
+    const releaseDeletion = createDeferred();
+    const deletionError = new ProjectCheckoutError("keep the existing checkout");
+    const deletion = removeClonedProjectCheckout(
+      project,
+      async () => {
+        deletionReady.resolve();
+        await releaseDeletion.promise;
+        throw deletionError;
+      },
+      options,
+    );
+    await deletionReady.promise;
+
+    let additionSettled = false;
+    const addition = materializeProjectClone(
+      { cfg: {} as OpenClawConfig, gitUrl: originUrl },
+      options,
+    ).finally(() => {
+      additionSettled = true;
+    });
+    await Promise.resolve();
+    expect(additionSettled).toBe(false);
+
+    releaseDeletion.resolve();
+    await expect(deletion).rejects.toBe(deletionError);
+    await expect(addition).resolves.toEqual(project);
+    await expect(fs.stat(checkout)).resolves.toBeDefined();
+  });
+
   it("serializes registration with the final managed-checkout deletion boundary", async () => {
     const root = tempDirs.make("openclaw-project-delete-race-");
     const stateDir = path.join(root, "state");

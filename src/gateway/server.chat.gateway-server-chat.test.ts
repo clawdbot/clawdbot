@@ -332,8 +332,9 @@ describe("gateway server chat", () => {
     expect(res.payload?.status).toBe("ok");
     return res;
   };
-  const waitForAgentRunDrained = async () => {
+  const waitForAgentRunDrained = async (runId: string) => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForAgentRunOk(runId, 0);
   };
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {
@@ -394,7 +395,7 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.runId).toBe("idem-sessions-send-1");
       expect(res.payload?.messageSeq).toBe(1);
-      await waitForAgentRunDrained();
+      await waitForAgentRunDrained("idem-sessions-send-1");
     } finally {
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
@@ -424,7 +425,7 @@ describe("gateway server chat", () => {
           storePath: testState.sessionStorePath,
         })?.sessionId,
       ).toBeTypeOf("string");
-      await waitForAgentRunDrained();
+      await waitForAgentRunDrained("idem-sessions-send-orion");
     } finally {
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -453,7 +454,7 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.runId).toBe("idem-sessions-steer-1");
       expect(res.payload?.messageSeq).toBe(1);
-      await waitForAgentRunDrained();
+      await waitForAgentRunDrained("idem-sessions-steer-1");
     } finally {
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
@@ -589,7 +590,7 @@ describe("gateway server chat", () => {
       idempotencyKey: "idem-sanitized-1",
     });
     expect(sanitizedRes.ok).toBe(true);
-    await waitForAgentRunDrained();
+    await waitForAgentRunDrained("idem-sanitized-1");
   });
 
   test("handles chat send and history flows", async () => {
@@ -619,7 +620,7 @@ describe("gateway server chat", () => {
         idempotencyKey: "idem-webchat-1",
       });
       expect(webchatRes.ok).toBe(true);
-      await waitForAgentRunDrained();
+      await waitForAgentRunDrained("idem-webchat-1");
 
       webchatWs.close();
       webchatWs = undefined;
@@ -632,7 +633,7 @@ describe("gateway server chat", () => {
       });
       expect(timeoutRes.ok).toBe(true);
       expect(timeoutRes.payload?.runId).toBe("idem-timeout-1");
-      await waitForAgentRunDrained();
+      await waitForAgentRunDrained("idem-timeout-1");
       testState.agentConfig = undefined;
 
       const sessionRes = await rpcReq(ws, "chat.send", {
@@ -642,7 +643,7 @@ describe("gateway server chat", () => {
       });
       expect(sessionRes.ok).toBe(true);
       expect(sessionRes.payload?.runId).toBe("idem-session-key-1");
-      await waitForAgentRunDrained();
+      await waitForAgentRunDrained("idem-session-key-1");
 
       const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(sendPolicyDir);
@@ -736,7 +737,7 @@ describe("gateway server chat", () => {
       });
       expect(imgRes.ok).toBe(true);
       expectStringRunId(imgRes.payload);
-      await waitForAgentRunDrained();
+      await waitForAgentRunDrained("idem-img");
       const imgOnlyRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "",
@@ -752,7 +753,7 @@ describe("gateway server chat", () => {
       });
       expect(imgOnlyRes.ok).toBe(true);
       expectStringRunId(imgOnlyRes.payload);
-      await waitForAgentRunDrained();
+      await waitForAgentRunDrained("idem-img-only");
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
