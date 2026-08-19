@@ -305,6 +305,8 @@ describe("tool display details", () => {
     const hyphenatedFunction = "function deploy-prod { echo one; echo two; }";
     const namespacedFunction = "function log::info { echo one; echo two; }";
     const selectLoop = 'select d in a b; do echo "$d"; break; done';
+    const namedCoprocess = "coproc worker { echo one; echo two; }";
+    const anonymousCoprocess = "coproc (echo one; echo two)";
     const doubleBracket = "[[ -f package.json && -f pnpm-lock.yaml ]] && pnpm test";
     const pipedSelect = "printf x | select d in a b; do break; done";
     const pipedDoubleBracket = "printf x | [[ -n x ]]";
@@ -336,6 +338,8 @@ describe("tool display details", () => {
       hyphenatedFunction,
       namespacedFunction,
       selectLoop,
+      namedCoprocess,
+      anonymousCoprocess,
       doubleBracket,
       pipedSelect,
       pipedDoubleBracket,
@@ -395,6 +399,7 @@ describe("tool display details", () => {
 
     for (const command of [
       "select-editor --version && pnpm test",
+      "coprocess --version && pnpm test",
       "[[helper arg && pnpm test",
       '"x"select --version && pnpm test',
       "select'' --version && pnpm test",

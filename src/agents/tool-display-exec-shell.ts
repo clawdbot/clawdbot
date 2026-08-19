@@ -512,7 +512,7 @@ const SHELL_COMMAND_START_PATTERN =
   String.raw`(?:^|;|\n|(?<!>)\||(?<![<>])&(?![>&]))\s*(?:(?:time(?:\s+-p(?:\s+--)?)?|!)(?:\s+|(?=\()))*`;
 const SHELL_TOKEN_END_PATTERN = String.raw`(?=$|[\s;&|()<>])`;
 const SHELL_NAMED_COMPOUND_START_PATTERN =
-  `(?:(?:for|while|until|if|case|select)${SHELL_TOKEN_END_PATTERN}|` +
+  `(?:(?:for|while|until|if|case|select|coproc)${SHELL_TOKEN_END_PATTERN}|` +
   `(?:\\[\\[|\\{)${SHELL_TOKEN_END_PATTERN}|\\(\\()`;
 const SHELL_COMPOUND_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\()`;
 const SHELL_COMPOUND_AT_COMMAND_START_RE = new RegExp(
