@@ -176,6 +176,149 @@ describe("createChannelHistoryWindow", () => {
     ]);
   });
 
+  it("persists text before media resolves and enriches the same sequence in place", async () => {
+    const persistence = createPersistenceStore();
+    const history = createChannelHistoryWindow({
+      historyMap: new Map(),
+      persistence: { store: persistence.store, keyPrefix: "imessage:main", now: () => 100 },
+    });
+    let resolveMedia!: (media: HistoryEntry["media"]) => void;
+    const mediaPending = history.recordWithMedia({
+      historyKey: "group-1",
+      limit: 50,
+      messageId: "pdf-1",
+      entry: {
+        sender: "Alice",
+        body: "This is the worksheet",
+        timestamp: 10,
+        messageId: "pdf-1",
+      },
+      media: () =>
+        new Promise((resolve) => {
+          resolveMedia = resolve;
+        }),
+    });
+
+    expect(history.snapshot({ historyKey: "group-1", limit: 50 })).toEqual({
+      entries: [
+        {
+          sender: "Alice",
+          body: "This is the worksheet",
+          timestamp: 10,
+          messageId: "pdf-1",
+        },
+      ],
+      throughSequence: 1,
+    });
+    history.record({
+      historyKey: "group-1",
+      limit: 50,
+      entry: { sender: "Bob", body: "arrived later", timestamp: 11, messageId: "m2" },
+    });
+
+    resolveMedia([
+      {
+        path: "/state/media/channel-history/worksheet.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+      },
+    ]);
+    await mediaPending;
+
+    expect(persistence.values.get("imessage:main:group-1")).toEqual({
+      schemaVersion: 1,
+      nextSequence: 3,
+      items: [
+        {
+          sequence: 1,
+          entry: expect.objectContaining({
+            messageId: "pdf-1",
+            media: [
+              expect.objectContaining({
+                path: "/state/media/channel-history/worksheet.pdf",
+                messageId: "pdf-1",
+              }),
+            ],
+          }),
+        },
+        {
+          sequence: 2,
+          entry: { sender: "Bob", body: "arrived later", timestamp: 11, messageId: "m2" },
+        },
+      ],
+    });
+  });
+
+  it("does not resurrect or enrich a consumed sequence when media resolves late", async () => {
+    const persistence = createPersistenceStore();
+    const history = createChannelHistoryWindow({
+      historyMap: new Map(),
+      persistence: { store: persistence.store, keyPrefix: "imessage:main", now: () => 100 },
+    });
+    let resolveMedia!: (media: HistoryEntry["media"]) => void;
+    const mediaPending = history.recordWithMedia({
+      historyKey: "group-1",
+      limit: 50,
+      messageId: "same-id",
+      entry: { sender: "Alice", body: "first delivery", timestamp: 10, messageId: "same-id" },
+      media: () =>
+        new Promise((resolve) => {
+          resolveMedia = resolve;
+        }),
+    });
+    const firstSnapshot = history.snapshot({ historyKey: "group-1", limit: 50 });
+    history.consume({ historyKey: "group-1", limit: 50, snapshot: firstSnapshot });
+    history.record({
+      historyKey: "group-1",
+      limit: 50,
+      entry: { sender: "Alice", body: "redelivered", timestamp: 11, messageId: "same-id" },
+    });
+
+    resolveMedia([
+      {
+        path: "/state/media/channel-history/late.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+      },
+    ]);
+    await mediaPending;
+
+    expect(persistence.values.get("imessage:main:group-1")).toEqual({
+      schemaVersion: 1,
+      nextSequence: 3,
+      items: [
+        {
+          sequence: 2,
+          entry: { sender: "Alice", body: "redelivered", timestamp: 11, messageId: "same-id" },
+        },
+      ],
+    });
+  });
+
+  it("retains persisted text when media resolution fails", async () => {
+    const persistence = createPersistenceStore();
+    const history = createChannelHistoryWindow({
+      historyMap: new Map(),
+      persistence: { store: persistence.store, keyPrefix: "feishu:main", now: () => 100 },
+    });
+
+    await expect(
+      history.recordWithMedia({
+        historyKey: "group-1",
+        limit: 50,
+        messageId: "image-1",
+        entry: { sender: "Alice", body: "see image", timestamp: 10, messageId: "image-1" },
+        media: async () => {
+          throw new Error("media unavailable");
+        },
+      }),
+    ).rejects.toThrow("media unavailable");
+
+    expect(history.snapshot({ historyKey: "group-1", limit: 50 }).entries).toEqual([
+      { sender: "Alice", body: "see image", timestamp: 10, messageId: "image-1" },
+    ]);
+  });
+
   it("consumes only the captured high-water mark and preserves concurrent messages", () => {
     const persistence = createPersistenceStore();
     const history = createChannelHistoryWindow({

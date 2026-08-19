@@ -341,24 +341,29 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
     historyKey: string;
     entry?: T | null;
     limit: number;
-  }): T[] => {
+  }): { entries: T[]; sequence?: number } => {
     if (!persistence || !recordParams.entry || recordParams.limit <= 0) {
-      return [];
+      return { entries: [] };
     }
     const recordEntry = recordParams.entry;
     const now = (persistence.now ?? Date.now)();
     const key = persistedKey(recordParams.historyKey);
-    updatePersistedState({
+    let sequence: number | undefined;
+    const updated = updatePersistedState({
       key,
       operation: "record",
       updateValue: (current) => {
         const state = readPersistedState({ key, operation: "record", value: current });
-        if (
-          recordEntry.messageId &&
-          state.items.some((item) => item.entry.messageId === recordEntry.messageId)
-        ) {
-          return state;
+        if (recordEntry.messageId) {
+          const existing = state.items.find(
+            (item) => item.entry.messageId === recordEntry.messageId,
+          );
+          if (existing) {
+            sequence = existing.sequence;
+            return state;
+          }
         }
+        sequence = state.nextSequence;
         const entryWithTimestamp = {
           ...recordEntry,
           timestamp: recordEntry.timestamp ?? now,
@@ -378,13 +383,61 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
         });
       },
     });
-    return snapshot(recordParams).entries;
+    return {
+      entries: snapshot(recordParams).entries,
+      ...(updated && sequence !== undefined ? { sequence } : {}),
+    };
+  };
+  const enrichPersistedMedia = (enrichParams: {
+    historyKey: string;
+    limit: number;
+    sequence?: number;
+    messageId?: string;
+    media: HistoryMediaEntry[];
+  }): T[] => {
+    if (!persistence || enrichParams.sequence === undefined || enrichParams.media.length === 0) {
+      return snapshot(enrichParams).entries;
+    }
+    const now = (persistence.now ?? Date.now)();
+    const key = persistedKey(enrichParams.historyKey);
+    updatePersistedState({
+      key,
+      operation: "enrich-media",
+      updateValue: (current) => {
+        const state = readPersistedState({ key, operation: "enrich-media", value: current });
+        const itemIndex = state.items.findIndex((item) => {
+          if (item.sequence !== enrichParams.sequence) {
+            return false;
+          }
+          return (
+            enrichParams.messageId === undefined || item.entry.messageId === enrichParams.messageId
+          );
+        });
+        const item = state.items[itemIndex];
+        if (!item || (item.entry.media?.length ?? 0) > 0) {
+          return state;
+        }
+        const items = [...state.items];
+        items[itemIndex] = {
+          ...item,
+          entry: { ...item.entry, media: enrichParams.media },
+        };
+        return prunePersistedHistory({
+          state: { ...state, items },
+          limit: enrichParams.limit,
+          maxBytes: persistence.maxBytes ?? DEFAULT_PERSISTED_HISTORY_MAX_BYTES,
+          now,
+          ttlMs: persistence.ttlMs ?? DEFAULT_PERSISTED_HISTORY_TTL_MS,
+        });
+      },
+    });
+    return snapshot(enrichParams).entries;
   };
 
   return {
     record: (recordParams) => {
       if (persistence) {
-        return recordPersisted(recordParams);
+        return recordPersisted(recordParams).entries;
       }
       return recordChannelHistoryEntryIfEnabled({
         historyMap,
@@ -414,20 +467,13 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
       ) {
         return [];
       }
-      let resolvedMedia: readonly HistoryMediaEntry[] | null | undefined;
-      try {
-        resolvedMedia =
-          typeof recordParams.media === "function"
-            ? await recordParams.media()
-            : recordParams.media;
-      } catch (error) {
-        recordPersisted(recordParams);
-        throw error;
-      }
+      const recorded = recordPersisted(recordParams);
+      const resolvedMedia =
+        typeof recordParams.media === "function" ? await recordParams.media() : recordParams.media;
       if (recordParams.shouldRecord?.() === false) {
         // Match the in-memory window: cancellation while media resolves keeps
         // the already-admitted text but must not attach late media.
-        return recordPersisted(recordParams);
+        return recorded.entries;
       }
       const media = normalizeHistoryMediaEntries({
         media: resolvedMedia,
@@ -435,12 +481,12 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
         maxBytes: recordParams.mediaMaxBytes,
         messageId: recordParams.messageId ?? recordParams.entry.messageId,
       });
-      const recordEntryWithMedia = { ...recordParams.entry, media };
-      // SAFETY: T extends HistoryEntry; media is an optional HistoryEntry field.
-      const entryWithMedia = media.length > 0 ? (recordEntryWithMedia as T) : recordParams.entry;
-      return recordPersisted({
-        ...recordParams,
-        entry: entryWithMedia,
+      return enrichPersistedMedia({
+        historyKey: recordParams.historyKey,
+        limit: recordParams.limit,
+        sequence: recorded.sequence,
+        messageId: recordParams.messageId ?? recordParams.entry.messageId,
+        media,
       });
     },
     buildPendingContext: (contextParams) => {

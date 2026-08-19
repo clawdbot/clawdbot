@@ -816,31 +816,31 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
     if (decision.kind === "drop") {
       if (decision.history) {
-        let historyMedia: ChannelInboundMediaInput[] = [];
-        if (!remoteHost) {
-          try {
-            historyMedia = (
-              await stageIMessageAttachments(mediaCandidates, {
+        try {
+          await channelHistory.recordWithMedia({
+            historyKey: decision.history.historyKey,
+            limit: historyLimit,
+            entry: decision.history.entry,
+            media: async () => {
+              if (remoteHost) {
+                return [];
+              }
+              const staged = await stageIMessageAttachments(mediaCandidates, {
                 maxBytes: mediaMaxBytes,
                 allowedRoots: effectiveAttachmentRoots,
                 subdir: CHANNEL_HISTORY_MEDIA_SUBDIR,
                 deps: { logVerbose },
-              })
-            ).attachments;
-          } catch (err) {
-            logVerbose(
-              `imessage: retained text-only group history for ${decision.history.entry.messageId ?? "unknown"} after media staging failure: ${String(err)}`,
-            );
-          }
+              });
+              return toHistoryMediaEntries(staged.attachments);
+            },
+            mediaMaxBytes,
+            messageId: decision.history.entry.messageId,
+          });
+        } catch (err) {
+          logVerbose(
+            `imessage: retained text-only group history for ${decision.history.entry.messageId ?? "unknown"} after media staging failure: ${String(err)}`,
+          );
         }
-        await channelHistory.recordWithMedia({
-          historyKey: decision.history.historyKey,
-          limit: historyLimit,
-          entry: decision.history.entry,
-          media: toHistoryMediaEntries(historyMedia),
-          mediaMaxBytes,
-          messageId: decision.history.entry.messageId,
-        });
       }
       // Record echo/reflection drops so the rate limiter can detect sustained loops.
       // Only loop-related drop reasons feed the counter; policy/mention/empty drops

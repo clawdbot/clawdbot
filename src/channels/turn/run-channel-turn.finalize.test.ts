@@ -415,8 +415,32 @@ describe("channel turn finalize", () => {
     });
   });
 
-  it("clears pending group history after a successful prepared turn", async () => {
-    const historyMap = new Map([["room-1", [{ sender: "User", body: "queued before reply" }]]]);
+  it.each([
+    {
+      name: "zero-count dispatch",
+      result: { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } },
+      cleared: false,
+    },
+    {
+      name: "admission-time queued counts without a settled receipt",
+      result: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
+      cleared: false,
+    },
+    {
+      name: "authoritative visible delivery receipt",
+      result: {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: {
+          anyVisibleDelivered: true,
+          counts: { final: { delivered: 1, failedAfterSend: 0 } },
+        },
+      },
+      cleared: true,
+    },
+  ])("clears volatile pending history only after $name", async ({ result, cleared }) => {
+    const entries = [{ sender: "User", body: "queued before reply" }];
+    const historyMap = new Map([["room-1", entries]]);
 
     await runPreparedChannelTurn({
       channel: "test",
@@ -424,10 +448,7 @@ describe("channel turn finalize", () => {
       storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
-      runDispatch: vi.fn(async () => ({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      })),
+      runDispatch: vi.fn(async () => result),
       history: {
         isGroup: true,
         historyKey: "room-1",
@@ -436,10 +457,10 @@ describe("channel turn finalize", () => {
       },
     });
 
-    expect(historyMap.get("room-1")).toStrictEqual([]);
+    expect(historyMap.get("room-1")).toStrictEqual(cleared ? [] : entries);
   });
 
-  it("consumes a persistent history snapshot only after successful dispatch", async () => {
+  it("consumes a persistent history snapshot only after observable delivery", async () => {
     const consumeSnapshot = vi.fn(async () => {});
     const base = {
       channel: "test",
@@ -471,6 +492,28 @@ describe("channel turn finalize", () => {
       runDispatch: vi.fn(async () => ({
         queuedFinal: true,
         counts: { tool: 0, block: 0, final: 1 },
+      })),
+    });
+    expect(consumeSnapshot).not.toHaveBeenCalled();
+
+    await runPreparedChannelTurn({
+      ...base,
+      recordInboundSession: createRecordInboundSession(),
+      runDispatch: vi.fn(async () => ({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        settledReceipt: { anyVisibleDelivered: false, counts: {} },
+      })),
+    });
+    expect(consumeSnapshot).not.toHaveBeenCalled();
+
+    await runPreparedChannelTurn({
+      ...base,
+      recordInboundSession: createRecordInboundSession(),
+      runDispatch: vi.fn(async () => ({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        observedReplyDelivery: true,
       })),
     });
     expect(consumeSnapshot).toHaveBeenCalledOnce();

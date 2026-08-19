@@ -2,7 +2,7 @@
 // replayable inbound media, playback cache, and SQLite-managed outgoing media.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { cleanupManagedOutgoingMediaRecords } from "../gateway/managed-image-attachments.js";
 import {
   insertManagedImageRecord,
@@ -18,6 +18,25 @@ import {
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { markTrustedGeneratedHtmlPath } from "./web-media.js";
 
+type ChannelHistoryMediaTestApi = {
+  enforceChannelHistoryMediaLimits(): Promise<void>;
+  setChannelHistoryMediaLimitsForTest(limits?: {
+    maxBytes: number;
+    maxFiles: number;
+    ttlMs?: number;
+  }): void;
+};
+
+function getChannelHistoryMediaTestApi(): ChannelHistoryMediaTestApi {
+  const api = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.mediaStoreTestApi")
+  ];
+  if (!api) {
+    throw new Error("media store test API is unavailable");
+  }
+  return api as ChannelHistoryMediaTestApi;
+}
+
 describe("cleanOldMedia managed-subtree retention", () => {
   let store: typeof import("./store.js");
   let tempHome: TempHomeEnv;
@@ -30,6 +49,10 @@ describe("cleanOldMedia managed-subtree retention", () => {
   afterAll(async () => {
     closeOpenClawStateDatabaseForTest();
     await tempHome.restore();
+  });
+
+  afterEach(() => {
+    getChannelHistoryMediaTestApi().setChannelHistoryMediaLimitsForTest();
   });
 
   it("cannot delete managed history media or lift the legacy migration barrier", async () => {
@@ -171,5 +194,106 @@ describe("cleanOldMedia managed-subtree retention", () => {
         .where("realpath", "=", staleOutbound.path),
     );
     expect(marker).toBeUndefined();
+  });
+
+  it("enforces channel-history byte and file-count budgets immediately and oldest-first", async () => {
+    const testApi = getChannelHistoryMediaTestApi();
+    testApi.setChannelHistoryMediaLimitsForTest({ maxBytes: 1024, maxFiles: 2 });
+    const first = await store.saveMediaBuffer(
+      Buffer.from("first"),
+      "text/plain",
+      `${store.CHANNEL_HISTORY_MEDIA_SUBDIR}/account-b`,
+    );
+    const second = await store.saveMediaBuffer(
+      Buffer.from("second"),
+      "text/plain",
+      `${store.CHANNEL_HISTORY_MEDIA_SUBDIR}/account-a`,
+    );
+    const tiedMtime = Date.now() - 5_000;
+    await Promise.all([
+      fs.utimes(first.path, tiedMtime / 1000, tiedMtime / 1000),
+      fs.utimes(second.path, tiedMtime / 1000, tiedMtime / 1000),
+    ]);
+    const third = await store.saveMediaBuffer(
+      Buffer.from("third"),
+      "text/plain",
+      store.CHANNEL_HISTORY_MEDIA_SUBDIR,
+    );
+    const firstRelative = path.relative(
+      path.join(store.getMediaDir(), store.CHANNEL_HISTORY_MEDIA_SUBDIR),
+      first.path,
+    );
+    const secondRelative = path.relative(
+      path.join(store.getMediaDir(), store.CHANNEL_HISTORY_MEDIA_SUBDIR),
+      second.path,
+    );
+    const evicted = firstRelative.localeCompare(secondRelative) < 0 ? first : second;
+    const retained = evicted === first ? second : first;
+
+    await expect(fs.stat(evicted.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(retained.path)).resolves.toMatchObject({ size: retained.size });
+    await expect(fs.stat(third.path)).resolves.toMatchObject({ size: third.size });
+
+    testApi.setChannelHistoryMediaLimitsForTest({ maxBytes: 8, maxFiles: 10 });
+    const fourth = await store.saveMediaBuffer(
+      Buffer.from("four"),
+      "text/plain",
+      store.CHANNEL_HISTORY_MEDIA_SUBDIR,
+    );
+    await expect(fs.stat(third.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(retained.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(fourth.path)).resolves.toMatchObject({ size: 4 });
+  });
+
+  it("covers source and stream publication without touching sibling media trees", async () => {
+    const testApi = getChannelHistoryMediaTestApi();
+    testApi.setChannelHistoryMediaLimitsForTest({ maxBytes: 1024, maxFiles: 1 });
+    const mediaDir = await store.ensureMediaDir();
+    const sourcePath = path.join(mediaDir, "source.txt");
+    await fs.writeFile(sourcePath, "source");
+    const source = await store.saveMediaSource(
+      sourcePath,
+      undefined,
+      `${store.CHANNEL_HISTORY_MEDIA_SUBDIR}/source-account`,
+    );
+    const inbound = await store.saveMediaBuffer(Buffer.from("inbound"), "text/plain", "inbound");
+    const stream = await store.saveMediaStream(
+      (async function* () {
+        yield Buffer.from("stream");
+      })(),
+      "text/plain",
+      `${store.CHANNEL_HISTORY_MEDIA_SUBDIR}/stream-account`,
+    );
+
+    await expect(fs.stat(source.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(stream.path)).resolves.toMatchObject({ size: 6 });
+    await expect(fs.stat(inbound.path)).resolves.toMatchObject({ size: inbound.size });
+  });
+
+  it("fails a publication that cannot fit while leaving no dangling media claim", async () => {
+    const testApi = getChannelHistoryMediaTestApi();
+    testApi.setChannelHistoryMediaLimitsForTest({ maxBytes: 3, maxFiles: 1 });
+    await expect(
+      store.saveMediaBuffer(
+        Buffer.from("oversized"),
+        "text/plain",
+        store.CHANNEL_HISTORY_MEDIA_SUBDIR,
+      ),
+    ).rejects.toThrow("channel-history media publication exceeded its fixed storage budget");
+
+    const historyDir = path.join(store.getMediaDir(), store.CHANNEL_HISTORY_MEDIA_SUBDIR);
+    const remaining = await fs.readdir(historyDir, { recursive: true }).catch(() => []);
+    const remainingFiles = (
+      await Promise.all(
+        remaining.map(async (name) => {
+          const relativePath = name;
+          const stat = await fs.lstat(path.join(historyDir, relativePath)).catch(() => null);
+          return stat?.isFile() && !path.basename(relativePath).startsWith(".")
+            ? relativePath
+            : null;
+        }),
+      )
+    ).filter((name): name is string => name !== null);
+    expect(remainingFiles).toEqual([]);
   });
 });

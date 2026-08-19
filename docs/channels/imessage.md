@@ -339,7 +339,7 @@ If disabling SIP is not acceptable for your threat model:
     - with no configured patterns, mention gating cannot be enforced
     - control commands from authorized senders bypass mention gating
 
-    Mention gating controls activation, not context visibility. For admitted local groups, messages that do not mention the agent are retained in a bounded, restart-safe pending window. When a later message activates the group session, OpenClaw supplies that text plus managed local image and document references as explicitly untrusted context. The window is consumed only after a successful reply; a failed turn keeps it for recovery. Remote-host attachment paths remain text-only pending context because they are not local managed references on the gateway host.
+    Mention gating controls activation, not context visibility. For admitted local groups, messages that do not mention the agent are retained in a bounded, restart-safe pending window. When a later message activates the group session, OpenClaw supplies that text plus managed local image and document references as explicitly untrusted context. The window is consumed only after authoritative evidence of a visible reply; silent, failed, cancelled, and zero-visible turns keep it for recovery. Remote-host attachment paths remain text-only pending context because they are not local managed references on the gateway host.
 
     Per-group `systemPrompt`:
 

@@ -23,6 +23,10 @@ import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
+import {
+  CHANNEL_HISTORY_MEDIA_TTL_MS,
+  createChannelHistoryMediaBudget,
+} from "./channel-history-budget.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
 
@@ -42,8 +46,7 @@ const OUTBOUND_STAGING_SUBDIR = "outbound";
 // Match delivery-queue orphan grace: staged files get a full day to reach
 // every direct, streamed, fan-out, or queue-owned delivery path.
 const OUTBOUND_STAGING_TTL_MS = 24 * 60 * 60_000;
-/** Matches the default persisted channel-history time window. */
-export const CHANNEL_HISTORY_MEDIA_TTL_MS = 24 * 60 * 60_000;
+export { CHANNEL_HISTORY_MEDIA_TTL_MS };
 /** Fixed disk budget for cached playback renditions; oldest outputs are evicted first. */
 const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 /** Playback renditions outlive transient media but are still retired after one week. */
@@ -62,15 +65,6 @@ function setMediaStoreNetworkDepsForTest(deps?: {
   resolvePinnedHostname?: typeof resolvePinnedHostname;
 }): void {
   resolvePinnedHostnameForTest = deps?.resolvePinnedHostname;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
-    enforcePlaybackTranscodeCacheLimit,
-    PLAYBACK_TRANSCODE_MAX_CACHE_BYTES,
-    PLAYBACK_TRANSCODE_TTL_MS,
-    setMediaStoreNetworkDepsForTest,
-  };
 }
 
 function resolveMediaSubdir(subdir: string, caller: string): string {
@@ -120,6 +114,32 @@ function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
     maxBytes,
     mode: MEDIA_FILE_MODE,
   });
+}
+
+const channelHistoryMediaBudget = createChannelHistoryMediaBudget({
+  resolveDir: () =>
+    resolveMediaScopedDir(CHANNEL_HISTORY_MEDIA_SUBDIR, "channelHistoryMediaBudget"),
+  pruneExpired: async (dir, ttlMs) => {
+    await openMediaStore(MAX_BYTES, dir).pruneExpired({
+      ttlMs,
+      recursive: true,
+      pruneEmptyDirs: true,
+    });
+  },
+  remove: async (dir, relativePath) => {
+    await openMediaStore(MAX_BYTES, dir).remove(relativePath);
+  },
+});
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
+    enforcePlaybackTranscodeCacheLimit,
+    enforceChannelHistoryMediaLimits: channelHistoryMediaBudget.enforce,
+    setChannelHistoryMediaLimitsForTest: channelHistoryMediaBudget.setLimitsForTest,
+    PLAYBACK_TRANSCODE_MAX_CACHE_BYTES,
+    PLAYBACK_TRANSCODE_TTL_MS,
+    setMediaStoreNetworkDepsForTest,
+  };
 }
 
 /**
@@ -275,17 +295,28 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
   }
 }
 
+function isChannelHistoryMediaSubdir(subdir: string): boolean {
+  const safeSubdir = resolveMediaSubdir(subdir, "isChannelHistoryMediaSubdir");
+  return (
+    safeSubdir === CHANNEL_HISTORY_MEDIA_SUBDIR ||
+    safeSubdir.startsWith(`${CHANNEL_HISTORY_MEDIA_SUBDIR}/`)
+  );
+}
+
+async function publishChannelHistoryMedia<T>(params: {
+  subdir: string;
+  publish: () => Promise<T>;
+  resolvePath: (result: T) => string;
+}): Promise<T> {
+  if (!isChannelHistoryMediaSubdir(params.subdir)) {
+    return await params.publish();
+  }
+  return await channelHistoryMediaBudget.publish(params);
+}
+
 /** Prunes only media owned by the persistent channel-history window. */
 export async function pruneChannelHistoryMedia(): Promise<void> {
-  const historyDir = resolveMediaScopedDir(
-    CHANNEL_HISTORY_MEDIA_SUBDIR,
-    "pruneChannelHistoryMedia",
-  );
-  await openMediaStore(MAX_BYTES, historyDir).pruneExpired({
-    ttlMs: CHANNEL_HISTORY_MEDIA_TTL_MS,
-    recursive: true,
-    pruneEmptyDirs: true,
-  });
+  await channelHistoryMediaBudget.enforce();
 }
 
 async function queuePlaybackCacheOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -477,13 +508,18 @@ async function writeSavedMediaBuffer(params: {
 }): Promise<string> {
   const dir = resolveMediaScopedDir(params.subdir, "writeSavedMediaBuffer");
   const relativePath = resolveMediaRelativePath(params.id, params.subdir, "writeSavedMediaBuffer");
-  return await retryAfterRecreatingDir(
-    dir,
-    async () =>
-      await openMediaStore(params.buffer.byteLength).write(relativePath, params.buffer, {
-        tempPrefix: `.${params.id}`,
-      }),
-  );
+  return await publishChannelHistoryMedia({
+    subdir: params.subdir,
+    publish: async () =>
+      await retryAfterRecreatingDir(
+        dir,
+        async () =>
+          await openMediaStore(params.buffer.byteLength).write(relativePath, params.buffer, {
+            tempPrefix: `.${params.id}`,
+          }),
+      ),
+    resolvePath: (filePath) => filePath,
+  });
 }
 
 async function writeMediaStreamToFile(params: {
@@ -663,30 +699,35 @@ export async function saveMediaStream(
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const baseId = crypto.randomUUID();
   const headerExt = extensionForAuthoritativeHeaderMime(contentType);
-  return await saveMediaSiblingTempFile({
-    dir,
-    tempPrefix: `.${baseId}`,
-    writeTemp: async (tempPath) => {
-      const { sniffBuffer, size } = await writeMediaStreamToFile({
-        stream,
-        tempPath,
-        maxBytes,
-      });
-      const mime = await detectMime({
-        buffer: sniffBuffer,
-        headerMime: contentType,
-        filePath: originalFilename ?? detectionFilePathHint,
-      });
-      const ext = resolveSavedMediaExtension({
-        detectedMime: mime,
-        headerExt,
-        contentType,
-        originalFilename,
-        detectionFilePathHint,
-      });
-      const id = buildSavedMediaId({ baseId, ext, originalFilename });
-      return { id, size, contentType: mime };
-    },
+  return await publishChannelHistoryMedia({
+    subdir,
+    publish: async () =>
+      await saveMediaSiblingTempFile({
+        dir,
+        tempPrefix: `.${baseId}`,
+        writeTemp: async (tempPath) => {
+          const { sniffBuffer, size } = await writeMediaStreamToFile({
+            stream,
+            tempPath,
+            maxBytes,
+          });
+          const mime = await detectMime({
+            buffer: sniffBuffer,
+            headerMime: contentType,
+            filePath: originalFilename ?? detectionFilePathHint,
+          });
+          const ext = resolveSavedMediaExtension({
+            detectedMime: mime,
+            headerExt,
+            contentType,
+            originalFilename,
+            detectionFilePathHint,
+          });
+          const id = buildSavedMediaId({ baseId, ext, originalFilename });
+          return { id, size, contentType: mime };
+        },
+      }),
+    resolvePath: (saved) => saved.path,
   });
 }
 

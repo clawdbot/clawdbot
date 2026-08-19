@@ -75,6 +75,10 @@ function isSystemChannelTurn(ctx: FinalizedMsgContext): boolean {
   );
 }
 
+function resolveDispatchResultLike(dispatchResult: unknown): ChannelTurnDispatchResultLike {
+  return dispatchResult as ChannelTurnDispatchResultLike;
+}
+
 function resolveRecordSessionKey<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): string {
@@ -104,7 +108,7 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   if (params.admission?.kind === "observeOnly" || isSystemChannelTurn(params.ctxPayload)) {
     return;
   }
-  const dispatchResult = params.dispatchResult as ChannelTurnDispatchResultLike;
+  const dispatchResult = resolveDispatchResultLike(params.dispatchResult);
   if (dispatchResult?.deferredToActiveRun) {
     return;
   }
@@ -364,7 +368,10 @@ async function runPreparedChannelTurnCoreInTrace<
       admission: admission.kind,
     },
   });
-  await finalizePendingHistoryAfterTurn(params.history);
+  const visibleDispatchResult = resolveDispatchResultLike(dispatchResult);
+  if (hasVisibleChannelTurnDispatch(visibleDispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
+    await finalizePendingHistoryAfterTurn(params.history);
+  }
 
   return {
     admission,

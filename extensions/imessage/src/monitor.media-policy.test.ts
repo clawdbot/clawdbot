@@ -1,13 +1,17 @@
 // Imessage tests cover monitor.media policy plugin behavior.
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { PersistedChannelHistory } from "openclaw/plugin-sdk/reply-history";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { stageIMessageAttachments } from "./monitor/media-staging.js";
-import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+import {
+  createIMessagePluginStateSyncStoreForTest,
+  installIMessageStateRuntimeForTest,
+} from "./test-support/runtime.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -140,16 +144,37 @@ describe("iMessage monitor attachment policy", () => {
   });
 
   it("stages admitted no-mention attachments into persistent channel history", async () => {
-    stageIMessageAttachmentsMock.mockResolvedValue({
-      attachments: [
-        {
-          path: "/state/media/channel-history/photo.jpg",
-          contentType: "image/jpeg",
-          kind: "image",
-          sizeBytes: 123,
-        },
-      ],
-      unavailableCount: 0,
+    stageIMessageAttachmentsMock.mockImplementation(async () => {
+      const persisted = createIMessagePluginStateSyncStoreForTest<PersistedChannelHistory>({
+        namespace: "channel-history-v1",
+        maxEntries: 1000,
+      }).entries();
+      expect(persisted).toEqual([
+        expect.objectContaining({
+          value: expect.objectContaining({
+            items: [
+              expect.objectContaining({
+                entry: expect.objectContaining({
+                  body: expect.stringContaining("no mention here"),
+                  messageId: "1",
+                  media: undefined,
+                }),
+              }),
+            ],
+          }),
+        }),
+      ]);
+      return {
+        attachments: [
+          {
+            path: "/state/media/channel-history/photo.jpg",
+            contentType: "image/jpeg",
+            kind: "image",
+            sizeBytes: 123,
+          },
+        ],
+        unavailableCount: 0,
+      };
     });
     readChannelAllowFromStoreMock.mockResolvedValue([]);
 
