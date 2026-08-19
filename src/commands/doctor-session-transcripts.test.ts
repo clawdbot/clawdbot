@@ -444,6 +444,14 @@ describe("doctor session transcript repair", () => {
     }
     const siblings = await fs.readdir(path.dirname(filePath));
     expect(siblings.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("repair failed"),
+      "Session transcripts",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("error=ENOSPC: simulated mid-write failure"),
+      "Session transcripts",
+    );
   });
 
   it("keeps the original transcript when a metadata repair staged write fails", async () => {
@@ -491,6 +499,14 @@ describe("doctor session transcript repair", () => {
     }
     const siblings = await fs.readdir(path.dirname(filePath));
     expect(siblings.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("repair failed"),
+      "Session transcripts",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("error=ENOSPC: simulated mid-write failure"),
+      "Session transcripts",
+    );
   });
 
   it("reports affected transcripts without rewriting outside repair mode", async () => {

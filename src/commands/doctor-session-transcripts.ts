@@ -19,6 +19,7 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
 import { shortenHomePath } from "../utils.js";
@@ -331,7 +332,8 @@ async function repairBrokenSessionTranscriptFile(params: {
     });
     result.repaired = true;
   } catch (err) {
-    result.reason = String(err);
+    result.broken = params.shouldRepair;
+    result.reason = formatErrorMessage(err);
   }
   return result;
 }
@@ -444,7 +446,9 @@ export async function noteSessionTranscriptHealth(params?: {
             ? "repair failed"
             : "needs repair";
         const error =
-          shouldRepair && !result.repaired && result.reason ? ` error=${result.reason}` : "";
+          shouldRepair && !result.repaired && result.reason
+            ? ` error=${result.reason.replace(/\s+/g, " ").trim()}`
+            : "";
         const metadata =
           result.legacyOpenAICodexEntries > 0
             ? ` openai-codex=${result.legacyOpenAICodexEntries}`
