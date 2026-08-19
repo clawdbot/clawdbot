@@ -354,7 +354,11 @@ test.each([
   } finally {
     removeSpy.mockRestore();
     if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;

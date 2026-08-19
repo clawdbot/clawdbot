@@ -12,19 +12,13 @@ const REASON_KEYS = {
   "cleanup-failed": "sessionsView.deletePreservedReasonCleanupFailed",
 } as const satisfies Record<WorktreePreservationReason, Parameters<typeof t>[0]>;
 
-function describeWorktreePreservationReason(reason: WorktreePreservationReason): string {
-  return t(REASON_KEYS[reason]);
-}
-
 export function formatPreservedWorktreesNotice(
   worktrees: readonly PreservedSessionWorktree[],
 ): string {
   return t("sessionsView.deletePreservedWorktrees", {
     count: String(worktrees.length),
     details: worktrees
-      .map(
-        (worktree) => `${worktree.branch} — ${describeWorktreePreservationReason(worktree.reason)}`,
-      )
+      .map((worktree) => `${worktree.branch} — ${t(REASON_KEYS[worktree.reason])}`)
       .join("\n"),
   });
 }
@@ -32,6 +26,6 @@ export function formatPreservedWorktreesNotice(
 export function formatPreservedWorktreeConfirmation(worktree: PreservedSessionWorktree): string {
   return t("sessionsView.deletePreservedWorktreeConfirm", {
     branch: worktree.branch,
-    reason: describeWorktreePreservationReason(worktree.reason),
+    reason: t(REASON_KEYS[worktree.reason]),
   });
 }
