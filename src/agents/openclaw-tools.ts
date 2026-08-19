@@ -235,7 +235,7 @@ export function createOpenClawTools(
     runtimeSourceConfig: runtimeSnapshot?.sourceConfig,
   });
   const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: options?.agentSessionKey,
+    sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     config: resolvedConfig,
     agentId: options?.requesterAgentIdOverride,
   });
@@ -443,7 +443,7 @@ export function createOpenClawTools(
       denylist: explicitFactoryDenylist,
     });
   const sessionLookupToolOptions = {
-    agentSessionKey: options?.agentSessionKey,
+    agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     sandboxed: options?.sandboxed,
     config: resolvedConfig,
     callGateway: embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest,
