@@ -12,6 +12,7 @@ const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
   "extensions/google-meet/src/voice-call-gateway.ts",
   "extensions/qa-lab/src/gateway-rpc-client.ts",
   "src/acp/server.ts",
+  "src/commands/tasks-follow.ts",
   "src/gateway/call.ts",
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/operator-approvals-client.ts",

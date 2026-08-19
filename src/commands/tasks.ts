@@ -58,6 +58,8 @@ import {
 } from "./tasks-audit-system.js";
 import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintenance.js";
 
+export { tasksFollowCommand } from "./tasks-follow.js";
+
 const RUNTIME_PAD = 8;
 const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
