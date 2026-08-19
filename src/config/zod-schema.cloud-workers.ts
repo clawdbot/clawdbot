@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { isPluginJsonValue } from "../plugins/host-hook-json.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
+import { normalizeCloudRepo } from "./cloud-worker-project-profiles.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { CloudWorkerProfileConfig, CloudWorkersConfig } from "./types.cloud-workers.js";
 import { isSecretRef } from "./types.secrets.js";
@@ -85,12 +86,30 @@ const CloudWorkerProfileIdSchema = z
     (value) => value === value.trim(),
     "Worker profile ids must not contain outer whitespace",
   );
+const CloudWorkerProjectKeySchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => normalizeCloudRepo(`https://${value}`) === value,
+    "Project profile keys must use lowercase host/owner/repo identities without trailing .git",
+  );
+const CloudWorkerProjectProfileSchema = CloudWorkerProfileIdSchema.register(configUiMetadata, {
+  label: "Cloud Worker Project Profile",
+  help: "Cloud worker profile name used by default when a session worktree's origin matches this repository identity.",
+});
 
 const CloudWorkersConfigShape = {
   desktop: z.boolean().optional().register(configUiMetadata, {
     label: "Cloud Worker Desktop (Labs)",
     help: "Enables the experimental worker.desktop.observe surface and Control UI Desktop panel for desktop-capable cloud worker environments.",
   }),
+  projectProfiles: z
+    .record(CloudWorkerProjectKeySchema, CloudWorkerProjectProfileSchema)
+    .optional()
+    .register(configUiMetadata, {
+      label: "Cloud Worker Project Profiles",
+      help: "Default cloud worker profile names keyed by normalized lowercase repository identity (host/owner/repo). Explicit dispatch profile ids take precedence.",
+    }),
   profiles: z
     .record(CloudWorkerProfileIdSchema, CloudWorkerProfileSchema)
     .optional()
@@ -104,6 +123,8 @@ export const CloudWorkersConfigSchema = z.object(CloudWorkersConfigShape).strict
 
 const CLOUD_WORKER_FIELD_SCHEMAS = {
   "cloudWorkers.desktop": CloudWorkersConfigShape.desktop,
+  "cloudWorkers.projectProfiles": CloudWorkersConfigShape.projectProfiles,
+  "cloudWorkers.projectProfiles.*": CloudWorkerProjectProfileSchema,
   "cloudWorkers.profiles": CloudWorkersConfigShape.profiles,
   "cloudWorkers.profiles.*": CloudWorkerProfileSchema,
   "cloudWorkers.profiles.*.provider": CloudWorkerProfileShape.provider,

@@ -23,7 +23,7 @@ export async function resolveDesktopDocumentInventoryTarget(options: {
     } catch {}
   }
   const requestedSource = resolveDesktopDocumentTarget(
-    { source: options.source, session: options.sessionKey, control: false },
+    { source: options.source, session: options.sessionKey },
     session,
   );
   return requestedSource !== null &&

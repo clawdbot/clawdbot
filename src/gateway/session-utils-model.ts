@@ -609,6 +609,7 @@ function resolveSessionDisplayModelIdentityRef(params: {
   const inferredProvider = inferUniqueProviderFromConfiguredModels({
     cfg: params.cfg,
     model,
+    agentId: params.agentId,
   });
   if (inferredProvider && !isCliProvider(inferredProvider, params.cfg)) {
     return { provider: inferredProvider, model };

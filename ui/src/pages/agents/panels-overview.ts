@@ -308,7 +308,12 @@ export function renderAgentOverview(params: {
                     ? t("agents.overview.inheritDefaultModel", { model: defaultPrimary })
                     : t("agents.overview.inheritDefault"),
               },
-              ...buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog),
+              ...buildModelOptions(
+                configForm,
+                effectivePrimary ?? undefined,
+                params.modelCatalog,
+                agent.id,
+              ),
             ],
             disabled,
             onChange: (value) => onModelChange(agent.id, value || null),

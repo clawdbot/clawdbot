@@ -91,7 +91,7 @@ type RenderMessageGroupOptions = {
   userAvatar?: string | null;
   showAvatarGutter?: boolean;
   showAssistantAvatar?: boolean;
-  basePath?: string;
+  resourceBasePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -172,7 +172,7 @@ function buildGroupedMessageRenderOptions(
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-    basePath: opts.basePath,
+    resourceBasePath: opts.resourceBasePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     resolveArtifactDownload: opts.resolveArtifactDownload,
@@ -464,7 +464,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               name: opts.userName ?? null,
               avatar: opts.userAvatar ?? null,
             },
-            opts.basePath,
+            opts.resourceBasePath,
             opts.assistantAttachmentAuthToken,
             group.sender,
           )

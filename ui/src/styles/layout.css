@@ -2569,10 +2569,10 @@ body.update-dialog-open .sidebar-update-card__status {
   max-height: 420px;
   overflow-y: auto;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   animation: menu-in 140ms var(--ease-out);
 }
 
@@ -2587,10 +2587,10 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   max-height: 420px;
   overflow-y: auto;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .sidebar-customize-menu__title {
@@ -2700,10 +2700,10 @@ wa-dropdown-item.sidebar-customize-menu__item {
   min-width: 224px;
   max-width: 264px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   animation: menu-in 140ms var(--ease-out);
 }
 
@@ -2716,10 +2716,10 @@ wa-dropdown.session-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 /* Popover hosts live in the top layer so menus escape in-page stacking
@@ -2743,10 +2743,10 @@ openclaw-session-menu[popover] {
   min-width: 176px;
   max-width: 220px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   animation: menu-in 140ms var(--ease-out);
 }
 
@@ -2759,10 +2759,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 176px;
   max-width: 220px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .sidebar-session-sort-menu__title {

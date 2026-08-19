@@ -12,6 +12,7 @@ import {
 } from "../avatar.ts";
 import {
   buildAgentContext,
+  buildModelOptions,
   formatBytes,
   listSelectableAgents,
   normalizeAgentLabel,
@@ -21,6 +22,46 @@ import {
   resolveToolProfileOptions,
   resolveToolSections,
 } from "./display.ts";
+
+describe("buildModelOptions", () => {
+  const model = "openai/gpt-5.6-luna";
+  const catalog = [
+    {
+      id: "gpt-5.6-luna",
+      name: "GPT 5.6 Luna",
+      provider: "openai",
+      alias: "gateway-alias",
+      tags: ["default", "configured"],
+    },
+  ];
+
+  it.each([
+    {
+      name: "inherits the default alias when agent metadata omits alias",
+      agentMetadata: { agentRuntime: { id: "codex" } },
+      label: "GPT 5.6 Luna · global-luna",
+    },
+    {
+      name: "lets an explicit empty agent alias disable the inherited alias",
+      agentMetadata: { alias: "" },
+      label: "GPT 5.6 Luna",
+    },
+  ])("$name", ({ agentMetadata, label }) => {
+    const config = {
+      agents: {
+        defaults: { models: { [model]: { alias: "global-luna" } } },
+        entries: { worker: { models: { [model]: agentMetadata } } },
+      },
+    };
+
+    expect(buildModelOptions(config, null, catalog, "worker")).toContainEqual({
+      value: model,
+      label,
+      provider: "openai",
+      tags: ["default", "configured"],
+    });
+  });
+});
 
 describe("normalizeAgentTargetLabel", () => {
   it("uses resolved configured names but preserves ids for synthesized defaults", () => {

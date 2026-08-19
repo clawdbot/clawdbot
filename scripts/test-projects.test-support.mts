@@ -1631,6 +1631,7 @@ function findDirectImportersWithGitGrep(
 ) {
   const tooling = options.tooling === true;
   const cacheKey = `${cwd}\0${tooling ? "tooling" : "source"}\0${importedFile}`;
+  const isTestHelper = importedFile.startsWith("test/helpers/");
   if (cachedDirectImporters.has(cacheKey)) {
     return cachedDirectImporters.get(cacheKey) ?? null;
   }
@@ -1650,7 +1651,8 @@ function findDirectImportersWithGitGrep(
       cachedDirectImporters.set(cacheKey, null);
       return null;
     }
-    if (candidates.length > 800) {
+    // Central test helpers intentionally fan out broadly; incomplete scans silently drop owning tests.
+    if (candidates.length > 800 && !isTestHelper) {
       skippedBroadTerm = true;
       continue;
     }
@@ -1677,14 +1679,11 @@ function findDirectImportersWithGitGrep(
         }
       }
     }
-    if (importedFile.startsWith("test/helpers/") && importers.length > 0 && term.includes("/")) {
+    if (isTestHelper && importers.length > 0 && term.includes("/")) {
       break;
     }
   }
-  const result =
-    skippedBroadTerm && importers.length === 0 && !importedFile.startsWith("test/helpers/")
-      ? null
-      : importers;
+  const result = skippedBroadTerm && importers.length === 0 && !isTestHelper ? null : importers;
   cachedDirectImporters.set(cacheKey, result);
   return result;
 }

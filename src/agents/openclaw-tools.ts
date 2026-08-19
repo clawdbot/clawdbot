@@ -12,11 +12,9 @@ import { selectApplicableRuntimeConfig } from "../config/config.js";
 import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
-import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import {
   type HookContext,
@@ -43,6 +41,7 @@ import {
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
+import { resolveWidgetPresentationForRun } from "./openclaw-tools.widget-presentation.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -255,12 +254,7 @@ export function createOpenClawTools(
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir);
   const spawnWorkspaceDir = resolveWorkspaceRoot(options?.spawnWorkspaceDir ?? workspaceDir);
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
-  const deliveryContext = normalizeDeliveryContext({
-    channel: options?.agentChannel,
-    to: options?.agentTo,
-    accountId: options?.agentAccountId,
-    threadId: options?.agentThreadId,
-  });
+  const widgetPresentation = resolveWidgetPresentationForRun(options);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
@@ -318,7 +312,7 @@ export function createOpenClawTools(
     authProfileStore: options?.authProfileStore,
     agentSessionKey: mediaGenerationAgentSessionKey,
     requesterAgentId: sessionAgentId,
-    requesterOrigin: deliveryContext ?? undefined,
+    requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
     workspaceDir,
     preparedModelRuntime: options?.preparedModelRuntime,
     sandbox,
@@ -530,9 +524,9 @@ export function createOpenClawTools(
         })
       : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
-    // Discord owns show_widget; registering the core tool would collide.
-    ...(options?.agentChannel === "discord" ||
-    (!isCoreCanvasHostEnabled(resolvedConfig) && !hasRegisteredShowWidgetKinds())
+    ...(!isCoreCanvasHostEnabled(resolvedConfig) &&
+    !hasRegisteredShowWidgetKinds() &&
+    !widgetPresentation.currentChannelPresenter
       ? []
       : [
           createShowWidgetTool({
@@ -540,7 +534,9 @@ export function createOpenClawTools(
             agentId: sessionAgentId,
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
-            presenters: resolveWidgetPresenters().map((registration) => registration.presenter),
+            inlineClientAvailable: options?.clientCaps?.includes("inline-widgets") === true,
+            presenters: widgetPresentation.presenters,
+            presenterContext: widgetPresentation.context,
           }),
         ]),
     ...collectPresentOpenClawTools([heartbeatTool]),

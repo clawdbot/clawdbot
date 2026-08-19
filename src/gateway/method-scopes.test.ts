@@ -440,6 +440,12 @@ describe("method scope resolution", () => {
       "operator.admin",
     ],
     [
+      "configured-default dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread" },
+      "operator.admin",
+    ],
+    [
       "gateway move",
       "sessions.move",
       {

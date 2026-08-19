@@ -27,7 +27,12 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
     loadRuntimePlugins: input.loadRuntimePlugins === true,
     workspaceDir: input.workspaceDir,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
-    runtimePluginSelections: input.runtimePluginSelections,
+    // Normalization already resolves each model to its runtime. The workspace
+    // registry depends on provider/runtime ownership, not the model id itself.
+    runtimePluginSelections: input.runtimePluginSelections?.map(({ provider, runtime }) => ({
+      provider,
+      runtime,
+    })),
   });
 }
 

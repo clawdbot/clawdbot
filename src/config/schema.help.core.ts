@@ -5,7 +5,7 @@ import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
   "channels.discord.activities":
-    "Discord Activities configuration for launching interactive HTML widgets inside Discord. Leave unset to keep all Activity routes, tools, and handlers disabled.",
+    "Discord Activities configuration for presenting core show_widget documents inside Discord. Leave unset to keep Activity routes, presentation, and handlers disabled.",
   "channels.discord.activities.clientSecret":
     "OAuth2 client secret for the Discord application that hosts Activities. Keep this value secret; DISCORD_CLIENT_SECRET is used when this field is unset.",
   "channels.discord.activities.applicationId":

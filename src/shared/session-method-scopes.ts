@@ -16,7 +16,9 @@ export function resolveDynamicSessionMutationRequiredScope(
     if (!validateSessionsDispatchParams(params)) {
       return "operator.write";
     }
-    return params.profileId === undefined ? "operator.write" : "operator.admin";
+    // Only an explicit device target stays write-scoped. Both an explicit profile and the
+    // target-less configured-default lookup can allocate cloud infrastructure.
+    return params.deviceId === undefined ? "operator.admin" : "operator.write";
   }
   if (method === "sessions.move") {
     return validateSessionsMoveParams(params) && params.target.kind === "profile"

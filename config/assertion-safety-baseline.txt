@@ -335,7 +335,6 @@ extensions/discord/src/activities/discord-api.ts	1
 extensions/discord/src/activities/http.ts	1
 extensions/discord/src/activities/register.ts	1
 extensions/discord/src/activities/store.ts	1
-extensions/discord/src/activities/tool.ts	2
 extensions/discord/src/api.ts	3
 extensions/discord/src/approval-handler.runtime.ts	4
 extensions/discord/src/approval-native.ts	1
@@ -1970,7 +1969,7 @@ src/agents/model-fallback-runner.ts	2
 src/agents/model-provider-auth.ts	4
 src/agents/model-provider-auth.worker.ts	1
 src/agents/model-scan.ts	4
-src/agents/model-selection-shared.ts	3
+src/agents/model-selection-shared.ts	2
 src/agents/model-tool-support.ts	1
 src/agents/models-config-state.ts	1
 src/agents/models-config.merge.ts	2
@@ -3069,7 +3068,7 @@ src/gateway/server-plugins.ts	2
 src/gateway/server-reload-restart.ts	2
 src/gateway/server-reload-utils.ts	1
 src/gateway/server-resident-registry.ts	1
-src/gateway/server-restart-sentinel-agent-delivery.ts	3
+src/gateway/server-restart-sentinel-agent-delivery.ts	2
 src/gateway/server-runtime-handles.ts	11
 src/gateway/server-runtime-state-prepare.ts	2
 src/gateway/server-session-events.ts	1
@@ -4092,7 +4091,7 @@ ui/src/components/web-awesome.ts	2
 ui/src/components/wizard-step-controls.ts	4
 ui/src/i18n/lib/registry.ts	2
 ui/src/i18n/lib/translate.ts	3
-ui/src/lib/agents/display.ts	8
+ui/src/lib/agents/display.ts	6
 ui/src/lib/board/availability-controller.ts	1
 ui/src/lib/board/gateway-provider.ts	2
 ui/src/lib/board/widget-bridge.ts	3

@@ -26,10 +26,9 @@ import {
   prepareBrowserProxyUploadRequest,
 } from "./browser-proxy-upload.js";
 import {
-  applyBrowserProxyPaths,
   callGatewayTool,
   fetchBrowserJson,
-  persistBrowserProxyFiles,
+  persistBrowserProxyResultFiles,
 } from "./browser-tool.runtime.js";
 import { BrowserServiceError } from "./browser/client-fetch.js";
 import {
@@ -219,9 +218,7 @@ export function createBrowserNodeProxyRequest(params: {
       if (!("result" in proxy)) {
         throw new Error("Browser proxy returned a failure without an error payload.");
       }
-      const mapping = await persistBrowserProxyFiles(proxy.files);
-      applyBrowserProxyPaths(proxy.result, mapping);
-      return proxy.result;
+      return await persistBrowserProxyResultFiles(proxy.result, proxy.files);
     } catch (error) {
       if (!params.allowAutomaticHostFallback || !(error instanceof BrowserNodeSafeFallbackError)) {
         throw error;

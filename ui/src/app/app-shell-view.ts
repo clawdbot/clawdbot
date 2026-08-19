@@ -521,7 +521,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           `
         : nothing}
       <openclaw-app-topbar
-        .basePath=${context.basePath}
+        .resourceBasePath=${context.resourceBasePath}
         .navDrawerOpen=${navDrawerOpen}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
@@ -670,7 +670,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${browserPanelAvailable}
               .suppressed=${settingsTakeover}
-              .basePath=${context.basePath}
+              .resourceBasePath=${context.resourceBasePath}
               .authToken=${resolveControlUiAuthToken({
                 hello: gatewaySnapshot.hello,
                 settings: { token: context.gateway.connection.token },
@@ -682,6 +682,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${desktopPanelAvailable}
               .suppressed=${settingsTakeover}
+              .basePath=${context.basePath}
             ></openclaw-desktop-panel>
           `}
       <openclaw-custodian-panel

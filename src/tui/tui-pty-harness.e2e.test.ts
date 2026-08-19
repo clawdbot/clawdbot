@@ -8,6 +8,7 @@ import {
   disposeActiveTuiFixtures,
   exerciseFragmentedUnicodePrompt,
   exerciseNarrowTerminalRendering,
+  exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
   startTuiFixture,
@@ -21,7 +22,6 @@ import {
   streamingPrefixFrame,
   toolFrame,
 } from "./tui-pty-rendering-test-support.js";
-import { exerciseTerminalOutputSafety } from "./tui-pty-terminal-output-safety-test-support.js";
 const STARTUP_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;

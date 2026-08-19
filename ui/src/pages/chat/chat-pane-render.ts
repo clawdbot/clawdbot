@@ -241,7 +241,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     const fetchLinkFavicon = state.automaticallyFetchFavicons
       ? createLinkFaviconFetcher({
           auth: { hello: state.hello, settings: state.settings, password: state.password },
-          basePath: state.basePath,
+          resourceBasePath: state.resourceBasePath,
           gatewayUrl: state.client?.gatewayUrl ?? state.settings.gatewayUrl,
         })
       : undefined;
@@ -553,6 +553,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
+      resourceBasePath: state.resourceBasePath,
     };
     return this.renderChatPaneLayout({
       state,

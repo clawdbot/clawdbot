@@ -1700,7 +1700,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 
 ### Discord Activities
 
-Set `channels.discord.activities` to let agents post self-contained HTML widgets that open inside Discord. The block is opt-in; when absent, OpenClaw registers no Activity routes, tool, or interaction handler. See [Discord Activities](/channels/discord-activities) for the Developer Portal, tunnel, security, and troubleshooting setup.
+Set `channels.discord.activities` to let the core `show_widget` tool post self-contained HTML widgets that open inside Discord. The block is opt-in. Discord registers the Activity plumbing statically, but the current-channel presenter stays unavailable and `/discord/activity` remains externally hidden behind the normal 404 until an enabled account has an available bot token, resolved client secret, and application ID. See [Discord Activities](/channels/discord-activities) for the Developer Portal, tunnel, security, and troubleshooting setup.
 
 - `activities.clientSecret`: OAuth2 client secret for the Discord application; falls back to `DISCORD_CLIENT_SECRET`
 - `activities.applicationId`: optional Activity application ID; defaults to the bot application ID learned at gateway startup

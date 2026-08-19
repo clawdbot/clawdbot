@@ -6,6 +6,7 @@ import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } f
 
 const dispatchTestMocks = vi.hoisted(() => ({
   findLiveByOwner: vi.fn(),
+  runCommandWithTimeout: vi.fn(),
   resolveTarget: vi.fn(),
 }));
 
@@ -19,6 +20,15 @@ vi.mock("../../agents/worktrees/service.js", () => ({
   },
 }));
 
+vi.mock("../../process/exec.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+  return {
+    ...actual,
+    runCommandWithTimeout: dispatchTestMocks.runCommandWithTimeout,
+  };
+});
+
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
@@ -28,6 +38,13 @@ vi.mock("../session-utils.js", async () => {
 });
 
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
+
+export function getSessionDispatchHandler() {
+  return expectDefined(
+    sessionDispatchHandlers["sessions.dispatch"],
+    'sessionDispatchHandlers["sessions.dispatch"] test invariant',
+  );
+}
 
 export const dispatchTestSessionKey = "agent:main:cloud-test";
 export const dispatchTestSessionId = "session-cloud-test";
@@ -120,16 +137,13 @@ export function makeDispatchTestContext(
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: { profileId: string; machineClass?: string } | { deviceId: string } = {
+  target: { profileId?: string; machineClass?: string; deviceId?: string } = {
     profileId: "test",
   },
   sessionMutationAuthorization?: SessionMutationAuthorization,
 ) {
   const respond = vi.fn() as unknown as RespondFn;
-  await expectDefined(
-    sessionDispatchHandlers["sessions.dispatch"],
-    'sessionDispatchHandlers["sessions.dispatch"] test invariant',
-  )({
+  await getSessionDispatchHandler()({
     req: { id: "dispatch-request" } as never,
     params: { key: dispatchTestSessionKey, ...target },
     respond,
