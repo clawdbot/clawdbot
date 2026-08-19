@@ -1325,7 +1325,7 @@ describe("cron tool", () => {
           precheck: { command: "test -f /tmp/work" },
         },
       }),
-    ).rejects.toThrow("automation precheck host-shell gates cannot be created or edited");
+    ).rejects.toThrow("automation precheck host-shell gates cannot be created, edited, or cleared");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2974,7 +2974,22 @@ describe("cron tool", () => {
           precheck: { command: "test -f /tmp/work" },
         },
       }),
-    ).rejects.toThrow("automation precheck host-shell gates cannot be created or edited");
+    ).rejects.toThrow("automation precheck host-shell gates cannot be created, edited, or cleared");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects clearing precheck via null from the agent cron tool on update", async () => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-precheck-clear-null", {
+        action: "update",
+        id: "job-4",
+        job: {
+          precheck: null,
+        },
+      }),
+    ).rejects.toThrow("automation precheck host-shell gates cannot be created, edited, or cleared");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 

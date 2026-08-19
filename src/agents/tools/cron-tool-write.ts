@@ -26,12 +26,12 @@ export function assertNoCronShellExecution(value: unknown): void {
     );
   }
   // Host-shell precheck is a persisted unattended exec surface. Agents must
-  // not create/edit it via the automations tool (same boundary as command payloads).
-  const precheck = isRecord(value.precheck) ? value.precheck : undefined;
-  const precheckCommand = precheck?.command;
-  if (typeof precheckCommand === "string" && precheckCommand.trim().length > 0) {
+  // not create, edit, or clear it via the automations tool (CLI/Gateway only).
+  // Own-key presence matters: `precheck: null` would otherwise delete an
+  // operator-configured gate through applyJobPatch.
+  if (Object.prototype.hasOwnProperty.call(value, "precheck")) {
     throw new Error(
-      "automation precheck host-shell gates cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
+      "automation precheck host-shell gates cannot be created, edited, or cleared through the agent automations tool; use the CLI or Gateway API.",
     );
   }
   const schedule = isRecord(value.schedule) ? value.schedule : undefined;
