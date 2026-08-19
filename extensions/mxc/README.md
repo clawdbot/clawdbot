@@ -46,14 +46,14 @@ readiness behavior to change as MXC host support matures.
 and out-of-range values fail plugin activation with an actionable error
 (`Invalid mxc plugin config: <reason>`) instead of falling back silently.
 
-| Field            | Type                              | Default                        | Notes                                                                                                                                                         |
-| ---------------- | --------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mxcBinaryPath`  | `string`                          | unset                          | Non-empty override for the `wxc-exec.exe` executor path; see [SDK-only executor discovery](#supported).                                                       |
-| `containment`    | `"process" \| "processcontainer"` | `"process"`                    | Both currently resolve to Windows ProcessContainer.                                                                                                           |
-| `network`        | `"none" \| "default"`             | `"none"`                       | `"default"` allows outbound network via the `internetClient` capability.                                                                                      |
-| `timeoutSeconds` | `number`                          | `120`                          | Must be `>= 1` and `<= 2147000` (the largest Node-safe `setTimeout` delay in whole seconds). Capped to the sandbox policy baseline timeout when both are set. |
-| `debug`          | `boolean`                         | `false`                        | Forwards debug output from the MXC SDK launcher.                                                                                                              |
-| `mxcPolicyPaths` | `string[]`                        | unset (built-in baseline only) | Every entry must be a non-empty absolute path. See [Sandbox policy files](#sandbox-policy-files).                                                             |
+| Field            | Type                              | Default                                | Notes                                                                                                                                                         |
+| ---------------- | --------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mxcBinaryPath`  | `string`                          | unset                                  | Non-empty override for the `wxc-exec.exe` executor path; see [SDK-only executor discovery](#supported).                                                       |
+| `containment`    | `"process" \| "processcontainer"` | `"process"`                            | Both currently resolve to Windows ProcessContainer.                                                                                                           |
+| `network`        | `"none" \| "default"`             | `"none"`                               | `"default"` allows outbound network via the `internetClient` capability.                                                                                      |
+| `timeoutSeconds` | `number`                          | unset (baseline default `300` applies) | Must be `>= 1` and `<= 2147000` (the largest Node-safe `setTimeout` delay in whole seconds). Capped to the sandbox policy baseline timeout when both are set. |
+| `debug`          | `boolean`                         | `false`                                | Forwards debug output from the MXC SDK launcher.                                                                                                              |
+| `mxcPolicyPaths` | `string[]`                        | unset (built-in baseline only)         | Every entry must be a non-empty absolute path. See [Sandbox policy files](#sandbox-policy-files).                                                             |
 
 Any other key is rejected. `openclaw.plugin.json` publishes the same schema
 (enums, `minimum`/`maximum` bounds) so `openclaw config` validation and CLI
