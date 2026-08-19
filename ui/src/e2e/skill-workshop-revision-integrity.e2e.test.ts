@@ -309,11 +309,10 @@ suite.define(() => {
         sessionKey: "main",
       });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await page.waitForURL(/\/chat(?:[/?#].*)?$/u);
+      await page.waitForURL(/\/skills\/workshop(?:[?#].*)?$/u);
 
       await setProposalRevision(gateway, H2);
       await gateway.rejectDeferred("skills.proposals.requestRevision", staleError);
-      await page.waitForURL(/\/skills\/workshop(?:[?#].*)?$/u);
       await waitForProposalRefresh(page, gateway, listCount, inspectCount);
       expect(await gateway.getRequests("skills.proposals.requestRevision")).toHaveLength(
         revisionCount + 1,
@@ -369,8 +368,7 @@ suite.define(() => {
         runId,
         status: "started",
       });
-      await gateway.emitChatFinal({ runId, sessionKey: "main", text: "H2 revision started." });
-      await page.locator("p").getByText("H2 revision started.", { exact: true }).waitFor();
+      await page.waitForURL(/\/chat(?:[/?#].*)?$/u);
       expect(await gateway.getRequests("skills.proposals.requestRevision")).toHaveLength(
         secondRevisionCount + 1,
       );

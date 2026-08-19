@@ -366,7 +366,7 @@ async function refreshAfterMutation(
   await loadSkillWorkshopProposalDetail(state, context, proposalId, { force: true });
 }
 
-export function markSkillWorkshopRevisionChanged(
+function markSkillWorkshopRevisionChanged(
   state: SkillWorkshopState,
   proposalId: string,
   fallback?: SkillWorkshopProposal,
