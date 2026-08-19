@@ -66,12 +66,23 @@ type ChannelActionsContractCase = {
   name: string;
   cfg: OpenClawConfig;
   expectedActions: readonly ChannelMessageActionName[];
+  expectedCanonicalOutboundActions?: readonly ChannelMessageActionName[];
   expectedCapabilities?: readonly ChannelMessageCapability[];
   beforeTest?: () => void;
 };
 
+function hasCanonicalOutboundAction(
+  plugin: Pick<ChannelPlugin, "message" | "outbound">,
+  action: ChannelMessageActionName,
+) {
+  if (action !== "poll") {
+    return false;
+  }
+  return Boolean(plugin.outbound?.sendPoll || plugin.message?.send?.poll);
+}
+
 export function installChannelActionsContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "actions">;
+  plugin: Pick<ChannelPlugin, "id" | "actions" | "message" | "outbound">;
   cases: readonly ChannelActionsContractCase[];
   unsupportedAction?: ChannelMessageActionName;
 }) {
@@ -96,8 +107,19 @@ export function installChannelActionsContractSuite(params: {
       expect(sortStrings(actions)).toEqual(sortStrings(testCase.expectedActions));
       expect(sortStrings(capabilities)).toEqual(sortStrings(testCase.expectedCapabilities ?? []));
 
+      const canonicalOutboundActions = new Set(testCase.expectedCanonicalOutboundActions ?? []);
+      for (const action of canonicalOutboundActions) {
+        expect(actions).toContain(action);
+        expect(hasCanonicalOutboundAction(params.plugin, action)).toBe(true);
+        expect(params.plugin.actions?.supportsAction).toBeTypeOf("function");
+        expect(params.plugin.actions?.supportsAction?.({ action })).toBe(false);
+      }
+
       if (params.plugin.actions?.supportsAction) {
         for (const action of testCase.expectedActions) {
+          if (canonicalOutboundActions.has(action)) {
+            continue;
+          }
           expect(params.plugin.actions.supportsAction({ action })).toBe(true);
         }
         if (

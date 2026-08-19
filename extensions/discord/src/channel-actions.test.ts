@@ -364,7 +364,7 @@ describe("discordMessageActions", () => {
     expect(discovery?.schema).toBeUndefined();
   });
 
-  it.each(["read", "search", "edit", "delete", "react", "pin", "poll", "channel-info"])(
+  it.each(["read", "search", "edit", "delete", "react", "pin", "channel-info"])(
     "routes %s actions through gateway execution mode",
     (action) => {
       expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
@@ -375,6 +375,7 @@ describe("discordMessageActions", () => {
 
   it.each([
     "send",
+    "poll",
     "upload-file",
     "thread-reply",
     "sticker",
