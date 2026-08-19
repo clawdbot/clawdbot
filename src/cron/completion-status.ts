@@ -13,7 +13,7 @@ type CronCompletionJob = {
 export type CronCompletionStatus = "succeeded" | "failed" | "unknown";
 
 /** Required delivery is an explicit admitted policy, never an inferred default. */
-export function isCronDeliveryRequired(job: CronCompletionJob): boolean {
+function isCronDeliveryRequired(job: CronCompletionJob): boolean {
   return (
     job.delivery?.bestEffort === false &&
     (job.delivery.mode === "announce" || job.delivery.mode === "webhook")
