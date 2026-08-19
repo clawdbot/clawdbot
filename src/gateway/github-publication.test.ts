@@ -93,6 +93,17 @@ describe("Gateway GitHub publication", () => {
       ]),
     );
     expect(push).not.toContain(`HEAD:refs/heads/${BRANCH}`);
+    const fetch = commands.find((argv) => argv.includes("fetch"));
+    expect(fetch).toEqual(
+      expect.arrayContaining([
+        `core.hooksPath=${os.devNull}`,
+        "core.fsmonitor=false",
+        "maintenance.auto=false",
+        "gc.auto=0",
+        "--no-auto-maintenance",
+        "--recurse-submodules=no",
+      ]),
+    );
     const post = commandCalls.find(({ argv }) => argv.includes("POST"));
     expect(post?.argv).toEqual([
       "gh",
@@ -373,11 +384,17 @@ describe("Gateway GitHub publication", () => {
     ["HTTP proxy", "http.proxy https://attacker.invalid/"],
     ["push expansion", "push.followtags true"],
     ["worktree redirect", "core.worktree /tmp/other-checkout"],
+    ["alternate refs command", "core.alternaterefscommand ./steal-profile"],
+    ["askpass command", "core.askpass ./steal-profile"],
+    ["fsmonitor command", "core.fsmonitor ./steal-profile"],
+    ["credential helper", "credential.helper ./steal-profile"],
+    ["remote upload-pack", "remote.origin.uploadpack ./steal-profile"],
+    ["upload-pack hook", "uploadpack.packobjectshook ./steal-profile"],
   ])("rejects repository-local %s before snapshot or transport", async (label, configLine) => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       if (argv.includes("--includes") && argv.includes("--get-regexp")) {
-        expect(argv).not.toContain("--local");
+        expect(argv.some((arg) => arg === "--local" || arg === "--worktree")).toBe(true);
         return commandResult(`${configLine}\n`);
       }
       return await fallback(argv, options);
@@ -838,10 +855,7 @@ describe("Gateway GitHub publication", () => {
         if (command === "git rev-parse HEAD^") {
           return commandResult(`${OLD_HEAD}\n`);
         }
-        if (
-          command ===
-          "git config --includes --get-regexp ^(filter\\..*|url\\..*\\.(insteadof|pushinsteadof)|include(if)?\\..*|http\\..*|push\\..*|core\\.worktree)$"
-        ) {
+        if (argv.includes("--includes") && argv.includes("--get-regexp")) {
           return commandResult("", 1);
         }
         if (command === "git rev-parse --verify --end-of-options origin/main^{commit}") {

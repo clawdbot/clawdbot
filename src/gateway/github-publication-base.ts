@@ -1,3 +1,4 @@
+import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 
@@ -20,7 +21,16 @@ export function githubPublicationBaseFetchArgs(repository: string, sha: string):
     "credential.helper=",
     "-c",
     "credential.helper=!gh auth git-credential",
+    "-c",
+    `core.hooksPath=${os.devNull}`,
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "gc.auto=0",
     "fetch",
+    "--no-auto-maintenance",
     "--no-tags",
     "--no-write-fetch-head",
     "--recurse-submodules=no",
@@ -32,6 +42,17 @@ export function githubPublicationBaseFetchArgs(repository: string, sha: string):
 
 export function githubPublicationBaseLineageArgs(ancestor: string, descendant: string): string[] {
   return ["git", "merge-base", "--is-ancestor", ancestor, descendant];
+}
+
+export function githubPublicationUnsafeConfigArgs(scope: "--local" | "--worktree"): string[] {
+  return [
+    "git",
+    "config",
+    scope,
+    "--includes",
+    "--get-regexp",
+    "^(core\\.(alternaterefscommand|askpass|fsmonitor|gitproxy|hookspath|sshcommand|worktree)|credential\\..*helper|filter\\..*|http\\..*|include(if)?\\..*|push\\..*|remote\\..*\\.(proxy|receivepack|uploadpack|vcs)|uploadpack\\.packobjectshook|url\\..*\\.(insteadof|pushinsteadof))$",
+  ];
 }
 
 export function parseGitHubPublicationBaseBranch(baseRef: string, defaultBranch: string): string {

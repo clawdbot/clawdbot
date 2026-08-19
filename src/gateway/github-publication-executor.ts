@@ -19,6 +19,7 @@ import {
   githubPublicationBaseFetchArgs,
   githubPublicationBaseLineageArgs,
   githubPublicationBaseLookupArgs,
+  githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseBranch,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
@@ -99,20 +100,17 @@ function parseJsonObject(value: string, label: string): Record<string, unknown> 
 }
 
 async function assertSafeGitPublicationConfig(cwd: string): Promise<void> {
-  const unsafe = await runCommand(
-    [
-      "git",
-      "config",
-      "--includes",
-      "--get-regexp",
-      "^(filter\\..*|url\\..*\\.(insteadof|pushinsteadof)|include(if)?\\..*|http\\..*|push\\..*|core\\.worktree)$",
-    ],
-    {
-      cwd,
-      env: { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
-    },
+  const scopes: Array<"--local" | "--worktree"> = ["--local", "--worktree"];
+  const unsafe = await Promise.all(
+    scopes.map(
+      async (scope) =>
+        await runCommand(githubPublicationUnsafeConfigArgs(scope), {
+          cwd,
+          env: { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
+        }),
+    ),
   );
-  if (unsafe.code !== 1 || unsafe.stdout.length > 0) {
+  if (unsafe.some((result) => result.code !== 1 || result.stdout.length > 0)) {
     throw new Error("GitHub publication workspace has unsupported Git transport configuration.");
   }
 }

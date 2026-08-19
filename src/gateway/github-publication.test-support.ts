@@ -271,10 +271,7 @@ export function installGitHubPublicationTestHarness(): void {
         if (command === "git show -s --format=%B HEAD") {
           return commandResult("existing commit\n");
         }
-        if (
-          command ===
-          "git config --includes --get-regexp ^(filter\\..*|url\\..*\\.(insteadof|pushinsteadof)|include(if)?\\..*|http\\..*|push\\..*|core\\.worktree)$"
-        ) {
+        if (argv.includes("--includes") && argv.includes("--get-regexp")) {
           return commandResult("", 1);
         }
         if (command.endsWith("write-tree")) {
