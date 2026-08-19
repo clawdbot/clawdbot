@@ -9,6 +9,7 @@ type WidgetExportRuntime = {
   requestSnapshot?: typeof requestWidgetSnapshot;
   copyImage?: (dataUrl: Promise<string>) => Promise<void>;
   download?: typeof downloadHref;
+  fetch?: typeof globalThis.fetch;
 };
 
 class WidgetSnapshotUnavailableError extends Error {}
@@ -84,7 +85,7 @@ export async function exportWidget(
   frame: HTMLIFrameElement,
   title: string | undefined,
   runtime: WidgetExportRuntime = {},
-): Promise<"png" | "rerender-required"> {
+): Promise<"png" | "html" | "rerender-required"> {
   const filename =
     Array.from((title ?? "").trim(), (character) => {
       const codePoint = character.codePointAt(0) ?? 0;
@@ -135,9 +136,27 @@ export async function exportWidget(
     (runtime.download ?? downloadHref)(dataUrl, `${filename}.png`);
     return "png";
   } catch (error) {
-    if (error instanceof WidgetSnapshotUnavailableError) {
-      return "rerender-required";
+    if (!(error instanceof WidgetSnapshotUnavailableError)) {
+      throw error;
     }
-    throw error;
+    const src = frame.getAttribute("src");
+    if (!src) {
+      throw new Error("widget document URL is unavailable", { cause: error });
+    }
+    const url = new URL(src, window.location.href);
+    if (url.origin !== window.location.origin) {
+      throw new Error("widget document URL is not same-origin", { cause: error });
+    }
+    const response = await (runtime.fetch ?? globalThis.fetch)(url.href);
+    if (!response.ok) {
+      throw new Error(`widget document download failed (${response.status})`, { cause: error });
+    }
+    const objectUrl = URL.createObjectURL(await response.blob());
+    try {
+      (runtime.download ?? downloadHref)(objectUrl, `${filename}.html`);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+    return "html";
   }
 }
