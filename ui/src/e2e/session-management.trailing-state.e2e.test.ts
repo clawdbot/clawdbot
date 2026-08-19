@@ -97,8 +97,11 @@ suite.define(() => {
       const actionOnlyLink = actionOnlyRow.locator(".sidebar-recent-session__link");
       const actionOnlyPin = actionOnlyRow.getByRole("button", { name: "Pin session" });
       await expect
+        .poll(() => actionOnlyRow.getAttribute("class"))
+        .toContain("sidebar-recent-session--single-line");
+      await expect
         .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("4px");
+        .toBe("2px");
       const restingTextBounds = await actionOnlyText.boundingBox();
 
       await actionOnlyRow.hover();
@@ -142,7 +145,10 @@ suite.define(() => {
       if (!nameBounds || !pinBounds || !menuBounds) {
         throw new Error("Expected visible hovered action geometry");
       }
-      expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(pinBounds.y + pinBounds.height / 2);
+      expect(nameBounds.y + nameBounds.height / 2).toBeCloseTo(
+        pinBounds.y + pinBounds.height / 2,
+        1,
+      );
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
 
       await page.mouse.move(0, 0);
@@ -159,8 +165,9 @@ suite.define(() => {
       if (!focusedNameBounds || !focusedPinBounds || !focusedMenuBounds) {
         throw new Error("Expected visible focused action geometry");
       }
-      expect(focusedNameBounds.y + focusedNameBounds.height / 2).toBeLessThan(
+      expect(focusedNameBounds.y + focusedNameBounds.height / 2).toBeCloseTo(
         focusedPinBounds.y + focusedPinBounds.height / 2,
+        1,
       );
       expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
@@ -378,7 +385,7 @@ suite.define(() => {
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect
         .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("4px");
+        .toBe("2px");
 
       const [restingTextBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
         await Promise.all([

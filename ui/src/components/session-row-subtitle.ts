@@ -17,6 +17,7 @@ export function resolveSidebarSessionSubtitle(params: {
   hasDisplay: boolean;
   displaySubtitle: string | undefined;
   sidebarLiveActivity: boolean;
+  showPreview: boolean;
   narrationLine: string | undefined;
   observerDigest?: Pick<
     SessionObserverDigest,
@@ -25,6 +26,12 @@ export function resolveSidebarSessionSubtitle(params: {
 }): SidebarSessionSubtitle {
   const { session } = params;
   const attention = sessionAttentionSubtitle(session.attention);
+  // Preview off hides ambient text only. Attention survives the toggle because an
+  // error or pending approval is state the operator must act on, and a display
+  // preference that can silence it turns a visible failure into a silent one.
+  if (!params.showPreview) {
+    return { subtitle: attention, narration: undefined };
+  }
   // Agent-declared status (sessions tool) outranks live narration: it is an
   // explicit message to the user, not ambient activity.
   const agentStatus = session.agentStatusNote || undefined;

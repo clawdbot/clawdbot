@@ -587,6 +587,24 @@ export function collectKnownSidebarSessionGroups(
   return [...catalog, ...new Set(discovered)];
 }
 
+/** Depth-first flatten of a projected session tree. Callers that reason about the
+ *  whole list (creator facets, selection fallback) need every descendant, not just
+ *  the roots; two hand-rolled walks drifted apart before this existed. */
+export function flattenSidebarSessionTree(
+  roots: readonly SidebarRecentSession[],
+): SidebarRecentSession[] {
+  const flattened: SidebarRecentSession[] = [];
+  const pending = [...roots];
+  while (pending.length > 0) {
+    const row = pending.shift();
+    if (row) {
+      flattened.push(row);
+      pending.push(...row.children);
+    }
+  }
+  return flattened;
+}
+
 export function findProjectedSidebarSession(input: {
   sessionKey: string;
   navigationState: SidebarSessionNavigationState;
@@ -645,23 +663,9 @@ export function applySidebarSessionOwnerFilter(input: {
   const ownerOptions = selfOwner
     ? [selfOwner, ...facetOwners.filter((owner) => owner.id !== selfOwner.id)]
     : facetOwners;
-  let hasParticipants = false;
-  if (ownerOptions.length < 2) {
-    const pending = [...input.projected];
-    let index = 0;
-    while (index < pending.length) {
-      const row = pending[index];
-      index += 1;
-      if (!row) {
-        continue;
-      }
-      if ((row.participantCount ?? 0) > 0) {
-        hasParticipants = true;
-        break;
-      }
-      pending.push(...row.children);
-    }
-  }
+  const hasParticipants =
+    ownerOptions.length < 2 &&
+    flattenSidebarSessionTree(input.projected).some((row) => (row.participantCount ?? 0) > 0);
   const ownershipVisible = ownerOptions.length >= 2 || hasParticipants;
   const activeOwnerId = ownershipVisible
     ? ownerOptions.some((owner) => owner.id === input.selectedOwnerId)

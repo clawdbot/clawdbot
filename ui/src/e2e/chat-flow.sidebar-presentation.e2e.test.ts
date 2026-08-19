@@ -316,7 +316,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps session titles on the first line and status on a fixed second line", async () => {
+  it("keeps session titles on the first line and collapses rows that have no second line", async () => {
     if (captureUiProofEnabled) {
       await mkdir(sessionSecondRowProofDir, { recursive: true });
     }
@@ -412,9 +412,16 @@ suite.define(() => {
           subtitle: rect(".sidebar-recent-session__subtitle"),
         };
       });
-      const plainHeight = await plainRow.evaluate((row) => row.getBoundingClientRect().height);
+      const plain = await plainRow.evaluate((row) => ({
+        height: row.getBoundingClientRect().height,
+        singleLine: row.classList.contains("sidebar-recent-session--single-line"),
+      }));
 
-      expect(layout.busyHeight).toBeCloseTo(plainHeight, 1);
+      // A row with no secondary metadata no longer reserves the second line: it
+      // collapses so its endcap rides beside the title instead of hanging alone
+      // beneath it. Only rows that actually have a subtitle keep the two-line shape.
+      expect(plain.singleLine).toBe(true);
+      expect(plain.height).toBeLessThan(layout.busyHeight);
       expect(layout.badges.top).toBeGreaterThanOrEqual(layout.name.bottom - 1);
       expect(layout.name.right).toBeGreaterThan(layout.badges.left);
       expect((layout.badges.top + layout.badges.bottom) / 2).toBeCloseTo(

@@ -21,6 +21,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: true,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
         narrationLine: undefined,
       }),
     ).toEqual({ subtitle: undefined, narration: undefined });
@@ -33,6 +34,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
         narrationLine: "Still running",
       }),
     ).toEqual({ subtitle: "~/Projects/openclaw", narration: undefined });
@@ -72,6 +74,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
         narrationLine: "Using test runner",
         observerDigest,
       });
@@ -92,6 +95,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
         narrationLine: "Using test runner",
         observerDigest: null,
       }),
@@ -111,6 +115,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
         narrationLine: "Using test runner",
         observerDigest: {
           runId,
@@ -150,6 +155,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
         narrationLine: undefined,
         observerDigest: null,
       }).subtitle,
@@ -173,6 +179,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
         narrationLine: undefined,
         observerDigest: null,
       }).subtitle,
@@ -197,6 +204,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
         narrationLine: undefined,
         observerDigest: null,
       }).subtitle;
@@ -221,6 +229,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
+        showPreview: true,
         narrationLine: "Running the focused tests",
         observerDigest: {
           runId: "run-1",
@@ -231,6 +240,44 @@ describe("resolveSidebarSessionSubtitle", () => {
         },
       }).subtitle,
     ).toBe("Implementing the repair");
+  });
+
+  it("keeps attention visible while hiding every preview candidate", () => {
+    const hidden = (session: SidebarRecentSession, narrationLine?: string) =>
+      resolveSidebarSessionSubtitle({
+        session,
+        hasDisplay: false,
+        displaySubtitle: undefined,
+        sidebarLiveActivity: true,
+        showPreview: false,
+        narrationLine,
+        observerDigest: session.observerDigest ?? null,
+      }).subtitle;
+
+    expect(
+      hidden({
+        ...workSession(),
+        attention: { kind: "error", reason: "Deployment failed" },
+        agentStatusNote: "Waiting for deployment",
+        lastMessagePreview: "The final reply is durable.",
+      }),
+    ).toBe("Run failed: Deployment failed");
+
+    expect([
+      hidden({ ...workSession(), agentStatusNote: "Waiting for deployment" }),
+      hidden({ ...workSession(), hasActiveRun: true }, "Using test runner"),
+      hidden({
+        ...workSession(),
+        observerDigest: {
+          headline: "Running checks",
+          health: "done",
+          updatedAt: 2_000,
+          revision: 1,
+        },
+      }),
+      hidden({ ...workSession(), lastMessagePreview: "The final reply is durable." }),
+      hidden(workSession()),
+    ]).toEqual([undefined, undefined, undefined, undefined, undefined]);
   });
 });
 
