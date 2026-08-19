@@ -170,7 +170,10 @@ for _ in $(seq 1 ${seconds}); do
   win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
   if [ -n "$win" ]; then
     scrot -o ${shellQuote(`${REMOTE_ROOT}/telegram-main-window.png`)}
-    if ! zbarimg --raw ${shellQuote(`${REMOTE_ROOT}/telegram-main-window.png`)} | grep -q '^tg://login?token='; then
+    # No decodable QR is the success signal here, so zbarimg's "not detected" complaint would
+    # make every healthy wait read as a failure. renderReadQrLink keeps its stderr, where a
+    # failed decode is the reported problem.
+    if ! zbarimg --raw ${shellQuote(`${REMOTE_ROOT}/telegram-main-window.png`)} 2>/dev/null | grep -q '^tg://login?token='; then
       exit 0
     fi
   fi

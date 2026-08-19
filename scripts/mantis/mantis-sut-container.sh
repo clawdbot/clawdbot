@@ -124,8 +124,8 @@ cancel_runtime_claim() {
 }
 
 terminate_runtime_claim() {
-  # cancel_runtime_claim already captured the root-owned PID/PGID/start tuple.
-  # Never reread by name here: delayed cleanup must not target a replacement claim.
+  # Uses the tuple cancel_runtime_claim captured; never reread the claim by name here,
+  # or delayed cleanup targets whatever replacement claim now holds the container name.
   if claim_process_is_active; then
     kill -TERM -- "-$claimed_pgid" 2>/dev/null || true
   fi
@@ -834,10 +834,12 @@ case "$command" in
     [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
       || die "invalid runtime source"
     cancel_runtime_claim "$1" "$runtime_source"
+    # Release the owner before the removal below, which the 30s supervisor can kill: a claim
+    # still held then is unrecoverable, since destroy refuses one and nothing else ends it.
+    terminate_runtime_claim
     stop_result=0
     remove_container_or_fail "$1" || stop_result=1
     cleanup_network "${1}-net" || stop_result=1
-    terminate_runtime_claim
     exit "$stop_result"
     ;;
   destroy)
