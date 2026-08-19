@@ -63,6 +63,10 @@ type UserProfileDisplay = {
   hasAvatar: boolean;
 };
 
+type GitHubAuthenticationAlias =
+  | { kind: "email"; email: string }
+  | { kind: "github-login"; login: string };
+
 type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
@@ -100,6 +104,25 @@ function toUserProfile(row: UserProfileRow): UserProfile {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function insertUserProfile(
+  db: DatabaseSync,
+  displayName: string | null,
+  now: number,
+): UserProfileRow {
+  const row: UserProfileRow = {
+    id: generateSecureUuid(),
+    display_name: displayName,
+    avatar: null,
+    avatar_mime: null,
+    avatar_sha256: null,
+    merged_into: null,
+    created_at: now,
+    updated_at: now,
+  };
+  executeSqliteQuerySync(db, userProfilesDb(db).insertInto("user_profiles").values(row));
+  return row;
 }
 
 function toUserProfileListItem(
@@ -206,7 +229,6 @@ function ensureProfileForEmailWithInitialName(
   options: OpenClawStateDatabaseOptions,
 ): UserProfile {
   const normalizedEmail = normalizeEmail(email);
-  const profileId = generateSecureUuid();
   const now = Date.now();
   const displayName =
     initialDisplayName ??
@@ -228,22 +250,12 @@ function ensureProfileForEmailWithInitialName(
       if (existingAlias) {
         return toUserProfile(requireResolvedUserProfileById(db, existingAlias.profile_id));
       }
-      const row: UserProfileRow = {
-        id: profileId,
-        display_name: displayName,
-        avatar: null,
-        avatar_mime: null,
-        avatar_sha256: null,
-        merged_into: null,
-        created_at: now,
-        updated_at: now,
-      };
-      executeSqliteQuerySync(db, kysely.insertInto("user_profiles").values(row));
+      const row = insertUserProfile(db, displayName, now);
       executeSqliteQuerySync(
         db,
         kysely.insertInto("user_profile_emails").values({
           email: normalizedEmail,
-          profile_id: profileId,
+          profile_id: row.id,
           created_at: now,
         }),
       );
@@ -268,7 +280,6 @@ function ensureProfileForProviderIdentity(params: {
   initialDisplayName: string | null;
   options: OpenClawStateDatabaseOptions;
 }): UserProfile {
-  const profileId = generateSecureUuid();
   const now = Date.now();
   const subject =
     params.provider === "github" ? githubAuthenticationSubject(params.subject) : params.subject;
@@ -305,23 +316,13 @@ function ensureProfileForProviderIdentity(params: {
         }
         return toUserProfile(requireResolvedUserProfileById(db, existingIdentity.profile_id));
       }
-      const row: UserProfileRow = {
-        id: profileId,
-        display_name: params.initialDisplayName,
-        avatar: null,
-        avatar_mime: null,
-        avatar_sha256: null,
-        merged_into: null,
-        created_at: now,
-        updated_at: now,
-      };
-      executeSqliteQuerySync(db, kysely.insertInto("user_profiles").values(row));
+      const row = insertUserProfile(db, params.initialDisplayName, now);
       executeSqliteQuerySync(
         db,
         kysely.insertInto("user_profile_identities").values({
           provider: params.provider,
           subject,
-          profile_id: profileId,
+          profile_id: row.id,
           canonical_login: null,
           created_at: now,
         }),
@@ -594,26 +595,51 @@ export function setDisplayName(
   );
 }
 
+function normalizeGitHubAuthenticationAlias(
+  alias: GitHubAuthenticationAlias,
+): { kind: "email"; email: string } | { kind: "github-login"; subject: string } {
+  return alias.kind === "email"
+    ? { kind: "email", email: normalizeEmail(alias.email) }
+    : { kind: "github-login", subject: githubAuthenticationSubject(alias.login) };
+}
+
 export function syncGitHubIdentity(
-  profileId: string,
-  identity: { accountId: number; login: string },
+  params: {
+    identity: { accountId: number; login: string };
+    authenticationAlias: GitHubAuthenticationAlias;
+    initialDisplayName?: string;
+  },
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileListItem {
+  const alias = normalizeGitHubAuthenticationAlias(params.authenticationAlias);
+  const initialDisplayName = normalizeInitialDisplayName(params.initialDisplayName);
   ensureUserProfilesSchema(options);
   ensureUserPreferencesSchema(options);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const now = Date.now();
+      const kysely = userProfilesDb(db);
       const canonicalProfileId = applyVerifiedGitHubIdentity({
         db,
-        profileId,
-        identity,
+        alias,
+        identity: params.identity,
+        createProfile: () => insertUserProfile(db, initialDisplayName, now).id,
         mergeProfiles: (sourceProfileId, targetProfileId) =>
           mergeUserProfiles(db, sourceProfileId, targetProfileId, now),
       });
+      if (initialDisplayName) {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("user_profiles")
+            .set({ display_name: initialDisplayName, updated_at: now })
+            .where("id", "=", canonicalProfileId)
+            .where("display_name", "is", null),
+        );
+      }
       executeSqliteQuerySync(
         db,
-        userProfilesDb(db)
+        kysely
           .updateTable("user_profiles")
           .set({ updated_at: now })
           .where("id", "=", canonicalProfileId),

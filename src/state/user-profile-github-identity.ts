@@ -8,15 +8,10 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { mutateUserPreference, selectUserPreferenceValues } from "./user-preferences.js";
-import {
-  requireResolvedUserProfileById,
-  selectResolvedUserProfileById,
-  userProfilesDb,
-} from "./user-profiles-internal.js";
+import { selectResolvedUserProfileById, userProfilesDb } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 
 const GITHUB_PROVIDER = "github";
-const LEGACY_GITHUB_ATTRIBUTION_PROVIDER = "github-attribution";
 const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";
 
 type StoredGitHubIdentity = {
@@ -165,8 +160,9 @@ export function prepareUserProfileGitHubMerge(
 
 export function applyVerifiedGitHubIdentity(params: {
   db: DatabaseSync;
-  profileId: string;
+  alias: { kind: "email"; email: string } | { kind: "github-login"; subject: string };
   identity: { accountId: number; login: string };
+  createProfile: () => string;
   mergeProfiles: (sourceProfileId: string, targetProfileId: string) => void;
 }): string {
   if (!Number.isSafeInteger(params.identity.accountId) || params.identity.accountId <= 0) {
@@ -178,8 +174,8 @@ export function applyVerifiedGitHubIdentity(params: {
   }
   const db = params.db;
   const kysely = userProfilesDb(db);
-  const currentProfileId = requireResolvedUserProfileById(db, params.profileId).id;
   const subject = String(params.identity.accountId);
+  const now = Date.now();
   const existing = executeSqliteQueryTakeFirstSync(
     db,
     kysely
@@ -189,6 +185,40 @@ export function applyVerifiedGitHubIdentity(params: {
       .where("subject", "=", subject)
       .where("canonical_login", "is not", null),
   );
+  const aliasIdentity =
+    params.alias.kind === "email"
+      ? executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("user_profile_emails")
+            .select("profile_id")
+            .where("email", "=", params.alias.email),
+        )
+      : executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("user_profile_identities")
+            .select("profile_id")
+            .where("provider", "=", GITHUB_PROVIDER)
+            .where("subject", "=", params.alias.subject)
+            .where("canonical_login", "is", null),
+        );
+  const aliasProfileId = aliasIdentity
+    ? selectResolvedUserProfileById(db, aliasIdentity.profile_id)?.id
+    : undefined;
+  const aliasGitHubIdentity = aliasProfileId
+    ? selectStoredGitHubIdentities(db, [aliasProfileId]).get(aliasProfileId)
+    : undefined;
+  const reusableAliasProfileId =
+    aliasProfileId &&
+    (aliasGitHubIdentity === undefined ||
+      aliasGitHubIdentity.accountId === params.identity.accountId)
+      ? aliasProfileId
+      : undefined;
+  const currentProfileId =
+    reusableAliasProfileId ??
+    (existing ? selectResolvedUserProfileById(db, existing.profile_id)?.id : undefined) ??
+    params.createProfile();
   const targetProfileId = existing
     ? (selectResolvedUserProfileById(db, existing.profile_id)?.id ?? currentProfileId)
     : currentProfileId;
@@ -200,34 +230,6 @@ export function applyVerifiedGitHubIdentity(params: {
     currentIdentity?.accountId !== params.identity.accountId
   ) {
     mutateUserPreference(db, targetProfileId, GIT_COAUTHOR_PREFERENCE_KEY);
-  }
-
-  const migrationProfileIds = [...new Set([currentProfileId, targetProfileId])];
-  const legacyRows = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("user_profile_identities")
-      .select(["profile_id", "subject", "canonical_login"])
-      .where("provider", "=", LEGACY_GITHUB_ATTRIBUTION_PROVIDER)
-      .where("profile_id", "in", migrationProfileIds),
-  ).rows;
-  const legacyOptIn = legacyRows.some(
-    (row) => parseStoredGitHubIdentity(row)?.accountId === params.identity.accountId,
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("user_profile_identities")
-      .where("provider", "=", LEGACY_GITHUB_ATTRIBUTION_PROVIDER)
-      .where("profile_id", "in", migrationProfileIds),
-  );
-  if (
-    legacyOptIn &&
-    !selectUserPreferenceValues(db, [targetProfileId], GIT_COAUTHOR_PREFERENCE_KEY).has(
-      targetProfileId,
-    )
-  ) {
-    mutateUserPreference(db, targetProfileId, GIT_COAUTHOR_PREFERENCE_KEY, true);
   }
 
   if (currentProfileId !== targetProfileId) {
@@ -243,7 +245,7 @@ export function applyVerifiedGitHubIdentity(params: {
         subject,
         profile_id: targetProfileId,
         canonical_login: login,
-        created_at: Date.now(),
+        created_at: now,
       })
       .onConflict((conflict) =>
         conflict.columns(["provider", "subject"]).doUpdateSet({
@@ -252,5 +254,35 @@ export function applyVerifiedGitHubIdentity(params: {
         }),
       ),
   );
+  if (params.alias.kind === "email") {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("user_profile_emails")
+        .values({ email: params.alias.email, profile_id: targetProfileId, created_at: now })
+        .onConflict((conflict) =>
+          conflict.column("email").doUpdateSet({ profile_id: targetProfileId }),
+        ),
+    );
+  } else {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("user_profile_identities")
+        .values({
+          provider: GITHUB_PROVIDER,
+          subject: params.alias.subject,
+          profile_id: targetProfileId,
+          canonical_login: null,
+          created_at: now,
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["provider", "subject"]).doUpdateSet({
+            profile_id: targetProfileId,
+            canonical_login: null,
+          }),
+        ),
+    );
+  }
   return targetProfileId;
 }

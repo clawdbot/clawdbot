@@ -30,7 +30,13 @@ describe("Git co-author attribution", () => {
       const profile = (email: string, accountId?: number, login?: string, optedIn = true) => {
         const value = ensureProfileForEmail(email, { env: state.env });
         if (accountId && login) {
-          syncGitHubIdentity(value.id, { accountId, login }, { env: state.env });
+          syncGitHubIdentity(
+            {
+              identity: { accountId, login },
+              authenticationAlias: { kind: "email", email },
+            },
+            { env: state.env },
+          );
           if (optedIn) {
             expect(
               setUserPreferences(
@@ -130,7 +136,13 @@ describe("Git co-author attribution", () => {
         });
       }
       const current = ensureProfileForEmail("current@example.test", { env: state.env });
-      syncGitHubIdentity(current.id, { accountId: 99, login: "current" }, { env: state.env });
+      syncGitHubIdentity(
+        {
+          identity: { accountId: 99, login: "current" },
+          authenticationAlias: { kind: "email", email: "current@example.test" },
+        },
+        { env: state.env },
+      );
       expect(
         setUserPreferences(current.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, { env: state.env }),
       ).toMatchObject({ ok: true });

@@ -18,6 +18,7 @@ import {
   formatUserProfileAvatarEtag,
   getProfileAvatar,
   getUserProfileDisplay,
+  getUserProfileListItem,
   linkEmail,
   listProfiles,
   resolveUserProfileId,
@@ -52,6 +53,39 @@ async function ensureTailscaleProfileWithAvatar(
 ) {
   const profile = ensureProfileForTailscaleIdentity(identity, options);
   return await adoptTailscaleProfileAvatar(profile.id, identity.profilePic, options, fetchOptions);
+}
+
+function syncTailscaleGitHubProfile(
+  params: {
+    accountId: number;
+    canonicalLogin: string;
+    login: string;
+    name?: string;
+  },
+  options: Parameters<typeof ensureProfileForTailscaleIdentity>[1],
+) {
+  return syncGitHubIdentity(
+    {
+      identity: { accountId: params.accountId, login: params.canonicalLogin },
+      authenticationAlias: { kind: "github-login", login: params.login },
+      initialDisplayName: params.name,
+    },
+    options,
+  );
+}
+
+function syncEmailGitHubProfile(
+  params: { accountId: number; canonicalLogin: string; email: string; name?: string },
+  options: Parameters<typeof ensureProfileForEmail>[1],
+) {
+  return syncGitHubIdentity(
+    {
+      identity: { accountId: params.accountId, login: params.canonicalLogin },
+      authenticationAlias: { kind: "email", email: params.email },
+      initialDisplayName: params.name,
+    },
+    options,
+  );
 }
 
 afterEach(() => {
@@ -133,14 +167,17 @@ describe("user profiles", () => {
 
   it("stores and refreshes verified GitHub identity beside the authenticated login alias", () => {
     const options = stateOptions();
-    const profile = ensureProfileForTailscaleIdentity(
-      { login: "583231@github", name: "Numeric Login" },
+    const profile = syncTailscaleGitHubProfile(
+      {
+        accountId: 583231,
+        canonicalLogin: "octocat",
+        login: "583231",
+        name: "Numeric Login",
+      },
       options,
     );
 
-    expect(
-      syncGitHubIdentity(profile.id, { accountId: 583231, login: "octocat" }, options),
-    ).toMatchObject({
+    expect(profile).toMatchObject({
       id: profile.id,
       githubIdentity: {
         login: "octocat",
@@ -149,8 +186,10 @@ describe("user profiles", () => {
       },
     });
     expect(
-      syncGitHubIdentity(profile.id, { accountId: 583231, login: "Octo-Renamed" }, options)
-        .githubIdentity,
+      syncTailscaleGitHubProfile(
+        { accountId: 583231, canonicalLogin: "Octo-Renamed", login: "583231" },
+        options,
+      ).githubIdentity,
     ).toMatchObject({ login: "Octo-Renamed" });
     expect(
       openOpenClawStateDatabase(options)
@@ -176,23 +215,27 @@ describe("user profiles", () => {
 
   it("reconciles a GitHub rename to the established profile and its preferences", () => {
     const options = stateOptions();
-    const established = ensureProfileForTailscaleIdentity(
-      { login: "ada@github", name: "Established Ada" },
+    const established = syncTailscaleGitHubProfile(
+      {
+        accountId: 583231,
+        canonicalLogin: "ada",
+        login: "ada",
+        name: "Established Ada",
+      },
       options,
     );
-    syncGitHubIdentity(established.id, { accountId: 583231, login: "ada" }, options);
     setDisplayName(established.id, "User Chosen", options);
     expect(setUserPreferences(established.id, { theme: "claw" }, options)).toMatchObject({
       ok: true,
     });
 
-    const renamed = ensureProfileForTailscaleIdentity(
-      { login: "octocat@github", name: "Provider Renamed" },
-      options,
-    );
-    const reconciled = syncGitHubIdentity(
-      renamed.id,
-      { accountId: 583231, login: "octocat" },
+    const reconciled = syncTailscaleGitHubProfile(
+      {
+        accountId: 583231,
+        canonicalLogin: "octocat",
+        login: "octocat",
+        name: "Provider Renamed",
+      },
       options,
     );
 
@@ -201,11 +244,135 @@ describe("user profiles", () => {
       displayName: "User Chosen",
       githubIdentity: { login: "octocat" },
     });
-    expect(resolveUserProfileId(renamed.id, options)).toBe(established.id);
     expect(getUserPreferences(established.id, undefined, options)).toMatchObject({ theme: "claw" });
   });
 
-  it("migrates matching legacy consent but discards mismatched legacy attribution", () => {
+  it("keeps immutable owners isolated when a released GitHub login is reused", () => {
+    const options = stateOptions();
+    const accountA = syncTailscaleGitHubProfile(
+      {
+        accountId: 10,
+        canonicalLogin: "old-login",
+        login: "old-login",
+        name: "Account A",
+      },
+      options,
+    );
+    setDisplayName(accountA.id, "Account A Custom", options);
+    expect(setAvatar(accountA.id, new Uint8Array([1, 2, 3]), "image/png", options).ok).toBe(true);
+    expect(
+      setUserPreferences(
+        accountA.id,
+        { theme: "claw", [GIT_COAUTHOR_PREFERENCE_KEY]: true },
+        options,
+      ),
+    ).toMatchObject({ ok: true });
+
+    const renamedA = syncTailscaleGitHubProfile(
+      {
+        accountId: 10,
+        canonicalLogin: "new-login",
+        login: "new-login",
+        name: "Provider Renamed A",
+      },
+      options,
+    );
+    const accountB = syncTailscaleGitHubProfile(
+      {
+        accountId: 20,
+        canonicalLogin: "old-login",
+        login: "old-login",
+        name: "Account B",
+      },
+      options,
+    );
+
+    expect(renamedA.id).toBe(accountA.id);
+    expect(accountB).toMatchObject({
+      displayName: "Account B",
+      githubIdentity: { login: "old-login" },
+      hasAvatar: false,
+    });
+    expect(accountB.id).not.toBe(accountA.id);
+    expect(getUserPreferences(accountB.id, undefined, options)).toEqual({});
+    expect(ensureProfileForTailscaleIdentity({ login: "old-login@github" }, options).id).toBe(
+      accountB.id,
+    );
+
+    expect(getUserProfileListItem(accountA.id, options)).toMatchObject({
+      displayName: "Account A Custom",
+      githubIdentity: { login: "new-login" },
+      hasAvatar: true,
+    });
+    expect(getProfileAvatar(accountA.id, options)?.bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(getUserPreferences(accountA.id, undefined, options)).toEqual({
+      theme: "claw",
+      [GIT_COAUTHOR_PREFERENCE_KEY]: true,
+    });
+    expect(listProfiles(options)).toEqual([
+      expect.objectContaining({ id: accountA.id, mergedInto: null }),
+      expect.objectContaining({ id: accountB.id, mergedInto: null }),
+    ]);
+  });
+
+  it("does not create provisional profiles on repeated authenticated GitHub sync", () => {
+    const options = stateOptions();
+    const first = syncTailscaleGitHubProfile(
+      { accountId: 10, canonicalLogin: "ada", login: "ada", name: "Ada" },
+      options,
+    );
+    const second = syncTailscaleGitHubProfile(
+      { accountId: 10, canonicalLogin: "ada", login: "ada", name: "Changed Provider Name" },
+      options,
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(listProfiles(options)).toEqual([
+      expect.objectContaining({ id: first.id, displayName: "Ada", mergedInto: null }),
+    ]);
+  });
+
+  it("moves a reused Cloudflare email without exposing the prior verified owner", () => {
+    const options = stateOptions();
+    const accountA = syncEmailGitHubProfile(
+      {
+        accountId: 10,
+        canonicalLogin: "account-a",
+        email: "shared@example.test",
+        name: "Account A",
+      },
+      options,
+    );
+    setDisplayName(accountA.id, "Account A Custom", options);
+    expect(setUserPreferences(accountA.id, { theme: "claw" }, options)).toMatchObject({ ok: true });
+
+    const accountB = syncEmailGitHubProfile(
+      {
+        accountId: 20,
+        canonicalLogin: "account-b",
+        email: "shared@example.test",
+        name: "Account B",
+      },
+      options,
+    );
+
+    expect(accountB).toMatchObject({
+      displayName: "Account B",
+      emails: ["shared@example.test"],
+      githubIdentity: { login: "account-b" },
+    });
+    expect(accountB.id).not.toBe(accountA.id);
+    expect(ensureProfileForEmail("shared@example.test", options).id).toBe(accountB.id);
+    expect(getUserProfileListItem(accountA.id, options)).toMatchObject({
+      displayName: "Account A Custom",
+      emails: [],
+      githubIdentity: { login: "account-a" },
+    });
+    expect(getUserPreferences(accountA.id, undefined, options)).toEqual({ theme: "claw" });
+    expect(getUserPreferences(accountB.id, undefined, options)).toEqual({});
+  });
+
+  it("keeps retired GitHub attribution rows inert during verified sync", () => {
     const options = stateOptions();
     const matching = ensureProfileForTailscaleIdentity({ login: "ada@github" }, options);
     const mismatched = ensureProfileForTailscaleIdentity({ login: "grace@github" }, options);
@@ -216,41 +383,54 @@ describe("user profiles", () => {
     insertLegacy.run("10", matching.id, "ada");
     insertLegacy.run("99", mismatched.id, "wrong-account");
 
-    expect(syncGitHubIdentity(matching.id, { accountId: 10, login: "ada" }, options)).toMatchObject(
-      { githubIdentity: { login: "ada" } },
-    );
-    syncGitHubIdentity(mismatched.id, { accountId: 11, login: "grace" }, options);
+    expect(
+      syncTailscaleGitHubProfile({ accountId: 10, canonicalLogin: "ada", login: "ada" }, options),
+    ).toMatchObject({ githubIdentity: { login: "ada" } });
+    syncTailscaleGitHubProfile({ accountId: 11, canonicalLogin: "grace", login: "grace" }, options);
 
-    expect(getUserPreferences(matching.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({
-      [GIT_COAUTHOR_PREFERENCE_KEY]: true,
-    });
+    expect(getUserPreferences(matching.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({});
     expect(getUserPreferences(mismatched.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({});
     expect(
       database
         .prepare("SELECT COUNT(*) AS count FROM user_profile_identities WHERE provider = ?")
         .get("github-attribution"),
-    ).toEqual({ count: 0 });
+    ).toEqual({ count: 2 });
   });
 
   it("does not carry co-author consent to a different immutable GitHub account", () => {
     const options = stateOptions();
-    const profile = ensureProfileForTailscaleIdentity({ login: "shared@github" }, options);
-    syncGitHubIdentity(profile.id, { accountId: 10, login: "first-owner" }, options);
+    const profile = syncTailscaleGitHubProfile(
+      { accountId: 10, canonicalLogin: "first-owner", login: "shared" },
+      options,
+    );
     expect(
       setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, options),
     ).toMatchObject({ ok: true });
 
-    syncGitHubIdentity(profile.id, { accountId: 11, login: "next-owner" }, options);
+    const nextOwner = syncTailscaleGitHubProfile(
+      { accountId: 11, canonicalLogin: "next-owner", login: "shared" },
+      options,
+    );
 
-    expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({});
+    expect(nextOwner.id).not.toBe(profile.id);
+    expect(getUserPreferences(nextOwner.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({});
+    expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({
+      [GIT_COAUTHOR_PREFERENCE_KEY]: true,
+    });
   });
 
   it("keeps co-author consent with the verified account that survives an email merge", () => {
     const options = stateOptions();
     const discarded = ensureProfileForEmail("discarded@example.com", options);
     const established = ensureProfileForEmail("established@example.com", options);
-    syncGitHubIdentity(discarded.id, { accountId: 10, login: "discarded" }, options);
-    syncGitHubIdentity(established.id, { accountId: 11, login: "established" }, options);
+    syncEmailGitHubProfile(
+      { accountId: 10, canonicalLogin: "discarded", email: "discarded@example.com" },
+      options,
+    );
+    syncEmailGitHubProfile(
+      { accountId: 11, canonicalLogin: "established", email: "established@example.com" },
+      options,
+    );
     setUserPreferences(discarded.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, options);
 
     const merged = linkEmail("discarded@example.com", established.id, options);
@@ -260,7 +440,10 @@ describe("user profiles", () => {
 
     const carrying = ensureProfileForEmail("carrying@example.com", options);
     const unverified = ensureProfileForEmail("unverified@example.com", options);
-    syncGitHubIdentity(carrying.id, { accountId: 12, login: "carrying" }, options);
+    syncEmailGitHubProfile(
+      { accountId: 12, canonicalLogin: "carrying", email: "carrying@example.com" },
+      options,
+    );
     setUserPreferences(carrying.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, options);
 
     const carried = linkEmail("carrying@example.com", unverified.id, options);

@@ -125,24 +125,26 @@ describe("users gateway methods", () => {
 
   it("waits for the authenticated GitHub sync before returning users.self", async () => {
     let finishSync: (() => void) | undefined;
+    const providerClient: Record<string, unknown> = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      connect: { scopes: ["operator.write"] },
+    };
     const authenticatedGitHubIdentitySync = vi.fn(
       async () =>
         await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
-          finishSync = () => resolve({ profileId: profile.id, updatedAt: profile.updatedAt });
+          finishSync = () => {
+            providerClient.authenticatedUserProfile = {
+              profileId: profile.id,
+              displayName: "Ada",
+              hasAvatar: false,
+              updatedAt: 1,
+            };
+            resolve({ profileId: profile.id, updatedAt: profile.updatedAt });
+          };
         }),
     );
-    const providerClient = {
-      authenticatedUserId: "ada@github",
-      authenticatedUserIsTailscaleProvider: true,
-      authenticatedGitHubIdentitySync,
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-      connect: { scopes: ["operator.write"] },
-    };
+    providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
     resolveUserProfileId.mockReturnValue(profile.id);
     getUserProfileListItem.mockReturnValue(profile);
 
@@ -156,29 +158,33 @@ describe("users gateway methods", () => {
     expect(respond).toHaveBeenCalledWith(true, { profile });
   });
 
-  it("keeps users.self usable and retryable when GitHub lookup fails", async () => {
+  it("keeps unresolved users.self unavailable and retryable when GitHub lookup fails", async () => {
+    const providerClient: Record<string, unknown> = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      connect: { scopes: ["operator.write"] },
+    };
     const authenticatedGitHubIdentitySync = vi
       .fn()
       .mockRejectedValueOnce(new Error("network unavailable"))
-      .mockResolvedValueOnce({ profileId: profile.id, updatedAt: profile.updatedAt });
-    const providerClient = {
-      authenticatedUserId: "ada@github",
-      authenticatedUserIsTailscaleProvider: true,
-      authenticatedGitHubIdentitySync,
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-      connect: { scopes: ["operator.write"] },
-    };
+      .mockImplementationOnce(async () => {
+        providerClient.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: "Ada",
+          hasAvatar: false,
+          updatedAt: 1,
+        };
+        return { profileId: profile.id, updatedAt: profile.updatedAt };
+      });
+    providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
     resolveUserProfileId.mockReturnValue(profile.id);
     getUserProfileListItem.mockReturnValue(profile);
 
-    expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(true, {
-      profile,
-    });
+    expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "authenticated user profile is unavailable" }),
+    );
     expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(true, {
       profile,
     });

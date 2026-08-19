@@ -15,7 +15,12 @@ import {
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { setAvatar } from "../../../state/user-profiles.js";
+import {
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
+  setAvatar,
+  syncGitHubIdentity,
+} from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
@@ -303,6 +308,22 @@ function attachGatewayHarness(options: {
   };
   const advanceHandshakePhase = vi.fn();
   const logWsControl = createLogger();
+  const refreshConnectedUserProfile = vi.fn<
+    NonNullable<GatewayRequestContext["refreshConnectedUserProfile"]>
+  >((profile) => {
+    const authenticatedUserProfile = (
+      client as { authenticatedUserProfile?: Record<string, unknown> } | null
+    )?.authenticatedUserProfile;
+    if (authenticatedUserProfile) {
+      Object.assign(authenticatedUserProfile, {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        avatarRevision: profile.avatarRevision,
+        hasAvatar: profile.hasAvatar,
+        updatedAt: profile.updatedAt,
+      });
+    }
+  });
   attachGatewayWsMessageHandler({
     socket,
     upgradeReq: {
@@ -338,23 +359,7 @@ function attachGatewayHarness(options: {
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
-    buildRequestContext: () =>
-      ({
-        refreshConnectedUserProfile: (profile) => {
-          const authenticatedUserProfile = (
-            client as { authenticatedUserProfile?: Record<string, unknown> } | null
-          )?.authenticatedUserProfile;
-          if (authenticatedUserProfile) {
-            Object.assign(authenticatedUserProfile, {
-              profileId: profile.id,
-              displayName: profile.displayName,
-              avatarRevision: profile.avatarRevision,
-              hasAvatar: profile.hasAvatar,
-              updatedAt: profile.updatedAt,
-            });
-          }
-        },
-      }) as GatewayRequestContext,
+    buildRequestContext: () => ({ refreshConnectedUserProfile }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
@@ -383,6 +388,7 @@ function attachGatewayHarness(options: {
   return {
     advanceHandshakePhase,
     logWsControl,
+    refreshConnectedUserProfile,
     send,
     socketSend,
     sendRequest: (
@@ -528,7 +534,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     vi.clearAllMocks();
     createAuthenticatedGitHubIdentitySyncMock.mockImplementation(
       (params: {
-        profileId: string;
         authResult: { method?: string; tailscaleIdentity?: { login: string } };
         authConfig?: { trustedProxy?: { userHeader?: string; requiredHeaders?: string[] } };
       }) => {
@@ -540,12 +545,15 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           trustedProxy.requiredHeaders?.some(
             (header) => header.toLowerCase() === "cf-access-jwt-assertion",
           );
-        return tailscaleGitHub || cloudflareAccess
-          ? vi.fn(async () => ({
-              profileId: params.profileId,
-              updatedAt: 1,
-            }))
-          : undefined;
+        if (!tailscaleGitHub && !cloudflareAccess) {
+          return undefined;
+        }
+        return vi.fn(async () => {
+          const profile = params.authResult.tailscaleIdentity
+            ? ensureProfileForTailscaleIdentity(params.authResult.tailscaleIdentity)
+            : ensureProfileForEmailMock("authenticated@example.test");
+          return { profileId: profile.id, updatedAt: profile.updatedAt };
+        });
       },
     );
   });
@@ -965,63 +973,139 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("completes GitHub-authenticated login before deferred identity sync", async () => {
-    let finishSync: (() => void) | undefined;
-    const sync = vi.fn(
-      async () =>
-        await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
-          finishSync = () => resolve({ profileId: "profile-1", updatedAt: 1 });
-        }),
-    );
-    createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
-    resolveConnectAuthStateMock.mockResolvedValueOnce({
-      authResult: {
-        ok: true,
-        method: "tailscale",
-        user: "ada@github",
-        tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
-      },
-      authOk: true,
-      authMethod: "tailscale",
-      sharedAuthOk: true,
-    });
-    const harness = attachGatewayHarness({
-      connId: "conn-github-identity-detached",
-      connectNonce: "nonce-github-identity-detached",
-    });
-
-    harness.sendConnect("connect-github-identity-detached", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
-      role: "operator",
-      caps: [],
-    });
-
-    await waitForFast(() => {
-      expect(harness.socketSend).toHaveBeenCalled();
-      expect(harness.client).toMatchObject({
-        authenticatedUserId: "ada@github",
-        authenticatedGitHubIdentitySync: sync,
-        authenticatedUserProfile: { profileId: expect.any(String) },
-      });
-      expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          profileId: expect.any(String),
-          authResult: expect.objectContaining({ method: "tailscale", user: "ada@github" }),
-        }),
+    await withOpenClawTestState({ label: "gateway-github-profile-deferred" }, async () => {
+      const canonical = ensureProfileForEmail("canonical@example.test");
+      let finishSync: (() => void) | undefined;
+      const sync = vi.fn(
+        async () =>
+          await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
+            finishSync = () => resolve({ profileId: canonical.id, updatedAt: canonical.updatedAt });
+          }),
       );
-      expect(sync).toHaveBeenCalledOnce();
+      createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "ada@github",
+          tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-github-identity-detached",
+        connectNonce: "nonce-github-identity-detached",
+      });
+
+      harness.sendConnect("connect-github-identity-detached", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "test",
+          version: "dev",
+          platform: "test",
+          mode: "test",
+        },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.socketSend).toHaveBeenCalled();
+        expect(harness.client).toMatchObject({
+          authenticatedUserId: "ada@github",
+          authenticatedGitHubIdentitySync: expect.any(Function),
+        });
+        expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: { invoker: { state: "unknown" } },
+        });
+        expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            authResult: expect.objectContaining({ method: "tailscale", user: "ada@github" }),
+          }),
+        );
+        expect(sync).toHaveBeenCalledOnce();
+      });
+      const initialPresence = upsertPresenceMock.mock.calls.find(
+        ([key]) => key === "conn-github-identity-detached",
+      )?.[1];
+      expect(initialPresence).not.toHaveProperty("user");
+      expect(harness.socketSend.mock.invocationCallOrder[0]).toBeLessThan(
+        sync.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(finishSync).toBeTypeOf("function");
+      finishSync?.();
+
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserProfile: { profileId: canonical.id },
+        });
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: {
+            invoker: { state: "present", kind: "person", rawPrincipalRef: canonical.id },
+          },
+        });
+        expect(harness.refreshConnectedUserProfile).toHaveBeenCalledWith(
+          expect.objectContaining({ id: canonical.id }),
+        );
+      });
     });
-    expect(harness.socketSend.mock.invocationCallOrder[0]).toBeLessThan(
-      sync.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(finishSync).toBeTypeOf("function");
-    finishSync?.();
+  });
+
+  it("keeps a mutable GitHub alias unattributed when immutable sync fails", async () => {
+    await withOpenClawTestState({ label: "gateway-github-profile-failure" }, async () => {
+      syncGitHubIdentity({
+        identity: { accountId: 10, login: "prior-owner" },
+        authenticationAlias: { kind: "github-login", login: "released-login" },
+        initialDisplayName: "Prior Verified Owner",
+      });
+      const sync = vi.fn(async () => {
+        throw new Error("GitHub unavailable");
+      });
+      createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "released-login@github",
+          tailscaleIdentity: { login: "released-login@github", name: "New Account" },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-github-identity-failure",
+        connectNonce: "nonce-github-identity-failure",
+      });
+
+      harness.sendConnect("connect-github-identity-failure", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { id: "test", version: "dev", platform: "test", mode: "test" },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.socketSend).toHaveBeenCalled();
+        expect(sync).toHaveBeenCalledOnce();
+      });
+      await waitForFast(() => {
+        expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: { invoker: { state: "unknown" } },
+        });
+      });
+      const presence = upsertPresenceMock.mock.calls.find(
+        ([key]) => key === "conn-github-identity-failure",
+      )?.[1];
+      expect(presence).not.toHaveProperty("user");
+      expect(harness.refreshConnectedUserProfile).not.toHaveBeenCalled();
+    });
   });
 
   it("mints Cloudflare sync only for the standard trusted-proxy header contract", async () => {

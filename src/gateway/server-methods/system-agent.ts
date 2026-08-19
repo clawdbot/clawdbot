@@ -27,7 +27,6 @@ import {
   SystemAgentChatEngine,
   SystemAgentWizardAnswerError,
 } from "../../system-agent/chat-engine.js";
-import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
 import {
   acknowledgeSystemAgentGreetingDelivery,
   buildSystemAgentGreetingQuestion,
@@ -63,12 +62,8 @@ import {
   getSystemAgentChatInputError,
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -126,30 +121,6 @@ async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Promise<T> 
     // setup writes atomic with respect to other OpenClaw gateway requests.
     systemAgentGatewayExecutionQueue.enqueue(SYSTEM_AGENT_GATEWAY_EXECUTION_KEY, task),
   );
-}
-
-function resolveSystemAgentSessionOwnerKey(params: {
-  delegation?: { agentId?: string; sessionKey?: string };
-  client: GatewayClient | null;
-}): string | undefined {
-  const delegationKey = resolveSystemAgentDelegationKey(params.delegation);
-  if (delegationKey !== undefined) {
-    // Delegation is the host-only, cross-connection owner asserted by the regular-agent
-    // tool path. Keep its agent/session tuple authoritative across gateway reconnects.
-    return delegationKey;
-  }
-  // Authenticated users survive reconnects and may span paired devices. Otherwise
-  // bind to the verified device, with the server-issued connection as a last resort.
-  const userId = params.client?.authenticatedUserId?.trim();
-  if (userId) {
-    return `user:${userId}`;
-  }
-  const deviceId = params.client?.connect.device?.id.trim();
-  if (deviceId) {
-    return `device:${deviceId}`;
-  }
-  const connId = params.client?.connId?.trim();
-  return connId ? `connection:${connId}` : undefined;
 }
 
 async function evictOldestSession(

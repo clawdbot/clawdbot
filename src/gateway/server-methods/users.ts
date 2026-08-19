@@ -72,6 +72,9 @@ function resolveAuthenticatedProfileId(
   if (client?.authenticatedUserProfile?.profileId) {
     return resolveUserProfileId(client.authenticatedUserProfile.profileId);
   }
+  if (client?.authenticatedGitHubIdentitySync) {
+    return undefined;
+  }
   const authenticatedUserId = client?.authenticatedUserId;
   if (!authenticatedUserId) {
     return undefined;
@@ -124,7 +127,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     respond(true, { profiles: listProfiles() });
   },
-  "users.self": async ({ client, context, params, respond }) => {
+  "users.self": async ({ client, params, respond }) => {
     if (!validateUsersSelfParams(params)) {
       respond(false, undefined, invalidParams("users.self", validateUsersSelfParams.errors));
       return;
@@ -138,7 +141,14 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      let profileId = resolveAuthenticatedProfileId(client);
+      if (client.authenticatedGitHubIdentitySync) {
+        try {
+          await client.authenticatedGitHubIdentitySync();
+        } catch {
+          // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
+        }
+      }
+      const profileId = resolveAuthenticatedProfileId(client);
       if (!profileId) {
         respond(
           false,
@@ -146,18 +156,6 @@ export const usersHandlers: GatewayRequestHandlers = {
           errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
         );
         return;
-      }
-      if (client.authenticatedGitHubIdentitySync) {
-        try {
-          const result = await client.authenticatedGitHubIdentitySync();
-          refreshConnectedProfile(context, {
-            id: result.profileId,
-            updatedAt: result.updatedAt,
-          });
-        } catch {
-          // Profile reads stay usable; the connection-scoped resolver retries on refresh.
-        }
-        profileId = resolveAuthenticatedProfileId(client) ?? profileId;
       }
       respond(true, { profile: getUserProfileListItem(profileId) });
     } catch (error) {

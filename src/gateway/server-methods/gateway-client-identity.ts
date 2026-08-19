@@ -18,6 +18,9 @@ export function gatewayClientSenderFields(client: GatewayClient | null): {
       },
     };
   }
+  if (client?.authenticatedGitHubIdentitySync) {
+    return {};
+  }
   return client?.authenticatedUserId ? { sender: { id: client.authenticatedUserId } } : {};
 }
 

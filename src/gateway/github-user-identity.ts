@@ -68,10 +68,10 @@ function cloudflareAccessIssuer(assertion: string): URL {
   return issuer;
 }
 
-async function resolveCloudflareAccessAccountId(
+async function resolveCloudflareAccessIdentity(
   assertion: string,
   authenticatedPrincipal: string,
-): Promise<number> {
+): Promise<{ accountId: number; initialDisplayName?: string }> {
   const issuer = cloudflareAccessIssuer(assertion);
   let payload: unknown;
   try {
@@ -103,7 +103,9 @@ async function resolveCloudflareAccessAccountId(
   if (typeof payload.id !== "number" || !Number.isSafeInteger(payload.id) || payload.id <= 0) {
     throw new Error("Cloudflare Access GitHub account id is invalid");
   }
-  return payload.id;
+  const initialDisplayName =
+    typeof payload.name === "string" && payload.name.trim() ? payload.name : undefined;
+  return { accountId: payload.id, ...(initialDisplayName ? { initialDisplayName } : {}) };
 }
 
 async function resolveGitHubUserIdentityByLogin(
@@ -216,7 +218,6 @@ function cloudflareAccessAssertion(params: {
 }
 
 export function createAuthenticatedGitHubIdentitySync(params: {
-  profileId: string;
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
   requestHeaders?: IncomingHttpHeaders;
@@ -227,7 +228,11 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   if (tailscaleLogin?.kind === "provider" && tailscaleLogin.provider === "github") {
     return retryableConnectionSync(async () => {
       const identity = await resolveGitHubUserIdentityByLogin(tailscaleLogin.subject);
-      const profile = syncGitHubIdentity(params.profileId, identity);
+      const profile = syncGitHubIdentity({
+        identity,
+        authenticationAlias: { kind: "github-login", login: tailscaleLogin.subject },
+        initialDisplayName: params.authResult.tailscaleIdentity?.name,
+      });
       return { profileId: profile.id, updatedAt: profile.updatedAt };
     });
   }
@@ -237,9 +242,16 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     return undefined;
   }
   return retryableConnectionSync(async () => {
-    const accountId = await resolveCloudflareAccessAccountId(access.assertion, access.principal);
-    const identity = await resolveGitHubUserIdentityById(accountId);
-    const profile = syncGitHubIdentity(params.profileId, identity);
+    const accessIdentity = await resolveCloudflareAccessIdentity(
+      access.assertion,
+      access.principal,
+    );
+    const identity = await resolveGitHubUserIdentityById(accessIdentity.accountId);
+    const profile = syncGitHubIdentity({
+      identity,
+      authenticationAlias: { kind: "email", email: access.principal },
+      initialDisplayName: accessIdentity.initialDisplayName,
+    });
     return { profileId: profile.id, updatedAt: profile.updatedAt };
   });
 }
