@@ -315,6 +315,10 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             elevated: params.bashElevated,
           },
           sandbox,
+          sessionPermissionPolicy:
+            params.permissionMode && params.sessionRoot
+              ? { mode: params.permissionMode, root: params.sessionRoot }
+              : undefined,
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           chatType: params.chatType,
@@ -506,6 +510,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       config: params.config,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
+      permissionMode: params.permissionMode,
       sandboxAvailable: sandbox?.enabled === true,
       execOverrides: params.execOverrides,
     });

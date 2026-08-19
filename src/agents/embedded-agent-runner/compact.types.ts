@@ -77,6 +77,8 @@ export type CompactEmbeddedAgentSessionParams = {
   bootstrapWorkspaceDir?: string;
   /** Optional task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  sessionRoot?: string;
   agentDir?: string;
   config?: OpenClawConfig;
   toolOverrides?: SessionToolOverrides;
