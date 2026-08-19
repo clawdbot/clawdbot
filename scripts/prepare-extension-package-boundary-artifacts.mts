@@ -22,7 +22,10 @@ import {
   isLocalCheckEnabled,
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
-import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import {
+  createManagedCommandInvocation,
+  terminateManagedChild,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   listPluginSdkDeclarationOutputs,
@@ -223,6 +226,18 @@ export function derivePluginSdkTypeInputsFromBuildInfo(buildInfoPath: string, ro
   return derivePluginSdkTypeInputs(entries as string[], buildInfoDir, rootDir);
 }
 
+/** Normalizes the tsgo shim so Windows can execute it, matching every other repo tool runner. */
+export function createPluginSdkTypeInputsCommand(
+  tsgoPath: string,
+  platform: NodeJS.Platform = process.platform,
+) {
+  return createManagedCommandInvocation({
+    args: ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
+    bin: tsgoPath,
+    platform,
+  });
+}
+
 /** Resolves declaration inputs from build metadata or the compiler on cold cache. */
 export function resolvePluginSdkTypeInputs(rootDir = repoRoot) {
   const buildInfoPath = resolve(rootDir, "dist/plugin-sdk/.tsbuildinfo");
@@ -231,11 +246,14 @@ export function resolvePluginSdkTypeInputs(rootDir = repoRoot) {
   }
   const tsgoPath = resolveRepoToolBinPath("tsgo");
   ensureRepoToolNodeModulesLink(tsgoPath);
-  const result = spawnSync(
-    tsgoPath,
-    ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
-    { cwd: rootDir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
+  const tsgo = createPluginSdkTypeInputsCommand(tsgoPath);
+  const result = spawnSync(tsgo.command, tsgo.args, {
+    cwd: rootDir,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    shell: tsgo.shell,
+    windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
+  });
   if (result.status !== 0 || result.error) {
     throw new Error(`Failed to derive plugin SDK type inputs: ${result.stderr || result.error}`);
   }
