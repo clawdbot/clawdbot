@@ -183,6 +183,8 @@ describe("DockLayoutController inline columns", () => {
     );
 
     expect(controller.width).toBe(380);
+    expect(localStorage.getItem("test.dock-panel.inline")).toBeNull();
+    separator.dispatchEvent(new CustomEvent("resize-end", { bubbles: true }));
     expect(JSON.parse(localStorage.getItem("test.dock-panel.inline") ?? "{}")).toMatchObject({
       width: 380,
     });

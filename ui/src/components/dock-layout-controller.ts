@@ -169,7 +169,6 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     }
     this.syncReservation();
     this.options.onResize?.();
-    this.persist();
     this.host.requestUpdate();
   }
 
@@ -196,6 +195,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
       .measureRatio=${() => 1 - (horizontal ? this.height : this.width) / this.size()}
       .measureSize=${() => this.size()}
       @resize=${(event: CustomEvent<{ splitRatio: number }>) => this.resize(event)}
+      @resize-end=${() => this.persist()}
     ></resizable-divider>`;
   }
 

@@ -11,6 +11,7 @@ const originalPointerEvent = globalThis.PointerEvent;
 type ResizableDivider = HTMLElement & {
   orientation: "horizontal" | "vertical";
   splitRatio: number;
+  measureRatio?: () => number;
   updateComplete: Promise<boolean>;
 };
 
@@ -132,6 +133,11 @@ describe("resizable-divider", () => {
     await divider.updateComplete;
 
     expect(divider.getAttribute("aria-valuenow")).toBe("65");
+
+    divider.measureRatio = () => 0.55;
+    await divider.updateComplete;
+
+    expect(divider.getAttribute("aria-valuenow")).toBe("55");
   });
 
   it("localizes the fallback separator label", async () => {
@@ -201,6 +207,7 @@ describe("resizable-divider", () => {
   it("uses pointer events for mouse, pen, and touch dragging", async () => {
     const divider = await renderDivider();
     const resized = vi.fn();
+    const resizeEnded = vi.fn();
     const setPointerCapture = vi.fn();
     const releasePointerCapture = vi.fn();
     const hasPointerCapture = vi.fn(() => true);
@@ -208,6 +215,7 @@ describe("resizable-divider", () => {
     divider.releasePointerCapture = releasePointerCapture;
     divider.hasPointerCapture = hasPointerCapture;
     divider.addEventListener("resize", resized);
+    divider.addEventListener("resize-end", resizeEnded);
 
     dispatchPointer(divider, "pointerdown", 100);
     expect(document.activeElement).not.toBe(divider);
@@ -216,8 +224,10 @@ describe("resizable-divider", () => {
 
     dispatchPointer(document, "pointermove", 220);
     expectLastResizeRatio(resized, 0.7);
+    expect(resizeEnded).not.toHaveBeenCalled();
 
     dispatchPointer(document, "pointerup", 220);
+    expect((resizeEnded.mock.lastCall?.[0] as CustomEvent).detail).toEqual({ splitRatio: 0.7 });
     expect([...divider.classList]).toEqual([]);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
