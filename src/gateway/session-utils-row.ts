@@ -81,7 +81,7 @@ import {
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 /** Adds current actor display data without persisting rename-prone metadata. */
@@ -209,7 +209,7 @@ export function buildGatewaySessionRow(params: {
   store: Record<string, SessionEntry>;
   key: string;
   entry?: SessionEntry;
-  modelCatalog?: ModelCatalogEntry[];
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
@@ -457,10 +457,16 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  // A per-agent catalog map keeps unscoped listings owner-scoped: each row uses
+  // its own agent's completed catalog instead of a shared default-agent catalog.
+  const rowModelCatalog =
+    params.modelCatalog instanceof Map
+      ? params.modelCatalog.get(sessionAgentId)
+      : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
-  const thinkingModelCatalog = params.modelCatalog ?? (lightweight ? [] : undefined);
+  const thinkingModelCatalog = rowModelCatalog ?? (lightweight ? [] : undefined);
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
@@ -473,8 +479,8 @@ export function buildGatewaySessionRow(params: {
     providerPolicySource: lightweight ? "active" : undefined,
   });
   const catalogEntry =
-    params.modelCatalog && rowModelProvider && rowModel
-      ? findModelCatalogEntry(params.modelCatalog, {
+    rowModelCatalog && rowModelProvider && rowModel
+      ? findModelCatalogEntry(rowModelCatalog, {
           provider: rowModelProvider,
           modelId: rowModel,
         })

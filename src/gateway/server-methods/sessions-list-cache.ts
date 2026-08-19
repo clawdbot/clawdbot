@@ -12,7 +12,7 @@ import { readSessionAutomationVersion } from "../session-automation-index.js";
 import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
-import type { SessionsListResult } from "../session-utils.types.js";
+import type { SessionListModelCatalog, SessionsListResult } from "../session-utils.types.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -22,7 +22,7 @@ type SessionListFence = {
   agentDatabaseRegistryToken: symbol;
   incognitoDatabaseGeneration: number;
   lifecyclePersistenceVersion: number;
-  modelCatalogRevision: number;
+  modelCatalogRevision: string;
   sessionAutomationVersion: number;
   sessionIdentityMutationVersion: number;
   sessionsMutationVersion: number;
@@ -56,16 +56,33 @@ function readModelCatalogRevision(modelCatalog: readonly ModelCatalogEntry[] | u
   return revision;
 }
 
+/**
+ * Serializes the per-agent catalog revision set so the cache fence advances
+ * when any row owner's catalog changes. The revision identity of each distinct
+ * catalog array is monotonic; the string join is stable per sorted agent set.
+ */
+function readSessionListModelCatalogFence(
+  modelCatalog: SessionListModelCatalog | undefined,
+): string {
+  if (!modelCatalog || modelCatalog.size === 0) {
+    return "none";
+  }
+  return [...modelCatalog.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([agentId, entries]) => `${agentId}:${readModelCatalogRevision(entries)}`)
+    .join(",");
+}
+
 function readSessionListFence(
   context: GatewayRequestContext,
-  modelCatalog: readonly ModelCatalogEntry[] | undefined,
+  modelCatalog: SessionListModelCatalog | undefined,
 ): SessionListFence {
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
     agentDatabaseRegistryToken: readOpenClawAgentDatabaseRegistryToken(),
     incognitoDatabaseGeneration: readOpenIncognitoAgentDatabaseGeneration(),
     lifecyclePersistenceVersion: readSessionLifecyclePersistenceVersion(),
-    modelCatalogRevision: readModelCatalogRevision(modelCatalog),
+    modelCatalogRevision: readSessionListModelCatalogFence(modelCatalog),
     sessionAutomationVersion: readSessionAutomationVersion(),
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
@@ -159,7 +176,7 @@ export async function respondWithCachedSessionList(params: {
   client: GatewayClient | null;
   config: OpenClawConfig;
   context: GatewayRequestContext;
-  modelCatalog?: readonly ModelCatalogEntry[];
+  modelCatalog?: SessionListModelCatalog;
   request: SessionsListParams;
   respond: RespondFn;
   run: () => Promise<SessionsListResult>;
