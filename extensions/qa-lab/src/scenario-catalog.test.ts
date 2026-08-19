@@ -234,10 +234,7 @@ describe("qa scenario catalog", () => {
     const scenarios = readQaScenarioPack()
       .scenarios.filter(isFlowScenario)
       .filter((scenario) =>
-        [
-          "env.gateway.restartAfterStateMutation",
-          "scenarioModule.runQaRestartResumeScenarioFlow",
-        ].some((call) => flowContainsCall(scenario.execution.flow, call)),
+        flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation"),
       );
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([

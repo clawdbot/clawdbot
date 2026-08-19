@@ -1,7 +1,5 @@
 // QA Lab scenario module references normalize into the canonical flow shape.
 import { z } from "zod";
-import type { QaTransportAdapter } from "./qa-transport.js";
-import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 const qaFlowModuleExportArgSchema = z
   .object({
@@ -27,6 +25,11 @@ const qaFlowModuleSchema = z.object({
   call: z.string().trim().min(1),
   args: z.array(qaFlowModuleArgSchema).optional(),
 });
+const qaSharedFlowSchema = z
+  .object({
+    shared: z.enum(["channel-access-control", "channel-restart-resume"]),
+  })
+  .strict();
 const qaFlowProviderModeSchema = z.enum(["aimock", "live-frontier", "mock-openai"]);
 const qaFlowExecutionShape = {
   providerMode: qaFlowProviderModeSchema.optional(),
@@ -36,127 +39,158 @@ const qaFlowExecutionShape = {
 };
 
 type QaScenarioModuleFlow = z.infer<typeof qaFlowModuleSchema>;
+type QaScenarioSharedFlow = z.infer<typeof qaSharedFlowSchema>;
 type QaScenarioFlowShape = { steps: unknown[] };
 
-type QaSharedChannelFlowParams = {
-  config: Record<string, unknown>;
-  env: {
-    gateway: Pick<QaSuiteRuntimeEnv["gateway"], "restartAfterStateMutation">;
-  };
-  randomUUID: () => string;
-  transport: Pick<
-    QaTransportAdapter,
-    "reset" | "sendInbound" | "waitForNoOutbound" | "waitForOutbound"
-  >;
-  waitForGatewayHealthy: (env: unknown, timeoutMs: number) => Promise<unknown>;
-  waitForTransportReady: (env: unknown, timeoutMs: number) => Promise<unknown>;
-};
+const qaSharedFlowPreparationActions = [
+  { call: "waitForGatewayHealthy", args: [{ ref: "env" }, 60_000] },
+  { call: "waitForTransportReady", args: [{ ref: "env" }, 60_000] },
+  { resetTransport: true },
+] as const;
 
-type QaSharedChannelMessageConfig = {
-  conversationId: string;
-  conversationKind: "direct" | "group";
-  mentionPrefix: string;
-  senderId: string;
-};
-
-const qaAccessControlFlowConfigSchema = z.object({
-  conversationId: z.string(),
-  conversationKind: z.enum(["direct", "group"]),
-  expectReply: z.boolean(),
-  markerPrefix: z.string(),
-  mentionPrefix: z.string(),
-  senderId: z.string(),
-  timeoutMs: z.number().int().positive(),
-});
-
-const qaRestartResumeFlowConfigSchema = z.object({
-  conversationId: z.string(),
-  conversationKind: z.enum(["direct", "group"]),
-  firstPrefix: z.string(),
-  mentionPrefix: z.string(),
-  secondPrefix: z.string(),
-  senderId: z.string(),
-  timeoutMs: z.number().int().positive(),
-});
-
-async function prepareQaSharedChannelFlow(params: QaSharedChannelFlowParams) {
-  await params.waitForGatewayHealthy(params.env, 60_000);
-  await params.waitForTransportReady(params.env, 60_000);
-  await params.transport.reset();
-}
-
-function buildQaSharedChannelMarker(prefix: string, randomUUID: () => string) {
-  return `${prefix}_${randomUUID().slice(0, 8).toUpperCase()}`;
-}
-
-async function sendQaSharedChannelMarker(
-  params: QaSharedChannelFlowParams,
-  config: QaSharedChannelMessageConfig,
-  marker: string,
-) {
-  await params.transport.sendInbound({
-    conversation: {
-      id: config.conversationId,
-      kind: config.conversationKind,
-    },
-    senderId: config.senderId,
-    senderName: "QA Driver",
-    text: `${config.mentionPrefix}Reply with only this exact marker: ${marker}`,
-  });
-}
-
-export async function runQaAccessControlScenarioFlow(
-  params: QaSharedChannelFlowParams & {
-    getTransportSnapshot: QaTransportAdapter["state"]["getSnapshot"];
+const qaSharedFlows = {
+  "channel-access-control": {
+    steps: [
+      {
+        name: "enforces configured access policy",
+        actions: [
+          ...qaSharedFlowPreparationActions,
+          {
+            set: "marker",
+            value: {
+              expr: "`${config.markerPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
+            },
+          },
+          {
+            set: "outboundCount",
+            value: {
+              expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length",
+            },
+          },
+          {
+            sendInbound: {
+              conversation: {
+                id: { ref: "config.conversationId" },
+                kind: { ref: "config.conversationKind" },
+              },
+              senderId: { ref: "config.senderId" },
+              senderName: "QA Driver",
+              text: {
+                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${marker}`",
+              },
+            },
+          },
+          {
+            if: {
+              expr: "config.expectReply",
+              then: [
+                {
+                  waitForOutbound: {
+                    textIncludes: { ref: "marker" },
+                    timeoutMs: { ref: "config.timeoutMs" },
+                  },
+                },
+              ],
+              else: [
+                {
+                  waitForNoOutbound: {
+                    quietMs: { ref: "config.timeoutMs" },
+                    sinceIndex: { ref: "outboundCount" },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        detailsExpr: "`${config.markerPrefix}: expectReply=${config.expectReply}`",
+      },
+    ],
   },
-) {
-  const config = qaAccessControlFlowConfigSchema.parse(params.config);
-  await prepareQaSharedChannelFlow(params);
-  const marker = buildQaSharedChannelMarker(config.markerPrefix, params.randomUUID);
-  const outboundCount = params
-    .getTransportSnapshot()
-    .messages.filter((message) => message.direction === "outbound").length;
-  await sendQaSharedChannelMarker(params, config, marker);
-  if (config.expectReply) {
-    await params.transport.waitForOutbound({ textIncludes: marker, timeoutMs: config.timeoutMs });
-  } else {
-    await params.transport.waitForNoOutbound({
-      quietMs: config.timeoutMs,
-      sinceIndex: outboundCount,
-    });
-  }
-  return { details: `${config.markerPrefix}: expectReply=${config.expectReply}` };
-}
-
-export async function runQaRestartResumeScenarioFlow(params: QaSharedChannelFlowParams) {
-  const config = qaRestartResumeFlowConfigSchema.parse(params.config);
-  await prepareQaSharedChannelFlow(params);
-  const firstMarker = buildQaSharedChannelMarker(config.firstPrefix, params.randomUUID);
-  await sendQaSharedChannelMarker(params, config, firstMarker);
-  await params.transport.waitForOutbound({
-    textIncludes: firstMarker,
-    timeoutMs: config.timeoutMs,
-  });
-
-  const restart = params.env.gateway.restartAfterStateMutation;
-  if (!restart) {
-    throw new Error("qa gateway child does not expose restartAfterStateMutation");
-  }
-  await restart(async () => undefined);
-  await params.waitForGatewayHealthy(params.env, 60_000);
-  await params.waitForTransportReady(params.env, 60_000);
-
-  const secondMarker = buildQaSharedChannelMarker(config.secondPrefix, params.randomUUID);
-  await sendQaSharedChannelMarker(params, config, secondMarker);
-  await params.transport.waitForOutbound({
-    textIncludes: secondMarker,
-    timeoutMs: config.timeoutMs,
-  });
-  return { details: `${firstMarker} -> restart -> ${secondMarker}` };
-}
+  "channel-restart-resume": {
+    steps: [
+      {
+        name: "resumes after restart without replay",
+        actions: [
+          ...qaSharedFlowPreparationActions,
+          {
+            set: "firstMarker",
+            value: {
+              expr: "`${config.firstPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
+            },
+          },
+          {
+            sendInbound: {
+              conversation: {
+                id: { ref: "config.conversationId" },
+                kind: { ref: "config.conversationKind" },
+              },
+              senderId: { ref: "config.senderId" },
+              senderName: "QA Driver",
+              text: {
+                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${firstMarker}`",
+              },
+            },
+          },
+          {
+            waitForOutbound: {
+              textIncludes: { ref: "firstMarker" },
+              timeoutMs: { ref: "config.timeoutMs" },
+            },
+          },
+          {
+            assert: {
+              expr: "typeof env.gateway.restartAfterStateMutation === 'function'",
+              message: "qa gateway child does not expose restartAfterStateMutation",
+            },
+          },
+          {
+            call: "env.gateway.restartAfterStateMutation",
+            args: [
+              {
+                lambda: {
+                  async: true,
+                  params: ["ctx"],
+                  expr: "Promise.resolve()",
+                },
+              },
+            ],
+          },
+          { call: "waitForGatewayHealthy", args: [{ ref: "env" }, 60_000] },
+          { call: "waitForTransportReady", args: [{ ref: "env" }, 60_000] },
+          {
+            set: "secondMarker",
+            value: {
+              expr: "`${config.secondPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
+            },
+          },
+          {
+            sendInbound: {
+              conversation: {
+                id: { ref: "config.conversationId" },
+                kind: { ref: "config.conversationKind" },
+              },
+              senderId: { ref: "config.senderId" },
+              senderName: "QA Driver",
+              text: {
+                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${secondMarker}`",
+              },
+            },
+          },
+          {
+            waitForOutbound: {
+              textIncludes: { ref: "secondMarker" },
+              timeoutMs: { ref: "config.timeoutMs" },
+            },
+          },
+        ],
+        detailsExpr: "`${firstMarker} -> restart -> ${secondMarker}`",
+      },
+    ],
+  },
+} satisfies Record<QaScenarioSharedFlow["shared"], QaScenarioFlowShape>;
 
 function resolveQaScenarioFlowKind(
-  flow: QaScenarioFlowShape | QaScenarioModuleFlow | undefined,
+  flow: QaScenarioFlowShape | QaScenarioModuleFlow | QaScenarioSharedFlow | undefined,
 ): "module" | "steps" | undefined {
   return flow ? ("module" in flow ? "module" : "steps") : undefined;
 }
@@ -183,11 +217,14 @@ function resolveQaScenarioModuleArg(arg: unknown) {
 }
 
 function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
-  flow: TFlow | QaScenarioModuleFlow | undefined,
+  flow: TFlow | QaScenarioModuleFlow | QaScenarioSharedFlow | undefined,
   title: string,
 ) {
   if (!flow || "steps" in flow) {
     return flow;
+  }
+  if ("shared" in flow) {
+    return qaSharedFlows[flow.shared];
   }
   return {
     steps: [
@@ -229,4 +266,5 @@ export const qaScenarioModuleFlow = {
   providerModeSchema: qaFlowProviderModeSchema,
   resolveKind: resolveQaScenarioFlowKind,
   resolveFlow: resolveQaScenarioFileFlow,
+  sharedSchema: qaSharedFlowSchema,
 };

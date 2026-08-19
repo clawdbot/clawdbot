@@ -30,7 +30,4 @@ scenario:
       timeoutMs: 60000
 
 flow:
-  module: ./scenario-module-flow.js
-  call: runQaRestartResumeScenarioFlow
-  args:
-    - expr: "({ config, env, randomUUID, transport, waitForGatewayHealthy, waitForTransportReady })"
+  shared: channel-restart-resume

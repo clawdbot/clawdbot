@@ -34,7 +34,4 @@ scenario:
       timeoutMs: 8000
 
 flow:
-  module: ./scenario-module-flow.js
-  call: runQaAccessControlScenarioFlow
-  args:
-    - expr: "({ config, env, getTransportSnapshot, randomUUID, transport, waitForGatewayHealthy, waitForTransportReady })"
+  shared: channel-access-control

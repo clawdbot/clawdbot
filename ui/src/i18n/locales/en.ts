@@ -80,6 +80,7 @@ export const en: TranslationMap = {
     loadConfig: "Load config",
     loadApprovals: "Load approvals",
     settingsSections: "Settings sections",
+    version: "Version",
     docs: "Docs",
     learnMore: "Learn more",
     colorMode: "Color mode",

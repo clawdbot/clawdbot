@@ -27,7 +27,7 @@ describe("qa scenario catalog channel contracts", () => {
       (scenario) => scenario.execution.flowKind === "module",
     );
 
-    expect(moduleFlows).toHaveLength(153);
+    expect(moduleFlows).toHaveLength(146);
     expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
   });
 
@@ -52,28 +52,31 @@ describe("qa scenario catalog channel contracts", () => {
     const channelByScenarioId = new Map<string, { channel: string; sharedCall?: string }>([
       [
         "matrix-restart-resume",
-        { channel: "matrix", sharedCall: "runQaRestartResumeScenarioFlow" },
+        { channel: "matrix", sharedCall: "env.gateway.restartAfterStateMutation" },
       ],
-      ["slack-restart-resume", { channel: "slack", sharedCall: "runQaRestartResumeScenarioFlow" }],
+      [
+        "slack-restart-resume",
+        { channel: "slack", sharedCall: "env.gateway.restartAfterStateMutation" },
+      ],
       [
         "whatsapp-restart-resume",
-        { channel: "whatsapp", sharedCall: "runQaRestartResumeScenarioFlow" },
+        { channel: "whatsapp", sharedCall: "env.gateway.restartAfterStateMutation" },
       ],
       [
         "whatsapp-access-control-dm-disabled",
-        { channel: "whatsapp", sharedCall: "runQaAccessControlScenarioFlow" },
+        { channel: "whatsapp", sharedCall: "config.expectReply" },
       ],
       [
         "whatsapp-access-control-dm-open",
-        { channel: "whatsapp", sharedCall: "runQaAccessControlScenarioFlow" },
+        { channel: "whatsapp", sharedCall: "config.expectReply" },
       ],
       [
         "whatsapp-access-control-group-disabled",
-        { channel: "whatsapp", sharedCall: "runQaAccessControlScenarioFlow" },
+        { channel: "whatsapp", sharedCall: "config.expectReply" },
       ],
       [
         "whatsapp-access-control-group-open",
-        { channel: "whatsapp", sharedCall: "runQaAccessControlScenarioFlow" },
+        { channel: "whatsapp", sharedCall: "config.expectReply" },
       ],
       ["whatsapp-pairing-block", { channel: "whatsapp" }],
       ["matrix-allowlist-hot-reload", { channel: "matrix" }],
@@ -83,7 +86,7 @@ describe("qa scenario catalog channel contracts", () => {
       const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
       expect(scenario.execution.channel, scenarioId).toBe(expected.channel);
       if (expected.sharedCall) {
-        expect(scenario.execution.flowKind, scenarioId).toBe("module");
+        expect(scenario.execution.flowKind, scenarioId).toBe("steps");
         expect(scenario.execution.suiteIsolation, scenarioId).toBe("isolated");
         expect(JSON.stringify(scenario.execution.flow), scenarioId).toContain(expected.sharedCall);
       }
