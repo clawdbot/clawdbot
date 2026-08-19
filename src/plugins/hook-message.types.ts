@@ -110,6 +110,8 @@ export type PluginHookMessageContext = {
   spanId?: string;
   parentSpanId?: string;
   callDepth?: number;
+  /** Aborts when this handler's hook timeout expires, composed with any caller cancellation. */
+  abortSignal?: AbortSignal;
 };
 
 export type PluginHookInboundClaimContext = PluginHookMessageContext & {

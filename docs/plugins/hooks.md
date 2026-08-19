@@ -62,7 +62,7 @@ observation side effects.
 | `matcher`          | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
 | `priority`         | Ordering; higher runs first.                                                                                                                                                                                                                           |
 | `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
-| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                      |
+| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler, aborts its `ctx.abortSignal`, and moves on. Omit to use the runner's default per-hook timeout.                                                                             |
 | `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
@@ -96,12 +96,13 @@ plugin-authored `api.on(..., { timeoutMs })` value. Each value must be a
 positive integer up to 600000 ms. Prefer per-hook overrides for known-slow
 hooks so one plugin does not get a longer budget everywhere.
 
-A timed-out handler promise continues running because hook callbacks do not
-receive a timeout-owned cancellation signal. `before_tool_call` receives the
-owning tool call's `ctx.abortSignal`, but hook timeout expiry does not abort it.
-The hook dispatch can release its Gateway admission while that plugin work is
-still in progress. Plugins that own long-running work must provide their own
-cancellation and shutdown lifecycle.
+A handler that runs under a timeout receives `ctx.abortSignal`, and the runner
+aborts it when the budget expires. Where the host already supplies a signal, such
+as the owning tool call's signal for `before_tool_call`, the two are composed, so
+either cancellation aborts the handler's signal. Awaiting stops at expiry either
+way, so plugins that spawn child processes or other owned work must honor that
+signal; work that ignores it keeps running after the hook dispatch releases its
+Gateway admission.
 
 Policy hooks `before_tool_call` and `before_install` use a 15-second default per
 handler. A timeout fails closed: the tool call or installation is rejected
@@ -329,8 +330,8 @@ provider payloads, start the Gateway with `--raw-stream` and
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.runId`, `ctx.toolKind`, `ctx.toolInputKind`, and diagnostic `ctx.trace`
 - optional `ctx.abortSignal`, which aborts when the owning tool call is
-  cancelled; handlers should pass it to cancellable I/O and remove any
-  listeners they register
+  cancelled or the handler's hook timeout expires; handlers should pass it to
+  cancellable I/O and remove any listeners they register
 - optional `ctx.requester`, the host-derived requester that initiated the current
   message run. It can include `channel`, `accountId`, `senderId`,
   `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,

@@ -146,13 +146,13 @@ type HookRunnerOptions = {
    */
   failurePolicyByHook?: Partial<Record<PluginHookName, HookFailurePolicy>>;
   /**
-   * Optional timeout for void/observation hooks. A timed-out hook is logged and
-   * the runner continues, but the plugin's underlying work is not cancelled.
+   * Optional timeout for void/observation hooks. A timed-out hook is logged, its
+   * context abort signal fires, and the runner continues.
    */
   voidHookTimeoutMsByHook?: Partial<Record<PluginHookName, number>>;
   /**
    * Optional timeout for modifying hooks. A timed-out hook is logged and skipped,
-   * but the plugin's underlying work is not cancelled.
+   * and its context abort signal fires.
    */
   modifyingHookTimeoutMsByHook?: Partial<Record<PluginHookName, number>>;
 };
@@ -617,23 +617,53 @@ export function createHookRunner(
   const getClaimingHookTimeoutMs = (hook: PluginHookRegistration): number | undefined =>
     normalizePositiveTimeoutMs(hook.timeoutMs);
 
-  const withHookTimeout = async <T>(
-    promise: Promise<T>,
-    timeoutMs: number,
-    optionsResult: { unref?: boolean } = {},
-  ): Promise<T> => {
+  // The deadline signal is composed with any caller signal already on the context so a
+  // handler keeps observing tool-call cancellation as well as its own await budget.
+  const attachHookDeadlineSignal = (ctx: unknown, deadlineSignal: AbortSignal): unknown => {
+    if (typeof ctx !== "object" || ctx === null) {
+      return ctx;
+    }
+    const callerSignal = (ctx as { abortSignal?: AbortSignal }).abortSignal;
+    return {
+      ...ctx,
+      abortSignal: callerSignal ? AbortSignal.any([callerSignal, deadlineSignal]) : deadlineSignal,
+    };
+  };
+
+  /**
+   * Invoke one hook handler under its await budget. Expiry only stops the runner from
+   * awaiting, so aborting the deadline signal is the handler's single cancellation
+   * notice; without it the abandoned work and any child processes it spawned outlive
+   * the released hook lane and accumulate across turns (#115450).
+   */
+  const invokeHookHandler = async <T>(params: {
+    handler: unknown;
+    event: unknown;
+    ctx: unknown;
+    timeoutMs: number | undefined;
+    unrefTimeout?: boolean;
+  }): Promise<T> => {
+    const handler = params.handler as (event: unknown, ctx: unknown) => Promise<T> | T;
+    const timeoutMs = params.timeoutMs;
+    if (!timeoutMs) {
+      return await Promise.resolve(handler(params.event, params.ctx));
+    }
+
+    const deadline = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        deadline.abort(new Error(`hook timed out after ${timeoutMs}ms`));
         reject(new Error(`timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      if (optionsResult.unref) {
+      if (params.unrefTimeout) {
         timer.unref?.();
       }
     });
 
+    const handlerCtx = attachHookDeadlineSignal(params.ctx, deadline.signal);
     try {
-      return await Promise.race([promise, timeout]);
+      return await Promise.race([Promise.resolve(handler(params.event, handlerCtx)), timeout]);
     } finally {
       if (timer) {
         clearTimeout(timer);
@@ -684,15 +714,13 @@ export function createHookRunner(
 
     const promises = hooks.map(async (hook) => {
       try {
-        const promise = Promise.resolve(
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
-        );
-        const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
-        if (timeoutMs) {
-          await withHookTimeout(promise, timeoutMs, { unref: optionsValue.unrefTimeout ?? true });
-        } else {
-          await promise;
-        }
+        await invokeHookHandler<void>({
+          handler: hook.handler,
+          event,
+          ctx,
+          timeoutMs: getVoidHookTimeoutMs(hookName, hook),
+          unrefTimeout: optionsValue.unrefTimeout ?? true,
+        });
       } catch (err) {
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
@@ -723,13 +751,15 @@ export function createHookRunner(
 
     for (const hook of hooks) {
       try {
-        const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
         const handlerEvent = policy.isolateEventPerHandler
           ? cloneHookIsolationValue(hookName, event)
           : event;
-        const promise = Promise.resolve(handler(handlerEvent, ctx));
-        const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const handlerResult = await invokeHookHandler<TResult>({
+          handler: hook.handler,
+          event: handlerEvent,
+          ctx,
+          timeoutMs: getModifyingHookTimeoutMs(hookName, hook),
+        });
 
         const shouldMergeResult =
           handlerResult !== undefined && (handlerResult !== null || policy.mergeNullResults);
@@ -812,13 +842,13 @@ export function createHookRunner(
   ): Promise<TResult | undefined> {
     for (const hook of hooks) {
       try {
-        const invokeHandler = async (): Promise<TResult | void> => {
-          const promise = Promise.resolve(
-            (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
-          );
-          const timeoutMs = getClaimingHookTimeoutMs(hook);
-          return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
-        };
+        const invokeHandler = (): Promise<TResult | void> =>
+          invokeHookHandler<TResult | void>({
+            handler: hook.handler,
+            event,
+            ctx,
+            timeoutMs: getClaimingHookTimeoutMs(hook),
+          });
         const handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
         if (handlerResult?.handled) {
           return handlerResult;
@@ -866,11 +896,12 @@ export function createHookRunner(
     let firstError: string | null = null;
     for (const hook of hooks) {
       try {
-        const promise = Promise.resolve(
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
-        );
-        const timeoutMs = getClaimingHookTimeoutMs(hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const handlerResult = await invokeHookHandler<TResult | void>({
+          handler: hook.handler,
+          event,
+          ctx,
+          timeoutMs: getClaimingHookTimeoutMs(hook),
+        });
         if (handlerResult?.handled) {
           return { status: "handled", result: handlerResult };
         }
@@ -1124,15 +1155,12 @@ export function createHookRunner(
 
     for (const hook of hooks) {
       try {
-        const handler = hook.handler as (
-          event: PluginHookReplyPayloadSendingEvent,
-          ctx: PluginHookReplyPayloadSendingContext,
-        ) => Promise<PluginHookReplyPayloadSendingResult | void>;
-        const promise = Promise.resolve(
-          handler({ ...event, payload: toPluginReplyPayload(currentPayload) }, ctx),
-        );
-        const timeoutMs = getModifyingHookTimeoutMs("reply_payload_sending", hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const handlerResult = await invokeHookHandler<PluginHookReplyPayloadSendingResult | void>({
+          handler: hook.handler,
+          event: { ...event, payload: toPluginReplyPayload(currentPayload) },
+          ctx,
+          timeoutMs: getModifyingHookTimeoutMs("reply_payload_sending", hook),
+        });
 
         if (!handlerResult) {
           continue;
@@ -1472,13 +1500,12 @@ export function createHookRunner(
           ...(pluginVersion ? { pluginVersion } : {}),
         };
         try {
-          const handler = hook.handler as (
-            event: PluginHookSkillProposalEvaluateEvent,
-            ctx: PluginHookSkillContext,
-          ) => Promise<PluginHookSkillProposalEvaluateResult | void>;
-          const promise = Promise.resolve(handler(immutableEvent, ctx));
-          const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
-          const result = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          const result = await invokeHookHandler<PluginHookSkillProposalEvaluateResult | void>({
+            handler: hook.handler,
+            event: immutableEvent,
+            ctx,
+            timeoutMs: getModifyingHookTimeoutMs(hookName, hook),
+          });
           return result
             ? Object.assign({}, attribution, { status: "completed" as const, result })
             : Object.assign({}, attribution, { status: "skipped" as const });
