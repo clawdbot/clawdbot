@@ -148,9 +148,9 @@ class ResizableDivider extends OpenClawLitElement {
     this.capturePointer(e.pointerId);
 
     document.addEventListener("pointermove", this.handlePointerMove);
-    document.addEventListener("pointerup", this.handlePointerUp);
-    document.addEventListener("pointercancel", this.handlePointerUp);
-    window.addEventListener("blur", this.handlePointerUp);
+    document.addEventListener("pointerup", this.stopDragging);
+    document.addEventListener("pointercancel", this.stopDragging);
+    window.addEventListener("blur", this.stopDragging);
 
     e.preventDefault();
   };
@@ -191,10 +191,6 @@ class ResizableDivider extends OpenClawLitElement {
     this.emitResize(this.startRatio + deltaRatio);
   };
 
-  private handlePointerUp = () => {
-    this.stopDragging();
-  };
-
   private handleKeyDown = (e: KeyboardEvent) => {
     const step = e.shiftKey ? 0.05 : 0.02;
     const currentRatio = this.currentRatio();
@@ -220,7 +216,7 @@ class ResizableDivider extends OpenClawLitElement {
     this.emitResize(nextRatio);
   };
 
-  private stopDragging() {
+  private stopDragging = () => {
     if (!this.isDragging) {
       return;
     }
@@ -229,10 +225,10 @@ class ResizableDivider extends OpenClawLitElement {
     this.releaseActivePointer();
 
     document.removeEventListener("pointermove", this.handlePointerMove);
-    document.removeEventListener("pointerup", this.handlePointerUp);
-    document.removeEventListener("pointercancel", this.handlePointerUp);
-    window.removeEventListener("blur", this.handlePointerUp);
-  }
+    document.removeEventListener("pointerup", this.stopDragging);
+    document.removeEventListener("pointercancel", this.stopDragging);
+    window.removeEventListener("blur", this.stopDragging);
+  };
 
   private emitResize(nextRatio: number) {
     const splitRatio = this.clampRatio(nextRatio);
