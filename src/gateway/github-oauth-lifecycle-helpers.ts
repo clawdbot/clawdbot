@@ -6,10 +6,8 @@ import type {
   GitHubIdentityScope,
   GitHubOAuthRecord,
 } from "../agents/github-oauth-records.js";
-import {
-  resolveConfiguredGitHubToolIdentity,
-  type GitHubToolAccount,
-} from "../agents/github-tool-identity.js";
+import type { GitHubToolAccount } from "../agents/github-tool-account.js";
+import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 

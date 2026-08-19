@@ -29,6 +29,7 @@ import {
   writeGitHubDeviceAuthorizationRecord,
   writeGitHubOAuthRecord,
 } from "../agents/github-oauth-records.js";
+import type { GitHubToolAccount } from "../agents/github-tool-account.js";
 import {
   createManagedGitHubProfileId,
   GitHubAccountMismatchError,
@@ -38,7 +39,6 @@ import {
   resolveConfiguredGitHubToolIdentity,
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubProfileDir,
-  type GitHubToolAccount,
 } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";

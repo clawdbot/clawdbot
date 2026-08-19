@@ -13,10 +13,10 @@ import {
   type GitHubOAuthRecord,
   type GitHubIdentityScope,
 } from "../agents/github-oauth-records.js";
+import type { GitHubToolAccount } from "../agents/github-tool-account.js";
 import {
   GitHubAccountMismatchError,
   resolveConfiguredGitHubToolIdentity,
-  type GitHubToolAccount,
 } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";

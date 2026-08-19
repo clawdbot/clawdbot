@@ -16,13 +16,12 @@ import { runCommandBuffered } from "../process/exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
+import type { GitHubToolAccount } from "./github-tool-account.js";
 
 const GITHUB_HOST = "github.com";
 const PROFILE_COMMAND_TIMEOUT_MS = 15_000;
 const PROFILE_OUTPUT_LIMIT_BYTES = 32 * 1024;
 const MANAGED_GITHUB_ROOT_SEGMENTS = ["credentials", "github"] as const;
-
-export type GitHubToolAccount = { accountId: number; login: string; avatarUrl: string | null };
 
 export class GitHubAccountMismatchError extends Error {}
 

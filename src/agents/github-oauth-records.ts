@@ -10,7 +10,7 @@ import {
 } from "../secrets/store/secret-store.js";
 import type { AgentLifecycleBinding } from "./agent-lifecycle-registry.js";
 import type { GitHubOAuthTokenPair } from "./github-oauth-client.js";
-import type { GitHubToolAccount } from "./github-tool-identity.js";
+import type { GitHubToolAccount } from "./github-tool-account.js";
 
 const GITHUB_DEVICE_VERIFICATION_URI = "https://github.com/login/device";
 const OAUTH_RECORD_PREFIX = "github-oauth-";
