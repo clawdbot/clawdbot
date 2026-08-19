@@ -15,7 +15,7 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Provider model changes: update the owning plugin manifest; after landing, verify `openclaw/catalog/models/v1/catalog.json` refreshes and dispatch the catalog publish workflow when needed.
 - Live-verify is the default, not a nicety: user-facing behavior gets live-tested through the real flow before landing. Skipping requires a concrete infeasibility stated in the PR, not convenience. Never print secrets.
 - Missing deps in a normal checkout: `pnpm install`, retry once, then report first actionable error. Worktrees: see Commands — never reconcile there.
-- CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review.
+- CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review. The authenticated writer counts as the owner when they are an active member/maintainer of the matched CODEOWNERS team; a pending team review request alone does not require a second party. Independent approval is required only when an explicit guard, branch rule, security policy, or user instruction says so.
 - Product/docs/UI/changelog wording: "plugin/plugins"; `extensions/` is internal.
 - New channel/plugin/app/doc surface: update `.github/labeler.yml` + GH labels.
 - New `AGENTS.md`: add sibling `CLAUDE.md` symlink; edit `AGENTS.md` only.
