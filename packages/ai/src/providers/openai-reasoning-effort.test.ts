@@ -121,6 +121,25 @@ describe("OpenAI reasoning effort support", () => {
     ).toBe("xhigh");
   });
 
+  it("falls back to the requested supported effort when a mapping is unsupported", () => {
+    const model = {
+      provider: "example",
+      id: "custom-reasoning",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        reasoningEffortMap: { high: "xhigh" },
+      },
+    };
+
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "high",
+        fallbackMap: model.compat.reasoningEffortMap,
+      }),
+    ).toBe("high");
+  });
+
   it("preserves provider-native compat values mapped from canonical efforts", () => {
     const model = {
       provider: "example",

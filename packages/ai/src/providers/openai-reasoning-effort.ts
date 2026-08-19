@@ -212,6 +212,10 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   if (supported.some((supportedEffort) => supportedEffort === normalized)) {
     return normalized as OpenAIApiReasoningEffort;
   }
+  const requestedSupported = supported.find((supportedEffort) => supportedEffort === requested);
+  if (mapped !== undefined && requestedSupported !== undefined) {
+    return requestedSupported;
+  }
   if (requested === "off" && supported.includes("none")) {
     return "none";
   }

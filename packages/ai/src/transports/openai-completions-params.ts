@@ -448,13 +448,19 @@ export function buildOpenAICompletionsParams(
     }
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
-  const resolvedCompletionsReasoningEffort = completionsReasoningEffort
-    ? resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: completionsReasoningEffort,
-        fallbackMap: compat.reasoningEffortMap,
-      })
-    : undefined;
+  const explicitThinkingLevelMapOptOut =
+    model.thinkingLevelMap !== undefined &&
+    Object.entries(model.thinkingLevelMap).some(
+      ([level, value]) => level === completionsReasoningEffort && value === null,
+    );
+  const resolvedCompletionsReasoningEffort =
+    completionsReasoningEffort && !explicitThinkingLevelMapOptOut
+      ? resolveOpenAIReasoningEffortForModel({
+          model,
+          effort: completionsReasoningEffort,
+          fallbackMap: compat.reasoningEffortMap,
+        })
+      : undefined;
   const omitChatCompletionsToolReasoningEffort =
     Array.isArray(params.tools) &&
     params.tools.length > 0 &&
