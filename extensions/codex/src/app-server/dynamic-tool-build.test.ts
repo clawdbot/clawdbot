@@ -84,10 +84,8 @@ type RuntimeDynamicToolForTest = Parameters<
 >[0]["tools"][number];
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
-  const operationalRunInstance = Object.freeze({ instanceId: "instance-1", runId: "run-1" });
   return {
     hostCapabilities: createCodexTestHostCapabilities(),
-    operationalRunInstance,
     prompt: "hello",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -1220,7 +1218,7 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["message", "gateway_exec", "gateway_process"]);
-    expect(capturedOperationalRunInstance).toBe(params.operationalRunInstance);
+    expect(capturedOperationalRunInstance).toBeUndefined();
     const gatewayExec = tools.find((tool) => tool.name === "gateway_exec");
     expect(gatewayExec?.description).toContain("OpenClaw-managed Gateway environment access");
     expect(tools.find((tool) => tool.name === "gateway_process")?.description).toContain(

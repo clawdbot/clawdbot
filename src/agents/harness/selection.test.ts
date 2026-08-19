@@ -1294,9 +1294,7 @@ describe("runAgentHarnessAttempt", () => {
       }),
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
-    expect(classifyCall?.[1].operationalRunInstance).toBe(
-      params.admittedRunContext.operationalRunInstance,
-    );
+    expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });

@@ -758,10 +758,7 @@ function prepareHarnessFinalizationParams(
     ...withoutCapabilities
   } = params;
   if (builtIn) {
-    return {
-      ...withoutCapabilities,
-      operationalRunInstance: params.admittedRunContext.operationalRunInstance,
-    };
+    return withoutCapabilities;
   }
   const pluginParams = withoutPluginHarnessPrivateState(withoutCapabilities);
   const boundary = "plugin harness finalization handoff";
@@ -790,10 +787,7 @@ function withoutPluginHarnessPrivateState(
   } = params as EmbeddedRunAttemptParams & {
     __openclawSourceReplyDeliveryRuntime?: unknown;
   };
-  return {
-    ...pluginParams,
-    operationalRunInstance: params.admittedRunContext.operationalRunInstance,
-  };
+  return pluginParams;
 }
 
 function preparePluginHarnessParams(

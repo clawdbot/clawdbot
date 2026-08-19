@@ -126,8 +126,6 @@ type EmbeddedRunAttemptParamsBase = Omit<
   | "pluginHarnessToolPolicySafeDeniedTools"
   | "trajectoryRecorder"
 > & {
-  /** Exact admitted-run correlation; authority remains closure-bound in hostCapabilities. */
-  operationalRunInstance?: CoreEmbeddedRunAttemptParams["admittedRunContext"]["operationalRunInstance"];
   /** Per-model context cap authored by the operator and forwarded to harness runtimes. */
   authoredContextTokenCap?: number;
   /** Audited exact denies that the plugin harness must enforce against native equivalents. */

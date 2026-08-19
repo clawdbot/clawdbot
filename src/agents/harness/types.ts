@@ -100,10 +100,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
-> & {
-  /** Exact admitted-run correlation; authority remains closure-bound in hostCapabilities. */
-  operationalRunInstance?: InternalEmbeddedRunAttemptParams["admittedRunContext"]["operationalRunInstance"];
-};
+>;
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
  * existing harness source compatible through 2026-10-12.
