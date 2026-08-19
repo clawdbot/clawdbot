@@ -78,6 +78,28 @@ function stubAnswerSdpFetch(): void {
   vi.stubGlobal("fetch", vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch);
 }
 
+function createPendingSdpResponse(signal: AbortSignal | undefined): Response {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = signal.reason;
+            controller.error(
+              reason instanceof Error ? reason : new Error("offer request aborted"),
+            );
+          },
+          { once: true },
+        );
+      },
+    }),
+  } as Response;
+}
+
 function createOpenAiTransport(
   client: Record<string, unknown> = {},
   callbacks: Record<string, unknown> = {},
@@ -370,25 +392,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     let offerSignal: AbortSignal | undefined;
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       offerSignal = init?.signal ?? undefined;
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        body: new ReadableStream<Uint8Array>({
-          start(controller) {
-            offerSignal?.addEventListener(
-              "abort",
-              () => {
-                const reason = offerSignal?.reason;
-                controller.error(
-                  reason instanceof Error ? reason : new Error("offer request aborted"),
-                );
-              },
-              { once: true },
-            );
-          },
-        }),
-      } as Response;
+      return createPendingSdpResponse(offerSignal);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const transport = createOpenAiTransport();
@@ -413,25 +417,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     let offerSignal: AbortSignal | undefined;
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       offerSignal = init?.signal ?? undefined;
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        body: new ReadableStream<Uint8Array>({
-          start(controller) {
-            offerSignal?.addEventListener(
-              "abort",
-              () => {
-                const reason = offerSignal?.reason;
-                controller.error(
-                  reason instanceof Error ? reason : new Error("offer request aborted"),
-                );
-              },
-              { once: true },
-            );
-          },
-        }),
-      } as Response;
+      return createPendingSdpResponse(offerSignal);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const transport = createOpenAiTransport();
