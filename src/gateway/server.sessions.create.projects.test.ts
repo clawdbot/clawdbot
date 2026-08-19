@@ -169,7 +169,11 @@ test("sessions.create provisions a managed worktree from a registered project at
     );
   } finally {
     if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
     }
   }
 });

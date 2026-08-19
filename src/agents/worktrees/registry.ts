@@ -599,7 +599,6 @@ export function claimWorktreeRemovalRow(
   params: {
     worktreeId: string;
     token: string;
-    force: boolean;
     pid: number;
     startTime: number | null;
     now: number;
@@ -625,7 +624,7 @@ export function claimWorktreeRemovalRow(
         );
       }
       const { livePids, removingToken } = collectLiveRunLeases(db, k, scope, params.checks ?? {});
-      if (!params.force && livePids.length > 0) {
+      if (livePids.length > 0) {
         throw new WorktreeRemovalContentionError(
           "busy",
           `worktree is busy: locked by live pid ${livePids[0]}`,
