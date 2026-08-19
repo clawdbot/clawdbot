@@ -38,7 +38,9 @@ function createNonExitingTypedRuntimeEnv<TRuntime>(): TRuntime {
 
 export function installMatrixOnboardingEnvRestoreHooks() {
   afterEach(() => {
-    for (const [key, value] of Object.entries(previousMatrixEnv)) {
+    // Restore only the fixed Matrix allowlist; never replay arbitrary keys into host env.
+    for (const key of MATRIX_ENV_KEYS) {
+      const value = previousMatrixEnv[key];
       if (value === undefined) {
         delete process.env[key];
       } else {
