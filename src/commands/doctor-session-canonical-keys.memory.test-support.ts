@@ -1,4 +1,7 @@
+import { pathToFileURL } from "node:url";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
+
+export const canonicalMemoryTestSupportModuleUrl = import.meta.url;
 
 async function main(): Promise<void> {
   const [stateDir, storeTemplate] = process.argv.slice(2);
@@ -18,7 +21,9 @@ async function main(): Promise<void> {
   process.stdout.write(JSON.stringify(result));
 }
 
-void main().catch((error: unknown) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

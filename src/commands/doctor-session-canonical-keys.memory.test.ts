@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,6 +16,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { canonicalMemoryTestSupportModuleUrl } from "./doctor-session-canonical-keys.memory.test-support.js";
 import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -79,12 +81,7 @@ describe("canonical SQLite session repair memory", () => {
     );
     await esbuild({
       bundle: true,
-      entryPoints: [
-        path.join(
-          process.cwd(),
-          "src/commands/doctor-session-canonical-keys.memory.test-support.ts",
-        ),
-      ],
+      entryPoints: [fileURLToPath(canonicalMemoryTestSupportModuleUrl)],
       format: "esm",
       outfile: childPath,
       packages: "external",
