@@ -552,7 +552,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
     const clearedChat = z
       .object({
         chatId: z.union([z.string(), z.number()]).transform(String),
-        mode: z.enum(["all", "self"]),
+        mode: z.literal("self"),
         ok: z.literal(true),
       })
       .parse(

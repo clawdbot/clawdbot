@@ -397,21 +397,19 @@ class UserDriver:
     def clear_chat_history(self, chat_id):
         chat = self.client.request({"@type": "getChat", "chat_id": chat_id}, timeout=10)
         delete_for_self = bool(chat.get("can_be_deleted_only_for_self"))
-        delete_for_all = bool(chat.get("can_be_deleted_for_all_users"))
-        if not delete_for_self and not delete_for_all:
-            raise DriverError("The QA chat cannot be cleared before recording.")
-        # Desktop uses this same account. Prefer a local clear so privacy isolation does not
-        # destroy the shared QA group's history for other participants.
-        revoke = not delete_for_self
+        if not delete_for_self:
+            raise DriverError("The QA chat cannot be cleared locally before recording.")
+        # Desktop uses this same account. A local clear isolates public frames without
+        # destroying the shared QA group's history for other participants.
         self.client.request(
             {
                 "@type": "deleteChatHistory",
                 "chat_id": chat_id,
                 "remove_from_chat_list": False,
-                "revoke": revoke,
+                "revoke": False,
             }
         )
-        return "all" if revoke else "self"
+        return "self"
 
     def text_content(self, text):
         return {
