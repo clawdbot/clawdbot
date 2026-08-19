@@ -75,6 +75,12 @@ type WorkspaceSkillLoadOptions = {
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
   agentId?: string;
+  /**
+   * "ignore" keeps agentId scoping source discovery (custodian skills) without
+   * activating the agent allowlist filter — status/inventory views need the
+   * full entry list so excluded skills stay present-but-marked.
+   */
+  agentSkillFilter?: "apply" | "ignore";
   eligibility?: SkillEligibilityContext;
   workspaceOnly?: boolean;
   includeArchived?: boolean;
@@ -492,12 +498,13 @@ function filterArchivedSkillEntries(entries: SkillEntry[]): SkillEntry[] {
 function resolveEffectiveWorkspaceSkillFilter(opts?: {
   config?: OpenClawConfig;
   agentId?: string;
+  agentSkillFilter?: "apply" | "ignore";
   skillFilter?: string[];
 }): string[] | undefined {
   if (opts?.skillFilter !== undefined) {
     return normalizeSkillFilter(opts.skillFilter);
   }
-  if (!opts?.config || !opts.agentId) {
+  if (opts?.agentSkillFilter === "ignore" || !opts?.config || !opts.agentId) {
     return undefined;
   }
   return resolveEffectiveAgentSkillFilter(opts.config, opts.agentId);
