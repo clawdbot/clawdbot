@@ -92,6 +92,24 @@ describe("signalRpcRequest", () => {
     expect(result).toEqual({ version: "0.13.22" });
   });
 
+  it("rejects invalid UTF-8 in a successful JSON response", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      const corrupted = Buffer.concat([
+        Buffer.from('{"jsonrpc":"2.0","result":{"version":"1.'),
+        Buffer.from([0xff]),
+        Buffer.from('0"},"id":"test-id"}'),
+      ]);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(corrupted);
+    });
+
+    await expect(
+      signalRpcRequest("version", undefined, {
+        baseUrl,
+      }),
+    ).rejects.toBeInstanceOf(TypeError);
+  });
+
   it("preserves path-prefixed base URLs for RPC requests", async () => {
     const serverUrl = await withSignalServer(async (req, res) => {
       expect(req.method).toBe("POST");

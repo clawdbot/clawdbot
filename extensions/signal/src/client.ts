@@ -179,11 +179,15 @@ function requestSignalHttpText(
         });
         res.on("error", rejectOnce);
         res.on("end", () => {
-          resolveOnce({
-            status: res.statusCode ?? 0,
-            statusText: res.statusMessage || "error",
-            text: Buffer.concat(chunks).toString("utf8"),
-          });
+          try {
+            resolveOnce({
+              status: res.statusCode ?? 0,
+              statusText: res.statusMessage || "error",
+              text: new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)),
+            });
+          } catch (error) {
+            rejectOnce(error);
+          }
         });
       },
     );

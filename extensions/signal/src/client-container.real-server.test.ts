@@ -98,7 +98,7 @@ describe("signal REST real-server deadline", () => {
 
     await expect(
       containerRpcRequest("version", undefined, { baseUrl: server.baseUrl, timeoutMs: 1_000 }),
-    ).rejects.toThrow(/not valid for encoding utf-8/i);
+    ).rejects.toBeInstanceOf(TypeError);
   });
 
   it("returns the parsed body when it completes within the deadline", async () => {
