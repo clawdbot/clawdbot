@@ -1,24 +1,16 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { access } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { buildWidgetDocument } from "./wrap.js";
 
-let stateDir: string | undefined;
-
-afterEach(async () => {
-  if (stateDir) {
-    await rm(stateDir, { recursive: true, force: true });
-    stateDir = undefined;
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("show_widget current-channel presentation", () => {
   it("presents once without materializing an inline view", async () => {
-    stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-widget-presenter-"));
+    const stateDir = tempDirs.make("openclaw-widget-presenter-");
     const present = vi.fn(async () => ({
       ok: true as const,
       value: {

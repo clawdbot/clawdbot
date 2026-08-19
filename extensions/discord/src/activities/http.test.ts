@@ -11,7 +11,6 @@ import { DiscordActivitiesRuntime } from "./runtime.js";
 import {
   createActivityTestConfig,
   createActivityTestRuntime,
-  createMemoryActivityStore,
 } from "./test-helpers.test-support.js";
 
 const servers: Server[] = [];
@@ -244,10 +243,17 @@ function createWidgetFixture(
 }
 
 describe("Discord Activity HTTP OAuth", () => {
-  it("leaves the public prefix externally absent while Activities are disabled", async () => {
-    const base = await startServer(
-      createActivityTestRuntime({ channels: { discord: { token: "testtok" } } }),
-    );
+  it.each([
+    {
+      name: "Activities are unconfigured",
+      config: { channels: { discord: { token: "testtok" } } },
+    },
+    {
+      name: "the client secret is unresolved",
+      config: createActivityTestConfig({ clientSecret: "" }),
+    },
+  ])("leaves the public prefix externally absent when $name", async ({ config }) => {
+    const base = await startServer(createActivityTestRuntime(config));
 
     const response = await fetch(`${base}/discord/activity/`);
     await expect(response.text()).resolves.toBe("not found");
@@ -363,14 +369,6 @@ describe("Discord Activity HTTP OAuth", () => {
     );
     expect(widgetResponse.status).toBe(200);
     await expect(widgetResponse.json()).resolves.toMatchObject({ id: widgetId });
-  });
-
-  it("returns 503 when the configured account no longer resolves a secret", async () => {
-    const cfg = createActivityTestConfig({ clientSecret: "" });
-    const runtime = new DiscordActivitiesRuntime(createMemoryActivityStore(), cfg, undefined, {});
-    const base = await startServer(runtime);
-    const response = await requestToken(base);
-    expect(response.status).toBe(503);
   });
 
   it("limits token requests to ten per source IP per minute", async () => {

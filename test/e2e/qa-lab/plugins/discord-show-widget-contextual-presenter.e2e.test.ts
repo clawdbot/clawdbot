@@ -1,6 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -14,6 +13,7 @@ import {
   startQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
@@ -253,12 +253,19 @@ describe("Discord show_widget contextual presenter process proof", () => {
     }
   });
 
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   it(
     "routes one core tool through Discord and keeps mismatched and inline paths honest",
     { timeout: 180_000 },
     async () => {
-      const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-discord-widget-e2e-"));
-      cleanups.push(() => rm(scratch, { recursive: true, force: true }));
+      process.stdout.write("[discord-widget-e2e] starting isolated Gateway proof\n");
+      const progress = setInterval(() => {
+        process.stdout.write("[discord-widget-e2e] Gateway proof still running\n");
+      }, 10_000);
+      progress.unref();
+      cleanups.push(async () => clearInterval(progress));
+      const scratch = tempDirs.make("openclaw-discord-widget-e2e-");
       const discord = await startDiscordRestLoopback();
       cleanups.push(() => discord.stop());
       const preloadPath = await writeDiscordFetchPreload(scratch);
