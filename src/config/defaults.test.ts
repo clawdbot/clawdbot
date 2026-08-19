@@ -138,3 +138,134 @@ describe("config defaults", () => {
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
 });
+
+describe("applyModelDefaults catalog seeding", () => {
+  const catalogRegistry = {
+    plugins: [
+      {
+        id: "openai",
+        modelCatalog: {
+          providers: {
+            openai: {
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  name: "GPT-5.6 Sol",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  contextWindow: 400_000,
+                  contextTokens: 272_000,
+                  maxTokens: 128_000,
+                  cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+                  thinkingLevelMap: { off: "none" },
+                },
+              ],
+            },
+          },
+        },
+      },
+    ],
+    // SAFETY: minimal manifest record carrying only the fields applyModelDefaults reads.
+  } as never;
+
+  // Regression: an override entry pinning only sizing fields materialized as a
+  // text-only, non-reasoning, zero-cost model, silently dropping vision-gated
+  // tools (like `computer`) for that model downstream.
+  it("fills omitted fields from the owning catalog row before generic defaults", async () => {
+    const { applyModelDefaults } = await import("./defaults.js");
+    const cfg = applyModelDefaults(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                // SAFETY: mirrors a real operator config entry that omits input/reasoning/cost.
+                {
+                  id: "gpt-5.6-sol",
+                  name: "GPT-5.6",
+                  contextWindow: 1_050_000,
+                  contextTokens: 922_000,
+                } as never,
+              ],
+            },
+          },
+        },
+      },
+      { manifestRegistry: catalogRegistry },
+    );
+    const model = expectDefined(
+      cfg.models?.providers?.openai?.models?.[0],
+      "materialized model entry",
+    );
+    expect(model.input).toEqual(["text", "image"]);
+    expect(model.reasoning).toBe(true);
+    expect(model.cost).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
+    expect(model.maxTokens).toBe(128_000);
+    expect(model.thinkingLevelMap).toEqual({ off: "none" });
+    // Authored fields stay authoritative.
+    expect(model.contextWindow).toBe(1_050_000);
+    expect(model.contextTokens).toBe(922_000);
+    expect(model.name).toBe("GPT-5.6");
+  });
+
+  it("keeps authored metadata authoritative over the catalog row", async () => {
+    const { applyModelDefaults } = await import("./defaults.js");
+    const cfg = applyModelDefaults(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  name: "text-only override",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8_192,
+                  maxTokens: 4_096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      { manifestRegistry: catalogRegistry },
+    );
+    const model = expectDefined(
+      cfg.models?.providers?.openai?.models?.[0],
+      "materialized model entry",
+    );
+    expect(model.input).toEqual(["text"]);
+    expect(model.reasoning).toBe(false);
+    expect(model.maxTokens).toBe(4_096);
+  });
+
+  it("falls back to generic defaults when no catalog row matches", async () => {
+    const { applyModelDefaults } = await import("./defaults.js");
+    const cfg = applyModelDefaults(
+      {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://custom.example.com/v1",
+              models: [
+                // SAFETY: mirrors a real operator config entry that omits input/reasoning/cost.
+                { id: "house-model", name: "House Model" } as never,
+              ],
+            },
+          },
+        },
+      },
+      { manifestRegistry: catalogRegistry },
+    );
+    const model = expectDefined(
+      cfg.models?.providers?.custom?.models?.[0],
+      "materialized model entry",
+    );
+    expect(model.input).toEqual(["text"]);
+    expect(model.reasoning).toBe(false);
+  });
+});
