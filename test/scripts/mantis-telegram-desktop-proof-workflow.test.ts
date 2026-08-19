@@ -130,6 +130,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(lease.run).toContain("deadline=$(( SECONDS + 15 * 60 ))");
     expect(lease.run).toContain("still leased by another run after 15 minutes");
     expect(lease.run).toContain("sleep 60");
+    expect(lease.run.indexOf('echo "lease_file=$credential_dir/lease.json"')).toBeLessThan(
+      lease.run.indexOf("until node --import tsx"),
+    );
   });
 
   it("releases the runner Telegram QA lease after the agent", () => {

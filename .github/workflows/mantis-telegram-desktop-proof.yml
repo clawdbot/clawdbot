@@ -549,6 +549,7 @@ jobs:
           # The Convex credential is the real mutex for the shared Telegram account:
           # a concurrent holder fails this acquire, so no separate run-level lock is
           # needed. Retry while another run finishes, then fail with a clear reason.
+          echo "lease_file=$credential_dir/lease.json" >> "$GITHUB_OUTPUT"
           deadline=$(( SECONDS + 15 * 60 ))
           until node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
             --user-driver-dir "$credential_dir/user-driver" \
@@ -582,7 +583,6 @@ jobs:
           sudo setfacl -m "u:$(id -un):rwx,u:mantis-sut:rwx" "$session_root"
           sudo setfacl -d -m "u:$(id -un):rwx,u:mantis-sut:rwx" "$session_root"
           {
-            echo "lease_file=$credential_dir/lease.json"
             echo "state_dir=$credential_dir/user-driver"
             echo "sut_credential_dir=$sut_credential_dir"
             echo "session_root=$session_root"
