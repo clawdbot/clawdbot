@@ -23,6 +23,7 @@ type GatewaySpawnSpec = {
 
 type JsonObject = Record<string, unknown>;
 type MantisSutLane = "baseline" | "candidate";
+type SpawnedDaemon = { child: ReturnType<typeof spawn>; error?: Error };
 
 type FunnelBridge = {
   proxyPath: string;
@@ -392,7 +393,7 @@ function spawnDaemon(params: {
   logPath: string;
   shell?: boolean;
   windowsVerbatimArguments?: boolean;
-}): number | undefined {
+}): SpawnedDaemon {
   const log = fs.openSync(params.logPath, "a");
   const child = spawn(params.command, params.args, {
     cwd: params.cwd,
@@ -402,13 +403,35 @@ function spawnDaemon(params: {
     stdio: ["ignore", log, log],
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   });
+  const daemon: SpawnedDaemon = { child };
+  child.on("error", (error) => {
+    daemon.error = error;
+  });
   child.unref();
   fs.closeSync(log);
-  return child.pid;
+  return daemon;
 }
 
 function readLogTail(logPath: string, maxBytes = 256 * 1024): string {
   return readTextFileTail(logPath, Math.max(1, maxBytes));
+}
+
+function logTailDiagnostic(logPath: string): string {
+  const tail = sliceUtf16Safe(readLogTail(logPath), -4000);
+  return `${path.basename(logPath)}:${tail ? `\n${tail}` : " <empty>"}`;
+}
+
+function describeDaemonFailure(daemon: SpawnedDaemon): string | undefined {
+  if (daemon.error) {
+    return `failed to start: ${daemon.error.message}`;
+  }
+  if (daemon.child.signalCode) {
+    return `was terminated by signal ${daemon.child.signalCode}`;
+  }
+  if (daemon.child.exitCode !== null) {
+    return `exited with exit code ${daemon.child.exitCode}`;
+  }
+  return undefined;
 }
 
 export async function waitForLog(
@@ -416,17 +439,33 @@ export async function waitForLog(
   pattern: RegExp,
   label: string,
   timeoutMs: number,
+  daemonContext?: { daemon: SpawnedDaemon; logPath: string },
 ): Promise<void> {
   const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
+  while (true) {
     if (pattern.test(readLogTail(logPath))) {
       return;
     }
-    await sleep(500);
+    if (daemonContext) {
+      // The awaited log lives inside the daemon, so a daemon that already died can never
+      // satisfy the pattern: report how it died instead of waiting out the full timeout.
+      const failure = describeDaemonFailure(daemonContext.daemon);
+      if (failure) {
+        throw new Error(
+          `Container-isolated SUT ${failure} before ${label} became ready.\n${logTailDiagnostic(daemonContext.logPath)}\n${logTailDiagnostic(logPath)}`,
+        );
+      }
+    }
+    const remainingMs = timeoutMs - (Date.now() - started);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(500, remainingMs));
   }
-  throw new Error(
-    `${label} did not become ready within ${timeoutMs}ms\n${sliceUtf16Safe(readLogTail(logPath), -4000)}`,
-  );
+  const timeoutDetail = daemonContext
+    ? `; container-isolated SUT is still running (pid ${daemonContext.daemon.child.pid ?? "unknown"}).\n${logTailDiagnostic(daemonContext.logPath)}\n${logTailDiagnostic(logPath)}`
+    : `\n${sliceUtf16Safe(readLogTail(logPath), -4000)}`;
+  throw new Error(`${label} did not become ready within ${timeoutMs}ms${timeoutDetail}`);
 }
 
 export function createContainerizedSutSpawnSpec(params: {
@@ -611,21 +650,23 @@ export async function startMantisSut(params: {
     runtimeRoot: config.tempRoot,
     sutLane: params.sutLane,
   });
-  let gatewayPid: number | undefined;
   try {
-    gatewayPid = spawnDaemon({
+    const daemonLogPath = path.join(params.outputDir, "sut-container.log");
+    const daemon = spawnDaemon({
       args: spec.args,
       command: spec.command,
       cwd: typeof spec.options.cwd === "string" ? spec.options.cwd : process.cwd(),
       env: spec.options.env ?? {},
-      logPath: path.join(params.outputDir, "sut-container.log"),
+      logPath: daemonLogPath,
       shell: false,
     });
+    const daemonContext = { daemon, logPath: daemonLogPath };
+    await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 30_000, daemonContext);
+    await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000, daemonContext);
+    const gatewayPid = daemon.child.pid;
     if (!gatewayPid) {
-      throw new Error("container-isolated SUT did not start.");
+      throw new Error("Container-isolated SUT became ready without a daemon process id.");
     }
-    await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 30_000);
-    await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
     const sutAttestation = z
       .object({ lane: z.enum(["baseline", "candidate"]), sha: z.string().regex(/^[0-9a-f]{40}$/u) })
       .parse(

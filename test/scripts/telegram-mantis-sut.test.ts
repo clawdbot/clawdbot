@@ -1,10 +1,11 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   readCodexProxyPort,
   runSutContainerAction,
+  waitForLog,
 } from "../../scripts/e2e/telegram-mantis-sut.ts";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
@@ -38,6 +39,24 @@ describe("Telegram Mantis SUT CLI", () => {
       })),
     ).toThrow("permission denied while opening the Docker socket");
   });
+
+  it("reports a silent container daemon exit instead of a mock-openai timeout", async () => {
+    const root = makeTempDir(tempDirs, "telegram-mantis-start-failure-");
+    const mockLog = path.join(root, "mock-openai.log");
+    const daemonLog = path.join(root, "sut-container.log");
+    fs.writeFileSync(mockLog, "");
+    fs.writeFileSync(daemonLog, "");
+    const child = spawn(process.execPath, ["-e", "process.exit(23)"], { stdio: "ignore" });
+
+    await expect(
+      waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 30_000, {
+        daemon: { child },
+        logPath: daemonLog,
+      }),
+    ).rejects.toThrow(
+      "Container-isolated SUT exited with exit code 23 before mock-openai became ready.\nsut-container.log: <empty>",
+    );
+  }, 40_000);
 
   it("releases the runtime claim before deadline-exposed removal", () => {
     const root = makeTempDir(tempDirs, "telegram-mantis-cleanup-");
