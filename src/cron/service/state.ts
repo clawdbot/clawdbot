@@ -348,7 +348,11 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
 /** Dispatches a cron event without letting subscriber errors escape scheduler work. */
 export function emit(state: CronServiceState, evt: CronEvent, context?: CronEventContext) {
   try {
-    state.deps.onEvent?.(evt, context);
+    if (context) {
+      state.deps.onEvent?.(evt, context);
+    } else {
+      state.deps.onEvent?.(evt);
+    }
   } catch {
     /* ignore */
   }
