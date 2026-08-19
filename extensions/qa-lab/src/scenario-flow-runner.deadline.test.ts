@@ -1,8 +1,81 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import type { QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 
+type QaFlowAction = QaScenarioFlow["steps"][number]["actions"][number];
+
+const delayedSideEffectCases: Array<[name: string, action: QaFlowAction]> = [
+  ["generic call", { call: "sideEffect", args: [{ expr: "await resolveInput()" }] }],
+  ["sendInbound", { sendInbound: { expr: "await resolveInput()" } }],
+  ["sendNativeCommand", { sendNativeCommand: { expr: "await resolveInput()" } }],
+  ["waitForOutbound", { waitForOutbound: { expr: "await resolveInput()" } }],
+  ["waitForOutboundSequence", { waitForOutboundSequence: { expr: "await resolveInput()" } }],
+  ["waitForNoOutbound", { waitForNoOutbound: { expr: "await resolveInput()" } }],
+];
+
 describe("scenario flow deadline", () => {
+  it.each(delayedSideEffectCases)(
+    "does not invoke %s after aborting during async input resolution",
+    async (_name, action) => {
+      const controller = new AbortController();
+      const timeoutError = new Error("scenario deadline expired");
+      const sideEffect = vi.fn();
+      let markInputStarted!: () => void;
+      let releaseInput!: (value: unknown) => void;
+      const inputStarted = new Promise<void>((resolve) => {
+        markInputStarted = resolve;
+      });
+      const input = new Promise<unknown>((resolve) => {
+        releaseInput = resolve;
+      });
+
+      const pending = runScenarioFlow({
+        api: {
+          signal: controller.signal,
+          state: createQaBusState(),
+          scenario: {
+            id: "flow-post-resolution-abort-fence",
+            title: "flow-post-resolution-abort-fence",
+            sourcePath: "qa/scenarios/flow-post-resolution-abort-fence.yaml",
+            surface: "test",
+            objective: "test",
+            successCriteria: ["test"],
+            execution: { kind: "flow" },
+          },
+          config: {},
+          resolveInput: async () => {
+            markInputStarted();
+            return await input;
+          },
+          sideEffect,
+          transport: {
+            sendInbound: sideEffect,
+            sendNativeCommand: sideEffect,
+            waitForOutbound: sideEffect,
+            waitForOutboundSequence: sideEffect,
+            waitForNoOutbound: sideEffect,
+          },
+          runScenario: async (name, steps) => {
+            for (const step of steps) {
+              await step.run();
+            }
+            return { name, status: "pass", steps: [] };
+          },
+        },
+        scenarioTitle: "flow-post-resolution-abort-fence",
+        flow: { steps: [{ name: "resolve input", actions: [action] }] },
+      });
+
+      await inputStarted;
+      controller.abort(timeoutError);
+      releaseInput({});
+
+      await expect(pending).rejects.toBe(timeoutError);
+      expect(sideEffect).not.toHaveBeenCalled();
+    },
+  );
+
   it("runs finally cleanup without advancing other actions after abort", async () => {
     const controller = new AbortController();
     const timeoutError = new Error("scenario deadline expired");

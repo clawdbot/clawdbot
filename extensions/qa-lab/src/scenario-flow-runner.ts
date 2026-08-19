@@ -198,11 +198,13 @@ function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
   return parent ? value.bind(parent) : value;
 }
 
-function throwIfFlowAborted(api: QaFlowApi) {
-  api.signal?.throwIfAborted();
-}
-
 type QaFlowActionOptions = { allowAfterAbort?: boolean };
+
+function throwIfFlowAborted(api: QaFlowApi, options: QaFlowActionOptions = {}) {
+  if (!options.allowAfterAbort) {
+    api.signal?.throwIfAborted();
+  }
+}
 
 async function runFlowAction(
   action: unknown,
@@ -210,15 +212,11 @@ async function runFlowAction(
   vars: QaFlowVars,
   options: QaFlowActionOptions = {},
 ) {
-  if (!options.allowAfterAbort) {
-    throwIfFlowAborted(api);
-  }
+  throwIfFlowAborted(api, options);
   try {
     await runFlowActionBody(action, api, vars, options);
   } finally {
-    if (!options.allowAfterAbort) {
-      throwIfFlowAborted(api);
-    }
+    throwIfFlowAborted(api, options);
   }
 }
 
@@ -236,6 +234,8 @@ async function runFlowActionBody(
     const args = Array.isArray(action.args)
       ? await Promise.all(action.args.map((entry) => resolveValue(entry, api, vars)))
       : [];
+    // Value resolution may cross the deadline, so fence every callable at invocation time.
+    throwIfFlowAborted(api, options);
     const result = await callable(...args);
     if (typeof action.saveAs === "string" && action.saveAs.trim()) {
       vars[action.saveAs.trim()] = result;
@@ -251,7 +251,9 @@ async function runFlowActionBody(
   ] as const) {
     if (name in action) {
       const callable = resolveCallable(`transport.${name}`, api, vars);
-      const result = await callable(await resolveValue(action[name], api, vars));
+      const input = await resolveValue(action[name], api, vars);
+      throwIfFlowAborted(api, options);
+      const result = await callable(input);
       if (typeof action.saveAs === "string" && action.saveAs.trim()) {
         vars[action.saveAs.trim()] = result;
       }
@@ -260,6 +262,7 @@ async function runFlowActionBody(
   }
   if (action.resetTransport === true) {
     const reset = resolveCallable("transport.reset", api, vars);
+    throwIfFlowAborted(api, options);
     await reset();
     return;
   }
