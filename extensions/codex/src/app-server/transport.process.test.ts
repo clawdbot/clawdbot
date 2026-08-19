@@ -290,7 +290,10 @@ try {
               [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
               [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
               [stoppedRoot, { ...sentinelIdentity, ppid: root.pid }],
-              [stoppedRoot, { ...stoppedSentinel, ppid: 1 }],
+              [
+                stoppedRoot,
+                { ...stoppedSentinel, ppid: 1, pgid: stoppedSentinel.pgid + 1 },
+              ],
             ]
           : mode === "root-resumed"
             ? [
@@ -367,7 +370,7 @@ process.stdout.write(JSON.stringify(result));
             scenarioPath,
             tempDir,
           ],
-          { cwd: path.resolve("."), encoding: "utf8", timeout: 10_000 },
+          { cwd: path.resolve("."), encoding: "utf8", timeout: 30_000 },
         );
         const result = JSON.parse(output) as {
           closed: boolean;

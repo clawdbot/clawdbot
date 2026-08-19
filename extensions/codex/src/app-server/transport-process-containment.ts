@@ -62,6 +62,7 @@ function quiesceDescendants(
   stopped: Map<string, PosixProcess>,
 ): PosixProcess[] | undefined {
   const provenByPid = new Map(initialDescendants.map((descendant) => [descendant.pid, descendant]));
+  const stopFailures = new Map<string, number>();
   for (;;) {
     const snapshot = readProcessSnapshot();
     if (!snapshot) {
@@ -87,6 +88,7 @@ function quiesceDescendants(
       if (!hasSameIdentity(proven, current)) {
         return undefined;
       }
+      provenByPid.set(current.pid, current);
       liveProven.push(current);
     }
     const descendants = collectDescendants(snapshot, [
@@ -111,7 +113,15 @@ function quiesceDescendants(
       }
       const stopQueued = signalSameProcess(descendant, "SIGSTOP");
       if (stopQueued) {
+        stopFailures.delete(identityKey(descendant));
         stopped.set(identityKey(descendant), descendant);
+      } else {
+        const key = identityKey(descendant);
+        const failures = (stopFailures.get(key) ?? 0) + 1;
+        if (failures >= 2) {
+          return undefined;
+        }
+        stopFailures.set(key, failures);
       }
       if (!descendant.state.startsWith("D") || !stopQueued) {
         allStopped = false;
