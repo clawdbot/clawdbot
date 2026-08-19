@@ -26,6 +26,7 @@ const {
   updateVoiceStateMock,
   enqueueSystemEventMock,
   assertSecretOwnerAvailableMock,
+  isSecretOwnerAvailableMock,
   canonicalizeRealtimeVoiceProviderIdMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
@@ -163,7 +164,10 @@ const {
     logVerboseMock: vi.fn(),
     loggerWarnMock: vi.fn(),
     resolveConfiguredRealtimeVoiceProviderMock: vi.fn<
-      () => {
+      (params?: {
+        configuredProviderId?: string;
+        isProviderAvailable?: (provider: { id: string }) => boolean;
+      }) => {
         provider: {
           id: string;
           capabilities?: { supportsActivationNameGating?: boolean };
@@ -195,6 +199,7 @@ const {
     updateVoiceStateMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
     assertSecretOwnerAvailableMock: vi.fn(),
+    isSecretOwnerAvailableMock: vi.fn((_ownerKind: string, _ownerId: string) => true),
     canonicalizeRealtimeVoiceProviderIdMock: vi.fn((providerId: string | undefined) =>
       providerId?.trim().toLowerCase(),
     ),
@@ -227,6 +232,7 @@ export const voiceTestMocks = {
   updateVoiceStateMock,
   enqueueSystemEventMock,
   assertSecretOwnerAvailableMock,
+  isSecretOwnerAvailableMock,
   canonicalizeRealtimeVoiceProviderIdMock,
 };
 
@@ -237,6 +243,7 @@ vi.mock("openclaw/plugin-sdk/channel-secret-owner-runtime", async () => {
   return {
     ...actual,
     assertSecretOwnerAvailable: assertSecretOwnerAvailableMock,
+    isSecretOwnerAvailable: isSecretOwnerAvailableMock,
   };
 });
 

@@ -36,6 +36,8 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   agentId?: string;
   /** Test/runtime override for the provider list. */
   providers?: RealtimeVoiceProviderPlugin[];
+  /** Availability gate checked before auto-candidate config normalization. */
+  isProviderAvailable?: (provider: RealtimeVoiceProviderPlugin) => boolean;
   /** Model injected before provider-specific resolveConfig runs. */
   defaultModel?: string;
   /** Runtime surface being selected. Defaults to the provider bridge path. */
@@ -106,6 +108,9 @@ export function resolveConfiguredRealtimeVoiceProvider(
       params.providers?.find((entry) => entry.id === providerId) ??
       getRealtimeVoiceProvider(providerId, params.cfg),
     listProviders: () => providers,
+    isProviderAvailable: params.isProviderAvailable
+      ? ({ provider }) => params.isProviderAvailable?.(provider) === true
+      : undefined,
     resolveProviderConfig: ({ provider, cfg, rawConfig }) => {
       // Provider config resolution should see the default model as if it came
       // from config, while explicit provider config still wins.

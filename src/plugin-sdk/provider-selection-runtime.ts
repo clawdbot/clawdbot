@@ -110,6 +110,8 @@ export function resolveConfiguredCapabilityProvider<
   getConfiguredProvider: (providerId: string | undefined) => TProvider | undefined;
   /** Iterable of providers eligible for auto-selection. */
   listProviders: () => Iterable<TProvider>;
+  /** Availability gate checked before provider-specific config normalization. */
+  isProviderAvailable?: (params: { provider: TProvider }) => boolean;
   resolveProviderConfig: (params: {
     /** Candidate provider being resolved. */
     provider: TProvider;
@@ -155,6 +157,9 @@ export function resolveConfiguredCapabilityProvider<
 
   let firstUnconfigured: TProvider | undefined;
   for (const provider of providers) {
+    if (params.isProviderAvailable && !params.isProviderAvailable({ provider })) {
+      continue;
+    }
     const resolution = resolveProviderCandidate({
       ...params,
       provider,

@@ -1,4 +1,7 @@
-import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
+import {
+  assertSecretOwnerAvailable,
+  isSecretOwnerAvailable,
+} from "openclaw/plugin-sdk/channel-secret-owner-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildRealtimeVoiceSessionInstructions,
@@ -252,6 +255,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       cfg: this.params.cfg,
       agentId: this.params.entry.route.agentId,
       defaultModel: this.realtimeConfig?.model,
+      isProviderAvailable: (provider) =>
+        isSecretOwnerAvailable(
+          "capability",
+          discordRealtimeVoiceSecretOwnerId(this.params.accountId, provider.id),
+        ),
       noRegisteredProviderMessage: "No configured realtime voice provider registered",
     });
     assertSecretOwnerAvailable(

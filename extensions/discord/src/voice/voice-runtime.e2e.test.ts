@@ -29,6 +29,7 @@ defineDiscordVoiceTests(
     controlRealtimeVoiceAgentRunMock,
     resolveConfiguredRealtimeVoiceProviderMock,
     assertSecretOwnerAvailableMock,
+    isSecretOwnerAvailableMock,
     canonicalizeRealtimeVoiceProviderIdMock,
     realtimeSessionMock,
     decodeOpusStreamMock,
@@ -924,6 +925,43 @@ defineDiscordVoiceTests(
         "discord:voice:realtime:work:openai",
       );
       expect(resolveConfiguredRealtimeVoiceProviderMock).not.toHaveBeenCalled();
+    });
+
+    it("skips an unavailable auto provider before selecting a healthy fallback", async () => {
+      isSecretOwnerAvailableMock.mockImplementation(
+        (_ownerKind: string, ownerId: string) => !ownerId.endsWith(":openai"),
+      );
+      resolveConfiguredRealtimeVoiceProviderMock.mockImplementationOnce((params) => {
+        expect(params?.configuredProviderId).toBeUndefined();
+        expect(params?.isProviderAvailable?.({ id: "openai" })).toBe(false);
+        expect(params?.isProviderAvailable?.({ id: "xai" })).toBe(true);
+        return {
+          provider: { id: "xai", capabilities: { supportsActivationNameGating: true } },
+          providerConfig: { model: "grok-voice", voice: "ara" },
+        };
+      });
+      const session = new realtimeModule.DiscordRealtimeVoiceSession({
+        accountId: "work",
+        cfg: {},
+        discordConfig: { voice: { enabled: true, mode: "agent-proxy", realtime: {} } },
+        entry: {
+          guildId: "g1",
+          channelId: "1001",
+          voiceSessionKey: "discord:g1:1001",
+          route: { agentId: "agent-1", sessionKey: "discord:g1:1001" },
+          player: createAudioPlayerMock(),
+        },
+        mode: "agent-proxy",
+        onTerminalError: vi.fn(),
+        runAgentTurn: vi.fn(),
+      } as never);
+
+      await session.connect();
+
+      expect(assertSecretOwnerAvailableMock).toHaveBeenCalledWith(
+        "capability",
+        "discord:voice:realtime:work:xai",
+      );
     });
 
     it("gates the canonical secret owner for a configured realtime provider alias", async () => {

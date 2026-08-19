@@ -46,6 +46,7 @@ const {
   updateVoiceStateMock,
   enqueueSystemEventMock,
   assertSecretOwnerAvailableMock,
+  isSecretOwnerAvailableMock,
   canonicalizeRealtimeVoiceProviderIdMock,
 } = voiceTestMocks;
 const [managerModule, realtimeModule, segmentModule] = await Promise.all([
@@ -111,6 +112,8 @@ function buildVoiceTestHarness() {
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
     assertSecretOwnerAvailableMock.mockReset();
+    isSecretOwnerAvailableMock.mockReset();
+    isSecretOwnerAvailableMock.mockReturnValue(true);
     canonicalizeRealtimeVoiceProviderIdMock.mockReset();
     canonicalizeRealtimeVoiceProviderIdMock.mockImplementation((providerId: string | undefined) =>
       providerId?.trim().toLowerCase(),
@@ -646,6 +649,7 @@ function buildVoiceTestHarness() {
     updateVoiceStateMock,
     enqueueSystemEventMock,
     assertSecretOwnerAvailableMock,
+    isSecretOwnerAvailableMock,
     canonicalizeRealtimeVoiceProviderIdMock,
     managerModule,
     realtimeModule,
