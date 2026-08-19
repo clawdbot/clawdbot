@@ -997,6 +997,33 @@ export function createWorkerEnvironmentStore(
         });
       });
     },
+    adoptProvisionCleanupFailure(input: {
+      environmentId: string;
+      leaseId: string;
+      lastError: string;
+    }): WorkerEnvironmentRecord {
+      const environmentId = required(input.environmentId, "id");
+      const leaseId = required(input.leaseId, "lease id");
+      const lastError = required(input.lastError, "last error");
+      return write((db) => {
+        const current = getRequired(db, environmentId);
+        if (current.state !== "provisioning" || current.leaseId !== null) {
+          throw new Error(`Worker environment ${environmentId} cannot adopt provision cleanup`);
+        }
+        const updatedAtMs = now();
+        // Lease identity and teardown ownership must become durable together. A crash between
+        // separate writes would make startup replay an operation whose fixed id may be terminal.
+        return update(db, environmentId, current.state, {
+          lease_id: leaseId,
+          state: "destroying",
+          updated_at_ms: updatedAtMs,
+          state_changed_at_ms: updatedAtMs,
+          destroy_requested_at_ms: current.destroyRequestedAtMs ?? updatedAtMs,
+          teardown_terminal_state: current.teardownTerminalState ?? "failed",
+          last_error: lastError,
+        });
+      });
+    },
     requestDestroy(input: {
       environmentId: string;
       state: WorkerEnvironmentState;

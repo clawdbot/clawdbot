@@ -150,6 +150,29 @@ export type WorkerLeaseStatus =
   | { status: "destroyed" }
   | { status: "unknown" };
 
+/** Provision failed after allocation and the provider could not prove cleanup completed. */
+class WorkerProvisionCleanupError extends AggregateError {
+  readonly code = "cleanup_indeterminate";
+  readonly leaseId: string;
+
+  constructor(
+    leaseId: string,
+    readonly provisionError: unknown,
+    readonly cleanupError: unknown,
+  ) {
+    super(
+      [provisionError, cleanupError],
+      "Worker provision failed after allocation and cleanup is indeterminate",
+      { cause: provisionError },
+    );
+    this.name = "WorkerProvisionCleanupError";
+    this.leaseId = leaseId.trim();
+    if (!this.leaseId) {
+      throw new TypeError("Worker provision cleanup lease id must be non-empty");
+    }
+  }
+}
+
 /** Permanent provider rejection recorded as a terminal worker failure. */
 export class WorkerProviderError extends Error {
   readonly code = "invalid_profile";
@@ -157,6 +180,18 @@ export class WorkerProviderError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WorkerProviderError";
+  }
+
+  static cleanupIndeterminate(
+    leaseId: string,
+    provisionError: unknown,
+    cleanupError: unknown,
+  ): WorkerProvisionCleanupError {
+    return new WorkerProvisionCleanupError(leaseId, provisionError, cleanupError);
+  }
+
+  static isCleanupIndeterminate(error: unknown): error is WorkerProvisionCleanupError {
+    return error instanceof WorkerProvisionCleanupError;
   }
 }
 

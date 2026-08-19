@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  type WorkerProfile,
+  type WorkerProvider,
+  WorkerProviderError,
+} from "openclaw/plugin-sdk/plugin-entry";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -663,6 +667,39 @@ describe("Crabbox worker provider", () => {
     expect(calls.some((argv) => argv[1] === "stop" && argv.includes(LEASE_ID))).toBe(true);
   });
 
+  it("preserves the allocated lease and both failures when setup cleanup times out", async () => {
+    let releaseCommitted = false;
+    const provider = providerWithRunner(async (argv) => {
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      if (argv[1] === "run") {
+        return commandResult({ code: 7, stderr: "node setup failed" });
+      }
+      if (argv[1] === "stop") {
+        releaseCommitted = true;
+        return commandResult({ code: null, killed: true, termination: "timeout" });
+      }
+      return commandResult();
+    });
+
+    const error = await provider
+      .provision({ ...PROFILE, setup: "install-node" }, OPERATION_ID)
+      .catch((cause: unknown) => cause);
+
+    expect(WorkerProviderError.isCleanupIndeterminate(error)).toBe(true);
+    if (!WorkerProviderError.isCleanupIndeterminate(error)) {
+      throw new Error("expected indeterminate worker cleanup error");
+    }
+    expect(error).toMatchObject({
+      leaseId: LEASE_ID,
+      provisionError: { message: expect.stringContaining("node setup failed") },
+      cleanupError: { message: expect.stringContaining("stop did not exit normally (timeout)") },
+    });
+    expect(error.errors).toEqual([error.provisionError, error.cleanupError]);
+    expect(releaseCommitted).toBe(true);
+  });
+
   it("stops the lease when the profile setup command cannot start", async () => {
     const calls: string[][] = [];
     let warmed = false;
@@ -875,10 +912,24 @@ describe("Crabbox worker provider", () => {
         .catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toMatchObject({ code: "invalid_profile" });
-      const message = error instanceof Error ? error.message : "";
-      expect(message).toContain(`cleanup is indeterminate during ${failurePoint}`);
-      expect(message).toContain("Crabbox AWS instance profile must be empty for cloud workers");
-      expect(message.length).toBeLessThanOrEqual(512);
+      if (failurePoint === "stop") {
+        expect(WorkerProviderError.isCleanupIndeterminate(error)).toBe(true);
+        if (!WorkerProviderError.isCleanupIndeterminate(error)) {
+          throw new Error("expected indeterminate worker cleanup error");
+        }
+        expect(error).toMatchObject({
+          leaseId: LEASE_ID,
+          provisionError: {
+            message: "Crabbox AWS instance profile must be empty for cloud workers",
+          },
+          cleanupError: { message: expect.stringContaining("stop did not exit normally") },
+        });
+      } else {
+        const message = error instanceof Error ? error.message : "";
+        expect(message).toContain("cleanup is indeterminate during inspect");
+        expect(message).toContain("Crabbox AWS instance profile must be empty for cloud workers");
+        expect(message.length).toBeLessThanOrEqual(512);
+      }
       expect(live).toBe(true);
       expect(calls.map((argv) => argv[1])).toEqual(
         failurePoint === "inspect" ? ["config", "inspect"] : ["config", "inspect", "stop"],
