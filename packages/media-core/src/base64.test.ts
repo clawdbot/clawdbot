@@ -17,8 +17,8 @@ describe("base64 helpers", () => {
     // Regression guard: the previous per-character append built one cons-string
     // node per input character (~25 bytes each, all live at once), so this
     // 16 MiB payload (21.3 M base64 chars) transiently needed >500 MB of heap.
-    // The threshold is deliberately generous; the run-slicing implementation
-    // allocates nothing for already-canonical input.
+    // The threshold is deliberately generous; the bounded-buffer implementation
+    // returns already-canonical input unchanged.
     const encoded = Buffer.alloc(16 * 1024 * 1024, 0xab).toString("base64");
     const before = process.memoryUsage().heapUsed;
 
