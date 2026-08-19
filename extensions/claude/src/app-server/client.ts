@@ -178,6 +178,28 @@ export class ClaudeAppServerVersionError extends Error {
   }
 }
 
+/**
+ * Maps a bridge stderr line onto the host log level it deserves.
+ *
+ * The bridge writes every stderr line through its own leveled formatter, which
+ * prefixes the severity it chose (`[debug] …`, `[info] …`, `[warn] …`,
+ * `[error] …`). Funnelling all of that into `embeddedAgentLog.debug` discarded
+ * that severity, so at the default log level the journal contained none of the
+ * bridge's operational warnings — most consequentially the `[attempt-registry]`
+ * WARN that fires when an attempt is discarded with no turn awaiting its result,
+ * i.e. when work a previous turn backgrounded was silently killed along with the
+ * subprocess. That kill was real and invisible at the same time.
+ *
+ * Only `warn`/`error` are promoted. The bridge's `info` tier is per-RPC
+ * bookkeeping (`[turn/start] received`, `[thread/read] read`, …) that fires
+ * several times per turn, so it stays at debug along with everything carrying no
+ * recognized prefix.
+ */
+export function classifyBridgeStderrLevel(line: string): "debug" | "warn" | "error" {
+  const prefix = /^\[(warn|error)\]\s/.exec(line.trimStart())?.[1];
+  return prefix === "warn" || prefix === "error" ? prefix : "debug";
+}
+
 export class ClaudeAppServerClient {
   private child: ChildProcess | null = null;
   private nextId = 1;
@@ -239,7 +261,7 @@ export class ClaudeAppServerClient {
         return;
       }
       this.stderrTail = appendBoundedTail(this.stderrTail, `${line}\n`, STDERR_TAIL_MAX);
-      embeddedAgentLog.debug(`claude-bridge stderr: ${line}`);
+      embeddedAgentLog[classifyBridgeStderrLevel(line)](`claude-bridge stderr: ${line}`);
     });
 
     this.stdoutRl = createInterface({ input: this.child.stdout! });
