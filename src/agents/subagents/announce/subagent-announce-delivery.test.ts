@@ -1894,6 +1894,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       getRuntimeConfig: () => ({}) as never,
     });
 
+    const ownerContext = { owner: "gateway-a" } as never;
+    const resolveGatewayContext = () => ownerContext;
     const result = await deliverSubagentAnnouncement({
       requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
       targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
@@ -1912,6 +1914,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-dispatch",
+      resolveGatewayContext,
     });
 
     expectDeliveryPath(result, "direct");
@@ -1936,10 +1939,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-local-dispatch",
       },
       timeoutMs: 120_000,
+      resolveGatewayContext,
     });
-    // Instance-bound dispatch owns context resolution, so the caller's resolver
-    // is deliberately not forwarded; asserting it here would only prove the mock.
-    expect(dispatchOptions).not.toHaveProperty("resolveGatewayContext");
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {
