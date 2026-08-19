@@ -152,7 +152,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "audio.transcribe",
     description: "Transcribe one audio file.",
     transports: ["local"],
-    flags: ["--file", "--language", "--prompt", "--model", "--json"],
+    flags: ["--file", "--agent", "--language", "--prompt", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {

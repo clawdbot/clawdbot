@@ -797,7 +797,15 @@ describe("capability cli", () => {
 
   function firstAudioTranscriptionCall() {
     const calls = mocks.transcribeAudioFile.mock.calls as unknown as Array<
-      [{ cfg?: unknown; filePath?: string; language?: unknown; prompt?: unknown }]
+      [
+        {
+          agentDir?: string;
+          cfg?: unknown;
+          filePath?: string;
+          language?: unknown;
+          prompt?: unknown;
+        },
+      ]
     >;
     return calls[0]?.[0];
   }
@@ -1948,6 +1956,13 @@ describe("capability cli", () => {
       expectedAgent: "beta",
     },
     {
+      name: "audio transcribe",
+      run: () =>
+        runCapability("audio", "transcribe", "--agent", "beta", "--file", "memo.m4a", "--json"),
+      selectedAgent: () => firstAudioTranscriptionCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
       name: "video generate",
       run: () => {
         mocks.generateVideo.mockResolvedValue({
@@ -2059,6 +2074,13 @@ describe("capability cli", () => {
         ),
       selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
       expectedAgent: "beta",
+    },
+    {
+      name: "audio transcribe",
+      run: () =>
+        runCapabilityWithParentAgent("audio", "transcribe", "beta", "--file", "memo.m4a", "--json"),
+      selectedAgent: () => firstAudioTranscriptionCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
     },
     {
       name: "video generate",
