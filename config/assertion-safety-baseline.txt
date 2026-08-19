@@ -1145,7 +1145,7 @@ extensions/reef/src/setup.ts	5
 extensions/reef/src/state.ts	3
 extensions/reef/src/transport.ts	3
 extensions/runway/video-generation-provider.ts	1
-extensions/searxng/src/config.ts	2
+extensions/searxng/src/config.ts	1
 extensions/searxng/src/searxng-client.ts	3
 extensions/signal/src/accounts.ts	3
 extensions/signal/src/approval-handler.runtime.ts	2

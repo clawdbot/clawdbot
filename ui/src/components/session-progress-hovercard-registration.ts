@@ -7,8 +7,8 @@ import {
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
 import {
-  SESSION_PROGRESS_HOVER_LINK_SELECTOR,
-  sessionProgressHoverAnchorFromEvent,
+  SESSION_PROGRESS_HOVER_TARGET_SELECTOR,
+  sessionProgressHoverTargetFromEvent,
 } from "./session-progress-hovercard-target.ts";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
@@ -60,8 +60,8 @@ function handleBootstrapMutations(records: MutationRecord[]): void {
         continue;
       }
       if (
-        node.matches(SESSION_PROGRESS_HOVER_LINK_SELECTOR) ||
-        node.querySelector(SESSION_PROGRESS_HOVER_LINK_SELECTOR)
+        node.matches(SESSION_PROGRESS_HOVER_TARGET_SELECTOR) ||
+        node.querySelector(SESSION_PROGRESS_HOVER_TARGET_SELECTOR)
       ) {
         void bootstrap.define();
         return;
@@ -78,20 +78,20 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   ) {
     return;
   }
-  const anchor = sessionProgressHoverAnchorFromEvent(event);
-  if (!anchor || !bootstrap.providerFor(anchor)) {
+  const target = sessionProgressHoverTargetFromEvent(event);
+  if (!target || !bootstrap.providerFor(target)) {
     return;
   }
   await bootstrap.define();
-  const target = event.target;
+  const eventTarget = event.target;
   if (
-    !(target instanceof EventTarget) ||
-    !anchor.isConnected ||
-    !hovercardBootstrapIntentActive(anchor, trigger)
+    !(eventTarget instanceof EventTarget) ||
+    !target.isConnected ||
+    !hovercardBootstrapIntentActive(target, trigger, true)
   ) {
     return;
   }
-  target.dispatchEvent(
+  eventTarget.dispatchEvent(
     new Event(trigger === "pointer" ? "pointerover" : "focusin", {
       bubbles: true,
       composed: true,
@@ -103,7 +103,7 @@ bootstrap.install(activateHovercard);
 if (!customElements.get(HOVERCARD_TAG)) {
   bootstrapObserver = new MutationObserver(handleBootstrapMutations);
   bootstrapObserver.observe(document, { childList: true, subtree: true });
-  if (document.querySelector(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
+  if (document.querySelector(SESSION_PROGRESS_HOVER_TARGET_SELECTOR)) {
     void bootstrap.define();
   }
 }

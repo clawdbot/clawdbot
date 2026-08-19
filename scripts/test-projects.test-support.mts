@@ -3262,7 +3262,7 @@ function classifyTarget(arg: string, cwd: string) {
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
   }
-  if (isPathAtOrUnder(relative, "ui/src")) {
+  if (isPathAtOrUnder(relative, "ui")) {
     return "ui";
   }
   if (relative.startsWith("src/tui/tui-pty-")) {
