@@ -868,6 +868,75 @@ describe("channel ownership excludes claimants activation never selects", () => 
   // startup (`config-activation-shared.ts:110`), which bypasses auto-enable candidate discovery
   // entirely. Narrowing to the candidate set alone would report this claimant inactive while the
   // runtime runs it — the same config/runtime disagreement, in the other direction.
+  // Codex P1 3809838313 on #123209: explicit selection is keyed by whatever the operator wrote.
+  // A legacy alias or a padded/cased variant still activates the plugin at startup, so canonicalizing
+  // only the queried id leaves those spellings looking inactive here while the runtime runs them.
+  it("honors an explicit enable written under a legacy alias", () => {
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      channels: { clickclack: { enabled: true, token: "x" } },
+      plugins: { entries: { "  ClickClack-Other  ": { enabled: true } } },
+    });
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "clickclack-plus",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              preferOver: ["clickclack-core"],
+              schema: {
+                type: "object",
+                properties: { plusToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+        {
+          id: "clickclack-core",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { coreToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+        {
+          id: "clickclack-other",
+          origin: "config",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { otherToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = loadGatewayRuntimeConfigSchema().schema as {
+      properties?: Record<string, unknown>;
+    };
+    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+    const clickclack = channels?.properties?.clickclack as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(clickclack?.properties).toHaveProperty("otherToken");
+  });
+
   it("keeps an explicitly enabled claimant active even when it is not a candidate", () => {
     mockLoadConfig.mockReturnValue({
       ...explicitMainRoster(),

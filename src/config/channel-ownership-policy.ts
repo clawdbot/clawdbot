@@ -1,6 +1,7 @@
 // Assembles the channel ownership policy from operator config so config validation and the
 // operator-facing runtime schema pick the same channel owner plugin activation does.
 import { normalizeChatChannelId } from "../channels/registry.js";
+import { normalizePluginId } from "../plugins/config-state.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { collectPluginIdsForConfiguredChannel } from "./channel-activation-candidates.js";
@@ -38,6 +39,34 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   const resolveAlias = createManifestPluginAliasResolver(params.registry);
   const sourceConfig = params.sourceConfig ?? params.config;
 
+  // Explicit selection is keyed by whatever the OPERATOR wrote — a legacy id, a channel alias, a
+  // padded or differently-cased variant. `isPluginExplicitlySelected` indexes `plugins.entries`
+  // and scans `plugins.allow` by raw key, so canonicalizing only the queried id still misses those
+  // spellings, while Gateway startup normalizes the written keys through its own resolver and runs
+  // the plugin. Canonicalize BOTH sides once, then reuse the existing predicate so its notion of a
+  // material entry stays in one place.
+  const canonicalId = (pluginId: string) => resolveAlias(normalizePluginId(pluginId));
+  let canonicalSelectionConfig: OpenClawConfig | undefined;
+  const selectionConfig = (): OpenClawConfig => {
+    if (canonicalSelectionConfig) {
+      return canonicalSelectionConfig;
+    }
+    const plugins = sourceConfig.plugins;
+    type PluginEntries = NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>;
+    const entries: PluginEntries = {};
+    for (const [writtenId, entry] of Object.entries(plugins?.entries ?? {})) {
+      entries[canonicalId(writtenId)] = entry;
+    }
+    const allow = Array.isArray(plugins?.allow)
+      ? plugins.allow.map((id) => (typeof id === "string" ? canonicalId(id) : id))
+      : plugins?.allow;
+    canonicalSelectionConfig = {
+      ...sourceConfig,
+      plugins: { ...plugins, entries, allow },
+    };
+    return canonicalSelectionConfig;
+  };
+
   // Auto-enable's per-channel candidate set is what activation actually selects from. Once any
   // claimant declares `preferOver`, that set narrows to the declaring pair, so a third claimant is
   // never auto-enabled on that channel however close its origin sits. Ownership read only "not
@@ -73,12 +102,12 @@ export function createConfiguredChannelOwnershipPolicy(params: {
       if (isPluginPolicyDisabled(params.config, pluginId, resolveAlias)) {
         return false;
       }
-      const alias = resolveAlias(pluginId);
+      const alias = canonicalId(pluginId);
       // An operator can activate a plugin by hand, which bypasses candidate discovery entirely:
       // `plugins.entries.<id>.enabled: true` is explicit activation at startup. Narrowing to the
       // auto-enable candidates alone would report such a claimant inactive while the runtime runs
       // it, which is the same disagreement in the other direction.
-      if (isPluginExplicitlySelected(sourceConfig, alias)) {
+      if (isPluginExplicitlySelected(selectionConfig(), alias)) {
         return true;
       }
       const candidates = channelCandidates(channelId);
@@ -90,7 +119,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
       return candidates.has(pluginId) || candidates.has(alias);
     },
     isPluginExplicitlySelected: (pluginId) =>
-      isPluginExplicitlySelected(sourceConfig, resolveAlias(pluginId)),
+      isPluginExplicitlySelected(selectionConfig(), canonicalId(pluginId)),
     resolveChannelPreferOverIds: (record, channelId) =>
       resolveChannelPreferOverIds({ record, channelId, env: params.env }),
   };
