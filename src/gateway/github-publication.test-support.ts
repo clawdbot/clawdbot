@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   prepareIdentity: vi.fn(),
   runCommand: vi.fn(),
   findWorktree: vi.fn(),
+  findWorktreeById: vi.fn(),
   resolveRepository: vi.fn(),
   loadSession: vi.fn(),
   getConfigSnapshot: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock("../agents/git-coauthor-attribution.js", () => ({
 vi.mock("../agents/worktrees/service.js", () => ({
   managedWorktrees: {
     findLiveByOwner: mocks.findWorktree,
+    findLiveById: mocks.findWorktreeById,
     resolveRepositoryIdentity: mocks.resolveRepository,
   },
 }));
@@ -225,6 +227,7 @@ export function installGitHubPublicationTestHarness(): void {
       ownerKind: "session",
       ownerId,
     }));
+    mocks.findWorktreeById.mockReset().mockReturnValue(undefined);
     mocks.resolveRepository.mockReset().mockResolvedValue({
       checkoutRoot: "/repo/worktree",
       repoRoot: "/repo",

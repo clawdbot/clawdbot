@@ -42,6 +42,7 @@ import {
   githubPublicationPullRequestLookupArgs,
   parseGitHubPublicationPullRequests,
 } from "./github-publication-pull-requests.js";
+import { recoverGitHubPublicationWorkspace } from "./github-publication-recovery.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
@@ -255,6 +256,7 @@ export async function executeGitHubPublication(params: {
   if (initial.status === "published" || initial.status === "failed") {
     return params.projectResult(initial);
   }
+  await recoverGitHubPublicationWorkspace(initial, requireCommand);
   let activeIdentity: PreparedGitHubPublicationIdentity | undefined;
   const currentWorktree = () =>
     resolveGitHubPublicationWorktreeOwner({

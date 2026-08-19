@@ -84,6 +84,89 @@ async function writeDurableFile(file: string, contents: Buffer): Promise<void> {
   }
 }
 
+function publicationRecoveryPath(indexPath: string, requestId: string): string {
+  const recoveryId = createHash("sha256").update(requestId).digest("hex");
+  return `${indexPath}.openclaw-${recoveryId}`;
+}
+
+export async function recoverGitHubPublicationBranchAndIndex(params: {
+  cwd: string;
+  requestId: string;
+  branch: string;
+  sourceHeadCommit: string;
+  workspaceTree: string;
+  run: (argv: string[], options?: GitCommandOptions) => Promise<string>;
+}): Promise<void> {
+  const rawIndexPath = await params.run(["git", "rev-parse", "--git-path", "index"], {
+    cwd: params.cwd,
+  });
+  const indexPath = path.resolve(params.cwd, rawIndexPath);
+  const lockPath = `${indexPath}.lock`;
+  const recoveryPath = publicationRecoveryPath(indexPath, params.requestId);
+  if (!(await pathExists(recoveryPath))) {
+    return;
+  }
+  if (!(await sameFile(recoveryPath, lockPath))) {
+    if (await pathExists(lockPath)) {
+      throw new GitHubPublicationRecoveryPendingError(
+        "GitHub publication workspace recovery is waiting for another Git operation.",
+      );
+    }
+    const branchHead = await params.run(
+      ["git", "rev-parse", "--verify", `refs/heads/${params.branch}`],
+      { cwd: params.cwd },
+    );
+    const indexTree = await params.run(["git", "write-tree"], { cwd: params.cwd });
+    if (
+      branchHead === params.sourceHeadCommit ||
+      (indexTree === params.workspaceTree && (await publicationCommitMatches(params, branchHead)))
+    ) {
+      await fs.rm(recoveryPath, { force: true });
+      return;
+    }
+    throw new GitHubPublicationRecoveryPendingError(
+      "GitHub publication workspace recovery is pending.",
+    );
+  }
+  const branchHead = await params.run(
+    ["git", "rev-parse", "--verify", `refs/heads/${params.branch}`],
+    { cwd: params.cwd },
+  );
+  if (branchHead === params.sourceHeadCommit) {
+    await fs.rm(lockPath, { force: true });
+    await fs.rm(recoveryPath, { force: true });
+    await syncDirectory(path.dirname(indexPath));
+    return;
+  }
+  if (!(await publicationCommitMatches(params, branchHead))) {
+    throw new GitHubPublicationRecoveryPendingError(
+      "GitHub publication workspace branch recovery is pending.",
+    );
+  }
+  await fs.rename(lockPath, indexPath);
+  await syncDirectory(path.dirname(indexPath));
+  await fs.rm(recoveryPath, { force: true });
+}
+
+async function publicationCommitMatches(
+  params: Pick<
+    Parameters<typeof recoverGitHubPublicationBranchAndIndex>[0],
+    "cwd" | "requestId" | "sourceHeadCommit" | "workspaceTree" | "run"
+  >,
+  headCommit: string,
+): Promise<boolean> {
+  const [message, parent, tree] = await Promise.all([
+    params.run(["git", "show", "-s", "--format=%B", headCommit], { cwd: params.cwd }),
+    params.run(["git", "rev-parse", `${headCommit}^`], { cwd: params.cwd }),
+    params.run(["git", "rev-parse", `${headCommit}^{tree}`], { cwd: params.cwd }),
+  ]);
+  return (
+    message.split(/\r?\n/u).includes(`OpenClaw-Publication: ${params.requestId}`) &&
+    parent === params.sourceHeadCommit &&
+    tree === params.workspaceTree
+  );
+}
+
 /** Moves the branch and accepted index together while honoring Git's standard index lock. */
 export async function updateGitHubPublicationBranchAndIndex(params: {
   cwd: string;
@@ -112,8 +195,7 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     });
     const indexPath = path.resolve(params.cwd, rawIndexPath);
     lockPath = `${indexPath}.lock`;
-    const recoveryId = createHash("sha256").update(params.requestId).digest("hex");
-    recoveryPath = `${indexPath}.openclaw-${recoveryId}`;
+    recoveryPath = publicationRecoveryPath(indexPath, params.requestId);
     const gitEnv = {
       ...params.env,
       GIT_CONFIG_GLOBAL: os.devNull,

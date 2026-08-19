@@ -8,12 +8,14 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   assertGitHubPublicationRefCasCompleted,
+  recoverGitHubPublicationBranchAndIndex,
   updateGitHubPublicationBranchAndIndex,
 } from "./github-publication-git-index.js";
 import { assertGitHubPublicationTreeHasNoFilters } from "./github-publication-git-transport.js";
 
 let testState: OpenClawTestState;
 let directoryIndex = 0;
+const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({ prefix: "openclaw-publication-index-" });
@@ -64,7 +66,7 @@ async function createFixture() {
   const headCommit = await git(
     cwd,
     ["commit-tree", sourceIndexTree, "-p", previousHead],
-    "published\n",
+    `published\n\nOpenClaw-Publication: ${REQUEST_ID}\n`,
   );
   return { cwd, previousHead, sourceIndexTree, workspaceTree: sourceIndexTree, headCommit };
 }
@@ -72,7 +74,7 @@ async function createFixture() {
 function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture>>) {
   return {
     ...fixture,
-    requestId: "11111111-1111-4111-8111-111111111111",
+    requestId: REQUEST_ID,
     branch: "main",
     env: process.env,
     assertCurrent: () => undefined,
@@ -200,9 +202,14 @@ describe("GitHub publication index update", () => {
     ).rejects.toThrow("workspace recovery is pending");
 
     expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
-    await updateGitHubPublicationBranchAndIndex({
-      ...publicationIndexParams(fixture),
-      previousHead: fixture.headCommit,
+    await recoverGitHubPublicationBranchAndIndex({
+      cwd: fixture.cwd,
+      requestId: REQUEST_ID,
+      branch: "main",
+      sourceHeadCommit: fixture.previousHead,
+      workspaceTree: fixture.workspaceTree,
+      run: async (argv, options) =>
+        await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
     });
     expect(await git(fixture.cwd, ["write-tree"])).toBe(fixture.workspaceTree);
     expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
