@@ -21,7 +21,7 @@ export class SkillWorkshopRevisionRecoveryController {
 
   request(params: {
     context: ApplicationContext;
-    expectedRevisionHash: string;
+    expectedRevisionHash?: string;
     instructions: string;
     proposal: SkillWorkshopProposal;
     proposalAgentId: string;
@@ -32,7 +32,9 @@ export class SkillWorkshopRevisionRecoveryController {
       ? admissions.retry(this.recoveryId)
       : admissions.start(
           {
-            expectedRevisionHash: params.expectedRevisionHash,
+            ...(params.expectedRevisionHash
+              ? { expectedRevisionHash: params.expectedRevisionHash }
+              : {}),
             instructions: params.instructions,
             proposalAgentId: params.proposalAgentId,
             proposalId: params.proposal.key,
@@ -45,7 +47,12 @@ export class SkillWorkshopRevisionRecoveryController {
             proposalSlug: params.proposal.slug,
             useCurrentChatForRevisions: params.state.skillWorkshopUseCurrentChatForRevisions,
           },
-          (entry) => requestSkillWorkshopRevisionAdmission({ context: params.context, entry }),
+          (entry, materialize) =>
+            requestSkillWorkshopRevisionAdmission({
+              context: params.context,
+              entry,
+              materialize,
+            }),
         );
     if (!run) {
       return Promise.resolve({

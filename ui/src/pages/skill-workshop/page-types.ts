@@ -9,7 +9,7 @@ export type SkillWorkshopRevisionRequest = (
   instructions: string,
   proposal: SkillWorkshopProposal,
   proposalAgentId: string,
-  expectedRevisionHash: string,
+  expectedRevisionHash?: string,
 ) => Promise<SkillWorkshopRevisionAdmissionOutcome>;
 
 export type SkillWorkshopRenderContext = {

@@ -486,7 +486,7 @@ export async function requestSkillWorkshopRevision(
     instructions: string,
     proposal: SkillWorkshopProposal,
     agentId: string,
-    expectedRevisionHash: string,
+    expectedRevisionHash?: string,
   ) => Promise<SkillWorkshopRevisionAdmissionOutcome>,
   isCurrent: () => boolean = () => true,
 ): Promise<SkillWorkshopRevisionAdmissionOutcome | null> {
@@ -528,14 +528,11 @@ export async function requestSkillWorkshopRevision(
     }
     const currentProposal =
       state.skillWorkshopProposals.find((item) => item.key === proposalId) ?? proposal;
-    if (!currentProposal.revisionHash) {
-      throw new Error(t("skillWorkshop.evaluation.errors.revisionHashUnavailable"));
-    }
     const outcome = await sendRevisionRequest(
       instructions,
       currentProposal,
       proposalAgentId,
-      currentProposal.revisionHash,
+      currentProposal.revisionHash ?? undefined,
     );
     if (outcome.status === "retryable-failed") {
       if (isCurrent() && state.skillWorkshopAgentId === proposalAgentId) {

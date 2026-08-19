@@ -20,7 +20,7 @@ type SkillWorkshopPageTestElement = HTMLElement & {
     instructions: string,
     proposal: SkillWorkshopProposal,
     proposalAgentId: string,
-    expectedRevisionHash: string,
+    expectedRevisionHash?: string,
   ) => Promise<SkillWorkshopRevisionAdmissionOutcome>;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;

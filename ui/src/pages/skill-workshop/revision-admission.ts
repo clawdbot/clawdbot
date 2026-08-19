@@ -1,11 +1,18 @@
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SkillWorkshopRevisionAdmissionEntry } from "../../app/skill-workshop-revision-admissions.ts";
+import type {
+  SkillWorkshopRevisionAdmissionBinding,
+  SkillWorkshopRevisionAdmissionEntry,
+} from "../../app/skill-workshop-revision-admissions.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import type { SkillProposalInspectResult } from "./proposal-records.ts";
 import { resolveSkillWorkshopRevisionTarget } from "./revision-session.ts";
 
 export async function requestSkillWorkshopRevisionAdmission(params: {
   context: ApplicationContext;
   entry: SkillWorkshopRevisionAdmissionEntry;
+  materialize: (
+    binding: SkillWorkshopRevisionAdmissionBinding,
+  ) => SkillWorkshopRevisionAdmissionEntry | null;
 }): Promise<{ sessionKey: string }> {
   const source = params.context.gateway.snapshot;
   const client = source.client;
@@ -18,21 +25,48 @@ export async function requestSkillWorkshopRevisionAdmission(params: {
       current.phase === "connected" && current.client === client && current.hello === source.hello
     );
   };
-  const target = await resolveSkillWorkshopRevisionTarget(params.entry, params.context, isCurrent);
+  let entry = params.entry;
+  if (!entry.expectedRevisionHash) {
+    const result = await client.request<SkillProposalInspectResult>("skills.proposals.inspect", {
+      agentId: normalizeAgentId(entry.proposalAgentId),
+      proposalId: entry.proposalId,
+    });
+    if (!isCurrent()) {
+      throw new Error("Revision request was interrupted before proposal inspection completed.");
+    }
+    const expectedRevisionHash = result.revisionHash?.trim();
+    if (!expectedRevisionHash) {
+      throw new Error("The proposal revision binding is unavailable.");
+    }
+    const origin = result.record.origin;
+    const materialized = params.materialize({
+      expectedRevisionHash,
+      ...(origin?.agentId ? { proposalOriginAgentId: origin.agentId } : {}),
+      ...(origin?.sessionKey ? { proposalOriginSessionKey: origin.sessionKey } : {}),
+    });
+    if (!materialized) {
+      throw new Error("Revision recovery is no longer available.");
+    }
+    entry = materialized;
+  }
+  if (!entry.expectedRevisionHash) {
+    throw new Error("Revision recovery is no longer available.");
+  }
+  const target = await resolveSkillWorkshopRevisionTarget(entry, params.context, isCurrent);
   if (!target) {
     throw new Error("Revision request was interrupted before admission.");
   }
   const result = await client.request<{
     status: "started" | "in_flight" | "ok" | "timeout" | "error";
   }>("skills.proposals.requestRevision", {
-    agentId: normalizeAgentId(params.entry.proposalOriginAgentId ?? params.entry.proposalAgentId),
+    agentId: normalizeAgentId(entry.proposalOriginAgentId ?? entry.proposalAgentId),
     targetAgentId: target.targetAgentId,
-    proposalId: params.entry.proposalId,
-    expectedRevisionHash: params.entry.expectedRevisionHash,
-    instructions: params.entry.instructions,
+    proposalId: entry.proposalId,
+    expectedRevisionHash: entry.expectedRevisionHash,
+    instructions: entry.instructions,
     sessionKey: target.sessionKey,
     ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-    idempotencyKey: params.entry.idempotencyKey,
+    idempotencyKey: entry.idempotencyKey,
   });
   if (result.status !== "started" && result.status !== "in_flight" && result.status !== "ok") {
     throw new Error(`Gateway returned ${result.status} before admitting the revision request.`);

@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { requestSkillWorkshopRevisionAdmission } from "../pages/skill-workshop/revision-admission.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import {
   createSkillWorkshopRevisionAdmissions,
   type SkillWorkshopRevisionAdmissionInput,
@@ -92,5 +96,110 @@ describe("Skill Workshop revision admission owner", () => {
       error: "second error",
       instructions: "second failed",
     });
+  });
+
+  it("materializes a manifest-only proposal once and reuses its binding on retry", async () => {
+    const revisionHash = "b".repeat(64);
+    let admissionAttempts = 0;
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "skills.proposals.inspect") {
+        return {
+          content: "# Second proposal",
+          record: {
+            id: "proposal-second",
+            kind: "update",
+            status: "pending",
+            title: "Second proposal",
+            description: "Manifest-only proposal",
+            createdAt: "2026-08-18T00:00:00.000Z",
+            updatedAt: "2026-08-18T00:00:00.000Z",
+            proposedVersion: "v1",
+            draftHash: "draft-second",
+            origin: {
+              agentId: "research",
+              sessionKey: "agent:research:second",
+            },
+            target: { skillName: "Second proposal", skillKey: "proposal-second" },
+          },
+          revisionHash,
+          supportFiles: [],
+        };
+      }
+      admissionAttempts += 1;
+      if (admissionAttempts === 1) {
+        throw new Error("owner replaced");
+      }
+      return { status: "started" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      phase: "connected",
+      hello: gatewayHelloForMethods([]),
+      assistantAgentId: "research",
+    } as unknown as ApplicationGatewaySnapshot;
+    const context = {
+      gateway: { snapshot },
+      sessions: {
+        state: {
+          agentId: "research",
+          result: {
+            sessions: [
+              {
+                key: "agent:research:second",
+                sessionId: "session-second",
+                agentId: "research",
+                archived: false,
+                hasActiveRun: false,
+              },
+            ],
+          },
+          loading: false,
+          error: null,
+        },
+      },
+    } as unknown as ApplicationContext;
+    const owner = createSkillWorkshopRevisionAdmissions();
+    const run = owner.start(
+      {
+        ...input("revise the second"),
+        expectedRevisionHash: undefined,
+        proposalAgentId: "research",
+        proposalId: "proposal-second",
+        proposalSlug: "proposal-second",
+      },
+      (entry, materialize) =>
+        requestSkillWorkshopRevisionAdmission({ context, entry, materialize }),
+    );
+
+    await expect(run.completion).resolves.toMatchObject({ status: "retryable-failed" });
+    expect(owner.get(run.entry.id)).toMatchObject({ expectedRevisionHash: revisionHash });
+    const retry = owner.retry(run.entry.id);
+    await expect(retry?.completion).resolves.toMatchObject({
+      sessionKey: "agent:research:second",
+      status: "admitted",
+    });
+
+    const inspectCalls = request.mock.calls.filter(
+      ([method]) => method === "skills.proposals.inspect",
+    );
+    expect(inspectCalls).toEqual([
+      ["skills.proposals.inspect", { agentId: "research", proposalId: "proposal-second" }],
+    ]);
+    const admissions = request.mock.calls.filter(
+      ([method]) => method === "skills.proposals.requestRevision",
+    );
+    expect(admissions).toHaveLength(2);
+    const firstParams = admissions[0]?.[1] as Record<string, unknown>;
+    const secondParams = admissions[1]?.[1] as Record<string, unknown>;
+    expect(firstParams).toMatchObject({
+      expectedRevisionHash: revisionHash,
+      instructions: "revise the second",
+      proposalId: "proposal-second",
+      sessionId: "session-second",
+      sessionKey: "agent:research:second",
+    });
+    expect(secondParams).toMatchObject({ expectedRevisionHash: revisionHash });
+    expect(secondParams.idempotencyKey).toBe(firstParams.idempotencyKey);
   });
 });

@@ -2,7 +2,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
 export type SkillWorkshopRevisionAdmissionInput = {
-  expectedRevisionHash: string;
+  expectedRevisionHash?: string;
   instructions: string;
   proposalAgentId: string;
   proposalId: string;
@@ -10,6 +10,12 @@ export type SkillWorkshopRevisionAdmissionInput = {
   proposalOriginSessionKey?: string;
   proposalSlug: string;
   useCurrentChatForRevisions: boolean;
+};
+
+export type SkillWorkshopRevisionAdmissionBinding = {
+  expectedRevisionHash: string;
+  proposalOriginAgentId?: string;
+  proposalOriginSessionKey?: string;
 };
 
 export type SkillWorkshopRevisionAdmissionEntry = SkillWorkshopRevisionAdmissionInput & {
@@ -25,6 +31,9 @@ export type SkillWorkshopRevisionAdmissionOutcome =
 
 type AdmissionExecutor = (
   entry: SkillWorkshopRevisionAdmissionEntry,
+  materialize: (
+    binding: SkillWorkshopRevisionAdmissionBinding,
+  ) => SkillWorkshopRevisionAdmissionEntry | null,
 ) => Promise<{ sessionKey: string }>;
 
 export type SkillWorkshopRevisionAdmissionRun = {
@@ -66,8 +75,21 @@ export function createSkillWorkshopRevisionAdmissions(): ApplicationSkillWorksho
   };
   const run = (entry: OwnedEntry): SkillWorkshopRevisionAdmissionRun => {
     const generation = entry.generation;
+    const materialize = (binding: SkillWorkshopRevisionAdmissionBinding) => {
+      if (
+        disposed ||
+        entries.get(entry.value.id) !== entry ||
+        entry.generation !== generation ||
+        entry.value.phase !== "pending"
+      ) {
+        return null;
+      }
+      entry.value = { ...entry.value, ...binding };
+      publish();
+      return copyEntry(entry);
+    };
     const completion = entry
-      .execute(copyEntry(entry))
+      .execute(copyEntry(entry), materialize)
       .then(({ sessionKey }): SkillWorkshopRevisionAdmissionOutcome => {
         if (entries.get(entry.value.id) === entry) {
           entries.delete(entry.value.id);
