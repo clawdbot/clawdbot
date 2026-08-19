@@ -1916,6 +1916,8 @@ describe("package acceptance workflow", () => {
     const npm12Step = workflowStep(npm12Job, "Run install.sh with npm 12");
     expect(npm12Step.run).toContain("npm@12.0.2");
     expect(npm12Step.run).toContain("bash scripts/install.sh");
+    expect(npm12Step.run).toContain("scripts/docker/install-sh-common/version-parse.sh");
+    expect(npm12Step.run).toContain("extract_openclaw_semver");
     expect(npm12Step.run).toContain("openclaw-install-guard");
     expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
   });

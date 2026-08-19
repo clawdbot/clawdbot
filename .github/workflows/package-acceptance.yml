@@ -861,7 +861,12 @@ jobs:
             NPM_CONFIG_PREFIX="$install_prefix" \
             OPENCLAW_VERSION="$package" \
             bash scripts/install.sh --install-method npm --no-prompt --no-onboard
-          [[ "$("$install_prefix/bin/openclaw" --version)" == "$EXPECTED_PACKAGE_VERSION" ]]
+          source scripts/docker/install-sh-common/version-parse.sh
+          installed_version="$(extract_openclaw_semver "$("$install_prefix/bin/openclaw" --version)")"
+          [[ "$installed_version" == "$EXPECTED_PACKAGE_VERSION" ]] || {
+            echo "Installed OpenClaw version $installed_version differs from expected $EXPECTED_PACKAGE_VERSION." >&2
+            exit 1
+          }
           guard="$install_prefix/lib/node_modules/openclaw/dist/openclaw-install-guard"
           [[ ! -e "$guard" ]]
 
