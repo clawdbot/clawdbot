@@ -509,7 +509,7 @@ function splitTopLevel(
 // `&` and `|` start commands unless they belong to redirects such as `>&`, `&>`, or `>|`.
 // Bash pipeline prefixes remain part of the command start that follows them.
 const SHELL_COMMAND_START_PATTERN =
-  String.raw`(?:^|;|\n|(?<!>)\||(?<![<>])&(?![>&]))\s*(?:(?:time(?:\s+-p(?:\s+--)?)?|!)(?:\s+|(?=\()))*`;
+  String.raw`(?:^|;|\n|(?<!>)\||(?<![<>])&(?![>&]))\s*(?:(?:time(?:\s+-p)?(?:\s+--)?|!)(?:\s+|(?=\()))*`;
 const SHELL_TOKEN_END_PATTERN = String.raw`(?=$|[\s;&|()<>])`;
 const SHELL_NAMED_COMPOUND_START_PATTERN =
   `(?:(?:for|while|until|if|case|select|coproc)${SHELL_TOKEN_END_PATTERN}|` +

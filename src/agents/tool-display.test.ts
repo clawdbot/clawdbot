@@ -330,6 +330,7 @@ describe("tool display details", () => {
     const operatorTimedSubshell = "time(echo one; echo two)";
     const operatorArithmeticFunction = "function bump(( n++ )) && pnpm test";
     const portableTimedDoubleDashArithmetic = "time -p -- (( n++ )) && pnpm test";
+    const timedDoubleDashConditional = "time -- if true; then echo one; echo two; fi";
 
     for (const command of [
       loop,
@@ -365,6 +366,7 @@ describe("tool display details", () => {
       operatorTimedSubshell,
       operatorArithmeticFunction,
       portableTimedDoubleDashArithmetic,
+      timedDoubleDashConditional,
     ]) {
       expect(splitTopLevelStages(command)).toEqual([command]);
       expect(
@@ -419,7 +421,6 @@ describe("tool display details", () => {
       "function f{ echo one; echo two; }",
       "function f {not-a-body; echo two; }",
       "function worker (echo one; echo two)",
-      "time -- if true; then echo one; echo two; fi",
       "printf x >& select",
       "printf x &> select",
       "printf x >| select",
