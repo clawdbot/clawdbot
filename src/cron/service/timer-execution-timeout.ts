@@ -12,13 +12,13 @@ import type {
   CronDeliveryTrace,
   CronJob,
   CronNextCheckProposal,
+  CronResolvedDeliveryState,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
 import type { CronRunReceiptSettlementDisposition } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
-import type { CronResolvedDeliveryState } from "./timer-trigger.js";
 
 export const MAX_CRON_TIMER_DELAY_MS = 60_000;
 

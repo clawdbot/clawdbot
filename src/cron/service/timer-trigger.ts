@@ -4,9 +4,9 @@ import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
-  CronDeliveryStatus,
   CronFailureNotificationDelivery,
   CronJob,
+  CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
 } from "../types.js";
@@ -288,13 +288,6 @@ export function isScheduledTerminalOneShotRetry(
     job.state.lastError === HEARTBEAT_SKIP_DISABLED
   );
 }
-
-export type CronResolvedDeliveryState = {
-  delivered?: boolean;
-  status: CronDeliveryStatus;
-  error?: string;
-  failureNotification: CronFailureNotificationDelivery;
-};
 
 export function resolveDeliveryState(params: {
   job: CronJob;

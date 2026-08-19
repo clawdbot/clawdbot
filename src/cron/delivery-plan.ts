@@ -124,14 +124,6 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   };
 }
 
-/** Required delivery is an explicit admitted policy, never an inferred default. */
-export function isCronDeliveryRequired(job: CronJob): boolean {
-  const plan = resolveCronDeliveryPlan(job);
-  return (
-    job.delivery?.bestEffort === false && (plan.mode === "announce" || plan.mode === "webhook")
-  );
-}
-
 /** Normalized destination for notifying about cron execution failures. */
 type CronFailureDeliveryPlan = {
   mode: "announce" | "webhook";

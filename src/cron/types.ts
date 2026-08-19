@@ -11,6 +11,7 @@ import type {
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
+export type { CronCompletionStatus } from "./completion-status.js";
 
 /** Supported schedule forms persisted in cron job specs. */
 export type CronSchedule =
@@ -112,9 +113,6 @@ export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort"
 /** Execution outcome, separate from delivery outcome. */
 export type CronRunStatus = "ok" | "error" | "skipped";
 
-/** Whole-run completion after execution and any explicitly required delivery settle. */
-export type CronCompletionStatus = "succeeded" | "failed" | "unknown";
-
 /** Delivery outcome for completion or failure-notification sends. */
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
@@ -150,6 +148,14 @@ export type CronFailureNotificationDelivery = {
   delivered?: boolean;
   status: CronDeliveryStatus;
   error?: string;
+};
+
+/** Resolved delivery state recorded with a completed cron run. */
+export type CronResolvedDeliveryState = {
+  delivered?: boolean;
+  status: CronDeliveryStatus;
+  error?: string;
+  failureNotification: CronFailureNotificationDelivery;
 };
 
 /** Human-readable delivery target preview for list/detail surfaces. */
