@@ -1,7 +1,7 @@
 // Session store target discovery maps configured and on-disk agent stores to canonical targets.
 import fsSync from "node:fs";
 import path from "node:path";
-import { listAgentEntries, listAgentIds, resolveSoleAgentId } from "../../agents/agent-scope.js";
+import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -654,7 +654,7 @@ export function resolveSessionStoreTargets(
       // agent would hide the other agents' sessions, so this stays explicit and
       // offers --agent/--all-agents instead of the ambient owner chain.
       tryResolveLegacyCompatibilityAgentId(cfg) ??
-      resolveSoleAgentId(cfg);
+      resolveDefaultAgentId(cfg);
     const knownAgentIds = new Set(listAgentIds(cfg).map(normalizeAgentId));
     if (hasAgent && !knownAgentIds.has(defaultAgentId)) {
       throw new Error(
@@ -712,7 +712,7 @@ export function resolveSessionStoreTargets(
     (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
     // Explicit selection, not ambient ownership: see listConfiguredSessionStoreAgentIds.
     tryResolveLegacyCompatibilityAgentId(cfg) ??
-    resolveSoleAgentId(cfg);
+    resolveDefaultAgentId(cfg);
   return [
     {
       agentId: defaultAgentId,

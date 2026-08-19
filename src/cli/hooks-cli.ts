@@ -13,7 +13,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
-  resolveSoleAgentId,
+  resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
@@ -89,7 +89,7 @@ function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): 
     // Status reporting narrows to one workspace, so it keeps demanding an explicit
     // choice rather than adopting the system agent and hiding the other agents' hooks.
     tryResolveLegacyCompatibilityAgentId(config) ??
-    resolveSoleAgentId(config, {
+    resolveDefaultAgentId(config, {
       surface: "hooks status reporting",
       hint: "Pass --agent <id> to select a configured agent.",
     });
