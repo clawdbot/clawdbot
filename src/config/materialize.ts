@@ -51,7 +51,7 @@ export function materializeRuntimeConfig(
     loadManifestRegistry: options.loadManifestRegistry,
   });
   next = applyTalkConfigNormalization(next);
-  normalizeConfigPaths(next);
+  next = normalizeConfigPaths(next);
   normalizeExecSafeBinProfilesInConfig(next);
   return asRuntimeConfig(inheritLegacyDefaultAgentId(config, next));
 }

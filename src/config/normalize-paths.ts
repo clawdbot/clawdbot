@@ -27,32 +27,38 @@ function normalizeAny(key: string | undefined, value: unknown): unknown {
 
   if (Array.isArray(value)) {
     const normalizeChildren = Boolean(key && PATH_LIST_KEYS.has(key));
-    return value.map((entry) => {
+    let mutated = false;
+    const normalized = value.map((entry) => {
+      let next = entry;
       if (typeof entry === "string") {
-        return normalizeChildren ? normalizeStringValue(key, entry) : entry;
+        next = normalizeChildren ? normalizeStringValue(key, entry) : entry;
+      } else if (Array.isArray(entry) || isPlainObject(entry)) {
+        next = normalizeAny(undefined, entry);
       }
-      if (Array.isArray(entry)) {
-        return normalizeAny(undefined, entry);
+      if (next !== entry) {
+        mutated = true;
       }
-      if (isPlainObject(entry)) {
-        return normalizeAny(undefined, entry);
-      }
-      return entry;
+      return next;
     });
+    return mutated ? normalized : value;
   }
 
   if (!isPlainObject(value)) {
     return value;
   }
 
+  let normalized: Record<string, unknown> = value;
   for (const [childKey, childValue] of Object.entries(value)) {
     const next = normalizeAny(childKey, childValue);
     if (next !== childValue) {
-      value[childKey] = next;
+      if (normalized === value) {
+        normalized = { ...value };
+      }
+      normalized[childKey] = next;
     }
   }
 
-  return value;
+  return normalized;
 }
 
 /**
@@ -65,6 +71,6 @@ export function normalizeConfigPaths(cfg: OpenClawConfig): OpenClawConfig {
   if (!cfg || typeof cfg !== "object") {
     return cfg;
   }
-  normalizeAny(undefined, cfg);
-  return cfg;
+  // SAFETY: normalization only copy-on-writes existing config containers and rewrites string values.
+  return normalizeAny(undefined, cfg) as OpenClawConfig;
 }

@@ -73,4 +73,23 @@ describe("normalizeConfigPaths", () => {
       expect(cfg.agents?.list?.[0]?.identity?.name).toBe("~not-a-path");
     });
   });
+
+  it("does not mutate frozen non-path catalog metadata", () => {
+    const supportedReasoningEfforts = Object.freeze(["low", "high"]);
+    const compat = Object.freeze({ supportedReasoningEfforts });
+    const cfg = {
+      models: {
+        providers: {
+          mock: {
+            models: [{ id: "reasoning-model", compat }],
+          },
+        },
+      },
+    };
+
+    const normalized = normalizeConfigPaths(cfg);
+
+    expect(normalized).toBe(cfg);
+    expect(normalized.models?.providers?.mock?.models?.[0]?.compat).toBe(compat);
+  });
 });
