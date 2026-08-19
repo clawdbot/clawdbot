@@ -162,11 +162,18 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     // Legacy destination-only config remains untouched for doctor; runtime defaults to announce.
     runtimeConfig.delivery = deliveryFromJson({ ...runtimeConfig.delivery, mode: "announce" });
   }
-  let precheck;
-  try {
-    precheck = normalizeCronJobPrecheck(runtimeConfig.precheck);
-  } catch {
-    precheck = undefined;
+  const rawPrecheck = runtimeConfig.precheck;
+  if (rawPrecheck !== undefined && rawPrecheck !== null) {
+    try {
+      const precheck = normalizeCronJobPrecheck(rawPrecheck);
+      if (precheck) {
+        runtimeConfig.precheck = precheck;
+      } else {
+        delete runtimeConfig.precheck;
+      }
+    } catch {
+      throw new Error("invalid-precheck");
+    }
   }
   return {
     ...runtimeConfig,
@@ -177,7 +184,6 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     updatedAtMs:
       normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at) ?? createdAtMs,
     state,
-    ...(precheck ? { precheck } : {}),
   } as CronStoredJob;
 }
 
@@ -482,7 +488,17 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
       });
       continue;
     }
-    const job = rowToCronJob(row, parsedJobJson);
+    let job: CronStoredJob | null = null;
+    let precheckInvalid = false;
+    try {
+      job = rowToCronJob(row, parsedJobJson);
+    } catch (err) {
+      if (err instanceof Error && err.message === "invalid-precheck") {
+        precheckInvalid = true;
+      } else {
+        throw err;
+      }
+    }
     const configJob = decodeCronJobConfig(parsedJobJson);
     const runtimeEntry = {
       updatedAtMs: normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at),
@@ -493,7 +509,9 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
     if (!job) {
       invalidConfigRows.push({
         sourceIndex: index,
-        reason: getInvalidPersistedCronJobReason(configJob) ?? "invalid-payload",
+        reason: precheckInvalid
+          ? "invalid-precheck"
+          : (getInvalidPersistedCronJobReason(configJob) ?? "invalid-payload"),
         job: configJob,
         ...(runtimeEntry.state ? { state: runtimeEntry.state } : {}),
         ...(runtimeEntry.updatedAtMs !== undefined
