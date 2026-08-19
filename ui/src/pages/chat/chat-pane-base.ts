@@ -66,6 +66,7 @@ import { ChatTranscriptController } from "./components/chat-transcript-controlle
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import type { SidebarLayout } from "./sidebar-layout-types.ts";
 import { closeSlot, isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
@@ -276,15 +277,16 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     return visible ? "expanded" : "hidden";
   }
 
-  protected setChatSidePanelOpen(open: boolean): void {
+  protected setChatSidePanelOpen(open: boolean, layout?: SidebarLayout): void {
     const state = this.state;
     if (!state) {
       return;
     }
-    if (state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
+    const renderedLayout = layout ?? state.sidebarLayout;
+    if (renderedLayout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
       this.setSessionObserverVisibility(open);
     }
-    state.updateSidebarLayout(setSidebarOpen(state.sidebarLayout, open));
+    state.updateSidebarLayout(setSidebarOpen(renderedLayout, open));
   }
 
   protected requestSessionRail(intent: "open" | "toggle"): void {

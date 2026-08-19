@@ -201,7 +201,8 @@ export function resolveSidebarLayoutForBoard(params: {
     layout = closeSlot(layout, "chat");
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
-  layout = openSlot(layout, "chat");
+  const explicitlyClosed = layout.columns.length > 0 && layout.open === false;
+  layout = { ...openSlot(layout, "chat"), open: !explicitlyClosed };
   return fitSidebarLayout(layout, params.paneWidth) ?? layout;
 }
 
