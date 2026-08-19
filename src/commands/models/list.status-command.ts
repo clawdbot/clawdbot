@@ -6,12 +6,11 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
+import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
-  resolveAgentDir,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -99,7 +98,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
-  resolveKnownAgentId,
+  resolveModelsTargetAgent,
 } from "./shared.js";
 
 type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
@@ -367,11 +366,14 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
-  const agentDir = agentId
-    ? resolveAgentDir(cfg, agentId)
-    : (resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, workspaceAgentId));
+  const explicitAgentId = opts.agent?.trim();
+  const { agentId: workspaceAgentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
+    agentDirOverride: explicitAgentId ? undefined : resolveEnvAgentDirOverride(),
+    kind: "read",
+  });
+  // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
+  // system-agent target still reports unscoped defaults, matching this command's shipped output.
+  const agentId = explicitAgentId ? workspaceAgentId : undefined;
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
@@ -648,9 +650,13 @@ export async function modelsStatusCommand(
         ...(probedProvider ? [normalizeProviderId(probedProvider)] : []),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
+    // Omitting agentId lets the catalog resolve its own owner, which still dead-ends on an
+    // ambiguous roster (prepared-model-catalog.ts resolveInputs). Keep the historical omission
+    // for single-agent installs and name the resolved owner only when the roster needs one.
+    const catalogAgentId = agentId ?? (listAgentIds(cfg).length > 1 ? workspaceAgentId : undefined);
     const catalog = await loadPreparedModelCatalogSnapshot({
       config: cfg,
-      ...(agentId ? { agentId } : {}),
+      ...(catalogAgentId ? { agentId: catalogAgentId } : {}),
       providerDiscoveryProviderIds,
       readOnly: true,
     });

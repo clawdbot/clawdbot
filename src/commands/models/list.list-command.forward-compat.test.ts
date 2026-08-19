@@ -425,7 +425,9 @@ describe("modelsListCommand forward-compat", () => {
 
     await modelsListCommand({ agent: "research", json: true }, createRuntime() as never);
 
-    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(mocks.resolvedConfig, "research");
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(mocks.resolvedConfig, "research", {
+      kind: "read",
+    });
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent-research");
   });
 
