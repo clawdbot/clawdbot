@@ -7,6 +7,7 @@ import { normalizeChatChannelId } from "../channels/registry.js";
 import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import type { ConfigUiHint } from "../shared/config-ui-hints-types.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -318,6 +319,11 @@ export function collectChannelSchemaMetadataWithOwnership(
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
   const displacedOwners = collectDisplacedChannelOwners(registry, policy);
+  // Sensitivity is a property of the field, not of whichever claimant wins the schema. A displaced
+  // plugin's config can survive under the shared channel when the replacement accepts additional
+  // properties, so dropping its `sensitive` hints with its schema would leave a retained secret
+  // with no hint and no name-shaped fallback, and redaction would emit it.
+  const sensitiveHintsByChannel = new Map<string, Record<string, ConfigUiHint>>();
 
   for (const record of registry.plugins) {
     const originRank = resolveOriginRank(record.origin);
@@ -368,6 +374,18 @@ export function collectChannelSchemaMetadataWithOwnership(
     }
 
     for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
+      // Collect before any ownership decision: a claimant that loses the schema still contributes
+      // sensitivity, and the decision below `continue`s past this point for losers.
+      for (const [relPath, hint] of Object.entries(
+        (channelConfig.uiHints ?? {}) as Record<string, ConfigUiHint>,
+      )) {
+        if (hint?.sensitive !== true) {
+          continue;
+        }
+        const carried = sensitiveHintsByChannel.get(channelId) ?? {};
+        carried[relPath] = { ...carried[relPath], sensitive: true };
+        sensitiveHintsByChannel.set(channelId, carried);
+      }
       const current = byChannelId.get(channelId);
       const currentOwnsSchema =
         current !== undefined &&
@@ -413,7 +431,20 @@ export function collectChannelSchemaMetadataWithOwnership(
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ originRank: _originRank, ...entry }) => entry);
+    .map(({ originRank: _originRank, ...entry }) => {
+      const carried = sensitiveHintsByChannel.get(entry.id);
+      if (!carried) {
+        return entry;
+      }
+      // Union only sensitivity: the owner keeps its labels, help text, and schema. `entry` is
+      // already a fresh object from the rest destructure above, so assigning into it is local.
+      const merged: Record<string, ConfigUiHint> = { ...entry.configUiHints };
+      for (const [relPath, hint] of Object.entries(carried)) {
+        merged[relPath] = { ...hint, ...merged[relPath], sensitive: true };
+      }
+      entry.configUiHints = merged;
+      return entry;
+    });
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */

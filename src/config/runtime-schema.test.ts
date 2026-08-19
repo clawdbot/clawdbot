@@ -647,3 +647,55 @@ describe("buildRuntimeConfigSchemaForConfig", () => {
     expect(properties).not.toHaveProperty("plusToken");
   });
 });
+
+describe("sensitivity survives schema displacement", () => {
+  // A displaced plugin's config can remain under the shared channel when the replacement accepts
+  // additional properties. Sensitivity belongs to the field, not to whoever won the schema, so
+  // dropping the displaced hints would leave a retained secret with no hint and no name-shaped
+  // fallback, and redaction would emit it.
+  it("keeps a displaced claimant's sensitive hint on the surviving channel", () => {
+    mockLoadConfig.mockReturnValue(explicitMainRoster());
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "clickclack-plus",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              preferOver: ["clickclack-core"],
+              schema: {
+                type: "object",
+                properties: { plusToken: { type: "string" } },
+                additionalProperties: true,
+              },
+              uiHints: { plusToken: { sensitive: true } },
+            },
+          },
+        },
+        {
+          id: "clickclack-core",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { opaqueValue: { type: "string" } },
+                additionalProperties: false,
+              },
+              // Innocuously named, so nothing recovers this if the hint is dropped.
+              uiHints: { opaqueValue: { sensitive: true } },
+            },
+          },
+        },
+      ],
+    });
+
+    const { uiHints } = loadGatewayRuntimeConfigSchema();
+
+    expect(uiHints["channels.clickclack.plusToken"]?.sensitive).toBe(true);
+    expect(uiHints["channels.clickclack.opaqueValue"]?.sensitive).toBe(true);
+  });
+});
