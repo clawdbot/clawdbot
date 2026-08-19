@@ -434,6 +434,10 @@ export async function startGatewayCoreRuntime(input: {
     );
   };
   let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
+  let retireAttachedPluginRuntimeBindings = () => {};
+  kernel.addGatewayLifetimeSidecar({
+    stop: async () => retireAttachedPluginRuntimeBindings(),
+  });
   const listAttachedGatewayMethods = () => {
     const methods = attachedGatewayMethodRegistry.listAdvertisedMethods();
     methods.push(...listStartupChannelGatewayMethods());
@@ -443,7 +447,11 @@ export async function startGatewayCoreRuntime(input: {
   const replaceAttachedPluginRuntime = (loaded: {
     pluginRegistry: typeof pluginRuntime.registry;
     gatewayMethods: string[];
+    retireGatewayRuntimeBindings?: () => void;
   }) => {
+    const retirePreviousBindings = retireAttachedPluginRuntimeBindings;
+    retireAttachedPluginRuntimeBindings = loaded.retireGatewayRuntimeBindings ?? (() => {});
+    retirePreviousBindings();
     pluginRuntime.registry = loaded.pluginRegistry;
     pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
     for (const key of attachedPluginGatewayHandlerKeys) {

@@ -705,9 +705,10 @@ In practice:
 - Inline `data:image/...` URLs still render.
 - Local `blob:` URLs created by the Control UI still render.
 - GitHub link preview avatars are fetched by the Gateway from GitHub's fixed avatar host and returned as bounded `data:` URLs; the operator browser never contacts the remote avatar host.
+- Link favicons are off by default. Set `gateway.controlUi.automaticallyFetchFavicons: true` to let the authenticated Control UI request them through the Gateway. The browser never contacts link destinations directly; the Gateway requests only each public hostname's HTTPS `/favicon.ico`, with strict DNS-pinned SSRF checks on the original URL and every redirect plus bounded time, bytes, concurrency, and image validation. Private, internal, and IP-literal destinations are rejected. Enabling this option discloses linked hostnames and the Gateway's network address to those sites.
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
 
-This is always on and not configurable.
+The browser-side CSP restriction itself is always on and not configurable.
 
 ## Avatar route auth
 

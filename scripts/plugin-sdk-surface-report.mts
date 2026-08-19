@@ -301,7 +301,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shared delegation policy (mode resolver + section builder) so harness
       //     runtimes render the same guidance instead of diverging prompt copies.
       // +1: shared harness visible-source-reply guidance.
-      4335,
+      // +1: typed guarded-fetch redirect error for direct-only plugin delivery.
+      4336,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

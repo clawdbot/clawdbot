@@ -1451,6 +1451,7 @@ describe("runCopilotAttempt", () => {
     expect(
       (requireResumeSessionConfig(sdk) as { continuePendingWork?: boolean }).continuePendingWork,
     ).toBe(false);
+    expect(requireResumeSessionConfig(sdk)).not.toHaveProperty("suppressResumeEvent");
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
     expect(result.replayMetadata.replaySafe).toBe(true);
     expect(
@@ -4539,8 +4540,41 @@ describe("runCopilotAttempt", () => {
         ]),
       );
       const sdk = makeFakeSdk({
-        onResumeSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("final answer"));
+        onResumeSession: (session, _sessionId, config) => {
+          session.sendAndWait.mockImplementationOnce(async (options) => {
+            const systemMessage = (config.systemMessage as { content?: unknown } | undefined)
+              ?.content;
+            if (typeof systemMessage === "string") {
+              session.emit("system.message", {
+                __eventId: "finalization-system",
+                content: systemMessage,
+              });
+            }
+            if (config.suppressResumeEvent !== true) {
+              session.emit("assistant.message", {
+                __eventId: "prior-tool-assistant",
+                content: "",
+                messageId: "prior-tool-message",
+                toolRequests: [{ arguments: {}, name: "read", toolCallId: "prior-tool-call" }],
+              });
+              session.emit("tool.execution_start", {
+                toolCallId: "prior-tool-call",
+                toolName: "read",
+              });
+              session.emit("tool.execution_complete", {
+                result: { content: "prior tool result" },
+                success: true,
+                toolCallId: "prior-tool-call",
+              });
+            }
+            const prompt = (options as { prompt?: unknown } | undefined)?.prompt;
+            session.emit("user.message", {
+              __eventId: "finalization-user",
+              content: typeof prompt === "string" ? prompt : "",
+              transformedContent: `sdk-wrapped:${typeof prompt === "string" ? prompt : ""}`,
+            });
+            return makeAssistantMessageEvent("final answer");
+          });
         },
       });
       const permissivePolicy = vi.fn(async () => ({ kind: "approved" }) as never);
@@ -4584,7 +4618,21 @@ describe("runCopilotAttempt", () => {
         content: [{ type: "text", text: "final answer" }],
         stopReason: "stop",
       });
-      expect(result.toolMetas).toEqual([]);
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: false,
+        replaySafe: true,
+      });
+      expect({
+        itemLifecycle: result.itemLifecycle,
+        toolMetas: result.toolMetas,
+      }).toEqual({
+        itemLifecycle: {
+          activeCount: 0,
+          completedCount: 0,
+          startedCount: 0,
+        },
+        toolMetas: [],
+      });
       expect(sdk.createSession).not.toHaveBeenCalled();
       expect(sdk.resumeSession).toHaveBeenCalledTimes(1);
       expect(pool.acquire).toHaveBeenCalledWith(
@@ -4597,6 +4645,7 @@ describe("runCopilotAttempt", () => {
         coauthorEnabled: false,
         continuePendingWork: false,
         customAgents: [],
+        suppressResumeEvent: true,
         customAgentsLocalOnly: true,
         embeddingCacheStorage: "in-memory",
         enableConfigDiscovery: false,

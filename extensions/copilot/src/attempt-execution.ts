@@ -363,6 +363,8 @@ export async function runCopilotExecution(context: {
         session = (await client.resumeSession(resumeSessionId, {
           ...sessionConfig,
           continuePendingWork: false,
+          // Settled finalization must not replay lifecycle from the completed turn.
+          ...(settledToolFinalization ? { suppressResumeEvent: true } : {}),
         })) as unknown as SessionLike;
         nativeSessionHistoryValidated = input.initialReplayState?.journalValidated === true;
       } catch (error: unknown) {

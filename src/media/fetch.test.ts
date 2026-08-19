@@ -864,6 +864,22 @@ describe("readRemoteMediaBuffer", () => {
     });
   });
 
+  it("passes the HTTPS-only redirect policy through the guarded fetch path", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+
+    await readRemoteMediaBuffer({
+      url: "https://example.com/favicon.ico",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      requireHttps: true,
+    });
+
+    expect(requireFetchGuardRequest()).toMatchObject({
+      url: "https://example.com/favicon.ico",
+      requireHttps: true,
+    });
+  });
+
   it("streams successful responses directly into the media store", async () => {
     const fetchImpl = vi.fn(
       async () =>

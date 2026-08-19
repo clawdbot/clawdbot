@@ -36,6 +36,11 @@ import {
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
+vi.mock("./session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils.js")>();
+  return { ...actual, resolveGatewayModelSupportsImages: vi.fn(async () => true) };
+});
+
 function createGatewayHistoryText(role: "user" | "assistant", text: unknown, timestamp: number) {
   return { role, content: [{ type: "text", text }], timestamp };
 }
