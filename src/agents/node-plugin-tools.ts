@@ -9,7 +9,7 @@ import {
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
-import { projectMcpCallToolResultContent } from "./mcp-content.js";
+import { projectMcpCallToolResult } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
@@ -33,17 +33,36 @@ function readNodeInvokePayload(value: unknown): unknown {
   return isRecord(value) && "payload" in value ? value.payload : value;
 }
 
-function mapMcpPayloadToAgentToolResult(payload: unknown): AgentToolResult<unknown> {
+function mapMcpPayloadToAgentToolResult(
+  payload: unknown,
+  mcp: { server: string; tool: string },
+): AgentToolResult<unknown> {
   if (!isRecord(payload)) {
     return jsonResult(payload);
   }
-  const content = projectMcpCallToolResultContent({
-    content: payload.content,
-    structuredContent: payload.structuredContent,
+  const projected = projectMcpCallToolResult(payload, {
+    mcpServer: mcp.server,
+    mcpTool: mcp.tool,
   });
+  if (payload.structuredContent !== undefined || !isRecord(projected.details)) {
+    return projected;
+  }
+  const textContent = Array.isArray(payload.content)
+    ? payload.content.flatMap((block) =>
+        isRecord(block) && block.type === "text" && typeof block.text === "string"
+          ? [{ type: "text" as const, text: block.text }]
+          : [],
+      )
+    : [];
+  if (textContent.length === 0) {
+    return projected;
+  }
   return {
-    content,
-    details: payload.isError === true ? { ...payload, status: "error" } : payload,
+    ...projected,
+    details: {
+      ...projected.details,
+      content: textContent,
+    },
   };
 }
 
@@ -233,7 +252,7 @@ export function createNodePluginTools(params: {
         );
         const payload = readNodeInvokePayload(raw);
         if (mcpTool) {
-          return mapMcpPayloadToAgentToolResult(payload);
+          return mapMcpPayloadToAgentToolResult(payload, mcpTool);
         }
         return isAgentToolResult(payload) ? payload : jsonResult(payload);
       },

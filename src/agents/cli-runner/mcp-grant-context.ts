@@ -160,6 +160,7 @@ export function buildCliMcpGrantContext(params: {
       params.run.currentMessageId == null
         ? undefined
         : normalizeOptionalMcpContextValue(String(params.run.currentMessageId)),
+    replyToMode: params.run.replyToMode,
     currentInboundAudio: params.run.currentInboundAudio === true ? true : undefined,
     accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
     inboundEventKind: params.run.currentInboundEventKind,

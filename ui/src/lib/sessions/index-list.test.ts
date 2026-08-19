@@ -98,6 +98,17 @@ describe("session list requests", () => {
     sessions.dispose();
   });
 
+  it("forwards the involving-me predicate", async () => {
+    const request = vi.fn(async () => listResult());
+    const { sessions } = sessionHarness(request);
+    await sessions.list({ involvingMe: true });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ involvingMe: true }),
+    );
+    sessions.dispose();
+  });
+
   it("discards a list rejection from a retired same-client connection", async () => {
     let rejectStale!: (error: Error) => void;
     const staleRequest = new Promise<SessionsListResult>((_resolve, reject) => {
@@ -235,6 +246,35 @@ describe("session list requests", () => {
       includeUnknown: true,
       limit: 50,
     });
+    unsubscribe();
+    sessions.dispose();
+  });
+
+  it("keeps involving-me queries independent from the primary roster", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(listResult(["agent:main:primary"]))
+      .mockResolvedValueOnce(listResult(["agent:main:involving-me"]));
+    const { sessions } = sessionHarness(request);
+    const involvingMeQuery = {
+      agentId: "main",
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      involvingMe: true,
+    };
+    const unsubscribe = sessions.subscribeList(involvingMeQuery, () => undefined);
+
+    await sessions.refreshList({ agentId: "main", limit: 50, force: true });
+    const primaryResult = sessions.state.result;
+    await sessions.refreshList({ ...involvingMeQuery, force: true });
+
+    expect(sessions.state.result).toBe(primaryResult);
+    expect(sessions.listSnapshot(involvingMeQuery).result?.sessions[0]?.key).toBe(
+      "agent:main:involving-me",
+    );
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ involvingMe: true });
     unsubscribe();
     sessions.dispose();
   });

@@ -8,7 +8,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
-import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
@@ -128,6 +127,11 @@ vi.mock("../infra/update-runner.js", async (importOriginal) => ({
 vi.mock("../state/openclaw-database-preflight.js", () => ({
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL: "https://docs.openclaw.ai/reference/database-schemas",
   preflightOpenClawDatabaseSchemas: databasePreflightMocks.preflightOpenClawDatabaseSchemas,
+}));
+
+vi.mock("../state/openclaw-state-ownership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-ownership.js")>()),
+  assertOpenClawStateWriteAllowedAtPath: vi.fn(async () => undefined),
 }));
 
 vi.mock("../infra/openclaw-root.js", () => ({
@@ -364,13 +368,17 @@ vi.mock("../daemon/service.js", () => ({
         : undefined),
     };
     args?.validateEnvBeforeStatusRead?.(env);
-    const [loaded, runtime] = await Promise.all([
-      serviceLoaded({ env }).catch(() => false),
+    const [loadState, runtime] = await Promise.all([
+      serviceLoaded({ env })
+        .then((loaded: boolean) =>
+          loaded ? ({ status: "loaded" } as const) : ({ status: "not-loaded" } as const),
+        )
+        .catch((error: unknown) => ({ status: "unknown" as const, detail: String(error) })),
       serviceReadRuntime(env).catch(() => undefined),
     ]);
     return {
       installed: command !== null,
-      loaded,
+      loadState,
       running: runtime?.status === "running",
       env,
       command,
@@ -512,7 +520,7 @@ const {
   updateWizardCommand,
 } = await import("./update-cli.js");
 const updateCliShared = await import("./update-cli/shared.js");
-const { ensureGitCheckout, resolveGitInstallDir } = updateCliShared;
+const { resolveGitInstallDir } = updateCliShared;
 const { spawnSync } = await import("node:child_process");
 const { readRestartSentinel } = await import("../infra/restart-sentinel.js");
 
@@ -530,18 +538,23 @@ type UpdateCliScenario = {
 };
 
 describe("update-cli", () => {
-  const fixtureRoot = "/tmp/openclaw-update-tests";
+  // Per-run unique root: concurrent runs on one machine (CI shards, sibling checkouts) must
+  // never share fixture paths — some cases write real files and rm them in cleanup. Realpath'd
+  // because macOS os.tmpdir() is a /var -> /private/var symlink.
+  const fixtureRoot = fsSync.realpathSync(
+    fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-tests-")),
+  );
   let fixtureCount = 0;
   const tempDirsToCleanup = new Set<string>();
 
   const createCaseDir = (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-    // Tests only need a stable path; the directory does not have to exist because all I/O is mocked.
+    // Callers that only need a stable path skip creating it; real-I/O callers mkdir themselves.
     return dir;
   };
 
   const createTrackedTempDir = async (prefix: string) => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
     tempDirsToCleanup.add(dir);
     return dir;
   };
@@ -1131,7 +1144,7 @@ describe("update-cli", () => {
   const writeOpenClawPackageFixture = async (
     root: string,
     version: string,
-    options: { entrySource?: string; sidecars?: boolean; inventory?: boolean } = {},
+    options: { entrySource?: string; inventory?: boolean } = {},
   ) => {
     const entryPath = path.join(root, "dist", "index.js");
     await fs.mkdir(options.entrySource === undefined ? root : path.dirname(entryPath), {
@@ -1144,13 +1157,6 @@ describe("update-cli", () => {
     );
     if (options.entrySource !== undefined) {
       await fs.writeFile(entryPath, options.entrySource, "utf-8");
-    }
-    if (options.sidecars) {
-      for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
-        const absolutePath = path.join(root, relativePath);
-        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-        await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-      }
     }
     if (options.inventory) {
       await writePackageDistInventory(root);
@@ -1487,8 +1493,9 @@ describe("update-cli", () => {
     setStdoutTty(false);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     serviceEnvSnapshot.restore();
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   afterEach(async () => {
@@ -1503,11 +1510,12 @@ describe("update-cli", () => {
     tempDirsToCleanup.clear();
   });
 
-  it("reads the initial update config without plugin schema validation", async () => {
+  it("reads the initial update config without schema validation or observation", async () => {
     await updateCommand({ yes: true, restart: false });
 
     expect(vi.mocked(readConfigFileSnapshot).mock.calls[0]?.[0]).toEqual({
       skipPluginValidation: true,
+      observe: false,
     });
   });
 
@@ -1668,7 +1676,8 @@ describe("update-cli", () => {
         candidate === path.join(root, "package.json") ||
         entrypoints.includes(candidate),
     );
-    const managedState = "/tmp/openclaw-update-tests/managed-profile";
+    const managedState = path.join(fixtureRoot, "managed-profile");
+    const personalState = path.join(fixtureRoot, "personal-profile");
     const managedConfig = {
       ...baseConfig,
       update: { channel: "beta" as const },
@@ -1723,8 +1732,8 @@ describe("update-cli", () => {
     await withEnvAsync(
       {
         OPENCLAW_PROFILE: "personal",
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
-        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-update-tests/personal-profile/openclaw.json",
+        OPENCLAW_STATE_DIR: personalState,
+        OPENCLAW_CONFIG_PATH: path.join(personalState, "openclaw.json"),
         OPENCLAW_GATEWAY_PORT: "19111",
       },
       async () => {
@@ -1746,6 +1755,7 @@ describe("update-cli", () => {
   });
 
   it("keeps foreign-service updates in the caller profile", async () => {
+    const personalState = path.join(fixtureRoot, "personal-profile");
     const { root, entrypoints } = setupUpdatedRootRefresh();
     const foreignRoot = await createTrackedTempDir("openclaw-update-foreign-profile-");
     const foreignEntrypoint = path.join(foreignRoot, "dist", "index.js");
@@ -1768,7 +1778,7 @@ describe("update-cli", () => {
       programArguments: ["node", foreignEntrypoint, "gateway", "run"],
       environment: {
         OPENCLAW_PROFILE: "foreign",
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/foreign-profile",
+        OPENCLAW_STATE_DIR: path.join(fixtureRoot, "foreign-profile"),
         OPENCLAW_GATEWAY_PORT: "19333",
       },
     });
@@ -1782,7 +1792,7 @@ describe("update-cli", () => {
     await withEnvAsync(
       {
         OPENCLAW_PROFILE: "personal",
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
+        OPENCLAW_STATE_DIR: personalState,
         OPENCLAW_GATEWAY_PORT: "19111",
       },
       async () => {
@@ -1794,7 +1804,7 @@ describe("update-cli", () => {
     expect(serviceEnabled).not.toHaveBeenCalled();
     expect(spawnCall()?.[2]?.env).toMatchObject({
       OPENCLAW_PROFILE: "personal",
-      OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
+      OPENCLAW_STATE_DIR: personalState,
       OPENCLAW_GATEWAY_PORT: "19111",
     });
   });
@@ -1810,7 +1820,7 @@ describe("update-cli", () => {
         after: { sha: "new-managed-sha", version: "2026.4.27" },
       }),
     );
-    const managedState = "/tmp/openclaw-update-tests/fallback-managed";
+    const managedState = path.join(fixtureRoot, "fallback-managed");
     serviceReadCommand.mockResolvedValue({
       programArguments: ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
       environment: {
@@ -1835,7 +1845,7 @@ describe("update-cli", () => {
     await withEnvAsync(
       {
         OPENCLAW_PROFILE: "personal",
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/fallback-personal",
+        OPENCLAW_STATE_DIR: path.join(fixtureRoot, "fallback-personal"),
         OPENCLAW_GATEWAY_PORT: "19111",
       },
       async () => {
@@ -1868,7 +1878,7 @@ describe("update-cli", () => {
         candidate === path.join(process.cwd(), "package.json") ||
         candidate === path.join(process.cwd(), "openclaw.mjs"),
     );
-    const managedState = "/tmp/openclaw-update-tests/restart-doctor-managed";
+    const managedState = path.join(fixtureRoot, "restart-doctor-managed");
     serviceReadCommand.mockResolvedValue({
       programArguments: ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
       environment: {
@@ -1890,7 +1900,7 @@ describe("update-cli", () => {
     await withEnvAsync(
       {
         OPENCLAW_PROFILE: "personal",
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/restart-doctor-personal",
+        OPENCLAW_STATE_DIR: path.join(fixtureRoot, "restart-doctor-personal"),
         OPENCLAW_GATEWAY_PORT: "19111",
       },
       async () => {
@@ -4338,12 +4348,6 @@ describe("update-cli", () => {
       expectedSpec: "openclaw@9999.0.0",
     },
     {
-      name: "main shorthand",
-      options: { yes: true, tag: "main" },
-      packageSpec: undefined,
-      expectedSpec: "github:openclaw/openclaw#main",
-    },
-    {
       name: "explicit git package spec",
       options: { yes: true, tag: "github:openclaw/openclaw#main" },
       packageSpec: undefined,
@@ -4411,13 +4415,39 @@ describe("update-cli", () => {
     },
   );
 
+  it.each([
+    { name: "real run", options: { yes: true, json: true, tag: "main" } },
+    { name: "normalized alias", options: { yes: true, json: true, tag: "openclaw@main" } },
+    {
+      name: "dry-run",
+      options: { dryRun: true, json: true, tag: "main", yes: true },
+    },
+  ] as const)("refuses --tag main before package resolution: $name", async ({ options }) => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update-main-refusal"));
+
+    await updateCommand(options);
+
+    const result = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "unsupported-package-target",
+      steps: [],
+    });
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(resolveGlobalManager, replaceConfigFile, runGatewayUpdate);
+    if ("dryRun" in options && options.dryRun) {
+      expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    }
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(getErrorOutput()).toContain("openclaw update --channel dev");
+  });
+
   it("fails package updates when the installed correction version does not match the requested target", async () => {
     const tempDir = createCaseDir("openclaw-update");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(tempDir);
     await writeOpenClawPackageFixture(pkgRoot, "2026.3.23", {
-      sidecars: true,
       inventory: true,
     });
     readPackageVersion.mockResolvedValue("2026.3.23");
@@ -4702,34 +4732,6 @@ describe("update-cli", () => {
     ).toBe("2026.5.14");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
-
-  it.each(["11.13.0", "11.15.9"])(
-    "refuses npm %s before stopping the managed gateway or cleaning update backups",
-    async (npmVersion) => {
-      const tempDir = await createTrackedTempDir("openclaw-update-npm-policy-");
-      const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
-      const backupDir = path.join(nodeModules, ".openclaw-interrupted");
-      await fs.mkdir(backupDir, { recursive: true });
-      mockRunningManagedGateway(["node", entryPath, "gateway", "run"]);
-      mockFileBackedPathExists();
-      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
-        if (argv[0] === "npm" && argv[1] === "--version") {
-          return commandResult({ stdout: `${npmVersion}\n` });
-        }
-        if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
-          return commandResult({ stdout: `${nodeModules}\n` });
-        }
-        return commandResult();
-      });
-
-      await updateCommand({ yes: true });
-
-      expect(serviceStop).not.toHaveBeenCalled();
-      expect(packageInstallCommandCall()).toBeUndefined();
-      await expect(fs.access(backupDir)).resolves.toBeUndefined();
-      expect(getErrorOutput()).toContain(`npm ${npmVersion} cannot safely approve`);
-    },
-  );
 
   it("stops a running managed gateway before package replacement", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -5368,6 +5370,57 @@ describe("update-cli", () => {
     expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
   });
 
+  it.runIf(process.platform !== "win32")(
+    "continues package-to-Git updates from the published checkout after its alias is retargeted",
+    async () => {
+      const root = await createTrackedTempDir("openclaw-update-git-alias-");
+      const nodeModules = path.join(root, "package", "node_modules");
+      const packageRoot = path.join(nodeModules, "openclaw");
+      const targetRoot = path.join(root, "checkout-target");
+      const replacementRoot = path.join(root, "checkout-replacement");
+      const checkoutAlias = path.join(root, "checkout-alias");
+      await Promise.all([fs.mkdir(targetRoot), fs.mkdir(replacementRoot)]);
+      await fs.symlink(targetRoot, checkoutAlias, "dir");
+      mockPackageInstallStatus(packageRoot);
+      mockFileBackedPathExists();
+      mockNoopPostUpdatePluginConvergence();
+      vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
+        expect(options?.cwd).toBe(targetRoot);
+        return makeOkUpdateResult({ mode: "git", root: targetRoot });
+      });
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+        if (argv[1] === "--version") {
+          return commandResult({ stdout: "12.0.0\n" });
+        }
+        if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+          return commandResult({ stdout: `${nodeModules}\n` });
+        }
+        if (argv[0] === "git" && argv[1] === "clone") {
+          const stagingDir = requireValue(argv.at(-1), "Git clone staging directory");
+          await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
+          await fs.writeFile(
+            path.join(stagingDir, "package.json"),
+            JSON.stringify({ name: "openclaw", version: "2026.8.17" }),
+            "utf8",
+          );
+          await fs.unlink(checkoutAlias);
+          await fs.symlink(replacementRoot, checkoutAlias, "dir");
+        }
+        return commandResult();
+      });
+
+      await withEnvAsync({ OPENCLAW_GIT_DIR: checkoutAlias }, async () => {
+        await updateCommand({ channel: "dev", yes: true, restart: false });
+      });
+
+      const installCall = packageInstallCommandCall();
+      expect(installCall?.[0]).toContain(targetRoot);
+      expect(installCall?.[0]).not.toContain(checkoutAlias);
+      expect(installCall?.[1].cwd).toBe(targetRoot);
+      await expect(fs.readdir(replacementRoot)).resolves.toEqual([]);
+    },
+  );
+
   it("does not stop or restart a managed gateway owned by another git checkout", async () => {
     const otherRoot = await createTrackedTempDir("openclaw-update-other-service-root-");
     const otherEntrypoint = path.join(otherRoot, "dist", "index.js");
@@ -5486,7 +5539,6 @@ describe("update-cli", () => {
       version: "2026.4.23",
     });
     await writeOpenClawPackageFixture(pkgRoot, "2026.4.23", {
-      sidecars: true,
       inventory: true,
     });
     mockFileBackedPathExists();
@@ -5517,7 +5569,6 @@ describe("update-cli", () => {
     mockPackageInstallStatus(pkgRoot);
     mockCurrentProcessFreshDoctor();
     await writeOpenClawPackageFixture(pkgRoot, "9999.0.0", {
-      sidecars: true,
       inventory: true,
     });
 
@@ -6864,32 +6915,6 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it.each(["11.13.0", "11.15.9"])(
-    "refuses npm %s package-to-dev updates before checkout or install",
-    async (npmVersion) => {
-      const packageRoot = createCaseDir("openclaw-npm-transition");
-      mockPackageInstallStatus(packageRoot);
-      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
-        if (argv[0] === "npm" && argv[1] === "--version") {
-          return commandResult({ stdout: `${npmVersion}\n` });
-        }
-        if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
-          return commandResult({ stdout: `${path.dirname(packageRoot)}\n` });
-        }
-        return commandResult();
-      });
-
-      await updateCommand({ channel: "dev", yes: true, restart: false });
-
-      expect(runGatewayUpdate).not.toHaveBeenCalled();
-      expect(commandCalls().some(([argv]) => argv[0] === "git")).toBe(false);
-      expect(
-        commandCalls().some(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g"),
-      ).toBe(false);
-      expect(getErrorOutput()).toContain(`npm ${npmVersion} cannot safely approve`);
-    },
-  );
-
   it("explains why git updates cannot run with edited files", async () => {
     vi.mocked(defaultRuntime.log).mockClear();
     vi.mocked(defaultRuntime.error).mockClear();
@@ -7848,7 +7873,8 @@ describe("update-cli", () => {
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const tempDir = createCaseDir("openclaw-update-wizard");
+    const root = await createTrackedTempDir("openclaw-update-wizard-");
+    const tempDir = path.join(root, "openclaw");
     await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
       setTty(true);
 
@@ -7874,6 +7900,7 @@ describe("update-cli", () => {
 
       await updateWizardCommand({});
 
+      expect(readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
     });
@@ -7991,30 +8018,6 @@ describe("update-cli", () => {
     } finally {
       homedirSpy.mockRestore();
     }
-  });
-
-  it("creates the parent directory before cloning the default dev checkout", async () => {
-    const root = await createTrackedTempDir("openclaw-update-home-");
-    const home = path.join(root, "custom-openclaw-home");
-    const checkoutDir = path.join(home, "openclaw");
-
-    await withEnvAsync({ OPENCLAW_GIT_DIR: undefined, OPENCLAW_HOME: home }, async () => {
-      const dir = resolveGitInstallDir();
-      expect(dir).toBe(checkoutDir);
-      await ensureGitCheckout({ dir, timeoutMs: 1_000, env: process.env });
-    });
-
-    expect((await fs.stat(home)).isDirectory()).toBe(true);
-    const cloneCall = vi
-      .mocked(runCommandWithTimeout)
-      .mock.calls.find((call) => call[0][0] === "git" && call[0][1] === "clone");
-    expect(cloneCall?.[0]).toEqual([
-      "git",
-      "clone",
-      "--filter=blob:none",
-      "https://github.com/openclaw/openclaw.git",
-      checkoutDir,
-    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

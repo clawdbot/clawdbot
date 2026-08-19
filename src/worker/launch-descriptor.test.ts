@@ -11,7 +11,7 @@ import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-
 
 function launchDescriptor(): WorkerLaunchDescriptor {
   return {
-    version: 3,
+    version: 4,
     connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
     admission: {
       environmentId: "environment-1",
@@ -34,6 +34,8 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       prompt: "Inspect the workspace.",
       suppressPromptTranscript: false,
       workspaceDir: "/tmp/openclaw-worker/workspace",
+      permissionMode: "workspace",
+      workerContainmentRoot: "/tmp/openclaw-worker/workspace",
       modelRef: { provider: "provider-1", model: "model-1" },
       inferenceOptions: { reasoning: "medium", maxTokens: 512 },
       initialMessages: [
@@ -62,6 +64,27 @@ describe("worker launch descriptor", () => {
     });
   });
 
+  it("accepts the permission context pair only when both fields are present", () => {
+    const descriptor = launchDescriptor();
+    const {
+      permissionMode: _permissionMode,
+      workerContainmentRoot: _root,
+      ...withoutContext
+    } = descriptor.assignment;
+    expect(
+      parseWorkerLaunchDescriptor({ ...descriptor, assignment: withoutContext }).assignment,
+    ).toEqual(withoutContext);
+
+    for (const assignment of [
+      { ...withoutContext, permissionMode: "workspace" },
+      { ...withoutContext, workerContainmentRoot: "/tmp/openclaw-worker/workspace" },
+    ]) {
+      expect(() => parseWorkerLaunchDescriptor({ ...descriptor, assignment })).toThrow(
+        "invalid worker launch descriptor",
+      );
+    }
+  });
+
   it("accepts only closed Unix or public WebSocket connection endpoints", () => {
     const descriptor = launchDescriptor();
     descriptor.connectionEndpoint = {
@@ -69,7 +92,13 @@ describe("worker launch descriptor", () => {
       url: "wss://gateway.example/tenant/__openclaw__/worker",
       tlsFingerprint: "ab:".repeat(31) + "ab",
     };
-    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual({
+      ...descriptor,
+      connectionEndpoint: {
+        ...descriptor.connectionEndpoint,
+        tlsFingerprint: "ab".repeat(32),
+      },
+    });
 
     const invalidEndpoints: unknown[] = [
       { kind: "unix", socketPath: "gateway.sock" },
@@ -85,8 +114,26 @@ describe("worker launch descriptor", () => {
       },
       {
         kind: "websocket",
+        url: "ws://127.0.0.1/__openclaw__/worker",
+        cloudflareAccess: {
+          clientId: "cf-worker-plaintext-id",
+          clientSecret: "cf-worker-plaintext-secret",
+        },
+      },
+      {
+        kind: "websocket",
         url: "wss://gateway.example/__openclaw__/worker",
         tlsFingerprint: "",
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "ab:cd:ef",
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "g".repeat(64),
       },
       { ...descriptor.connectionEndpoint, unexpected: true },
     ];
@@ -164,7 +211,7 @@ describe("worker launch descriptor", () => {
     const descriptor = launchDescriptor();
     const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
     const cases: unknown[] = [
-      { ...descriptor, version: 2 },
+      { ...descriptor, version: 3 },
       { ...descriptor, assignment: assignmentWithoutAuthority },
       {
         ...descriptor,
@@ -262,6 +309,10 @@ describe("worker launch descriptor", () => {
       {
         ...descriptor,
         assignment: { ...descriptor.assignment, workspaceDir: "workspace" },
+      },
+      {
+        ...descriptor,
+        assignment: { ...descriptor.assignment, workerContainmentRoot: "workspace" },
       },
       {
         ...descriptor,

@@ -73,16 +73,27 @@ export class SecretStoreValidationError extends Error {
 export const SECRET_STORE_VALUE_MAX_BYTES = 64 * 1024;
 export const SECRET_STORE_ALLOWED_HOSTS_MAX = 128;
 const SECRET_STORE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const GITHUB_SETUP_HANDOFF_PATTERN = /^github-setup-[a-f0-9]{32}$/u;
+const GITHUB_SETUP_HANDOFF_MAX_AGE_MS = 10 * 60_000;
 
 function normalizeScope(_scope: SecretStoreScope): { scopeKind: "team"; scopeId: "" } {
   return { scopeKind: "team", scopeId: "" };
 }
 
-function assertSecretStoreName(name: string): void {
+function assertSecretStoreEnvName(name: string): void {
   if (!ENV_SECRET_REF_ID_RE.test(name)) {
     throw new SecretStoreValidationError(
       "SECRET_STORE_INVALID_NAME",
       `Secret store name must match ${String(ENV_SECRET_REF_ID_RE)}.`,
+    );
+  }
+}
+
+function assertSecretStoreMutationName(name: string): void {
+  if (!ENV_SECRET_REF_ID_RE.test(name) && !GITHUB_SETUP_HANDOFF_PATTERN.test(name)) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_INVALID_NAME",
+      `Secret store name must match ${String(ENV_SECRET_REF_ID_RE)} or ${String(GITHUB_SETUP_HANDOFF_PATTERN)}.`,
     );
   }
 }
@@ -218,7 +229,9 @@ export function listSecretStoreEntries(params: {
         if (!params.includeDeleted) {
           query = query.where("deleted_at_ms", "is", null);
         }
-        return executeSqliteQuerySync(sqlite, query).rows.map(toMetadata);
+        return executeSqliteQuerySync(sqlite, query)
+          .rows.filter((row) => !GITHUB_SETUP_HANDOFF_PATTERN.test(row.name))
+          .map(toMetadata);
       }, params.database ?? {}) ?? []
     );
   } catch (error) {
@@ -229,9 +242,67 @@ export function listSecretStoreEntries(params: {
   }
 }
 
+/** Atomically returns and hard-deletes one exact fresh, non-egress GitHub setup handoff. */
+export function consumeGitHubSetupHandoff(params: {
+  name: string;
+  nowMs?: number;
+  database?: OpenClawStateDatabaseOptions;
+}): string | undefined {
+  if (!GITHUB_SETUP_HANDOFF_PATTERN.test(params.name)) {
+    return undefined;
+  }
+  const now = params.nowMs ?? Date.now();
+  try {
+    let value: string | undefined;
+    runOpenClawStateWriteTransaction(
+      ({ db: sqlite }) => {
+        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
+        const row = executeSqliteQueryTakeFirstSync(
+          sqlite,
+          db
+            .selectFrom("secret_store_entries")
+            .select("value")
+            .where("scope_kind", "=", "team")
+            .where("scope_id", "=", "")
+            .where("name", "=", params.name)
+            .where("kind", "=", "secret")
+            .where("allowed_hosts", "is", null)
+            .where("created_at_ms", ">=", now - GITHUB_SETUP_HANDOFF_MAX_AGE_MS)
+            .where("created_at_ms", "<=", now)
+            .where("deleted_at_ms", "is", null),
+        );
+        if (!row) {
+          return;
+        }
+        executeSqliteQuerySync(
+          sqlite,
+          db
+            .deleteFrom("secret_store_entries")
+            .where("scope_kind", "=", "team")
+            .where("scope_id", "=", "")
+            .where("name", "=", params.name),
+        );
+        value = row.value;
+      },
+      params.database,
+      { operationLabel: "secrets.store.consume-github-setup-handoff" },
+    );
+    if (value !== undefined) {
+      registerSecretValueForRedaction(value);
+    }
+    return value;
+  } catch (error) {
+    if (isMissingSecretStoreTableError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 /** Captures one coherent team-store snapshot for an agent run's exec environment. */
 export function readSecretStoreExecEnvironment(params: {
   includeSecretSentinels: boolean;
+  excludeNames?: readonly string[];
   database?: OpenClawStateDatabaseOptions;
 }): SecretStoreExecEnvironment {
   try {
@@ -251,7 +322,11 @@ export function readSecretStoreExecEnvironment(params: {
         const env: Record<string, string> = {};
         const secretSentinels: Record<string, string> = {};
         const secretEgressBindings: SecretStoreEgressBinding[] = [];
+        const excludedNames = new Set(params.excludeNames ?? []);
         for (const row of rows) {
+          if (GITHUB_SETUP_HANDOFF_PATTERN.test(row.name) || excludedNames.has(row.name)) {
+            continue;
+          }
           if (row.kind === "env") {
             env[row.name] = row.value;
             continue;
@@ -292,7 +367,7 @@ export function readSecretStoreValue(params: {
   database?: OpenClawStateDatabaseOptions;
 }): Result<string, SecretStoreReadError> {
   try {
-    assertSecretStoreName(params.name);
+    assertSecretStoreEnvName(params.name);
     const { scopeKind, scopeId } = normalizeScope(params.scope);
     const row = withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
@@ -344,7 +419,7 @@ export function writeSecretStoreEntry(params: {
   updatedBy: string | null;
   database?: OpenClawStateDatabaseOptions;
 }): void {
-  assertSecretStoreName(params.name);
+  assertSecretStoreMutationName(params.name);
   assertSecretStoreValue(params.value, params.kind);
   if (params.kind === "env" && params.allowedHosts !== undefined) {
     throw new SecretStoreValidationError(
@@ -407,7 +482,7 @@ export function updateSecretStoreAllowedHosts(params: {
   updatedBy: string | null;
   database?: OpenClawStateDatabaseOptions;
 }): void {
-  assertSecretStoreName(params.name);
+  assertSecretStoreEnvName(params.name);
   const allowedHosts = normalizeSecretAllowedHosts(params.allowedHosts);
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   const now = Date.now();
@@ -447,7 +522,7 @@ export function deleteSecretStoreEntry(params: {
   name: string;
   database?: OpenClawStateDatabaseOptions;
 }): void {
-  assertSecretStoreName(params.name);
+  assertSecretStoreMutationName(params.name);
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   const state = openOpenClawStateDatabase(params.database);
   const now = Date.now();
@@ -455,16 +530,20 @@ export function deleteSecretStoreEntry(params: {
     runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        executeSqliteQuerySync(
-          sqlite,
-          db
-            .updateTable("secret_store_entries")
-            .set({ deleted_at_ms: now, updated_at_ms: now })
-            .where("scope_kind", "=", scopeKind)
-            .where("scope_id", "=", scopeId)
-            .where("name", "=", params.name)
-            .where("deleted_at_ms", "is", null),
-        );
+        const query = GITHUB_SETUP_HANDOFF_PATTERN.test(params.name)
+          ? db
+              .deleteFrom("secret_store_entries")
+              .where("scope_kind", "=", scopeKind)
+              .where("scope_id", "=", scopeId)
+              .where("name", "=", params.name)
+          : db
+              .updateTable("secret_store_entries")
+              .set({ deleted_at_ms: now, updated_at_ms: now })
+              .where("scope_kind", "=", scopeKind)
+              .where("scope_id", "=", scopeId)
+              .where("name", "=", params.name)
+              .where("deleted_at_ms", "is", null);
+        executeSqliteQuerySync(sqlite, query);
       },
       { ...params.database, database: state },
       { operationLabel: "secrets.store.delete" },
@@ -483,6 +562,7 @@ export function purgeExpiredSecretStoreEntries(
 ): number {
   const state = openOpenClawStateDatabase(params.database);
   const threshold = Date.now() - SECRET_STORE_RETENTION_MS;
+  const handoffThreshold = Date.now() - GITHUB_SETUP_HANDOFF_MAX_AGE_MS;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
@@ -494,7 +574,27 @@ export function purgeExpiredSecretStoreEntries(
             .where("deleted_at_ms", "is not", null)
             .where("deleted_at_ms", "<", threshold),
         );
-        return Number(deleted.numAffectedRows ?? 0n);
+        const handoffRows = executeSqliteQuerySync(
+          sqlite,
+          db
+            .selectFrom("secret_store_entries")
+            .select(["scope_kind", "scope_id", "name"])
+            .where("deleted_at_ms", "is", null)
+            .where("created_at_ms", "<", handoffThreshold),
+        ).rows.filter((row) => GITHUB_SETUP_HANDOFF_PATTERN.test(row.name));
+        let expiredHandoffs = 0;
+        for (const row of handoffRows) {
+          const result = executeSqliteQuerySync(
+            sqlite,
+            db
+              .deleteFrom("secret_store_entries")
+              .where("scope_kind", "=", row.scope_kind)
+              .where("scope_id", "=", row.scope_id)
+              .where("name", "=", row.name),
+          );
+          expiredHandoffs += Number(result.numAffectedRows ?? 0n);
+        }
+        return Number(deleted.numAffectedRows ?? 0n) + expiredHandoffs;
       },
       { ...params.database, database: state },
       { operationLabel: "secrets.store.purge" },

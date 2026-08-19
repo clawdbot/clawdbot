@@ -26,7 +26,7 @@ import {
   readQueuedMessageById,
 } from "./chat-queue.ts";
 import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
-import { sendChatMessageWithGeneratedRunId, steerSendDependencies } from "./chat-send-actions.ts";
+import { sendChatMessageWithGeneratedRunId } from "./chat-send-actions.ts";
 import {
   captureChatCommandComposerRecovery,
   cancelChatDelivery,
@@ -48,6 +48,10 @@ import {
   waitForPendingChatSettings,
 } from "./chat-send-queue-state.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
+import {
+  formatTerminalChatSendAckError,
+  OFFLINE_QUEUE_STORAGE_ERROR,
+} from "./chat-send-support.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { withChatSubmitGuard } from "./chat-submit-guard.ts";
@@ -61,17 +65,16 @@ import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queu
 import {
   handleAbortChat,
   hasAbortableSessionRun,
+  hasDirectSessionRun,
   isChatBusy,
   isChatStopCommand,
 } from "./run-lifecycle.ts";
-import {
-  formatTerminalChatSendAckError,
-  OFFLINE_QUEUE_STORAGE_ERROR,
-  sendQueuedChatMessageWithQueueMode as sendQueuedChatMessageWithQueueModeLifecycle,
-} from "./steer-lifecycle.ts";
 
 type ChatSendSubmitOptions = {
+  attachmentsOverride?: readonly ChatAttachment[];
   followUpMode?: ControlUiFollowUpMode;
+  /** Only the inline queued-row submit may resume and replace an edited row. */
+  resumeQueuedMessageEditId?: string;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
   /** Lets request-scoped UI actions recover from rejected local commands. */
@@ -100,7 +103,7 @@ function attachmentSubmitSignature(attachment: ChatAttachment): string {
 
 function chatSubmitKey(
   host: ChatHost,
-  kind: "detached" | "local" | "message",
+  kind: "detached" | "local" | "message" | "queued-edit",
   message: string,
   attachments: ChatAttachment[],
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
@@ -203,17 +206,39 @@ export async function handleSendChat(
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
   let expectedLeafEntryId = resolveDisplayedLeafEntryId(host);
-  const attachmentsToSend =
-    messageOverride == null ? snapshotChatAttachments(host.chatAttachments) : [];
+  const attachmentsToSend = snapshotChatAttachments(
+    messageOverride == null ? host.chatAttachments : (opts?.attachmentsOverride ?? []),
+  );
   const hasAttachments = attachmentsToSend.length > 0;
   const skillWorkshopRevision = opts?.skillWorkshopRevision;
-  // Materialize hidden annotation context before command classification and queue admission.
+  const requestedEditId = opts?.resumeQueuedMessageEditId;
+  const inlineEdit = requestedEditId ? activeQueuedMessageEdit(host) : null;
+  if (requestedEditId != null && !inlineEdit) {
+    return;
+  }
+  const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;
+  const submittedInlineEditRevision = isInlineEditSubmission ? inlineEdit.revision : null;
+  // Classify the operator's raw row draft before browser annotation context is
+  // prepended. Otherwise annotation text can hide /stop, /compact, or a stop
+  // alias from the inline-edit command fence.
+  const rawParsedCommand = !skillWorkshopRevision ? parseSlashCommand(userMessage) : null;
+  if (isInlineEditSubmission && (rawParsedCommand || isChatStopCommand(userMessage))) {
+    setChatError(
+      host,
+      "Queued-row edits cannot run commands or stop aliases. Cancel this edit and send the command from the composer.",
+    );
+    return;
+  }
+
+  // Materialize hidden annotation context once after inline-edit classification.
   // Delivery and retry consume this snapshot; they must not re-read or recompose attachments.
   const message = composeBrowserAnnotationContext(userMessage, attachmentsToSend);
 
   if (!message && !hasAttachments) {
     return;
   }
+
+  const parsedCommand = !skillWorkshopRevision ? parseSlashCommand(message) : null;
 
   if (!skillWorkshopRevision) {
     // Natural stop aliases require a run; explicit /stop is always available.
@@ -233,7 +258,7 @@ export async function handleSendChat(
     }
 
     host.chatRunError = null;
-    const parsed = parseSlashCommand(message);
+    const parsed = parsedCommand;
     if (/^\/(?:btw|side)(?::|\s|$)/i.test(message)) {
       const question = extractCompanionCommandQuestion(message);
       if (!question) {
@@ -438,16 +463,21 @@ export async function handleSendChat(
     }
   }
 
-  const replyTarget = host.chatReplyTarget;
+  const replyTarget = isInlineEditSubmission ? null : host.chatReplyTarget;
   // Persisted ids use replyToId; synthetic replies fall back to a quote.
-  const replyToId = replyTarget?.sourceMessageId?.trim() || undefined;
+  const replyToId = isInlineEditSubmission
+    ? inlineEdit.replyToId
+    : replyTarget?.sourceMessageId?.trim() || undefined;
   const effectiveMessage =
     replyTarget && !replyToId ? prependReplyQuote(message, replyTarget) : message;
 
   const refreshSessions = !skillWorkshopRevision && isChatResetCommand(message);
+  // A row edit and a composer send may intentionally carry the same payload.
+  // Keep their guards independent so submitting one cannot suppress the other.
+  const submitKind = requestedEditId ? "queued-edit" : "message";
   const submitKey = chatSubmitKey(
     host,
-    "message",
+    submitKind,
     effectiveMessage,
     attachmentsToSend,
     skillWorkshopRevision,
@@ -469,6 +499,16 @@ export async function handleSendChat(
       setChatError(host, t("mcpServers.sessionUnavailable"));
       return;
     }
+    // History can await while the operator cancels or changes the row edit.
+    // Never admit a replacement captured from a stale row-local draft.
+    const resumedEditCandidate = activeQueuedMessageEdit(host);
+    if (
+      isInlineEditSubmission &&
+      (resumedEditCandidate !== inlineEdit ||
+        resumedEditCandidate.revision !== submittedInlineEditRevision)
+    ) {
+      return;
+    }
     const cleared =
       messageOverride == null
         ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
@@ -479,9 +519,20 @@ export async function handleSendChat(
 
     const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
     const waitingForSettings = Boolean(pendingSettings);
+    const directRunActive = hasDirectSessionRun(host);
+    // Only an explicit browser override replaces inherited Gateway policy.
+    const followUpMode =
+      opts?.followUpMode ??
+      host.chatFollowUpMode ??
+      normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
+    const activeRunQueueMode =
+      !skillWorkshopRevision && directRunActive && followUpMode !== "queue"
+        ? followUpMode
+        : undefined;
     // The edited row hands its place to the replacement and is retired by the same
     // store write, so a rejected write leaves the original queued and editable.
-    const resumedEdit = activeQueuedMessageEdit(host);
+    const resumedEdit =
+      requestedEditId && resumedEditCandidate?.id === requestedEditId ? resumedEditCandidate : null;
     const queued = enqueuePendingSendMessage(
       host,
       effectiveMessage,
@@ -492,6 +543,7 @@ export async function handleSendChat(
       skillWorkshopRevision,
       replyToId,
       resumedEdit?.orderKey,
+      activeRunQueueMode,
     );
     if (!queued) {
       return;
@@ -500,11 +552,19 @@ export async function handleSendChat(
       host,
       submittedSessionKey,
       queued,
-      resumedEdit?.id,
+      resumedEdit
+        ? {
+            id: resumedEdit.id,
+            expected: resumedEdit.source,
+          }
+        : undefined,
     );
-    retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments);
+    if (resumedEdit) {
+      retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments, resumedEdit);
+    }
     const canSendFromMemory =
       !admittedDurably &&
+      (!resumedEdit || !resumedEdit.sourceWasDurable) &&
       // A still-open edit means its stored source outlived the rejected write;
       // sending the replacement from memory would strand the original as a duplicate.
       !activeQueuedMessageEdit(host) &&
@@ -522,6 +582,9 @@ export async function handleSendChat(
     const sendResult = await deliverChatQueueItem(host, queued, {
       previousDraft: cleared.previousDraft,
       previousAttachments: cleared.previousAttachments,
+      ...(!skillWorkshopRevision && directRunActive && followUpMode !== "queue"
+        ? { allowActiveRunSend: true }
+        : {}),
       ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
       ...(pendingSettings ? { pendingSettings } : {}),
       restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
@@ -535,27 +598,9 @@ export async function handleSendChat(
       pending?.sendState === "waiting-idle" &&
       host.sessionKey === submittedSessionKey &&
       visibleSessionMatches(host, submittedSessionKey, pending.agentId) &&
-      (isChatBusy(host) || hasAbortableSessionRun(host));
+      (isChatBusy(host) || hasDirectSessionRun(host));
     if (pendingBusySend) {
       recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
-      // Only an explicit browser override replaces inherited Gateway policy.
-      const followUpMode =
-        opts?.followUpMode ??
-        host.chatFollowUpMode ??
-        normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
-      if (
-        !skillWorkshopRevision &&
-        followUpMode !== "queue" &&
-        host.connected &&
-        hasAbortableSessionRun(host)
-      ) {
-        void sendQueuedChatMessageWithQueueModeLifecycle(
-          host,
-          pending.id,
-          followUpMode,
-          steerSendDependencies,
-        );
-      }
     }
     if (
       sendResult !== "failed" &&

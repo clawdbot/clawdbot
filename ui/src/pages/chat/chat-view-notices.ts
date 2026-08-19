@@ -1,19 +1,19 @@
 import { html, nothing } from "lit";
 import type { SessionPlacementDiskSpace } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
-import type { ApplicationCloudStartupStatus } from "../../app/cloud-session-startup.ts";
+import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { renderCloudStartupStatus } from "./components/chat-working-indicator.ts";
+import { renderPlacementStartupStatus } from "./components/chat-working-indicator.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
-export type ChatCloudStartupNoticeProps = {
-  cloudStartup?: ApplicationCloudStartupStatus | null;
-  onRetryCloudStartup?: () => void;
+export type ChatPlacementStartupNoticeProps = {
+  placementStartup?: ApplicationPlacementStartupStatus | null;
+  onRetrySessionPlacementStartup?: () => void;
 };
 
-type ChatViewNoticesProps = ChatCloudStartupNoticeProps & {
+type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
   diskSpace?: SessionPlacementDiskSpace;
   error?: string | null;
   focusMode?: boolean;
@@ -96,6 +96,6 @@ export function renderChatViewNotices(props: ChatViewNoticesProps) {
           </openclaw-tooltip>
         `
       : nothing}
-    ${renderCloudStartupStatus(props.cloudStartup, props.onRetryCloudStartup)}
+    ${renderPlacementStartupStatus(props.placementStartup, props.onRetrySessionPlacementStartup)}
   `;
 }

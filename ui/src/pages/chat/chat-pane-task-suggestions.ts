@@ -1,14 +1,18 @@
-import type {
-  TaskSuggestion,
-  TaskSuggestionEvent,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
+import {
+  GATEWAY_SERVER_CAPS,
+  type TaskSuggestion,
+  type TaskSuggestionEvent,
+  type TaskSuggestionsAcceptResult,
+  type TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   taskSuggestionAcceptParams,
@@ -26,6 +30,47 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
   protected taskSuggestionsRequestVersion = 0;
   protected taskSuggestionCloudProfiles: Array<{ id: string }> = [];
   protected taskSuggestionCloudProfileGeneration = -1;
+  protected activeTaskSuggestionId: string | undefined;
+  protected taskSuggestionSwapDirection: "next" | "previous" | undefined;
+  protected taskSuggestionSwapGeneration = 0;
+
+  protected setTaskSuggestions(suggestions: TaskSuggestion[]): void {
+    this.taskSuggestions = suggestions;
+    if (!suggestions.some((suggestion) => suggestion.id === this.activeTaskSuggestionId)) {
+      this.activeTaskSuggestionId = suggestions[0]?.id;
+      this.taskSuggestionSwapDirection = undefined;
+    }
+  }
+
+  protected readonly navigateTaskSuggestion = (
+    taskId: string,
+    direction: "next" | "previous",
+  ): void => {
+    const current = this.taskSuggestions.findIndex((suggestion) => suggestion.id === taskId);
+    if (current < 0 || this.taskSuggestions.length < 2) {
+      return;
+    }
+    const offset = direction === "next" ? 1 : -1;
+    const next =
+      this.taskSuggestions[
+        (current + offset + this.taskSuggestions.length) % this.taskSuggestions.length
+      ];
+    if (!next) {
+      return;
+    }
+    this.activeTaskSuggestionId = next.id;
+    this.taskSuggestionSwapDirection = direction;
+    this.taskSuggestionSwapGeneration += 1;
+    this.requestUpdate();
+    void this.updateComplete.then(() => {
+      const activeCard = [...this.querySelectorAll<HTMLElement>(".task-suggestion")].find(
+        (card) => card.dataset.taskId === next.id,
+      );
+      activeCard
+        ?.querySelector<HTMLElement>(`[data-task-${direction === "next" ? "next" : "prev"}]`)
+        ?.focus();
+    });
+  };
 
   protected resetTaskSuggestionCloudProfiles(): void {
     this.taskSuggestionCloudProfiles = [];
@@ -68,13 +113,13 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       !scope ||
       !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list")
     ) {
-      this.taskSuggestions = [];
+      this.setTaskSuggestions([]);
       this.requestUpdate();
       return;
     }
     const sessionKey = scope.state.sessionKey;
     if (parseCatalogSessionKey(sessionKey)) {
-      this.taskSuggestions = [];
+      this.setTaskSuggestions([]);
       this.requestUpdate();
       return;
     }
@@ -90,8 +135,8 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       ) {
         return;
       }
-      this.taskSuggestions = result.suggestions.filter((suggestion) =>
-        this.suggestionMatchesCurrentSession(suggestion),
+      this.setTaskSuggestions(
+        result.suggestions.filter((suggestion) => this.suggestionMatchesCurrentSession(suggestion)),
       );
       this.requestUpdate();
     } catch {
@@ -106,12 +151,12 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       if (!this.suggestionMatchesCurrentSession(event.suggestion)) {
         return;
       }
-      this.taskSuggestions = [
+      this.setTaskSuggestions([
         event.suggestion,
         ...this.taskSuggestions.filter((item) => item.id !== event.suggestion.id),
-      ];
+      ]);
     } else {
-      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== event.taskId);
+      this.setTaskSuggestions(this.taskSuggestions.filter((item) => item.id !== event.taskId));
       this.taskSuggestionBusyIds.delete(event.taskId);
     }
     this.requestUpdate();
@@ -157,6 +202,43 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     }, 2000);
   };
 
+  protected suggestionChatProps(connected: boolean, archived: boolean, multiIdentity: boolean) {
+    const gatewaySnapshot = this.context.gateway.snapshot;
+    const auth = gatewaySnapshot.hello?.auth ?? null;
+    const canWrite = connected && hasOperatorWriteAccess(auth);
+    const canAdmin = connected && hasOperatorAdminAccess(auth);
+    return {
+      taskSuggestions: this.taskSuggestions,
+      activeTaskSuggestionId: this.activeTaskSuggestionId,
+      taskSuggestionSwapDirection: this.taskSuggestionSwapDirection,
+      taskSuggestionSwapGeneration: this.taskSuggestionSwapGeneration,
+      onNavigateTaskSuggestion: this.navigateTaskSuggestion,
+      taskSuggestionBusyIds: this.taskSuggestionBusyIds,
+      sessionSuggestions: multiIdentity ? this.sessionSuggestions : [],
+      sessionSuggestionRole: this.sessionSuggestionRole,
+      sessionSuggestionBusyIds: this.sessionSuggestionBusyIds,
+      sessionSuggestionsArchived: archived,
+      canResolveSessionSuggestions:
+        canWrite &&
+        isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.resolve") === true,
+      onResolveSessionSuggestion: this.resolveCurrentSessionSuggestion.bind(this),
+      canAcceptTaskSuggestions:
+        canAdmin && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.accept") === true,
+      canAcceptTaskSuggestionModes:
+        isGatewayCapabilityAdvertised(
+          gatewaySnapshot,
+          GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
+        ) === true,
+      canDismissTaskSuggestions:
+        canWrite && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.dismiss") === true,
+      taskSuggestionCloudProfiles: this.taskSuggestionCloudProfiles,
+      taskSuggestionCopiedIds: this.taskSuggestionCopiedIds,
+      onCopyTaskSuggestionPrompt: this.copyTaskSuggestionPrompt,
+      onAcceptTaskSuggestion: this.acceptTaskSuggestion,
+      onDismissTaskSuggestion: this.dismissTaskSuggestion,
+    };
+  }
+
   protected async resolveTaskSuggestion(
     suggestion: TaskSuggestion,
     action: "accept" | "dismiss",
@@ -194,7 +276,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       if (!isCurrent()) {
         return;
       }
-      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== suggestion.id);
+      this.setTaskSuggestions(this.taskSuggestions.filter((item) => item.id !== suggestion.id));
       if (acceptedKey && mode !== "session") {
         this.onPaneSessionChange?.(this.paneId, acceptedKey);
       }

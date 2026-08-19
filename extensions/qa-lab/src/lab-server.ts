@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import {
   closeQaHttpServer,
+  dispatchQaHttpRequest,
   handleQaBusRequest,
   isQaMalformedJsonBodyError,
   readQaJsonBody,
@@ -449,7 +450,7 @@ export async function startQaLabServer(
   }
 
   const server = createServer((req, res) => {
-    void (async () => {
+    dispatchQaHttpRequest(res, async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
       if (await handleQaBusRequest({ req, res, state })) {
@@ -933,7 +934,7 @@ export async function startQaLabServer(
       } catch (error) {
         writeQaLabServerError(res, error);
       }
-    })();
+    });
   });
 
   const releaseCaptureStore = () => {

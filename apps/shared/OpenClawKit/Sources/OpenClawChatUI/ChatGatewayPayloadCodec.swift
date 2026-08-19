@@ -162,6 +162,13 @@ public enum OpenClawChatGatewayPayloadCodec {
                       as: OpenClawAgentEventPayload.self)
             else { return nil }
             return .agent(agent)
+        case "progressCard.changed":
+            guard let payload = frame.payload,
+                  let event = try? GatewayPayloadDecoding.decode(
+                      payload,
+                      as: ProgressCardChangedEvent.self)
+            else { return nil }
+            return .progressCardChanged(event)
         default:
             return self.secondaryEvent(from: frame)
         }

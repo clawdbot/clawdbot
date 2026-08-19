@@ -2,8 +2,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { adoptRuntimeContextEngineRegistrations } from "../context-engine/registry.js";
 import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -17,31 +19,6 @@ import {
   type AgentHarnessPluginSelection,
 } from "./harness/runtime-plugin-load-plan.js";
 
-type StartupScopedPluginSnapshot = NonNullable<
-  ReturnType<typeof getCurrentPluginMetadataSnapshot>
-> & {
-  startup?: {
-    pluginIds?: readonly unknown[];
-  };
-};
-
-function resolveStartupPluginIdsFromCurrentSnapshot(params: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}): string[] | undefined {
-  const snapshot = getCurrentPluginMetadataSnapshot({
-    config: params.config,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-  }) as StartupScopedPluginSnapshot | undefined;
-  const pluginIds = snapshot?.startup?.pluginIds;
-  if (!Array.isArray(pluginIds)) {
-    return undefined;
-  }
-  return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
-}
-
 type AgentRuntimePluginRegistryParams = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -50,10 +27,12 @@ type AgentRuntimePluginRegistryParams = {
   /** Explicit base scope for hosts without a Gateway startup registry. */
   basePluginIds?: readonly string[];
   selections?: readonly AgentHarnessPluginSelection[];
+  /** Lifecycle-selected metadata. Omission selects one standalone cold generation. */
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistryParams) {
-  const workspaceDir =
+  const requestedWorkspaceDir =
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
       : undefined;
@@ -63,7 +42,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
         config: params.config,
         activationSourceConfig: params.config,
         ...(params.env ? { env: params.env } : {}),
-        workspaceDir,
+        workspaceDir: requestedWorkspaceDir,
         onlyPluginIds: [],
         runtimeOptions: params.allowGatewaySubagentBinding
           ? { allowGatewaySubagentBinding: true }
@@ -71,18 +50,30 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
       },
     };
   }
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    loadPluginMetadataSnapshot({
+      config: params.config ?? {},
+      env: params.env ?? process.env,
+      ...(requestedWorkspaceDir ? { workspaceDir: requestedWorkspaceDir } : {}),
+    });
+  const workspaceDir = metadataSnapshot.workspaceDir ?? requestedWorkspaceDir;
+  const metadataLoadOptions = {
+    ...(metadataSnapshot.discovery ? { discovery: metadataSnapshot.discovery } : {}),
+    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
+    manifestRegistry: metadataSnapshot.manifestRegistry,
+    ...(workspaceDir ? { workspaceDir } : {}),
+  };
   const requestPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const startupPluginIds =
     params.basePluginIds !== undefined
       ? [...params.basePluginIds]
       : requestPluginRegistry
         ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
-        : resolveStartupPluginIdsFromCurrentSnapshot({
-            config: params.config,
-            env: params.env,
-            workspaceDir,
-          });
-  const plan = resolveAgentRuntimePluginLoadPlan({
+        : metadataSnapshot.pluginIds
+          ? [...metadataSnapshot.pluginIds]
+          : undefined;
+  const planParams = {
     config: params.config,
     workspaceDir: workspaceDir ?? process.cwd(),
     ...(startupPluginIds === undefined ? {} : { basePluginIds: startupPluginIds }),
@@ -94,13 +85,15 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
       })),
       ...(params.selections ?? []),
     ],
-  });
+    metadataSnapshot,
+  };
+  const plan = resolveAgentRuntimePluginLoadPlan(planParams);
   return {
     loadOptions: {
       config: plan.config,
       ...(plan.config ? { activationSourceConfig: plan.config } : {}),
       ...(params.env ? { env: params.env } : {}),
-      workspaceDir,
+      ...metadataLoadOptions,
       ...(startupPluginIds === undefined || plan.pluginIds === undefined
         ? {}
         : { onlyPluginIds: plan.pluginIds }),

@@ -176,6 +176,8 @@ export type SkillProposalManifestEntry = {
   scanState: SkillProposalScannerState;
   /** The proposal remains bound to an earlier workspace for this agent. */
   workspaceMismatch?: true;
+  /** The durable proposal body is unavailable; metadata remains inspectable in list output. */
+  degradedState?: "draft-missing";
 };
 
 export type SkillProposalManifest = {

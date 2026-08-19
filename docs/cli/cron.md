@@ -18,6 +18,11 @@ Run `openclaw automations --help` for the full command surface. See [Automations
 All automation mutations (`add`/`create`, `update`/`edit`, `remove`, `run`) require `operator.admin`. Command-payload runs execute directly in the Gateway process, not as an agent `tools.exec` tool call; `tools.exec.*` and exec approvals still govern model-visible exec tools.
 </Note>
 
+Every automation subcommand accepts the shared Gateway connection options. Use
+`--port <port>` for a Gateway on a non-default local port, or `--url <url>` for
+an explicit WebSocket URL; do not combine them. Connection options such as
+`--port`, `--url`, and `--token` may appear before or after the subcommand.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:

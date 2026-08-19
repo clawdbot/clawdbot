@@ -8,6 +8,7 @@ import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
 import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
+import { SessionOwnerSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
@@ -27,9 +28,13 @@ export {
 } from "./sessions-patch.js";
 export {
   SessionCreatedActorSchema,
+  SessionPermissionModeSchema,
+  SessionOwnerSchema,
   SessionRowSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionOwner,
+  type SessionPermissionMode,
   type SessionRow,
   type SessionRunStatus,
   type SessionToolOverrides,
@@ -399,8 +404,12 @@ export const SessionsListParamsSchema = closedObject({
   label: Type.Optional(SessionLabelString),
   /** Limit rows to sessions with an explicitly stored Control UI face preference. */
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
-  /** Filter rows by their permanent creator identity. */
+  /** Filter rows by their immutable creator provenance. */
   creatorId: Type.Optional(NonEmptyString),
+  /** Filter rows by their current assignable owner identity. */
+  ownerId: Type.Optional(NonEmptyString),
+  /** Limit rows to sessions owned by or previously prompted by the authenticated viewer. */
+  involvingMe: Type.Optional(Type.Boolean()),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
@@ -558,6 +567,22 @@ export const SessionsDeleteParamsSchema = closedObject({
    * operator.admin.
    */
   archivedOnly: Type.Optional(Type.Boolean()),
+});
+
+/** Reassigns mutable session responsibility without changing provenance or sharing authority. */
+export const SessionsAssignOwnerParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  owner: closedObject({
+    type: Type.Union([Type.Literal("agent"), Type.Literal("human")]),
+    id: NonEmptyString,
+  }),
+});
+
+export const SessionsAssignOwnerResultSchema = closedObject({
+  ok: Type.Literal(true),
+  key: NonEmptyString,
+  owner: SessionOwnerSchema,
 });
 
 /** Lists the gateway-owned custom session group catalog (names + order). */
@@ -858,6 +883,8 @@ export type SessionsPluginPatchParams = Static<typeof SessionsPluginPatchParamsS
 export type SessionsPluginPatchResult = Static<typeof SessionsPluginPatchResultSchema>;
 export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
 export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
+export type SessionsAssignOwnerParams = Static<typeof SessionsAssignOwnerParamsSchema>;
+export type SessionsAssignOwnerResult = Static<typeof SessionsAssignOwnerResultSchema>;
 export type SessionGroup = Static<typeof SessionGroupSchema>;
 export type SessionGroupDefaults = Static<typeof SessionGroupDefaultsSchema>;
 export type SessionsGroupsListParams = Static<typeof SessionsGroupsListParamsSchema>;

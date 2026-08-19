@@ -35,8 +35,13 @@ import {
 } from "./run-receipts.js";
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
-import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
-import { emit } from "./state.js";
+import type {
+  CronRunMode,
+  CronServiceState,
+  CronWakeMode,
+  DeferredCronNotifications,
+} from "./state.js";
+import { emit, isImmediateCronRunMode } from "./state.js";
 import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
@@ -66,7 +71,7 @@ function applyManualRunOutcome(params: {
   startedAt: number;
   endedAt: number;
   triggerSkipped: boolean;
-  mode?: "due" | "force";
+  mode?: CronRunMode;
   deferredNotifications: DeferredCronNotifications;
 }): boolean {
   const scheduleOwnership = resolveCronRunScheduleOwnership({
@@ -82,8 +87,8 @@ function applyManualRunOutcome(params: {
   const scheduleMode =
     scheduleOwnership === "stale"
       ? "stale-preserve"
-      : params.mode === "force"
-        ? "force-preserve"
+      : isImmediateCronRunMode(params.mode)
+        ? "immediate-preserve"
         : "advance";
   if (params.triggerSkipped) {
     applyTriggerNoFireResult(
@@ -107,7 +112,7 @@ function applyManualRunOutcome(params: {
     params.job,
     { ...params.coreResult, startedAt: params.startedAt, endedAt: params.endedAt },
     {
-      scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
+      scheduleMode: scheduleMode === "immediate-preserve" ? "preserve" : "advance",
       scheduleOwnership,
       scheduleOwnershipAtMs: params.prepared.scheduleOwnershipAtMs,
       deferredNotifications: params.deferredNotifications,
@@ -132,7 +137,7 @@ function applyManualRunOutcome(params: {
 async function finishPreparedManualRun(
   state: CronServiceState,
   prepared: ActivatedManualRun,
-  mode?: "due" | "force",
+  mode?: CronRunMode,
 ): Promise<void> {
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
@@ -387,7 +392,7 @@ async function finishPreparedManualRun(
         publishCronRuntimeRows(state);
         const maintenance = recomputeUnownedCronSchedules(state, {
           recomputeExpired: true,
-          ...(mode === "force" ? { preserveExpiredPacedNextRunJobId: jobId } : {}),
+          ...(isImmediateCronRunMode(mode) ? { preserveExpiredPacedNextRunJobId: jobId } : {}),
         });
         runPostPersistCronNotifications(state, maintenance.notifications);
         applyCronRuntimeRowsToState(state, maintenance.jobs);
@@ -452,7 +457,7 @@ async function finishPreparedManualRun(
 export async function run(
   state: CronServiceState,
   id: string,
-  mode?: "due" | "force",
+  mode?: CronRunMode,
   opts?: ManualRunOptions,
 ) {
   const prepared = await prepareManualRun(state, id, mode, opts);
@@ -495,7 +500,7 @@ export async function run(
 export async function enqueueRun(
   state: CronServiceState,
   id: string,
-  mode?: "due" | "force",
+  mode?: CronRunMode,
   opts?: { commitGuard?: () => void },
 ) {
   const disposition = await inspectManualRunDisposition(state, id, mode);

@@ -1,5 +1,4 @@
 // Canonical MCP OAuth session state. Legacy JSON import belongs to doctor only.
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import {
@@ -17,7 +16,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { ensureMcpOAuthPendingSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -25,7 +24,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 type McpOAuthDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -245,37 +243,33 @@ export function readMcpOAuthStore(storeKey: string): McpOAuthStore {
 
 /** Read status state without creating or repairing the shared database. */
 export function readMcpOAuthStoreReadOnly(storeKey: string): McpOAuthStore {
-  const databasePath = resolveOpenClawStateSqlitePath();
-  if (!fs.existsSync(databasePath)) {
-    return {};
-  }
-  return withOpenClawStateDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "mcp_oauth_stores")) {
-      return {};
-    }
-    return readFromDatabase(db, storeKey);
-  });
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "mcp_oauth_stores")) {
+        return {};
+      }
+      return readFromDatabase(db, storeKey);
+    }) ?? {}
+  );
 }
 
 /** List canonical store keys matching one server/principal prefix without creating state. */
 export function listMcpOAuthStoreKeysByPrefix(prefix: string): string[] {
-  const databasePath = resolveOpenClawStateSqlitePath();
-  if (!fs.existsSync(databasePath)) {
-    return [];
-  }
-  return withOpenClawStateDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "mcp_oauth_stores")) {
-      return [];
-    }
-    const rows = executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<McpOAuthDatabase>(db)
-        .selectFrom("mcp_oauth_stores")
-        .select("store_key")
-        .orderBy("store_key", "asc"),
-    ).rows;
-    return rows.map((row) => row.store_key).filter((storeKey) => storeKey.startsWith(prefix));
-  });
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "mcp_oauth_stores")) {
+        return [];
+      }
+      const rows = executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<McpOAuthDatabase>(db)
+          .selectFrom("mcp_oauth_stores")
+          .select("store_key")
+          .orderBy("store_key", "asc"),
+      ).rows;
+      return rows.map((row) => row.store_key).filter((storeKey) => storeKey.startsWith(prefix));
+    }) ?? []
+  );
 }
 
 function ensurePendingSchema(database: DatabaseSync): void {
@@ -315,11 +309,7 @@ const MCP_OAUTH_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
 export function readMcpOAuthPendingAuthorization(state: string): string | undefined {
   // Public unauthenticated callback path: must stay read-only. Table creation
   // belongs to start-authorization; an unknown state must not write anything.
-  const databasePath = resolveOpenClawStateSqlitePath();
-  if (!fs.existsSync(databasePath)) {
-    return undefined;
-  }
-  return withOpenClawStateDatabaseReadOnly(({ db }) => {
+  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
     if (!tableExists(db, "mcp_oauth_pending_authorizations")) {
       return undefined;
     }

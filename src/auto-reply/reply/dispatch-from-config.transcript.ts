@@ -8,8 +8,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
-import type { DispatcherOutcomeCountsView, ReplyDispatcher } from "./reply-dispatcher.types.js";
-import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 type SourceReplyTranscriptMirror = NonNullable<
   NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"]
@@ -61,17 +61,6 @@ export async function mirrorDeliveredReplyToTranscript(params: {
       `dispatch-from-config: transcript mirror failed after delivery: ${formatErrorMessage(error)}`,
     );
   }
-}
-
-/** Reads final outcome counters from dispatchers that expose them. */
-export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCountsView): {
-  cancelled: number;
-  failed: number;
-} {
-  return {
-    cancelled: dispatcher.getCancelledCounts?.().final ?? 0,
-    failed: readDispatcherFailedCounts(dispatcher).final,
-  };
 }
 
 export function transcriptMirrorForDeliveredPayload(
@@ -144,17 +133,15 @@ export function captureDeliveredTranscriptMirror(params: {
 }
 
 export async function mirrorTranscriptAfterDispatcherSettled(params: {
-  dispatcher: ReplyDispatcher;
-  before: { cancelled: number; failed: number };
+  outcome: Promise<ReplyDispatchDeliveryOutcome>;
   metadata: () => TranscriptMirror | undefined;
   cfg: OpenClawConfig;
 }): Promise<void> {
-  const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
-  const metadata = params.metadata();
-  if (!metadata) {
+  if ((await params.outcome) !== "delivered") {
     return;
   }
-  if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
+  const metadata = params.metadata();
+  if (!metadata) {
     return;
   }
   await mirrorDeliveredReplyToTranscript({

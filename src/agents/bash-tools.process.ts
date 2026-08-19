@@ -665,6 +665,8 @@ export function createProcessTool(
             );
           }
           resetPollRetrySuggestion(params.sessionId);
+          // The kill was performed; "failed" here would flag a successful
+          // action as a tool error and invite the model to retry it.
           return {
             content: [
               {
@@ -673,7 +675,7 @@ export function createProcessTool(
               },
             ],
             details: {
-              status: "failed",
+              status: "completed",
               name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
             },
           };
@@ -716,6 +718,8 @@ export function createProcessTool(
             scopedSession.backgrounded = false;
             deleteSession(params.sessionId);
             resetPollRetrySuggestion(params.sessionId);
+            // Removal succeeded (termination requested + registry row dropped);
+            // match the finished-session remove branch's success shape.
             return {
               content: [
                 {
@@ -724,7 +728,7 @@ export function createProcessTool(
                 },
               ],
               details: {
-                status: "failed",
+                status: "completed",
                 name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
               },
             };

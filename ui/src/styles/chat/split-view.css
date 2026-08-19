@@ -694,6 +694,7 @@ openclaw-chat-pane {
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__gateway-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__nav-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__palette-open,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__participants,
   .chat-pane__header:has(.chat-pane__close-pane) openclaw-session-owner-chip {
     display: none;
   }

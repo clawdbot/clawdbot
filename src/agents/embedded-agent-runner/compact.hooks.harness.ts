@@ -365,9 +365,6 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       transformSystemPrompt: vi.fn((context: { systemPrompt: string }) => context.systemPrompt),
     },
     tools: {
-      preparedPlanning: {
-        loadMetadataSnapshot: () => ({}),
-      },
       normalize: vi.fn((tools) => tools),
       logDiagnostics: vi.fn(),
     },
@@ -986,9 +983,16 @@ export async function loadCompactHooksHarness(): Promise<{
     applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
   }));
 
-  vi.doMock("../../skills/loading/workspace-skill-loader.js", () => ({
-    loadWorkspaceSkills: vi.fn(() => []),
-  }));
+  vi.doMock("../../skills/loading/workspace-skill-loader.js", async () => {
+    const actual = await vi.importActual<
+      typeof import("../../skills/loading/workspace-skill-loader.js")
+    >("../../skills/loading/workspace-skill-loader.js");
+    return {
+      loadMergedWorkspaceSkills: vi.fn(() => []),
+      loadWorkspaceSkills: vi.fn(() => []),
+      normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
+    };
+  });
 
   vi.doMock("../../skills/loading/workspace-skill-prompt.js", () => ({
     resolveSkillsPrompt: vi.fn(() => undefined),

@@ -1,5 +1,6 @@
 // Typed terminal RPCs plus per-session event routing; DOM-free for focused tests.
 
+import type { TerminalOpenParams } from "@openclaw/gateway-protocol";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
@@ -24,12 +25,6 @@ type TerminalOpenResult = {
   cwd: string;
   confined: boolean;
   title?: string;
-};
-
-type TerminalCatalogReference = {
-  catalogId: string;
-  hostId: string;
-  threadId: string;
 };
 
 type TerminalAttachResult = TerminalOpenResult & {
@@ -220,10 +215,7 @@ export class TerminalConnection {
   }
 
   /** Opens a session and registers its output/exit sinks before returning. */
-  async open(
-    params: { agentId?: string; cols: number; rows: number; catalog?: TerminalCatalogReference },
-    sink: SessionSink,
-  ): Promise<TerminalOpenResult> {
+  async open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>

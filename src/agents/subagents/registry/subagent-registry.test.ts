@@ -4417,7 +4417,7 @@ describe("subagent registry seam flow", () => {
           runId,
           childSessionKey,
           task: "cancel during result capture",
-          expectsCompletionMessage: true,
+          expectsCompletionMessage: false,
           createdAt: startedAt,
           startedAt,
         }),
@@ -5674,7 +5674,11 @@ describe("subagent registry seam flow", () => {
     lifecycleHandler?.({
       runId: "run-timeout-then-ok",
       stream: "lifecycle",
-      data: { phase: "end", endedAt: 1_250 },
+      data: {
+        phase: "end",
+        endedAt: 1_250,
+        terminalReply: { disposition: "visible", text: "Finished successfully." },
+      },
     });
 
     await waitForFast(() => {
@@ -5705,6 +5709,7 @@ describe("subagent registry seam flow", () => {
       status: "ok",
       startedAt: endedAt - 500,
       endedAt,
+      terminalReply: { disposition: "visible", text: "final completion reply" },
     });
 
     mod.registerSubagentRun({

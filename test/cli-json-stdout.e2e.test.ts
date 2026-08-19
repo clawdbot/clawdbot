@@ -5,7 +5,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 
-function runSourceCli(tempHome: string, args: string[], envOverrides: NodeJS.ProcessEnv = {}) {
+function runBuiltCli(tempHome: string, args: string[], envOverrides: NodeJS.ProcessEnv = {}) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: tempHome,
@@ -18,8 +18,8 @@ function runSourceCli(tempHome: string, args: string[], envOverrides: NodeJS.Pro
   delete env.VITEST;
   Object.assign(env, envOverrides);
 
-  const entry = path.resolve(process.cwd(), "src/entry.ts");
-  return spawnSync(process.execPath, ["--import", "tsx", entry, ...args], {
+  const entry = path.resolve(process.cwd(), "openclaw.mjs");
+  return spawnSync(process.execPath, [entry, ...args], {
     cwd: process.cwd(),
     env,
     encoding: "utf8",
@@ -68,7 +68,7 @@ describe("cli json stdout contract", () => {
           "utf8",
         );
 
-        const result = runSourceCli(tempHome, testCase.args, {
+        const result = runBuiltCli(tempHome, testCase.args, {
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_STATE_DIR: stateDir,
           ...testCase.overrides,
@@ -99,7 +99,7 @@ describe("cli json stdout contract", () => {
         const configPath = path.join(tempHome, "read-only-openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf8");
 
-        const result = runSourceCli(
+        const result = runBuiltCli(
           tempHome,
           ["config", "get", "gateway.__proto__.token", "--json"],
           {
@@ -145,7 +145,7 @@ describe("cli json stdout contract", () => {
           "utf8",
         );
 
-        const result = runSourceCli(tempHome, ["config", "get", "gateway.port", "--json"], {
+        const result = runBuiltCli(tempHome, ["config", "get", "gateway.port", "--json"], {
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_STATE_DIR: stateDir,
           ...testCase.overrides,
@@ -180,7 +180,7 @@ describe("cli json stdout contract", () => {
     await withTempHome(
       async (tempHome) => {
         const inheritedStateDir = path.join(tempHome, inherited.inheritedStateName);
-        const result = runSourceCli(tempHome, ["--profile", "work", "config", "file"], {
+        const result = runBuiltCli(tempHome, ["--profile", "work", "config", "file"], {
           OPENCLAW_PROFILE: inherited.inheritedProfile,
           OPENCLAW_STATE_DIR: inheritedStateDir,
           OPENCLAW_CONFIG_PATH: path.join(inheritedStateDir, "openclaw.json"),
@@ -207,7 +207,7 @@ describe("cli json stdout contract", () => {
         await fs.mkdir(scratchStateDir, { recursive: true });
         await fs.writeFile(approvalsPath, approvals, "utf8");
 
-        const result = runSourceCli(tempHome, ["config", "file"], {
+        const result = runBuiltCli(tempHome, ["config", "file"], {
           OPENCLAW_STATE_DIR: scratchStateDir,
         });
 
@@ -235,7 +235,7 @@ describe("cli json stdout contract", () => {
         await fs.mkdir(legacyDir, { recursive: true });
         await fs.writeFile(path.join(legacyDir, "clawdbot.json"), "{}", "utf8");
 
-        const result = runSourceCli(tempHome, ["update", "status", "--json", "--timeout", "1"]);
+        const result = runBuiltCli(tempHome, ["update", "status", "--json", "--timeout", "1"]);
 
         expect(result.status).toBe(0);
         const stdout = result.stdout.trim();
@@ -260,7 +260,7 @@ describe("cli json stdout contract", () => {
   it("rejects an explicitly empty update status timeout before emitting JSON", async () => {
     await withTempHome(
       async (tempHome) => {
-        const result = runSourceCli(tempHome, ["update", "status", "--json", "--timeout", ""]);
+        const result = runBuiltCli(tempHome, ["update", "status", "--json", "--timeout", ""]);
 
         expect(result.status, result.stderr).toBe(1);
         expect(JSON.parse(result.stdout)).toEqual({
@@ -280,7 +280,7 @@ describe("cli json stdout contract", () => {
     await withTempHome(
       async (tempHome) => {
         const missingArchive = path.join(tempHome, "missing-backup.tar.gz");
-        const result = runSourceCli(tempHome, ["backup", "verify", missingArchive, "--json"]);
+        const result = runBuiltCli(tempHome, ["backup", "verify", missingArchive, "--json"]);
 
         expect(result.status).toBe(1);
         expect(JSON.parse(result.stdout)).toEqual({
@@ -298,7 +298,7 @@ describe("cli json stdout contract", () => {
   it("keeps Commander parse failures machine-readable in JSON mode", async () => {
     await withTempHome(
       async (tempHome) => {
-        const result = runSourceCli(tempHome, [
+        const result = runBuiltCli(tempHome, [
           "config",
           "get",
           "gateway.port",
@@ -353,7 +353,7 @@ describe("cli json stdout contract", () => {
   ])("renders $name as actionable guidance", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
-        const result = runSourceCli(tempHome, testCase.args);
+        const result = runBuiltCli(tempHome, testCase.args);
 
         expect(result.status).toBe(1);
         expect(result.stdout).toBe("");
@@ -389,7 +389,7 @@ describe("cli json stdout contract", () => {
   ])("reports $name once with structured JSON guidance", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
-        const result = runSourceCli(tempHome, testCase.args);
+        const result = runBuiltCli(tempHome, testCase.args);
 
         expect(result.status).toBe(1);
         const payload = JSON.parse(result.stdout) as {
@@ -419,7 +419,7 @@ describe("cli json stdout contract", () => {
   it("keeps parse-error JSON free of terminal controls when color is forced", async () => {
     await withTempHome(
       async (tempHome) => {
-        const result = runSourceCli(tempHome, ["sessions", "lst", "--json"], {
+        const result = runBuiltCli(tempHome, ["sessions", "lst", "--json"], {
           FORCE_COLOR: "1",
         });
 
@@ -445,8 +445,8 @@ describe("cli json stdout contract", () => {
         await fs.writeFile(configPath, '{"gateway":{"port":28789}}\n', "utf8");
         const env = { OPENCLAW_CONFIG_PATH: configPath };
 
-        const getResult = runSourceCli(tempHome, ["config", "get", "gateway.port", "--json"], env);
-        const validateResult = runSourceCli(tempHome, ["config", "validate", "--json"], env);
+        const getResult = runBuiltCli(tempHome, ["config", "get", "gateway.port", "--json"], env);
+        const validateResult = runBuiltCli(tempHome, ["config", "validate", "--json"], env);
 
         expect(getResult.status, getResult.stderr).toBe(0);
         expect(getResult.stdout).toBe("28789\n");
@@ -462,7 +462,7 @@ describe("cli json stdout contract", () => {
   it("keeps `config schema` stdout parseable at debug log level", async () => {
     await withTempHome(
       async (tempHome) => {
-        const result = runSourceCli(tempHome, ["config", "schema"], {
+        const result = runBuiltCli(tempHome, ["config", "schema"], {
           OPENCLAW_LOG_LEVEL: "debug",
         });
 
@@ -483,7 +483,7 @@ describe("cli json stdout contract", () => {
       async (tempHome) => {
         const configPath = path.join(tempHome, "openclaw.json");
         await fs.writeFile(configPath, "{}", "utf8");
-        const result = runSourceCli(tempHome, ["config", "validate", "--json"], {
+        const result = runBuiltCli(tempHome, ["config", "validate", "--json"], {
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_LOG_LEVEL: "debug",
         });
@@ -522,7 +522,7 @@ describe("cli json stdout contract", () => {
           "utf8",
         );
 
-        const result = runSourceCli(
+        const result = runBuiltCli(
           tempHome,
           [
             "doctor",

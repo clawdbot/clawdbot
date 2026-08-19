@@ -57,6 +57,8 @@ export const SessionLifecycleProtocolSchemas = {
   SessionsPluginPatchResult: sessions.SessionsPluginPatchResultSchema,
   SessionsResetParams: sessions.SessionsResetParamsSchema,
   SessionsDeleteParams: sessions.SessionsDeleteParamsSchema,
+  SessionsAssignOwnerParams: sessions.SessionsAssignOwnerParamsSchema,
+  SessionsAssignOwnerResult: sessions.SessionsAssignOwnerResultSchema,
   SessionGroup: sessions.SessionGroupSchema,
   SessionGroupDefaults: sessions.SessionGroupDefaultsSchema,
   SessionsGroupsListParams: sessions.SessionsGroupsListParamsSchema,

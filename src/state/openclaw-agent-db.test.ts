@@ -4098,6 +4098,28 @@ describe("openclaw agent database", () => {
     });
   });
 
+  it.each([null, "", "   "])(
+    "treats schema metadata with invalid agent owner %j as unreadable",
+    (agentId) => {
+      const stateDir = createTempStateDir();
+      const database = openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      const databasePath = database.path;
+      closeOpenClawAgentDatabasesForTest();
+      const { DatabaseSync } = requireNodeSqlite();
+      const raw = new DatabaseSync(databasePath);
+      try {
+        raw.prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'").run(agentId);
+      } finally {
+        raw.close();
+      }
+
+      expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({ status: "unreadable" });
+    },
+  );
+
   it("migrates compact v1 session tables before applying normalized indexes", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(

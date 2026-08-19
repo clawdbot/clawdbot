@@ -161,6 +161,20 @@ describe("Browser node proxy nested watchdogs", () => {
     );
   });
 
+  it("names the selected node and host-status recovery for an invalid proxy envelope", async () => {
+    runtimeMocks.callGatewayTool.mockResolvedValueOnce({
+      payload: {},
+    } as unknown as BrowserNodeResponse);
+    const proxy = createBrowserNodeProxyRequest({
+      nodeTarget: { nodeId: "node-1", label: "Studio Node" },
+      allowAutomaticHostFallback: false,
+    });
+
+    await expect(proxy({ method: "GET", path: "/snapshot" })).rejects.toThrow(
+      /Studio Node.*action=status.*target="host"/i,
+    );
+  });
+
   it("sends Gateway-owned upload bytes without node-facing source paths", async () => {
     const originalBody = {
       paths: ["/tmp/openclaw/uploads/report.txt"],

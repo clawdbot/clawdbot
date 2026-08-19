@@ -163,18 +163,14 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
 });
 
 describe("npm lifecycle policy preflight", () => {
-  it.each([
-    { version: "11.13.0", message: "Upgrade the owning npm to 11.16" },
-    { version: "11.15.9", message: "Upgrade the owning npm to 11.16" },
-    { version: null, message: "Unable to determine the owning npm version" },
-  ])("stops before mutation for npm $version", async ({ version, message }) => {
+  it("stops before mutation when the owning npm version is unknown", async () => {
     const runStep = vi.fn();
     const runCommand = vi.fn<CommandRunner>();
     const installTarget = createNpmTarget("/tmp/npm-policy-test/lib/node_modules");
     installTarget.npmOwner = {
-      version,
-      lifecyclePolicy: version ? "unsupported-transition" : null,
-      ...(version ? {} : { probeError: "version probe failed" }),
+      version: null,
+      lifecyclePolicy: null,
+      probeError: "version probe failed",
     };
 
     const result = await runGlobalPackageUpdateSteps({
@@ -187,7 +183,7 @@ describe("npm lifecycle policy preflight", () => {
     });
 
     expect(runCommand).not.toHaveBeenCalled();
-    expect(result.failedStep?.stderrTail).toContain(message);
+    expect(result.failedStep?.stderrTail).toContain("Unable to determine the owning npm version");
     expect(runStep).not.toHaveBeenCalled();
   });
 });

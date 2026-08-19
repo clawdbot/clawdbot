@@ -11,6 +11,7 @@ import {
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
 } from "../index.js";
+import { WorkerSlotSummarySchema } from "./environments.js";
 
 const workerStates = [
   "requested",
@@ -150,6 +151,31 @@ describe("worker environment protocol schemas", () => {
     ).toBe(false);
   });
 
+  it("accepts only bounded closed worker slot summaries", () => {
+    const slots = { total: 2, available: 1 };
+    expect(Value.Check(WorkerSlotSummarySchema, slots)).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: slots,
+      }),
+    ).toBe(true);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 0, available: 0 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 3 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 1_025 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { ...slots, busy: 1 })).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: { total: 2, available: 3 },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
     const node = {
       id: "node:build-mac",
@@ -207,7 +233,8 @@ describe("worker environment protocol schemas", () => {
               {
                 id: "standard",
                 label: "Standard",
-                description: "Cheap smoke checks and small repos",
+                cpu: 32,
+                memoryGb: 64,
                 default: true,
               },
             ],
@@ -234,7 +261,7 @@ describe("worker environment protocol schemas", () => {
           {
             id: "aws",
             providerId: "crabbox",
-            machines: [{ id: "standard", label: "Standard", cpu: 32 }],
+            machines: [{ id: "standard", label: "Standard", cpu: 0 }],
           },
         ],
       }),

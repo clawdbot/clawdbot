@@ -318,13 +318,25 @@ describe("AppSidebar session attention", () => {
       JSON.stringify(["ungrouped"]),
     );
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [agentAttentionRow()]);
+    setRows(sessionsHarness, [
+      agentAttentionRow(),
+      {
+        key: "agent:main:peer",
+        kind: "direct",
+        updatedAt: 1,
+        worktree: { id: "peer", branch: "main", repoRoot: "/repo" },
+      },
+    ]);
     const { sidebar } = await mountSidebar(
       createGateway({} as GatewayBrowserClient),
       sessionsHarness.sessions,
     );
 
     const section = sidebar.querySelector('[data-session-section="ungrouped"]');
+    expect(sidebar.querySelector('[data-session-section="work"]')).not.toBeNull();
+    expect(
+      section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-expanded"),
+    ).toBe("false");
     expect(section?.querySelector(".sidebar-session-group-attention")).not.toBeNull();
     expect(section?.querySelector(".sidebar-recent-session")).toBeNull();
   });
@@ -340,6 +352,12 @@ describe("AppSidebar session attention", () => {
       const sessionsHarness = createSessionsHarness("main", [parentKey]);
       setRows(sessionsHarness, [
         { key: parentKey, kind: "direct", updatedAt: 1, childSessions: [childKey] },
+        {
+          key: "agent:main:peer",
+          kind: "direct",
+          updatedAt: 0,
+          worktree: { id: "peer", branch: "main", repoRoot: "/repo" },
+        },
       ]);
       const approval = {
         id: "approval-child",
@@ -375,6 +393,7 @@ describe("AppSidebar session attention", () => {
         ),
       ).not.toBeNull();
       expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
+      expect(sidebar.querySelector('[data-session-section="work"]')).not.toBeNull();
       sidebar.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
       await sidebar.updateComplete;
       expect(

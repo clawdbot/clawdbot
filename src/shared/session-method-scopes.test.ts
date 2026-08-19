@@ -34,6 +34,21 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     ).toBe("operator.write");
   });
 
+  it.each(["read-only", "guarded", "workspace"])(
+    "keeps sessions.create permission mode %s write-scoped",
+    (permissionMode) => {
+      expect(
+        resolveDynamicSessionMutationRequiredScope("sessions.create", { permissionMode }),
+      ).toBe("operator.write");
+    },
+  );
+
+  it("requires admin to create a full-access session", () => {
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.create", { permissionMode: "full" }),
+    ).toBe("operator.admin");
+  });
+
   it.each([
     { name: "model set", patch: { model: "openai/gpt-5.6-luna" } },
     { name: "model reset", patch: { model: null } },
@@ -55,6 +70,33 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
         ...patch,
       }),
     ).toBe("operator.write");
+  });
+
+  it.each(["read-only", "guarded", "workspace"])(
+    "keeps sessions.patch permission mode %s write-scoped",
+    (permissionMode) => {
+      expect(
+        resolveDynamicSessionMutationRequiredScope("sessions.patch", {
+          key: "agent:main:thread",
+          permissionMode,
+        }),
+      ).toBe("operator.write");
+    },
+  );
+
+  it("requires admin to patch a session to full access", () => {
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.patch", {
+        key: "agent:main:thread",
+        permissionMode: "full",
+      }),
+    ).toBe("operator.admin");
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
+        targets: [{ key: "agent:main:thread" }],
+        patch: { permissionMode: "full" },
+      }),
+    ).toBe("operator.admin");
   });
 
   it.each([

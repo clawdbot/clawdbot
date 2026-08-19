@@ -495,7 +495,8 @@ describe("discordOutbound", () => {
       expectedText: "spoken answer",
     },
   ])("falls back to $name when audioAsVoice delivery fails", async ({ payload, expectedText }) => {
-    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
+    const voiceError = new Error("ffmpeg unavailable");
+    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(voiceError);
 
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
@@ -520,10 +521,15 @@ describe("discordOutbound", () => {
       messageId: "msg-1",
       target: { kind: "channel", id: "ch-1" },
     });
+    expect(outboundWarnSpy).toHaveBeenCalledWith(
+      "discord voice send failed; continuing without voice",
+      { error: voiceError },
+    );
   });
 
   it("does not duplicate already-delivered TTS supplement text when audioAsVoice delivery fails", async () => {
-    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
+    const voiceError = new Error("ffmpeg unavailable");
+    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(voiceError);
 
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
@@ -553,6 +559,10 @@ describe("discordOutbound", () => {
         parts: [],
       },
     });
+    expect(outboundWarnSpy).toHaveBeenCalledWith(
+      "discord voice send failed; continuing without voice",
+      { error: voiceError },
+    );
   });
 
   it("does not treat delivery progress failures as voice delivery failures", async () => {

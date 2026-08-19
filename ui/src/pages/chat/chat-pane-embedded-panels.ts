@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { ProgressCard } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import { icons } from "../../components/icons.ts";
@@ -18,6 +19,7 @@ import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
   agentId: string | null;
+  browserPresented: boolean;
   desktopAvailable: boolean;
   hasBoard: boolean;
   chat: TemplateResult;
@@ -30,6 +32,8 @@ type SidebarPanelDefinitionParams = {
   startedAt: number | undefined;
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
+  progressCard: ProgressCard | null;
+  onDismissProgressCard?: (card: ProgressCard) => void;
   companion: ChatSessionCompanionThread;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
@@ -86,6 +90,7 @@ export function sidebarPanelDefinitions(
           .client=${state.connected ? state.client : null}
           .available=${state.terminalAvailable}
           .agentId=${params?.agentId ?? null}
+          .sessionKey=${state.sessionKey}
           .themeMode=${document.documentElement.dataset.theme === "light" ? "light" : "dark"}
           .basePath=${state.basePath}
         ></openclaw-terminal-panel>`
@@ -97,6 +102,7 @@ export function sidebarPanelDefinitions(
           data-chat-autotype-exempt
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
+          .presented=${params?.browserPresented ?? false}
           .basePath=${state.basePath}
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`
@@ -110,7 +116,8 @@ export function sidebarPanelDefinitions(
         .activeRunId=${params.activeRunId}
         .startedAt=${params.startedAt}
         .lastReadAt=${params.lastReadAt}
-        .planStatus=${state?.planStatus ?? null}
+        .progressCard=${params.progressCard}
+        .onDismissProgressCard=${params.onDismissProgressCard}
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}

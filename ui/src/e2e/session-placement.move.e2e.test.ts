@@ -127,6 +127,70 @@ suite.define(() => {
     }
   });
 
+  it.each([
+    { machineId: "fast", expectedMachineClass: "fast" },
+    { machineId: "standard", expectedMachineClass: undefined },
+  ])(
+    "moves to a cloud profile with machine $machineId",
+    async ({ machineId, expectedMachineClass }) => {
+      const context = await suite.newBrowserContext(contextOptions());
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.startup", "environments.list", "node.list", "sessions.move"],
+        historyMessages: [{ role: "assistant", content: "Placement machine proof." }],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([activeSession()]),
+          "environments.list": {
+            profiles: [
+              {
+                id: "aws",
+                providerId: "crabbox",
+                trust: "disposable",
+                machines: [
+                  { id: "standard", label: "Standard", default: true },
+                  { id: "fast", label: "Fast" },
+                ],
+              },
+            ],
+            environments: [],
+          },
+          "node.list": { nodes: [] },
+        },
+        sessionKey: "agent:main:placement-move",
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.deferNext("sessions.move");
+        await page.getByRole("button", { name: "Runs on Cloud" }).click();
+        await page.getByText("Move session…", { exact: true }).click();
+        await page.locator('[data-value="cloud:aws"]').click();
+        await page.locator(`[data-value="machine:${machineId}"]`).click();
+        await page.getByRole("button", { name: "Move session", exact: true }).click();
+
+        const request = await gateway.waitForRequest("sessions.move");
+        expect(request.params).toEqual({
+          key: "agent:main:placement-move",
+          agentId: "main",
+          expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+          target: {
+            kind: "profile",
+            profileId: "aws",
+            ...(expectedMachineClass ? { machineClass: expectedMachineClass } : {}),
+          },
+        });
+        await gateway.resolveDeferred("sessions.move", {
+          ok: true,
+          key: "agent:main:placement-move",
+          sessionId: "session-placement-move",
+          placement: { state: "active", generation: 10 },
+        });
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
   it("keeps a move failure visible and retryable", async () => {
     const context = await suite.newBrowserContext(contextOptions());
     const page = await context.newPage();

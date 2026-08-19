@@ -750,7 +750,7 @@ describe("qa confidence report", () => {
     for (const [artifact, expectedDetail] of [
       [
         { counts: { total: 1, passed: -1, skipped: 0, failed: 0 } },
-        "counts.passed must be a non-negative integer",
+        "counts.passed must be a non-negative safe integer",
       ],
       [
         { counts: { total: 1, passed: 2, failed: 0 } },

@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.test-support.js";
 import {
   createSequencedTestDraftStream,
   createTestDraftStream,
@@ -220,8 +221,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         history: resolved.history,
         admission: resolved.admission,
         botLoopProtection: resolved.botLoopProtection,
-        runDispatch: async () =>
-          await dispatchReplyWithBufferedBlockDispatcherHoisted({
+        runDispatch: async () => {
+          const dispatchResult = await dispatchReplyWithBufferedBlockDispatcherHoisted({
             ctx: resolved.ctxPayload,
             cfg: resolved.cfg,
             dispatcherOptions: {
@@ -238,7 +239,9 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             toolsAllow: resolved.toolsAllow,
             replyOptions: resolved.replyOptions,
             replyResolver: resolved.replyResolver,
-          }),
+          });
+          return withTelegramTestSettledReceipt(dispatchResult);
+        },
       });
       await params.adapter.onFinalize?.(result);
       return result;

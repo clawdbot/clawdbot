@@ -1,18 +1,12 @@
 // Runs a command with inline KEY=value assignments while preserving signal behavior.
-import { spawn, spawnSync } from "node:child_process";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+import { spawn } from "node:child_process";
+import { terminateManagedChild } from "./lib/managed-child-process.mts";
 
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 const USAGE =
   "Usage: node --import tsx scripts/run-with-env.mts KEY=value [KEY=value ...] -- command [args...]";
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
-
-type RunWithEnvChild = Pick<ReturnType<typeof spawn>, "kill" | "pid">;
-type TaskkillRunner = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: Error; status: number | null };
+type ForwardedSignal = "SIGHUP" | "SIGINT" | "SIGTERM";
 
 /**
  * Detects help requests before the command separator.
@@ -102,50 +96,6 @@ export function resolveForceKillDelayMs(env: NodeJS.ProcessEnv = process.env) {
 /**
  * Signals the wrapped command tree when this small parent wrapper is stopped.
  */
-export function signalRunWithEnvChild(
-  child: RunWithEnvChild,
-  signal: NodeJS.Signals,
-  {
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useChildProcessGroup = platform !== "win32",
-  }: {
-    platform?: NodeJS.Platform;
-    runTaskkill?: TaskkillRunner;
-    useChildProcessGroup?: boolean;
-  } = {},
-) {
-  if (useChildProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch (error) {
-      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ESRCH") {
-        child.kill(signal);
-        return;
-      }
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  child.kill(signal);
-}
-
 function main(argv: string[] = process.argv.slice(2)) {
   if (isRunWithEnvHelpRequest(argv)) {
     console.log(USAGE);
@@ -178,16 +128,16 @@ function main(argv: string[] = process.argv.slice(2)) {
     },
     stdio: "inherit",
   });
-  let forwardedSignal: NodeJS.Signals | null = null;
-  let forceKillTimer: NodeJS.Timeout | null = null;
+  let forwardedSignal: ForwardedSignal | undefined;
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
   // Keep the child in the foreground process group so TTY signals such as
   // Ctrl-C, Ctrl-Z, and window resizes stay native. Forward direct wrapper
   // shutdown signals that would otherwise only kill this small parent process.
-  const forwardedSignals: NodeJS.Signals[] = useChildProcessGroup
+  const forwardedSignals: ForwardedSignal[] = useChildProcessGroup
     ? ["SIGTERM", "SIGHUP", "SIGINT"]
     : ["SIGTERM", "SIGHUP"];
   const signalChild = (signal: NodeJS.Signals) =>
-    signalRunWithEnvChild(child, signal, { useChildProcessGroup });
+    terminateManagedChild(child, signal, { useProcessGroup: useChildProcessGroup });
   const childProcessGroupAlive = () => {
     if (!useChildProcessGroup || typeof child.pid !== "number") {
       return false;
@@ -234,7 +184,7 @@ function main(argv: string[] = process.argv.slice(2)) {
       process.off(signal, handler);
     }
   };
-  const signalHandlers = new Map<NodeJS.Signals, () => void>(
+  const signalHandlers = new Map<ForwardedSignal, () => void>(
     forwardedSignals.map((signal) => [
       signal,
       () => {

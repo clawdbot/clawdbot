@@ -311,7 +311,7 @@ describe("applyJobResult dynamic cadence", () => {
         endedAt: ENDED_AT,
         triggerEval: { fired: false, stateChanged: false },
       },
-      { scheduleMode: "force-preserve" },
+      { scheduleMode: "immediate-preserve" },
     );
 
     expect(job.state.nextRunAtMs).toBe(pendingSlot);

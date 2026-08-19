@@ -30,6 +30,14 @@ inspection adapts their existing first-answer-wins rows directly into decision
 receipts; it does not copy approvals into the audit ledger or the generic
 decision-fact table.
 
+This includes operator-routed native Codex command and file prompts. The Codex
+bridge carries the admitted agent, session key, run, tool, context, and
+execution binding into the same approval owner, then returns only the approved
+native scope. Auto-review, full-access policy, native hook decisions, and
+requests rejected before operator routing have no operator-owned row and remain
+unsupported as operator-approval evidence; later tool events never manufacture
+one.
+
 Shared outbound delivery is another owner-native source. Queue admission and
 platform-send start use a lazy progress companion, while terminal message rows
 remain in the activity ledger. Run inspection merges both sources directly;
@@ -90,6 +98,21 @@ state for these fields:
 - represented subject and sponsor;
 - applicable grants and assurance evidence;
 - parent or child lineage when available.
+
+For a child started through `sessions_spawn`, the child owns a new context; it
+never reuses or mutates the parent context. The lineage projection links the
+parent context, execution, run, and agent when the exact private parent token
+was available. Its delegation reference covers the spawn relation plus the
+requester/controller and evaluated local/target policy inputs. Applicable
+grants and runtime assurance remain separate evidence categories. This reports
+the inputs that could narrow child authority; it does not claim that identity
+changed an allow or deny decision.
+
+If the private parent token was unavailable, the child remains inspectable but
+the missing parent context, execution, and run evidence is explicit. ACP spawn
+itself is observable. Actions performed wholly inside an external ACP runtime
+without a callback are reported as unsupported evidence, never inferred from
+task or transcript text.
 
 The foundation records direct local CLI ingress, Gateway boot-system ingress,
 and admitted channel participants at their authoritative producers. For a
@@ -296,9 +319,10 @@ canonical session keys can themselves contain platform account or peer ids.
 Message records intentionally omit both.
 
 Execution identity contexts use the same installation-local key owner with a
-separate HMAC domain. Raw runtime, invoker, ingress-source, assurance, and grant
-references exist only in a deeply frozen, in-process worker message capped at
-16 KiB and 16 entries in each grant/assurance array. The worker replaces them with keyed
+separate HMAC domain. Raw runtime, invoker, ingress-source, assurance, grant,
+and child-delegation references exist only in bounded private admission
+carriers. The deeply frozen worker message is capped at 16 KiB and 16 entries
+in each bounded evidence array. The worker replaces raw references with keyed
 pseudonyms before persistence; they are never stored, exported, inspected, or
 logged. Configured agent ids plus context, execution, and run ids remain
 operator-visible.

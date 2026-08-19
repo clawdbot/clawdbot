@@ -64,9 +64,6 @@ type ReleaseCheckExecOptions = ExecFileSyncOptions & {
   windowsVerbatimArguments?: boolean;
 };
 
-export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
-export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mts";
-
 export const RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV =
   "OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR";
 
@@ -1158,8 +1155,6 @@ export function collectForbiddenPackContentPaths(
     })
     .toSorted((left, right) => left.localeCompare(right));
 }
-
-export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = escapeRegExp(tag);

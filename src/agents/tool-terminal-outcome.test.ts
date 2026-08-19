@@ -36,12 +36,59 @@ describe("tool terminal outcome observer", () => {
       error: "A failed",
       actionFingerprint: expect.stringContaining("to=channel:a"),
     });
+    expect(afterB.lastToolRecovery).toEqual({ toolName: "message" });
     expect(
       observe({ toolName: "heartbeat_respond", arguments: {}, outcome: "success" }).lastToolError,
     ).toMatchObject({ error: "A failed" });
     expect(
       observe({ toolName: "message", arguments: actionA, outcome: "success" }).lastToolError,
     ).toBeUndefined();
+  });
+
+  it("surfaces the successful cross-tool recovery without leaking failure details", () => {
+    const observe = createToolTerminalObserver("run-edit-recovery");
+
+    observe({
+      toolName: "edit",
+      arguments: { path: "/tmp/demo.txt", oldText: "missing", newText: "after" },
+      outcome: "failure",
+      failure: { error: "Could not find TOP_SECRET text in /tmp/demo.txt" },
+    });
+    const recovered = observe({
+      toolName: "write",
+      arguments: { path: "/tmp/demo.txt", content: "after" },
+      outcome: "success",
+    });
+    const afterRead = observe({
+      toolName: "read",
+      arguments: { path: "/tmp/demo.txt" },
+      outcome: "success",
+    });
+    const payloads = buildPayloads({ lastToolRecovery: afterRead.lastToolRecovery });
+
+    expect(recovered.lastToolError).toBeUndefined();
+    expect(recovered.lastToolRecovery).toEqual({ toolName: "write" });
+    expect(afterRead.lastToolRecovery).toEqual({ toolName: "write" });
+    expect(payloads.map((payload) => payload.text)).toEqual(["✅ ✍️ Write succeeded after retry."]);
+    expect(JSON.stringify(payloads)).not.toContain("TOP_SECRET");
+    expect(JSON.stringify(payloads)).not.toContain("/tmp/demo.txt");
+
+    const afterUnrelatedFailure = observe({
+      toolName: "message",
+      arguments: { action: "send", to: "channel:other", message: "hello" },
+      outcome: "failure",
+      failure: { error: "send failed" },
+    });
+    expect(afterUnrelatedFailure.lastToolError).toMatchObject({ error: "send failed" });
+    expect(afterUnrelatedFailure.lastToolRecovery).toEqual({ toolName: "write" });
+
+    const afterSameTargetFailure = observe({
+      toolName: "edit",
+      arguments: { path: "/tmp/demo.txt", oldText: "after", newText: "later" },
+      outcome: "failure",
+      failure: { error: "second edit failed" },
+    });
+    expect(afterSameTargetFailure.lastToolRecovery).toBeUndefined();
   });
 
   it("uses host execution and adjusted-argument evidence before fallback facts", () => {

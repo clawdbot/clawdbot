@@ -122,6 +122,28 @@ describe("worker provider registry", () => {
     );
   });
 
+  it.each([
+    { modes: [], label: "no modes" },
+    { modes: ["worker-turn", "remote-exec"], label: "multiple modes" },
+    { modes: ["unsupported"], label: "an unknown mode" },
+  ])("rejects $label in a placement declaration", ({ modes }) => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      supportedExecutionModes: modes,
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message:
+          "worker provider registration supportedExecutionModes must contain exactly one current mode",
+      }),
+    );
+  });
+
   it("rejects a non-function optional SSH identity resolver", () => {
     const pluginRegistry = createTestRegistry();
     const provider = {

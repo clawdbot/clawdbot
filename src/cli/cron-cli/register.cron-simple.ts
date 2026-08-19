@@ -15,6 +15,7 @@ import { findCronJobByIdOrName } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
   enrichCronJsonWithStatus,
+  formatCronLookupMiss,
   handleCronCliError,
   printCronJson,
   printCronShow,
@@ -179,7 +180,7 @@ export function registerCronSimpleCommands(cron: Command) {
             includeDeliveryPreview: !opts.json,
           });
           if (!job) {
-            throw new Error(`automation not found: ${String(id)}`);
+            throw new Error(formatCronLookupMiss(String(id)));
           }
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(job));

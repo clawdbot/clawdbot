@@ -5,7 +5,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
-import { listSkillProposalEvents } from "../../skills/workshop/service.js";
+import {
+  applySkillProposal,
+  listSkillProposalEvents,
+  proposeCreateSkill,
+} from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import { withSkillCollectionLock } from "../../skills/workshop/target-lock.js";
@@ -38,9 +42,20 @@ afterEach(async () => {
 describe("skill_workshop tool", () => {
   it("gives an isolated collection review only read and reconcile", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-collection-tool-");
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "duplicate", description: "Duplicate procedure" },
-    ]);
+    // Drop targets must be Workshop-owned: seed via an applied create proposal, not a raw write.
+    const seeded = await proposeCreateSkill({
+      workspaceDir,
+      env: testState.env,
+      name: "duplicate",
+      description: "Duplicate procedure",
+      content: "# duplicate\n",
+    });
+    await applySkillProposal({
+      workspaceDir,
+      env: testState.env,
+      proposalId: seeded.record.id,
+      expectedRevisionHash: seeded.revisionHash,
+    });
     const collectionReconcile = { approvedSkillNames: new Set(["duplicate"]) };
     const tool = createSkillWorkshopTool({
       workspaceDir,
@@ -49,7 +64,9 @@ describe("skill_workshop tool", () => {
     });
 
     expect(JSON.stringify(tool.parameters)).toContain('"enum":["read","reconcile"]');
-    expect(tool.description).toContain("exactly one keep, write, or drop decision");
+    expect(JSON.stringify(tool.parameters)).toContain(
+      "Exactly one decision for every current skill, plus optional new write decisions. Skills not created by Skill Workshop are read-only and require keep. write requires description and complete SKILL.md content; drop requires a reason.",
+    );
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
     await tool.execute("read", { action: "read", skill_name: "duplicate" });
     await tool.execute("reconcile", {

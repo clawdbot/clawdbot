@@ -1,7 +1,40 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { resolveDesktopDocumentTarget } from "../components/desktop/desktop-source.ts";
+import {
+  dashboardDocumentHref,
+  dashboardDocumentSession,
+  isDashboardOnlyView,
+} from "./dashboard-document-mode.ts";
 import { desktopDocumentOptions } from "./desktop-document-mode.ts";
+
+describe("dashboard document mode", () => {
+  it("parses the dashboard session reference", () => {
+    const location = {
+      search: "?view=dashboard&session=agent%3Amain%3Awork",
+    };
+
+    expect(isDashboardOnlyView(location)).toBe(true);
+    expect(dashboardDocumentSession(location)).toBe("agent:main:work");
+  });
+
+  it("keeps a missing session visible to the document empty state", () => {
+    const location = { search: "?view=dashboard" };
+
+    expect(isDashboardOnlyView(location)).toBe(true);
+    expect(dashboardDocumentSession(location)).toBeNull();
+  });
+
+  it("does not treat an ordinary route as a dashboard document", () => {
+    expect(isDashboardOnlyView({ search: "" })).toBe(false);
+  });
+
+  it("builds an encoded base-path-aware document URL", () => {
+    expect(dashboardDocumentHref("/openclaw/", "agent:main:work item")).toBe(
+      "/openclaw?view=dashboard&session=agent%3Amain%3Awork+item",
+    );
+  });
+});
 
 describe("desktop document mode", () => {
   it("parses desktop source, session, and control options", () => {

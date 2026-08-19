@@ -960,7 +960,7 @@ describe("optional media tool factory planning", () => {
           disablePluginTools: true,
         })
       ).map((tool) => tool.name),
-    ).not.toContain("image");
+    ).not.toContain("view_image");
   });
 
   it.each([

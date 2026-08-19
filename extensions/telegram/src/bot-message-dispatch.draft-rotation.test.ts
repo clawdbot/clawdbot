@@ -373,7 +373,35 @@ describeTelegramDispatch("dispatchTelegramMessage draft-rotation", () => {
         firstBlockPreviewWentStale = true;
         await replyOptions?.onBlockReplyQueued?.(secondPayload, { assistantMessageIndex: 1 });
         await dispatcherOptions.deliver(secondPayload, { kind: "block" });
-        return { queuedFinal: true };
+        return {
+          queuedFinal: true,
+          settledReceipt: {
+            counts: {
+              tool: {
+                delivered: 0,
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend: 0,
+                failedAfterSend: 0,
+              },
+              block: {
+                delivered: 2,
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend: 0,
+                failedAfterSend: 0,
+              },
+              final: {
+                delivered: 1,
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend: 0,
+                failedAfterSend: 0,
+              },
+            },
+            anyVisibleDelivered: true,
+          },
+        };
       },
     );
 

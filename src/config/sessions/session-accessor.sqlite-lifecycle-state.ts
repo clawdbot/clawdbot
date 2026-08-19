@@ -22,12 +22,12 @@ import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteSessionEntryRows,
   readExactSessionEntryJsonForCanonicalRepair,
   readExactSessionEntryRow,
   readSessionEntryStore,
-  sqliteSessionEntriesEqual,
 } from "./session-accessor.sqlite-entry-store.js";
 import type {
   LifecycleArtifactCleanupPlan,

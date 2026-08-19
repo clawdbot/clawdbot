@@ -1,5 +1,6 @@
 // Whatsapp plugin module implements approval reactions behavior.
 import type { WAMessage } from "baileys";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   approvalReactionDecisionSetsMatch,
   buildApprovalReactionDeliveredBindingMarker,
@@ -29,18 +30,16 @@ const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 const DELIVERY_BINDING_CHANNEL_DATA_KEY = "whatsappApprovalReactionBindingV1";
 
-type WhatsAppApprovalKind = "exec" | "plugin";
-
 type WhatsAppApprovalDeliveryBinding = ApprovalReactionDeliveryBinding;
 
 type WhatsAppApprovalReactionResolution = {
   approvalId: string;
-  approvalKind: WhatsAppApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
 };
 
 type WhatsAppApprovalReactionTarget = ApprovalReactionTargetRecord & {
-  approvalKind: WhatsAppApprovalKind;
+  approvalKind: ChannelApprovalKind;
 };
 
 type WhatsAppApprovalReactionEvent = {
@@ -226,7 +225,7 @@ export function registerWhatsAppApprovalReactionTarget(params: {
   remoteJid: string;
   messageId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): WhatsAppApprovalReactionTarget | null {

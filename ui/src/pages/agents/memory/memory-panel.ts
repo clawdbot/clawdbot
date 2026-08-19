@@ -125,6 +125,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   private gatewayBindingEpoch = 0;
   private gatewayEpoch = 0;
   private hasBoundGatewaySource = false;
+  private selectedAgentId: string | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
@@ -154,7 +155,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       },
     );
 
-  override willUpdate(changed: PropertyValues<this>) {
+  override updated(changed: PropertyValues<this>) {
     if (changed.has("agentId")) {
       this.applyAgentId();
     }
@@ -211,7 +212,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       hello: snapshot.hello,
       configSnapshot: this.context.runtimeConfig.state.configSnapshot,
       applySessionKey: snapshot.sessionKey,
-      selectedAgentId: this.agentId.trim() || null,
+      selectedAgentId: this.selectedAgentId,
     });
   }
 
@@ -236,21 +237,26 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       this.dreaming.hello = snapshot.hello;
       this.dreaming.applySessionKey = snapshot.sessionKey;
     }
-    if (snapshot.phase === "connected" && (replaceState || becameConnected)) {
+    if (
+      snapshot.phase === "connected" &&
+      this.selectedAgentId &&
+      (replaceState || becameConnected)
+    ) {
       void this.loadAll();
     }
     this.requestUpdate();
   }
 
   private applyAgentId() {
-    const agentId = this.agentId.trim();
-    if (!agentId || this.dreaming.selectedAgentId === agentId) {
+    const agentId = this.agentId.trim() || null;
+    if (this.selectedAgentId === agentId) {
       return;
     }
+    this.selectedAgentId = agentId;
     this.gatewayEpoch += 1;
     this.resetTransientState();
     this.dreaming = this.createGatewayState();
-    if (this.dreaming.connected) {
+    if (agentId && this.dreaming.connected) {
       void this.loadAll();
     }
   }
@@ -291,7 +297,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
 
   private async loadAll(refreshConfig = false) {
     const scope = this.captureTaskScope();
-    if (!scope || !scope.state.client || !scope.state.connected) {
+    if (!scope || !scope.state.client || !scope.state.connected || !scope.state.selectedAgentId) {
       return;
     }
     const runtimeConfig = this.context.runtimeConfig;
@@ -459,20 +465,17 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   private async openWikiPage(lookup: string): Promise<WikiPagePreview | null> {
     const scope = this.captureTaskScope();
     const client = scope?.state.client;
-    if (!scope || !client || !scope.state.connected) {
+    const agentId = scope?.state.selectedAgentId;
+    if (!scope || !client || !scope.state.connected || !agentId) {
       return null;
     }
-    const agentId = scope.state.selectedAgentId?.trim() || null;
     const payload = await client.request("wiki.get", {
       lookup,
       fromLine: 1,
       lineCount: 5000,
-      ...(agentId ? { agentId } : {}),
+      agentId,
     });
-    if (
-      !this.isTaskScopeCurrent(scope) ||
-      (scope.state.selectedAgentId?.trim() || null) !== agentId
-    ) {
+    if (!this.isTaskScopeCurrent(scope) || scope.state.selectedAgentId !== agentId) {
       return null;
     }
     return readWikiPagePreview(payload, lookup);
@@ -480,7 +483,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
 
   private async refreshWikiData(task: (state: DreamingState) => Promise<void>) {
     const scope = this.captureTaskScope();
-    if (!scope) {
+    if (!scope?.state.selectedAgentId) {
       return;
     }
     const runtimeConfig = this.context.runtimeConfig;
@@ -509,7 +512,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       onReset: () => void this.resetEnabledOverride(configuredDreaming),
     });
     const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
-    const selectedAgentId = dreaming.selectedAgentId ?? this.agentId;
+    const selectedAgentId = dreaming.selectedAgentId ?? "";
 
     return html`
       <section class="content-header content-header--page agent-memory-panel__header">

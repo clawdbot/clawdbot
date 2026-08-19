@@ -3013,27 +3013,6 @@ describe("runGatewayUpdate", () => {
     expect(await pathExists(staleDir)).toBe(false);
   });
 
-  it("refuses unsupported npm before global update cleanup mutates backups", async () => {
-    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
-    const backupDir = path.join(nodeModules, ".openclaw-interrupted");
-    await fs.mkdir(backupDir, { recursive: true });
-    const { runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      npmVersion: "11.15.9",
-      installCommand: npmGlobalInstallCommand("openclaw@latest"),
-    });
-
-    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-
-    expect(result).toMatchObject({
-      status: "error",
-      reason: "unexpected-error",
-    });
-    expect(result.steps.at(-1)?.name).toBe("npm lifecycle policy preflight");
-    await expect(fs.access(backupDir)).resolves.toBeUndefined();
-  });
-
   it("retries global npm update with --omit=optional when initial install fails", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");

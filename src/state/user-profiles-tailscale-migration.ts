@@ -10,8 +10,8 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { ensureUserProfilesSchema, type UserProfilesDatabase } from "./user-profiles-schema.js";
 import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
-import { ensureUserProfilesSchema, type UserProfilesDatabase } from "./user-profiles.js";
 
 type UserProfileIdentityMigrationResult = {
   changes: string[];
@@ -57,6 +57,7 @@ export function migrateLegacyTailscaleProfileIdentities(
               provider: row.provider,
               subject: row.subject,
               profile_id: row.profile_id,
+              canonical_login: null,
               created_at: row.created_at,
             })
             .onConflict((conflict) => conflict.columns(["provider", "subject"]).doNothing()),

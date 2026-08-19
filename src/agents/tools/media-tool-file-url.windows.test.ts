@@ -38,7 +38,7 @@ const ONE_PIXEL_PNG = Buffer.from(
   "base64",
 );
 
-function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: "image" | "pdf") {
+function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: "view_image" | "pdf") {
   const tool = tools.find((candidate) => candidate.name === name);
   expect(tool, `${name} tool registration`).toBeDefined();
   if (!tool) {
@@ -90,8 +90,8 @@ describe.runIf(process.platform === "win32")("host-local media tool file URLs", 
         });
 
         const imageUrl = pathToFileURL(imagePath).href;
-        const imageResult = await requireTool(tools, "image").execute("image-call", {
-          image: imageUrl,
+        const imageResult = await requireTool(tools, "view_image").execute("image-call", {
+          path: imageUrl,
         });
         expect(imageResult.content).toEqual([
           {

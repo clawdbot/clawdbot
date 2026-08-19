@@ -390,7 +390,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: "available" },
+          workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
         },
       }),
     ).toEqual({ changed: true });
@@ -401,7 +401,7 @@ describe("gateway/node-registry", () => {
         pairingIdentity: "identity-a",
         pairingGeneration: "generation-a",
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
         commands: ["system.run"],
       }),
     ]);
@@ -448,7 +448,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: "available" },
+          workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
         },
       }),
     ).toBeNull();
@@ -459,7 +459,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-2",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: "available" },
+          workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
         },
       }),
     ).toEqual({ changed: true });
@@ -467,7 +467,7 @@ describe("gateway/node-registry", () => {
       expect.objectContaining({
         connId: "conn-2",
         pairingGeneration: "generation-b",
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
       }),
     ]);
   });
@@ -491,7 +491,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: "available" },
+          workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
         },
       }),
     ).toEqual({ changed: true });
@@ -529,7 +529,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: "available" },
+          workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
         },
       }),
     ).toEqual({ changed: true });
@@ -544,7 +544,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: "full" },
+          workerHost: { enabled: true, capacity: { total: 2, available: 0 } },
         },
       }),
     ).toEqual({ changed: true });
@@ -597,7 +597,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: "available" },
+          workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
         },
       }),
     ).toEqual({ changed: true });
@@ -645,7 +645,7 @@ describe("gateway/node-registry", () => {
     );
     const declaration = {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] as const,
-      workerHost: { enabled: true, capacity: "available" as const },
+      workerHost: { enabled: true, capacity: { total: 2, available: 2 } as const },
     };
     expect(
       updateNodeRunnerInventory({
@@ -673,7 +673,7 @@ describe("gateway/node-registry", () => {
     expect(priorProof && nodeWorkerSupervisorTransport.isCurrent(priorProof, true)).toBe(true);
     expect(negotiatedProof?.workerHost).toEqual({
       enabled: true,
-      capacity: "available",
+      capacity: { total: 2, available: 2 },
       bundlePrewarm: 1,
     });
   });

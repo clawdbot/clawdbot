@@ -1,11 +1,11 @@
 // Builds the status summary used by human and JSON status output.
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
-import { normalizeLowercaseStringOrEmpty as normalizeStatusModelPart } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
@@ -161,34 +161,6 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
   return !hasSessionAutoModelFallbackProvenance(entry);
 }
 
-function resolveTrustedSessionContextTokens(params: {
-  entry: SessionEntry | undefined;
-  provider: string | undefined;
-  model: string | null;
-}): number | undefined {
-  const contextTokens =
-    typeof params.entry?.contextTokens === "number" && params.entry.contextTokens > 0
-      ? params.entry.contextTokens
-      : undefined;
-  if (contextTokens === undefined) {
-    return undefined;
-  }
-  if (hasSessionAutoModelFallbackProvenance(params.entry)) {
-    return contextTokens;
-  }
-  const entryProvider = normalizeStatusModelPart(params.entry?.modelProvider);
-  const entryModel = normalizeStatusModelPart(params.entry?.model);
-  const resolvedProvider = normalizeStatusModelPart(params.provider);
-  const resolvedModel = normalizeStatusModelPart(params.model);
-  if (!entryModel || !resolvedModel || entryModel !== resolvedModel) {
-    return undefined;
-  }
-  if (entryProvider && resolvedProvider && entryProvider !== resolvedProvider) {
-    return undefined;
-  }
-  return contextTokens;
-}
-
 type SessionCandidate = {
   key: string;
   entry: SessionEntry;
@@ -271,8 +243,9 @@ export async function getStatusSummary(
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
+    resolveAuthoredModelContextTokens,
     resolveContextTokensForModel,
-    resolveSessionRuntimeLabel,
+    resolveSessionRuntime,
     resolveSessionModelRef,
     resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
@@ -378,13 +351,22 @@ export async function getStatusSummary(
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
   // Status may overlap a live Gateway, so task inspection must not initialize
   // the writable process registry or its schema-owning shared-state handle.
-  const inspectableTasks = taskMaintenanceModule.listInspectableTasksReadOnly();
+  const taskInspection = taskMaintenanceModule.inspectTasksReadOnly();
+  const inspectableTasks = taskInspection.tasks;
   const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
   const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
   const now = Date.now();
   const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
   const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });
-  const tasks = discountRetainedLostTaskFailures(rawTasks, taskAuditRetainedLost.count);
+  const tasks: StatusSummary["tasks"] = {
+    ...discountRetainedLostTaskFailures(rawTasks, taskAuditRetainedLost.count),
+    ...(taskInspection.state === "migration-required"
+      ? {
+          warning:
+            "Task history is unavailable until Gateway startup or openclaw doctor --fix repairs the state database.",
+        }
+      : {}),
+  };
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -480,17 +462,27 @@ export async function getStatusSummary(
           fallbackContextTokens: configContextTokens ?? undefined,
           allowAsyncLoad: false,
         });
-        const trustedSessionContextTokens = resolveTrustedSessionContextTokens({
+        const runtime = resolveSessionRuntime({
+          cfg,
           entry,
           provider: lookupModel.provider,
-          model: lookupModelId,
+          model: lookupModelId ?? "",
+          agentId,
+          sessionKey: key,
         });
         const contextTokens =
-          trustedSessionContextTokens === undefined
-            ? (resolvedContextTokens ?? null)
-            : resolvedContextTokens === undefined
-              ? trustedSessionContextTokens
-              : Math.min(trustedSessionContextTokens, resolvedContextTokens);
+          resolveProjectedSessionContextTokens({
+            entry,
+            provider: lookupModel.provider,
+            model: lookupModelId,
+            agentHarnessId: runtime.id,
+            resolvedContextTokens,
+            authoredContextTokens: resolveAuthoredModelContextTokens({
+              cfg,
+              provider: lookupModel.provider,
+              model: lookupModelId,
+            }),
+          }) ?? null;
         const total = resolveSessionTotalTokens(entry);
         const freshTotal = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh = freshTotal !== undefined;
@@ -502,15 +494,6 @@ export async function getStatusSummary(
           contextTokens && contextTokens > 0 && freshTotal !== undefined
             ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
             : null;
-        const runtime = resolveSessionRuntimeLabel({
-          cfg,
-          entry,
-          provider: lookupModel.provider,
-          model: lookupModelId ?? "",
-          agentId,
-          sessionKey: key,
-        });
-
         return {
           agentId,
           key,
@@ -542,7 +525,7 @@ export async function getStatusSummary(
               ? "session override"
               : "fallback selected"
             : null,
-          runtime,
+          runtime: runtime.label,
           contextTokens,
           flags: buildFlags(entry),
         } satisfies SessionStatus;

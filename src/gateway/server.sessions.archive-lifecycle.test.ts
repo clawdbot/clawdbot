@@ -722,16 +722,7 @@ test("sessions.patch retains the archive drain through the ordered audit append"
       "sessions.patch",
       { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
-        client: {
-          authenticatedUserId: "archive-reviewer@example.com",
-          authenticatedUserProfile: {
-            profileId: "archive-reviewer",
-            displayName: "Archive Reviewer",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-          connect: { scopes: ["operator.write"] },
-        } as never,
+        client: identifiedClient("archive-reviewer"),
         context: {
           workerEnvironmentService: {
             beginInferenceSessionDrain: vi.fn(() => ({

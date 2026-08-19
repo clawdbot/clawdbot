@@ -9,6 +9,7 @@ import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { discardPreparedInboundMedia, type OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
@@ -181,6 +182,7 @@ export function createAgentTurnService({
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
     let gatewayAdmissionTransferred = false;
+    let preparedOffloadedRefs: OffloadedRef[] = [];
     let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
     let releaseGatewayAdmission = () => {};
     const cronContinuation = createCronContinuationController({
@@ -212,6 +214,7 @@ export function createAgentTurnService({
       if (!content) {
         return;
       }
+      preparedOffloadedRefs = content.offloadedRefs;
       agentId = content.agentId;
       requestedSessionKey = content.requestedSessionKey;
       // Participation is authorized below against the canonical session the run
@@ -247,6 +250,7 @@ export function createAgentTurnService({
       let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
+      let resolvedStorePath: string | undefined;
       let admittedSessionId = resolvedSessionId ?? runId;
       const admissionController = createAgentAdmissionController({
         cfg,
@@ -340,6 +344,7 @@ export function createAgentTurnService({
           failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
         } = preparedSession;
         cfgForAgent = cfgLocal;
+        resolvedStorePath = storePath;
         // Authorize the canonical session the run will actually target — covering
         // keyless requests whose default/effective session is resolved only here —
         // before any run side effects (admission, dispatch).
@@ -367,6 +372,7 @@ export function createAgentTurnService({
           // string and numeric threadIds (e.g., Matrix uses integers).
           threadId: recipientThreadId,
         });
+        const explicitSessionKey = normalizeOptionalString(request.sessionKey);
         const buildSessionPatch = (freshEntry: SessionEntry | undefined) =>
           buildAgentSessionPatch({
             freshEntry,
@@ -378,6 +384,7 @@ export function createAgentTurnService({
             normalizedSpawned,
             requestDeliveryHint,
             requestLabel: request.label,
+            ...(explicitSessionKey ? { explicitSessionKey } : {}),
             pluginOwnerId:
               freshEntry === undefined
                 ? normalizeOptionalString(principal?.internal?.pluginRuntimeOwnerId)
@@ -536,6 +543,9 @@ export function createAgentTurnService({
         effectiveTranscriptInputText,
         images,
         offloadedRefs,
+        onUserTurnMediaPersisted: () => {
+          preparedOffloadedRefs = [];
+        },
         requestedPromptPersistenceSuppression,
         runId,
         agentDedupeKeys,
@@ -557,6 +567,9 @@ export function createAgentTurnService({
         return;
       }
       resolvedSessionId = admittedSessionId;
+      // The prepared dispatch now owns either transcript-persisted media or its
+      // closed unpersisted ref set; admission must not retain a second owner.
+      preparedOffloadedRefs = [];
       gatewayAdmissionTransferred = true;
       // This captures ambient root admission synchronously, then settles the final
       // frame on the existing detached chain after the router returns its acceptance.
@@ -570,6 +583,7 @@ export function createAgentTurnService({
         resolvedSessionKey,
         requestedSessionKey,
         resolvedSessionId,
+        storePath: resolvedStorePath,
         agentId,
         activeSessionAgentId,
         delivery,
@@ -622,6 +636,7 @@ export function createAgentTurnService({
           }
         }
       } finally {
+        await discardPreparedInboundMedia(preparedOffloadedRefs);
         clearUnacceptedAgentDedupe();
       }
     }

@@ -668,6 +668,7 @@ describe("OpenClaw rescue message", () => {
           workspace: "/tmp/work",
           agentDir: "/tmp/agent-work",
           bootstrapPending: true,
+          config: cfg,
         })),
       };
 

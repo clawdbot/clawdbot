@@ -332,7 +332,7 @@ export function applyJobResult(
         deferredNotifications: opts?.deferredNotifications,
       })
     ) {
-      // Keep this after the ownership and force-preserve gates: those paths
+      // Keep this after the ownership and immediate-preserve gates: those paths
       // restore schedule state and would otherwise silently undo the disable.
       state.deps.log.error(
         {
@@ -563,7 +563,7 @@ export function applyTriggerNoFireResult(
   job: CronJob,
   result: { startedAt: number; endedAt: number; triggerEval: CronTriggerEvalOutcome },
   opts?: {
-    scheduleMode?: "advance" | "force-preserve" | "stale-preserve";
+    scheduleMode?: "advance" | "immediate-preserve" | "stale-preserve";
     triggerOwnership?: CronTriggerOwnership;
     deferredNotifications?: DeferredCronNotifications;
   },
@@ -582,13 +582,13 @@ export function applyTriggerNoFireResult(
     job.state.lastFailureAlertAtMs = undefined;
     applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
   }
-  if (opts?.scheduleMode === "force-preserve" || opts?.scheduleMode === "stale-preserve") {
+  if (opts?.scheduleMode === "immediate-preserve" || opts?.scheduleMode === "stale-preserve") {
     job.state.nextRunAtMs = previousNextRunAtMs;
     job.state.pacedNextRunAtMs = previousPacedNextRunAtMs;
     // A stale wake preserves the operator's complete schedule; only an actual
     // force run may create the marker that exempts its slot from repair.
     job.state.forcePreservedNextRunAtMs =
-      opts.scheduleMode === "force-preserve"
+      opts.scheduleMode === "immediate-preserve"
         ? previousNextRunAtMs
         : previousForcePreservedNextRunAtMs;
     return;

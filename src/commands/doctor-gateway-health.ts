@@ -198,15 +198,10 @@ export async function checkGatewayHealth(params: {
         return { healthOk, authenticated: false };
       }
     }
-    const message = String(err);
-    if (message.includes("gateway closed")) {
+    const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+    if (closedDiagnostic) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
-      const closedDiagnostic = formatGatewayClosedDiagnostic(err);
-      if (closedDiagnostic) {
-        note(closedDiagnostic, "Gateway");
-      } else {
-        note("Gateway not running.", "Gateway");
-      }
+      note(closedDiagnostic, "Gateway");
       note(gatewayDetails.message, "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));

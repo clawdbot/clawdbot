@@ -49,6 +49,92 @@ async function initializeRemoteBackedGitWorkspace(root: string): Promise<string>
   return await fs.realpath(workspace);
 }
 
+test("sessions.delete snapshots and removes session worktrees", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-delete-worktree-",
+  });
+  const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let dirtyWorktreeId: string | undefined;
+  try {
+    const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+    await fs.writeFile(path.join(workspace, "local-base.txt"), "inherited local commit\n");
+    await execFileAsync("git", ["-C", workspace, "add", "local-base.txt"]);
+    await execFileAsync("git", ["-C", workspace, "commit", "-m", "local base"]);
+    const clean = await directSessionReq<{
+      key: string;
+      worktree: { id: string; path: string; branch: string };
+    }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
+    expect(clean.ok).toBe(true);
+    const cleanKey = clean.payload?.key;
+    const cleanWorktree = clean.payload?.worktree;
+    expect(cleanKey).toBeTruthy();
+    expect(cleanWorktree).toBeTruthy();
+
+    await expect(directSessionReq("sessions.delete", { key: cleanKey! })).resolves.toMatchObject({
+      ok: true,
+      payload: { deleted: true },
+    });
+
+    await expect(fs.access(cleanWorktree!.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, cleanWorktree!.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    const registered = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "worktree",
+      "list",
+      "--porcelain",
+    ]);
+    expect(registered.stdout).not.toContain(cleanWorktree!.path);
+    const branch = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "branch",
+      "--list",
+      cleanWorktree!.branch,
+    ]);
+    expect(branch.stdout.trim()).toBe("");
+
+    const dirty = await directSessionReq<{
+      key: string;
+      worktree: { id: string; path: string; branch: string };
+    }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
+    expect(dirty.ok).toBe(true);
+    const dirtyKey = dirty.payload?.key;
+    const dirtyWorktree = dirty.payload?.worktree;
+    dirtyWorktreeId = dirtyWorktree?.id;
+    await fs.writeFile(path.join(dirtyWorktree!.path, "dirty.txt"), "keep me\n");
+
+    await expect(directSessionReq("sessions.delete", { key: dirtyKey! })).resolves.toMatchObject({
+      ok: true,
+      payload: { deleted: true },
+    });
+
+    await expect(fs.access(dirtyWorktree!.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    dirtyWorktreeId = undefined;
+  } finally {
+    if (
+      dirtyWorktreeId &&
+      getRegistryWorktree(process.env, dirtyWorktreeId)?.removedAt === undefined
+    ) {
+      await managedWorktrees.remove({ id: dirtyWorktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
 test("sessions.delete keeps same-key successor worktree creation behind exact cleanup", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",

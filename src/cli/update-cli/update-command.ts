@@ -45,6 +45,8 @@ import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-man
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
@@ -166,6 +168,12 @@ async function updateCommandInternal(
     defaultRuntime.exit(1);
     return;
   }
+  if (opts.dryRun !== true) {
+    await assertOpenClawStateWriteAllowedAtPath({
+      databasePath: resolveOpenClawStateSqlitePath(process.env),
+      recoverOrphanedSidecars: false,
+    });
+  }
   const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const discoveredRoot = await resolveUpdateRoot();
   const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
@@ -220,7 +228,7 @@ async function updateCommandInternal(
 
   let configSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: true,
-    ...(opts.dryRun === true ? { observe: false } : {}),
+    observe: false,
   });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
@@ -281,11 +289,17 @@ async function updateCommandInternal(
   }
 
   const explicitTag = normalizeTag(opts.tag);
-  if (channel === "extended-stable" && explicitTag) {
+  const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
+  if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
     await reportPreMutationUpdateFailure({
       root,
       installKind: updateInstallKind,
-      reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      reason: unsupportedMainTag
+        ? "unsupported-package-target"
+        : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      message: unsupportedMainTag
+        ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
+        : undefined,
       opts,
       controlPlaneUpdateSentinelMeta,
     });
@@ -595,6 +609,11 @@ async function updateCommandInternal(
     }
   }
 
+  // Startup migrations belong to the freshly installed Doctor. Admit shared-state
+  // mutation only after every pre-install refusal has passed.
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
   await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
 
   const showProgress = !opts.json && process.stdout.isTTY;

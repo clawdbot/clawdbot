@@ -4,12 +4,15 @@ import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src
 import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import {
   collectNodeWorkerBundleStatusByNodeId,
+  collectNodeWorkerCapacityByNodeId,
   createNodeRegistryRuntime,
   setNodeRunnerInventoryChangedListener,
 } from "../node-registry-private.js";
@@ -24,6 +27,8 @@ const LEGACY_WORKER_RUNS = {
   openclawVersion: "2026.8.1",
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
+const AVAILABLE_CAPACITY = { total: 2, available: 2 } as const;
+const FULL_CAPACITY = { total: 2, available: 0 } as const;
 
 function runnerInventoryOptions(params: {
   nodeRegistry: NodeRegistry;
@@ -52,19 +57,19 @@ const runnerInventoryHandler = expectDefined(
 
 const availableHost = {
   protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-  workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+  workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
 } as const;
 
 const fullHost = {
   protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-  workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
+  workerHost: { enabled: true, capacity: FULL_CAPACITY, bundlePrewarm: 1 },
 } as const;
 
 const retainedHost = {
   protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
   workerHost: {
     enabled: true,
-    capacity: "available",
+    capacity: AVAILABLE_CAPACITY,
     bundlePrewarm: 1,
     bundleRetention: 1,
     bundleStatus: 1,
@@ -96,9 +101,14 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         nodeId: "node-1",
         connId: "conn-1",
         pairingGeneration: "generation-1",
-        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
       }),
     ]);
+    expect(
+      collectNodeWorkerCapacityByNodeId(runtime.nodeRegistry, [
+        { nodeId: "node-1", connId: "conn-1" },
+      ]),
+    ).toEqual(new Map([["node-1", AVAILABLE_CAPACITY]]));
     runtime.nodeRegistry.unregister("conn-1");
   });
 
@@ -221,7 +231,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
     expect(proof?.workerHost).toEqual({
       enabled: true,
-      capacity: "full",
+      capacity: FULL_CAPACITY,
       bundlePrewarm: 1,
     });
     expect(proof && runtime.nodeWorkerSupervisorTransport.isCurrent(proof)).toBe(true);
@@ -284,13 +294,13 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
         pairingGeneration: "generation-1",
-        workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
+        workerHost: { enabled: true, capacity: FULL_CAPACITY, bundlePrewarm: 1 },
       }),
     ]);
     runtime.nodeRegistry.unregister("conn-1");
   });
 
-  it("keeps exact v1 inventory diagnostic-only until disconnect and v3 reconnect", async () => {
+  it("keeps exact v1 inventory diagnostic-only until disconnect and v5 reconnect", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
@@ -331,7 +341,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       clientId: "node-host",
       clientMode: "node",
       protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-      workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+      workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
       commands: ["system.run"],
     } as const;
     expect(runtime.nodeWorkerSupervisorTransport.isCurrent(forgedProof)).toBe(false);
@@ -364,13 +374,35 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       expect.objectContaining({
         nodeId: "node-1",
         connId: "conn-v2",
-        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
       }),
     ]);
     runtime.nodeRegistry.unregister("conn-v2");
   });
 
-  it("routes the shipped v2 build-shaped inventory to update recovery", async () => {
+  it.each([
+    [
+      "v2 build-shaped",
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE],
+        workerRuns: { ...LEGACY_WORKER_RUNS, bundlePrewarm: 1 },
+      },
+    ],
+    [
+      "v3 execution-context",
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+      },
+    ],
+    [
+      "v4 binary-capacity",
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
+      },
+    ],
+  ] as const)("routes the shipped %s inventory to update recovery", async (_name, declaration) => {
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     const client = createWorkerSupervisorNodeClient();
     runtime.nodeRegistry.register(client, {
@@ -380,10 +412,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     const opts = runnerInventoryOptions({
       nodeRegistry: runtime.nodeRegistry,
       client,
-      declaration: {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE],
-        workerRuns: { ...LEGACY_WORKER_RUNS, bundlePrewarm: 1 },
-      },
+      declaration,
     });
 
     await runnerInventoryHandler(opts);
@@ -429,7 +458,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       name: "disabled host with capacity",
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: false, capacity: "full" },
+        workerHost: { enabled: false, capacity: FULL_CAPACITY },
       },
     },
     {
@@ -440,31 +469,59 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       },
     },
     {
+      name: "binary capacity on current dialect",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available" },
+      },
+    },
+    {
+      name: "zero total capacity",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: { total: 0, available: 0 } },
+      },
+    },
+    {
+      name: "available capacity above total",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: { total: 2, available: 3 } },
+      },
+    },
+    {
+      name: "capacity with extra field",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: { total: 2, available: 2, busy: 0 } },
+      },
+    },
+    {
       name: "unsupported bundle prewarm version",
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 2 },
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 2 },
       },
     },
     {
       name: "unsupported bundle retention version",
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available", bundleRetention: 2 },
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundleRetention: 2 },
       },
     },
     {
       name: "unsupported bundle status version",
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available", bundleStatus: 2 },
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundleStatus: 2 },
       },
     },
     {
       name: "bundle status without bundle retention",
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available", bundleStatus: 1 },
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundleStatus: 1 },
       },
     },
   ])("rejects $name without changing private eligibility", async ({ params }) => {

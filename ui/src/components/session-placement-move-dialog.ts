@@ -3,11 +3,13 @@ import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/i
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
+  renderCloudMachineMenuItems,
   renderCloudProfileMenuItems,
   renderSessionMenuItem,
 } from "../pages/new-session/cloud-target.ts";
 import type { DraftCloudProfile, DraftNode } from "../pages/new-session/discovery.ts";
 import { isDraftNodeSessionEligible } from "../pages/new-session/discovery.ts";
+import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine-state.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
 import "./modal-dialog.ts";
@@ -20,6 +22,7 @@ type Catalog = {
 type Options = {
   sessionLabel: string;
   activeRun: boolean;
+  deviceDisabledReason?: string;
   loadCatalog: () => Promise<Catalog>;
 };
 
@@ -51,6 +54,7 @@ export function showSessionPlacementMoveDialog(
     let loadError: string | null = null;
     let catalog: Catalog = { profiles: [], nodes: [] };
     let selected: SessionMoveTarget = { kind: "gateway" };
+    const cloudMachines = new DraftCloudMachineState();
 
     const finish = (result: SessionMoveTarget | null) => {
       render(nothing, host);
@@ -66,7 +70,15 @@ export function showSessionPlacementMoveDialog(
 
     const submit = (event: Event) => {
       event.preventDefault();
-      finish(selected);
+      if (selected.kind !== "profile") {
+        finish(selected);
+        return;
+      }
+      const machineClass = cloudMachines.resolve(selected.profileId);
+      finish({
+        ...selected,
+        ...(machineClass ? { machineClass } : {}),
+      });
     };
 
     function paint() {
@@ -117,7 +129,12 @@ export function showSessionPlacementMoveDialog(
                                     value: `device:${node.nodeId}`,
                                     label: node.displayName,
                                     icon: icons.monitor,
+                                    facts: options.deviceDisabledReason
+                                      ? [options.deviceDisabledReason]
+                                      : undefined,
                                     checked: selectedKey === `device:${node.nodeId}`,
+                                    disabled: Boolean(options.deviceDisabledReason),
+                                    title: options.deviceDisabledReason,
                                     onSelect: () =>
                                       select({ kind: "device", deviceId: node.nodeId }),
                                   },
@@ -131,12 +148,43 @@ export function showSessionPlacementMoveDialog(
                               <div class="new-session-page__menu-title">
                                 ${t("newSession.cloud")}
                               </div>
-                              ${renderCloudProfileMenuItems({
-                                profiles: catalog.profiles,
-                                selectedId: selected.kind === "profile" ? selected.profileId : "",
-                                submitting: false,
-                                icon: icons.server,
-                                onSelect: (profileId) => select({ kind: "profile", profileId }),
+                              ${catalog.profiles.map((profile) => {
+                                const profileSelected =
+                                  selected.kind === "profile" && selected.profileId === profile.id;
+                                const machines = profile.machines ?? [];
+                                const selectedMachineId =
+                                  cloudMachines.resolve(profile.id) ||
+                                  machines.find((machine) => machine.default === true)?.id ||
+                                  "";
+                                return html`
+                                  ${renderCloudProfileMenuItems({
+                                    profiles: [profile],
+                                    selectedId: profileSelected ? profile.id : "",
+                                    submitting: false,
+                                    icon: icons.server,
+                                    onSelect: (profileId) => select({ kind: "profile", profileId }),
+                                  })}
+                                  ${profileSelected && machines.length > 0
+                                    ? html`
+                                        <div class="new-session-page__menu-title">
+                                          ${t("newSession.machine")}
+                                        </div>
+                                        ${renderCloudMachineMenuItems({
+                                          machines,
+                                          selectedId: selectedMachineId,
+                                          submitting: false,
+                                          onSelect: (machineId) =>
+                                            cloudMachines.select(
+                                              profile.id,
+                                              machineId,
+                                              catalog.profiles,
+                                              false,
+                                              paint,
+                                            ),
+                                        })}
+                                      `
+                                    : nothing}
+                                `;
                               })}
                             `
                           : nothing}

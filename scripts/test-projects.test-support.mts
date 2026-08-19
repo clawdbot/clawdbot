@@ -3063,6 +3063,17 @@ function resolvePromptSnapshotFixtureTargets(changedPath: string) {
   return ["test/scripts/prompt-snapshots.test.ts"];
 }
 
+function resolvePackageFixtureTargets(changedPath: string, cwd: string) {
+  const match = /^packages\/([^/]+)\/test\/fixtures\/([^/]+)\/.+$/u.exec(changedPath);
+  const packageName = match?.[1];
+  const fixtureFamily = match?.[2];
+  if (!packageName || !fixtureFamily) {
+    return null;
+  }
+  const owner = `packages/${packageName}/src/${fixtureFamily}.test.ts`;
+  return fs.existsSync(path.join(cwd, owner)) ? [owner] : null;
+}
+
 function resolveAppcastTargets(changedPath: string) {
   return changedPath === "appcast.xml" ? APPCAST_TEST_TARGETS : null;
 }
@@ -3079,7 +3090,8 @@ function resolvePreciseChangedTestTargets(
       : null) ??
     resolveToolingTestTargets(changedPath, cwd) ??
     resolveAppcastTargets(changedPath) ??
-    resolvePromptSnapshotFixtureTargets(changedPath);
+    resolvePromptSnapshotFixtureTargets(changedPath) ??
+    resolvePackageFixtureTargets(changedPath, cwd);
   if (mappedTargets) {
     return mappedTargets;
   }

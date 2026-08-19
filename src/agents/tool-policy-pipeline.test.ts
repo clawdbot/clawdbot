@@ -147,6 +147,24 @@ describe("tool-policy-pipeline", () => {
     },
   );
 
+  test.each([
+    { expected: ["progress_card"], policy: { allow: ["update_plan"] } },
+    { expected: ["exec"], policy: { deny: ["update_plan"] } },
+  ])(
+    "maps the shipped update_plan policy name to progress_card ($policy)",
+    ({ expected, policy }) => {
+      const tools = [{ name: "exec" }, { name: "progress_card" }];
+      const filtered = applyToolPolicyPipeline({
+        tools: asPolicyTools(tools),
+        toolMeta: () => undefined,
+        warn: () => {},
+        steps: [{ policy, label: "tools", stripPluginOnlyAllowlist: true }],
+      });
+
+      expect(filtered.map((tool) => tool.name).toSorted()).toEqual(expected);
+    },
+  );
+
   test("warns about unknown allowlist entries", () => {
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];

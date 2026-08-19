@@ -42,6 +42,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  realtimeVoiceAudioDurationMs,
   resamplePcm,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
@@ -693,9 +694,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       typeof this.config.silenceDurationMs === "number"
         ? Math.max(0, Math.floor(this.config.silenceDurationMs))
         : DEFAULT_AUDIO_STREAM_END_SILENCE_MS;
-    const bytesPerSample = this.audioFormat.encoding === "pcm16" ? 2 : 1;
     this.consecutiveSilenceMs += Math.round(
-      (audio.length / bytesPerSample / this.audioFormat.sampleRateHz) * 1000,
+      realtimeVoiceAudioDurationMs(this.audioFormat, audio.length),
     );
     if (!this.audioStreamEnded && this.consecutiveSilenceMs >= silenceThresholdMs) {
       this.session.sendRealtimeInput({ audioStreamEnd: true });

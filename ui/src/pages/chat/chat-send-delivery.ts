@@ -46,6 +46,11 @@ import {
   requestSkillWorkshopRevisionChatSend,
 } from "./chat-send-request.ts";
 import {
+  formatTerminalChatSendAckError,
+  OFFLINE_QUEUE_STORAGE_ERROR,
+  surfaceChatDeliveryFailure,
+} from "./chat-send-support.ts";
+import {
   chatSendAckServerTimingEventFields,
   recordChatSendTiming,
   registerChatSendTiming,
@@ -61,13 +66,8 @@ import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
-import { hasAbortableSessionRun, isChatBusy, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import { hasDirectSessionRun, isChatBusy, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { resetChatScroll, scheduleChatScroll } from "./scroll.ts";
-import {
-  formatTerminalChatSendAckError,
-  OFFLINE_QUEUE_STORAGE_ERROR,
-  surfaceChatDeliveryFailure,
-} from "./steer-lifecycle.ts";
 import { resetToolStream } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -306,7 +306,8 @@ async function sendQueuedChatMessage(
           runId,
           sessionKey,
           agentId: prepared.agentId,
-          ...(options?.expectedLeafEntryId !== undefined
+          ...(prepared.queueMode ? { queueMode: prepared.queueMode } : {}),
+          ...(prepared.queueMode !== "steer" && options?.expectedLeafEntryId !== undefined
             ? { expectedLeafEntryId: options.expectedLeafEntryId }
             : {}),
           ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
@@ -614,7 +615,9 @@ export async function deliverChatQueueItem(
     if (
       drainResult === undefined &&
       routeVisible &&
-      (isChatBusy(host) || hasAbortableSessionRun(host))
+      !admittedItem.queueMode &&
+      !sendOptions.allowActiveRunSend &&
+      (isChatBusy(host) || hasDirectSessionRun(host))
     ) {
       const parked = finishChatDeliveryAdmission(
         host,

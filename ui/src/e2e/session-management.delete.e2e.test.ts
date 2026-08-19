@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   captureUiProof,
@@ -12,9 +13,245 @@ import {
   waitForConfirmModal,
 } from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite();
+const suite = createSessionManagementE2eSuite(true);
+
+type DraftDeletionTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
+  it("retires confirmed single and batch drafts in both stores without touching siblings or no-ops", async () => {
+    const retired = [
+      "agent:main:single",
+      "agent:main:batch-a",
+      "agent:main:batch-b",
+      "agent:main:external",
+    ];
+    const sibling = "agent:main:sibling";
+    const noOp = "agent:main:no-op";
+    const replacement = "agent:main:replacement";
+    const keys = [...retired, sibling, noOp, replacement];
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.list": sessionsListResponse(
+          keys.map((key, index) => sessionRow(key, key, index)),
+        ),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      await page.waitForFunction(() => {
+        const client = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
+          ?.context.gateway.snapshot.client;
+        return client?.recoveryScopeReady === true && Boolean(client.recoveryScope);
+      });
+      const draftStore = await page.evaluateHandle<
+        typeof import("../lib/chat/composer-draft-store.runtime.ts")
+      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const owner = await page.evaluate(
+        async ({ store, sessionKeys }) => {
+          const client = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
+            ?.context.gateway.snapshot.client;
+          if (!client?.recoveryScope) {
+            throw new Error("Gateway recovery scope unavailable");
+          }
+          const gatewayOwner = client.gatewayUrl.trim() || "default";
+          const sessions = Object.fromEntries(
+            sessionKeys.map((key, index) => [
+              `${key}\u0000agent:main`,
+              {
+                draft: `local ${key}`,
+                draftRevision: index + 1,
+                queue: [{ id: `queued-${index}`, text: "queued", createdAt: index }],
+                updatedAt: index + 1,
+              },
+            ]),
+          );
+          sessionStorage.setItem(
+            `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayOwner)}`,
+            JSON.stringify({ version: 2, gatewayOwner, sessions }),
+          );
+          const recoveryScope = client.recoveryScope;
+          await Promise.all(
+            sessionKeys.map((key, index) =>
+              store.writeDurableComposerDraft(
+                { gatewayOwner, recoveryScope, scopeKey: `${key}\u0000agent:main` },
+                {
+                  revision: index + 1,
+                  text: `durable ${key}`,
+                  attachments: [{ blob: new Blob([key]), mimeType: "text/plain" }],
+                },
+                { expectedRevision: 0, writeId: `seed-${index}` },
+              ),
+            ),
+          );
+          return { gatewayOwner, recoveryScope };
+        },
+        { store: draftStore, sessionKeys: keys },
+      );
+      const deleteFromRuntime = (sessionKeys: string[]) =>
+        page.evaluate(async (targets) => {
+          const sessions = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
+            ?.context.sessions;
+          if (!sessions) {
+            throw new Error("Session capability unavailable");
+          }
+          return targets.length === 1
+            ? sessions.delete(targets[0]!, { agentId: "main" })
+            : sessions.deleteMany(targets.map((key) => ({ key, agentId: "main" })));
+        }, sessionKeys);
+
+      await expect(deleteFromRuntime([retired[0]!])).resolves.toMatchObject({ deleted: true });
+      await expect(deleteFromRuntime(retired.slice(1, 3))).resolves.toMatchObject({
+        deleted: retired.slice(1, 3),
+      });
+      await gateway.setMethodResponse("sessions.delete", { ok: true, deleted: false });
+      await expect(deleteFromRuntime([noOp])).resolves.toMatchObject({ deleted: false });
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: retired[3],
+        agentId: "main",
+        reason: "delete",
+      });
+
+      await gateway.setMethodResponse("sessions.delete", { ok: true, deleted: true });
+      await gateway.deferNext("sessions.delete", { key: replacement });
+      const requestsBeforeReplacement = (await gateway.getRequests("sessions.delete")).length;
+      const replacementDelete = deleteFromRuntime([replacement]);
+      await gateway.waitForRequest("sessions.delete", { after: requestsBeforeReplacement });
+      const inFlightRevision = await page.evaluate(
+        async ({ store, key, scopeOwner }) => {
+          const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
+            sessions: Record<string, unknown>;
+          };
+          const revision = Date.now();
+          local.sessions[`${key}\u0000agent:main`] = {
+            draft: "in-flight local edit",
+            draftRevision: revision,
+            updatedAt: Date.now(),
+          };
+          sessionStorage.setItem(storageKey, JSON.stringify(local));
+          await store.writeDurableComposerDraft(
+            { ...scopeOwner, scopeKey: `${key}\u0000agent:main` },
+            { revision, text: "in-flight durable edit", attachments: [] },
+            { expectedRevision: 7, writeId: "in-flight-edit" },
+          );
+          return revision;
+        },
+        { store: draftStore, key: replacement, scopeOwner: owner },
+      );
+      await expect
+        .poll(() => page.evaluate((revision) => Date.now() > revision, inFlightRevision))
+        .toBe(true);
+      await gateway.resolveDeferred("sessions.delete", { ok: true, deleted: true });
+      await expect(replacementDelete).resolves.toMatchObject({ deleted: true });
+
+      await expect
+        .poll(() =>
+          page.evaluate(
+            async ({ store, key, scopeOwner }) => {
+              const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+              const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
+                sessions?: Record<string, { draft?: string; queue?: unknown[] }>;
+              };
+              const scopeKey = `${key}\u0000agent:main`;
+              const localDraft = local.sessions?.[scopeKey];
+              const durable = await store.readDurableComposerDraft({ ...scopeOwner, scopeKey });
+              return {
+                local: Boolean(localDraft?.draft || localDraft?.queue?.length),
+                durable: durable.status === "found" ? durable.draft.text : durable.status,
+              };
+            },
+            { store: draftStore, key: replacement, scopeOwner: owner },
+          ),
+        )
+        .toEqual({ local: false, durable: "not-found" });
+
+      await page.evaluate(
+        async ({ store, key, scopeOwner }) => {
+          const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
+          const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
+            sessions: Record<string, { draft?: string; draftRevision?: number }>;
+          };
+          const scopeKey = `${key}\u0000agent:main`;
+          const durable = await store.readDurableComposerDraft({ ...scopeOwner, scopeKey });
+          if (durable.status !== "not-found") {
+            throw new Error("confirmed deletion did not leave a durable retirement fence");
+          }
+          const revision = Date.now();
+          local.sessions[scopeKey] = {
+            draft: "post-confirm local replacement",
+            draftRevision: revision,
+          };
+          sessionStorage.setItem(storageKey, JSON.stringify(local));
+          const written = await store.writeDurableComposerDraft(
+            { ...scopeOwner, scopeKey },
+            { revision, text: "post-confirm durable replacement", attachments: [] },
+            {
+              expectedRevision: durable.revision ?? 0,
+              expectedWriteId: durable.writeId,
+              writeId: "post-confirm-replacement",
+            },
+          );
+          if (written.status !== "persisted") {
+            throw new Error(`post-confirm replacement failed: ${written.status}`);
+          }
+        },
+        { store: draftStore, key: replacement, scopeOwner: owner },
+      );
+
+      await expect
+        .poll(() =>
+          page.evaluate(
+            async ({ store, sessionKeys, scopeOwner }) => {
+              const local = JSON.parse(
+                sessionStorage.getItem(
+                  `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`,
+                ) ?? "{}",
+              ) as { sessions?: Record<string, { draft?: string; queue?: unknown[] }> };
+              return Object.fromEntries(
+                await Promise.all(
+                  sessionKeys.map(async (key) => {
+                    const scopeKey = `${key}\u0000agent:main`;
+                    const localDraft = local.sessions?.[scopeKey];
+                    const durable = await store.readDurableComposerDraft({
+                      ...scopeOwner,
+                      scopeKey,
+                    });
+                    return [
+                      key,
+                      {
+                        local: Boolean(localDraft?.draft || localDraft?.queue?.length),
+                        durable: durable.status === "found" ? durable.draft.text : durable.status,
+                      },
+                    ];
+                  }),
+                ),
+              );
+            },
+            { store: draftStore, sessionKeys: keys, scopeOwner: owner },
+          ),
+        )
+        .toEqual({
+          [retired[0]!]: { local: false, durable: "not-found" },
+          [retired[1]!]: { local: false, durable: "not-found" },
+          [retired[2]!]: { local: false, durable: "not-found" },
+          [retired[3]!]: { local: false, durable: "not-found" },
+          [sibling]: { local: true, durable: `durable ${sibling}` },
+          [noOp]: { local: true, durable: `durable ${noOp}` },
+          [replacement]: {
+            local: true,
+            durable: "post-confirm durable replacement",
+          },
+        });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("rejects deleting a same-key replacement after the in-app confirm", async () => {
     const key = "agent:main:research";
     const context = await suite.browser.newContext({

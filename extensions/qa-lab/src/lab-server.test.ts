@@ -402,6 +402,21 @@ async function createQaLabSuiteResultFixture(params?: {
 }
 
 describe("qa-lab server", () => {
+  it("returns a 500 JSON response when a shared bus route rejects", async () => {
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => await lab.stop());
+    const requestError = new Error("combined snapshot unavailable");
+    lab.state.getSnapshot = () => {
+      throw requestError;
+    };
+
+    const response = await fetch(`${lab.baseUrl}/v1/state`, {
+      signal: AbortSignal.timeout(1_000),
+    });
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: requestError.message });
+  });
+
   it("dispatches explicit mixed-kind selections through the suite planner", async () => {
     const lab = await startQaLabServerForTest();
     cleanups.push(async () => {

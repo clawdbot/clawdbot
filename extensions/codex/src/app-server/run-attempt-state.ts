@@ -53,11 +53,17 @@ export async function markCodexAppServerBindingCoveredThroughTurn(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
   threadId: string;
+  continuityCalibration?: { promptChars: number; inputTokens: number };
 }): Promise<void> {
   await params.bindingStore.mutate(params.identity, {
     kind: "patch",
     threadId: params.threadId,
-    patch: { historyCoveredThrough: new Date().toISOString() },
+    patch: {
+      historyCoveredThrough: new Date().toISOString(),
+      ...(params.continuityCalibration
+        ? { continuityCalibration: params.continuityCalibration }
+        : {}),
+    },
   });
 }
 

@@ -29,7 +29,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { isSqliteSchemaVersionError, readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -594,7 +594,7 @@ function openUnpublishedOpenClawStateDatabase(
       db.close();
       if (
         err instanceof Error &&
-        (err.name === "SqliteSchemaVersionError" || isTerminalSqliteIntegrityError(err))
+        (isSqliteSchemaVersionError(err) || isTerminalSqliteIntegrityError(err))
       ) {
         recordOpenClawStateDatabaseOpenFailure(pathname, err);
       }

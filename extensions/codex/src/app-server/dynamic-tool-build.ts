@@ -110,7 +110,8 @@ type DynamicToolBuildParams = {
   ignoreRuntimePlan?: boolean;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
   isHostScopedToolActive?: (toolName: string) => boolean;
-  onYieldDetected: () => void;
+  onYieldDetected: (acknowledgment?: string) => void;
+  claimYieldCompletion?: OpenClawCodingToolsOptions["claimYieldCompletion"];
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
   onWebSearchPolicyResolved?: (allowed: boolean) => void;
@@ -247,6 +248,13 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
+  const webSearchPlan = resolveCodexWebSearchPlan({
+    config: params.config,
+    disableTools: params.disableTools,
+    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
+    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
+  });
+  const webFetchHostnameAllowlistRef: { value?: string[] } = {};
   const buildOpenClawCodingTools = () =>
     params.hostCapabilities.bindToolSurface(
       createOpenClawCodingTools({
@@ -321,6 +329,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
           },
         ),
         suppressManagedWebSearch: false,
+        webFetchHostnameAllowlistRef,
         currentChannelId: params.currentChannelId,
         currentMessagingTarget: params.currentMessagingTarget,
         hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
@@ -340,13 +349,14 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         forceMessageTool: shouldForceMessageTool(messagePolicyParams),
         enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
         forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
-        onYield: (message) => {
-          input.onYieldDetected();
+        onYield: (message, acknowledgment) => {
+          input.onYieldDetected(acknowledgment);
           input.onCodexAppServerEvent?.({
             stream: "codex_app_server.tool",
             data: { name: "sessions_yield", message },
           });
         },
+        claimYieldCompletion: input.claimYieldCompletion,
         recordToolPrepStage: (name) => {
           toolBuildStages.mark(name);
         },
@@ -371,12 +381,6 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const readableAllToolProjection = filterProviderNormalizableTools(allTools);
   preNormalizationDiagnostics.push(...readableAllToolProjection.diagnostics);
-  const webSearchPlan = resolveCodexWebSearchPlan({
-    config: params.config,
-    disableTools: params.disableTools,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-  });
   const readableAllTools = [...readableAllToolProjection.tools];
   const normallyProfiledTools =
     input.nativeToolSurfaceEnabled === false
@@ -472,7 +476,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   toolBuildStages.mark("runtime-normalization");
   // Resolve policy before hiding the managed tool. Hosted search follows the
   // same effective policy, while only one search implementation is exposed.
-  input.onWebSearchPolicyResolved?.(normalizedTools.some((tool) => tool.name === "web_search"));
+  const webSearchAllowed = normalizedTools.some((tool) => tool.name === "web_search");
+  webFetchHostnameAllowlistRef.value = webSearchAllowed
+    ? webSearchPlan.webFetchHostnameAllowlist
+    : undefined;
+  input.onWebSearchPolicyResolved?.(webSearchAllowed);
   const exposedTools = webSearchPlan.suppressManagedWebSearch
     ? normalizedTools.filter((tool) => tool.name !== "web_search")
     : normalizedTools;

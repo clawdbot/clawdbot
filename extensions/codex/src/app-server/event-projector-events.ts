@@ -39,6 +39,20 @@ type NormalizedToolItemProjection = {
   event: AgentEvent | undefined;
 };
 
+function guardianActionCommand(action: JsonObject | undefined): string | undefined {
+  if (!action) {
+    return undefined;
+  }
+  const command = readString(action, "command");
+  if (command) {
+    return command;
+  }
+  const argv = Array.isArray(action.argv)
+    ? action.argv.filter((value): value is string => typeof value === "string")
+    : [];
+  return argv.length > 0 ? argv.join(" ") : readString(action, "program");
+}
+
 export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
   item: CodexThreadItem | undefined;
@@ -113,6 +127,7 @@ export class CodexEventProjection {
         userAuthorization: review ? readString(review, "userAuthorization") : undefined,
         rationale: review ? readNullableString(review, "rationale") : undefined,
         actionType: action ? readString(action, "type") : undefined,
+        command: guardianActionCommand(action),
       },
     });
   }

@@ -125,10 +125,11 @@ describe("command-path-policy", () => {
     }
   });
 
-  it("keeps gateway suspension RPCs on non-observing config validation", () => {
-    for (const subcommand of ["suspend", "resume"]) {
+  it("keeps gateway control RPCs on core-only config validation", () => {
+    for (const subcommand of ["call", "restart", "suspend", "resume"]) {
       expectResolvedPolicy(["gateway", subcommand], {
         configGuard: "validate",
+        loadPlugins: "never",
         networkProxy: "bypass",
       });
     }
@@ -293,6 +294,7 @@ describe("command-path-policy", () => {
     ["skills"],
     ["skills", "list"],
     ["skills", "check"],
+    ["gateway", "diagnostics", "export"],
     ["gateway", "stability"],
     ["gateway", "usage-cost"],
   ])("keeps read-only cold path %s out of startup config and plugins", (...commandPath) => {

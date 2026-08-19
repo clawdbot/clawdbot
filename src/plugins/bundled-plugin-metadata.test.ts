@@ -431,6 +431,15 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps Memory Core's health checks on a narrow public surface", () => {
+    const memoryCore = listRepoBundledPluginMetadata().find(
+      (entry) => entry.dirName === "memory-core",
+    );
+    expectArtifactPresence(memoryCore?.publicSurfaceArtifacts, {
+      contains: ["doctor-health-api.js"],
+    });
+  });
+
   it("keeps iMessage message-tool discovery on a narrow public surface", () => {
     const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
     expectArtifactPresence(imessage?.publicSurfaceArtifacts, {

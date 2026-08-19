@@ -229,6 +229,19 @@ describe("McpLoopbackToolCache", () => {
     });
   });
 
+  it("does not share loopback message tools across prepared reply modes", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
+    cache.resolve(scopeParams({ cfg, replyToMode: "off" }));
+    cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({ replyToMode: "all" });
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ replyToMode: "off" });
+  });
+
   it("evicts only the revoked grant's cached tool closures", () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;

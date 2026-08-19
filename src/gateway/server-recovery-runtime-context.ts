@@ -1,4 +1,14 @@
-import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
+import type {
+  GatewayInstanceAgentDispatchOptions,
+  GatewayRecoveryRuntime,
+} from "./server-instance-runtime.types.js";
+import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
+import type { GatewayContextResolver } from "./server-methods/shared-types.js";
+
+type GatewayLifecycleAgentDispatchOptions = GatewayInstanceAgentDispatchOptions & {
+  resolveGatewayContext?: GatewayContextResolver;
+  timeoutMs?: number;
+};
 
 type ActiveGatewayRecoveryRuntime = {
   owner: symbol;
@@ -27,4 +37,18 @@ export function registerGatewayRecoveryRuntime(runtime: GatewayRecoveryRuntime):
 
 export function getGatewayRecoveryRuntime(): GatewayRecoveryRuntime | undefined {
   return activeRuntime?.runtime;
+}
+
+/** Dispatches detached Gateway lifecycle work through the active instance principal. */
+export async function dispatchGatewayLifecycleMethod<T = unknown>(
+  method: "agent",
+  params: Record<string, unknown>,
+  options: GatewayLifecycleAgentDispatchOptions = {},
+): Promise<T> {
+  const agentParams = params as AgentRunRequest; // SAFETY: the bound facade validates the payload.
+  const runtime = getGatewayRecoveryRuntime();
+  if (!runtime) {
+    throw new Error(`Gateway instance lifecycle dispatch unavailable for ${method}`);
+  }
+  return await runtime.dispatchAgent<T>(agentParams, options.timeoutMs, options);
 }

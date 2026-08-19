@@ -2090,7 +2090,7 @@ describe("gateway hot reload commit policy", () => {
     expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(false);
   });
 
-  it("preserves the active hook transform cache when hook preparation rejects the config", async () => {
+  it("preserves the active hook transform cache across rejected and policy-only reloads", async () => {
     const configDir = autoCleanupTempDirs.make("openclaw-rejected-hook-reload-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
@@ -2151,6 +2151,24 @@ describe("gateway hot reload commit policy", () => {
     expect(afterRejectedReload?.ok).toBe(true);
     if (afterRejectedReload?.ok && afterRejectedReload.action?.kind === "wake") {
       expect(afterRejectedReload.action.text).toBe("accepted");
+    }
+
+    await applyHotReload(
+      createHotTailPlan({
+        changedPaths: ["agents.entries"],
+        hotReasons: ["agents.entries"],
+        refreshHooksPolicy: true,
+      }),
+      {
+        agents: { ownership: "explicit", entries: { next: {} } },
+        hooks: { enabled: true, token: "hook-secret" },
+      },
+    );
+
+    const afterPolicyReload = await applyActiveTransform();
+    expect(afterPolicyReload?.ok).toBe(true);
+    if (afterPolicyReload?.ok && afterPolicyReload.action?.kind === "wake") {
+      expect(afterPolicyReload.action.text).toBe("accepted");
     }
   });
 });

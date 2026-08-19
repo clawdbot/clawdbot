@@ -245,8 +245,10 @@ async function expectListedSessionActiveRun(
   requestId: string,
   run: Record<string, unknown>,
   expected: boolean,
+  expectedStatus?: "queued" | "running",
+  sessionOptions?: SessionStoreEntryOptions,
 ) {
-  await writeMainSessionStore();
+  await writeMainSessionStore(sessionOptions);
 
   const { respond } = await invokeSessionsList({
     requestId,
@@ -259,6 +261,7 @@ async function expectListedSessionActiveRun(
   const session = findSession(payload, "agent:main:main");
   expect(session.hasActiveRun).toBe(expected);
   expect(session.activeRunIds).toEqual(expected ? ["run-1"] : undefined);
+  expect(session.status).toBe(expectedStatus);
 }
 
 test("sessions.list keeps bulk rows lightweight and uses selected model fields", async () => {
@@ -718,7 +721,26 @@ test("sessions.changed mutations reach plugin subscribers without websocket clie
 });
 
 test("sessions.list marks sessions with active abortable runs", async () => {
-  await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
+  await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true, "running");
+});
+
+test("sessions.list marks admitted pre-execution work as queued", async () => {
+  await expectListedSessionActiveRun(
+    "req-sessions-list-queued-run",
+    { executionStarted: false },
+    true,
+    "queued",
+  );
+});
+
+test("sessions.list replaces a previous terminal status when execution starts", async () => {
+  await expectListedSessionActiveRun(
+    "req-sessions-list-restarted-run",
+    { executionStarted: true },
+    true,
+    "running",
+    { status: "failed" },
+  );
 });
 
 test("sessions.changed publishes visible active run ids", async () => {
@@ -734,6 +756,28 @@ test("sessions.changed publishes visible active run ids", async () => {
   expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["run-1"],
+  });
+});
+
+test("sessions.changed publishes queued status before execution starts", async () => {
+  await writeMainSessionStore({ status: "failed" });
+  const result = await invokeSessionMutation({
+    method: "sessions.patch",
+    params: { key: "main", label: "Queued main" },
+    context: {
+      chatAbortControllers: new Map([
+        ["run-1", { sessionKey: "agent:main:main", executionStarted: false }],
+      ]),
+    },
+  });
+
+  expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    status: "queued",
     hasActiveRun: true,
     activeRunIds: ["run-1"],
   });
@@ -865,7 +909,9 @@ test("sessions.changed mutation events include live usage metadata", async () =>
         modelOverride: "gpt-5.3-codex-spark",
         modelProvider: "openai",
         model: "gpt-5.3-codex-spark",
+        agentHarnessId: "openclaw",
         contextTokens: 123_456,
+        contextTokensSource: "runtime",
         totalTokens: 0,
         totalTokensFresh: false,
       }),
@@ -933,6 +979,20 @@ test("sessions.changed mutation events include live session setting metadata", a
     // An explicit session override resolves to the same effective mode and the
     // sessions.changed builder carries the row-built channel-aware value.
     effectiveResponseUsage: "full",
+  });
+});
+
+test("sessions.patch broadcasts the prepared permission boundary", async () => {
+  await writeMainSessionStore({ sessionRoot: "/workspace/project" });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    permissionMode: "workspace",
+  });
+
+  expectMainPatchBroadcast(result, {
+    permissionMode: "workspace",
+    sessionRoot: "/workspace/project",
   });
 });
 
