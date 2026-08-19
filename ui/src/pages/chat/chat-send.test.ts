@@ -15,6 +15,7 @@ import {
   buildSlashCommandsFromEntries,
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import {
   createTestGatewayClient,
@@ -668,6 +669,127 @@ describe("refreshChat", () => {
       status: "done",
       updatedAt: 10,
     });
+  });
+
+  it("keeps a newer canonical offline runner row over coalesced stale startup hydration", async () => {
+    const key = "agent:main:device-session";
+    const deviceRow = (status: "available" | "offline") =>
+      row(key, {
+        updatedAt: 10,
+        placement: {
+          state: "active",
+          generation: 4,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          stateChangedAtMs: 2,
+          environmentId: "environment-device",
+          activeOwnerEpoch: 7,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "manifest-device",
+          remoteWorkspaceDir: "/workspace",
+          runner: { kind: "device", status },
+        },
+      });
+    const staleAvailable = deviceRow("available");
+    const startup = createDeferred<unknown>();
+    const host = makeChatHost({
+      hello: gatewayHelloForMethods(["chat.startup"], []),
+      requestHandlers: {
+        "chat.startup": () => startup.promise,
+        "sessions.list": createSessionsResult([deviceRow("offline")]),
+      },
+      sessionKey: key,
+      sessionsResult: createSessionsResult([staleAvailable]),
+    });
+    const options = {
+      awaitHistory: true,
+      deferBranches: true,
+      scheduleScroll: false,
+      startup: true,
+    } as const;
+    const firstRefresh = refreshPageChat(asChatPageHost(host), options);
+    await vi.waitFor(() =>
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(
+        1,
+      ),
+    );
+    await host.sessions.refresh({ force: true });
+    expect(host.sessions.canonicalListRevision).toBe(1);
+    expect(host.sessions.state.result?.sessions[0]?.placement).toMatchObject({
+      runner: { kind: "device", status: "offline" },
+    });
+
+    const joinedRefresh = refreshPageChat(asChatPageHost(host), options);
+    startup.resolve({
+      messages: [{ role: "assistant", content: "Stale startup transcript was consumed." }],
+      sessionInfo: staleAvailable,
+    });
+    await Promise.all([firstRefresh, joinedRefresh]);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
+    expect(host.chatMessages.map((message) => extractText(message))).toContain(
+      "Stale startup transcript was consumed.",
+    );
+    expect(host.sessions.state.result?.sessions[0]?.placement).toMatchObject({
+      runner: { kind: "device", status: "offline" },
+    });
+  });
+
+  it("still lets late startup hydration add a routed row absent from a newer canonical list", async () => {
+    const key = "agent:main:archived-device-session";
+    const routed = row(key, {
+      archived: true,
+      updatedAt: 10,
+      placement: {
+        state: "active",
+        generation: 4,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        stateChangedAtMs: 2,
+        environmentId: "environment-device",
+        activeOwnerEpoch: 7,
+        workerBundleHash: "a".repeat(64),
+        workspaceBaseManifestRef: "manifest-device",
+        remoteWorkspaceDir: "/workspace",
+        runner: { kind: "device", status: "available" },
+      },
+    });
+    const startup = createDeferred<unknown>();
+    const host = makeChatHost({
+      hello: gatewayHelloForMethods(["chat.startup"], []),
+      requestHandlers: {
+        "chat.startup": () => startup.promise,
+        "sessions.list": createSessionsResult([]),
+      },
+      sessionKey: key,
+    });
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      deferBranches: true,
+      scheduleScroll: false,
+      startup: true,
+    });
+    await vi.waitFor(() =>
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(
+        1,
+      ),
+    );
+    await host.sessions.refresh({ force: true });
+    expect(host.sessions.canonicalListRevision).toBe(1);
+    expect(host.sessions.state.result?.sessions).toEqual([]);
+
+    startup.resolve({ messages: [], sessionInfo: routed });
+    await refresh;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(host.sessions.state.result?.sessions).toEqual([
+      expect.objectContaining({ key, archived: true }),
+    ]);
   });
 
   it("reconciles queued history over a prior terminal session row", async () => {

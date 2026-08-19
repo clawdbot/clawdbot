@@ -216,6 +216,7 @@ suite.define(() => {
       expect(await reclaimItem.isDisabled()).toBe(true);
       expect(await reclaimItem.getAttribute("title")).toContain("Reconnect the device");
       await captureRunnerOffline(page);
+      await gateway.deferNext("sessions.move");
       await continueAction.click();
       await page.getByText("Unsynced device files", { exact: false }).waitFor();
       await page.getByRole("button", { name: "Continue on Gateway", exact: true }).click();
@@ -230,6 +231,84 @@ suite.define(() => {
       });
       expect(await gateway.getRequests("environments.list")).toHaveLength(0);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
+      const localSession = {
+        ...session,
+        hasActiveRun: false,
+        placement: {
+          state: "local" as const,
+          generation: 9,
+          createdAtMs: 1,
+          updatedAtMs: 3,
+          stateChangedAtMs: 3,
+        },
+      };
+      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([localSession]));
+      await gateway.resolveDeferred("sessions.move", {
+        ok: true,
+        key: "agent:main:placement-move",
+        sessionId: "session-placement-move",
+        placement: localSession.placement,
+      });
+      await page.locator(".chat-pane__placement-chip").waitFor({ state: "detached" });
+      await capture(page, "06-abandonment-local.png");
+      expect(await page.getByRole("button", { name: "Move failed" }).count()).toBe(0);
+      expect(await page.getByText("Continue on Gateway…", { exact: true }).count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a rapid offline publication over stale deferred startup hydration", async () => {
+    const context = await suite.newBrowserContext(contextOptions());
+    const page = await context.newPage();
+    const available = activeSession();
+    available.placement = {
+      ...available.placement,
+      runner: { kind: "device", status: "available" },
+    } as typeof available.placement;
+    const offline = activeSession();
+    offline.placement = {
+      ...offline.placement,
+      runner: { kind: "device", status: "offline" },
+    } as typeof offline.placement;
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.startup"],
+      featureMethods: ["chat.startup", "sessions.move"],
+      historyMessages: [
+        { role: "assistant", content: "Deferred available startup transcript settled." },
+      ],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([available]),
+      },
+      sessionInfo: available,
+      sessionKey: "agent:main:placement-move",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await page.getByRole("button", { name: "Runs on device" }).waitFor();
+      const listCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([offline]));
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" }),
+        ),
+      );
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(listCount);
+      await page.getByRole("button", { name: "Device offline" }).waitFor();
+
+      await gateway.resolveDeferred("chat.startup");
+      await page.getByText("Deferred available startup transcript settled.").waitFor();
+      await page.getByRole("button", { name: "Device offline" }).waitFor();
+      expect(await page.getByRole("button", { name: "Runs on device" }).count()).toBe(0);
+      await page.getByRole("button", { name: "Device offline" }).click();
+      await page
+        .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
+        .waitFor();
+      await capture(page, "07-stale-startup-keeps-offline.png");
     } finally {
       await suite.closeBrowserContext(context);
     }

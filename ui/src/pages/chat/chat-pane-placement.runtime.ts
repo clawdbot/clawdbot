@@ -8,13 +8,10 @@ import {
   resolveCloudWorkerStopAction,
 } from "../../components/cloud-worker-stop.ts";
 import { t } from "../../i18n/index.ts";
-import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { requestPlaceCatalog } from "../new-session/cloud-target.ts";
 import { projectDevicePlacements } from "../new-session/device-placement.ts";
-
-registerSessionPlacementEnglish();
 
 async function loadPlacementMoveCatalog(client: GatewayBrowserClient, includeProfiles: boolean) {
   const catalog = await requestPlaceCatalog(client);

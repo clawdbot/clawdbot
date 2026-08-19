@@ -227,8 +227,13 @@ async function refreshChat(
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
+  let historyCanonicalListRevision = host.sessions.canonicalListRevision;
   const historyLoad = loadChatHistory(host, {
+    canonicalListRevision: historyCanonicalListRevision,
     deferBranches: opts?.deferBranches === true,
+    onCanonicalListRevisionCaptured: (revision) => {
+      historyCanonicalListRevision = revision;
+    },
     startup: opts?.startup === true,
   });
   const historyRefresh = historyLoad.finally(() => {
@@ -241,20 +246,37 @@ async function refreshChat(
     if (!history?.sessionInfo) {
       return;
     }
-    if (areUiSessionKeysEquivalent(history.sessionInfo.key, refreshedSessionKey)) {
-      host.selectedChatSessionArchived = history.sessionInfo.archived === true;
-      host.selectedChatSessionIncognito = history.sessionInfo.incognito === true;
+    const canonicalRow = host.sessions.state.result?.sessions.find(
+      (row) =>
+        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
+        areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
+    );
+    const canonicalListAdvanced =
+      host.sessions.canonicalListRevision > historyCanonicalListRevision;
+    const rosterRow = canonicalListAdvanced && canonicalRow ? canonicalRow : history.sessionInfo;
+    if (areUiSessionKeysEquivalent(rosterRow.key, refreshedSessionKey)) {
+      host.selectedChatSessionArchived = rosterRow.archived === true;
+      host.selectedChatSessionIncognito = rosterRow.incognito === true;
     }
-    const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
-      resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
-      selectedGlobalAgentId: refreshedAgentId,
-      // The routed chat remains visible after archive even though the active
-      // roster excludes it. Keep its descriptor in shared session state until
-      // navigation changes; otherwise the pane briefly falls back to the raw
-      // key while the sidebar lineage reload catches up.
-      archivedFilter: history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
-    });
-    const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
+    const reconciled =
+      canonicalListAdvanced && canonicalRow
+        ? false
+        : host.sessions.reconcile(history.sessionInfo, history.defaults, {
+            resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
+            selectedGlobalAgentId: refreshedAgentId,
+            // The routed chat remains visible after archive even though the active
+            // roster excludes it. Keep its descriptor in shared session state until
+            // navigation changes; otherwise the pane briefly falls back to the raw
+            // key while the sidebar lineage reload catches up.
+            archivedFilter:
+              history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
+          });
+    const sessionsResult =
+      canonicalListAdvanced && canonicalRow
+        ? host.sessions.state.result
+        : reconciled
+          ? host.sessions.state.result
+          : host.sessionsResult;
     if (reconciled) {
       host.sessionsResult = sessionsResult;
     }

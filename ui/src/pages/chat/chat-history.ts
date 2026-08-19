@@ -779,6 +779,7 @@ export async function syncSelectedSessionMessageSubscription(
 }
 
 type InFlightChatHistoryRequest = {
+  canonicalListRevision: number | undefined;
   client: NonNullable<ChatState["client"]>;
   connectionEpoch: number;
   key: string;
@@ -786,7 +787,9 @@ type InFlightChatHistoryRequest = {
 };
 
 type LoadChatHistoryOptions = {
+  canonicalListRevision?: number;
   deferBranches?: boolean;
+  onCanonicalListRevisionCaptured?: (revision: number) => void;
   startup?: boolean;
 };
 
@@ -1370,6 +1373,9 @@ export async function loadChatHistory(
     inFlight.client === client &&
     inFlight.connectionEpoch === connectionEpoch
   ) {
+    if (inFlight.canonicalListRevision !== undefined) {
+      opts.onCanonicalListRevisionCaptured?.(inFlight.canonicalListRevision);
+    }
     return inFlight.promise;
   }
   if (
@@ -1392,7 +1398,11 @@ export async function loadChatHistory(
       requests.inFlightHistory = undefined;
     }
   });
+  if (opts.canonicalListRevision !== undefined) {
+    opts.onCanonicalListRevisionCaptured?.(opts.canonicalListRevision);
+  }
   requests.inFlightHistory = {
+    canonicalListRevision: opts.canonicalListRevision,
     client,
     connectionEpoch,
     key: requestKey,

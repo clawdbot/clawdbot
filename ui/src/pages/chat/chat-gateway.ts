@@ -376,8 +376,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const finalMessage = normalizedFinalMessage;
     if (authoritativeTerminalMatches) {
       // History already owns this run's terminal message. Discard the live
-      // projection; reconcileTerminalRun below clears its remaining stream.
-      clearToolStreamSegments(state);
+      // projection; terminal cleanup below clears its remaining stream.
     } else {
       const boundary = finalMessage
         ? reconcileTerminalStreamBoundary(finalMessage, state)
@@ -387,7 +386,6 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         // authoritative prefix stable and project the complete terminal tail after it.
         discardStreamSegmentIndexes(state, boundary.replacedSegmentIndexes);
         let visibleMessages = materializeVisibleStream({ includeCurrent: false });
-        clearToolStreamSegments(state);
         if (boundary.tailMessage && !shouldHideAssistantChatMessage(boundary.tailMessage)) {
           visibleMessages = appendTerminalAssistantMessage(
             visibleMessages,
@@ -410,7 +408,6 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           })
         ) {
           visibleMessages = materializeVisibleStream();
-          clearToolStreamSegments(state);
         }
         const liveFinal = rememberLiveTerminalRun(
           finalMessage,
@@ -481,7 +478,6 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
             })
           ) {
             state.chatMessages = materializeVisibleStream({ includeCurrent: false });
-            clearToolStreamSegments(state);
           }
           state.chatMessages = appendTerminalAssistantMessage(
             state.chatMessages,
@@ -493,7 +489,6 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           );
         } else {
           state.chatMessages = materializeVisibleStream({ includeCurrent: true });
-          clearToolStreamSegments(state);
           state.chatMessages = [...state.chatMessages, visiblePayloadMessage];
         }
       } else {
@@ -510,6 +505,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
     );
+  }
+  if (payload.state !== "delta") {
+    // Terminal materialization transfers ownership into chatMessages; retaining
+    // the stream segments would render the same run output a second time.
+    clearToolStreamSegments(state);
   }
   return payload.state;
 }
