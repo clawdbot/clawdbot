@@ -18,6 +18,12 @@ import {
   createGatewayAgentModelCatalogProjector,
 } from "./server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
+import {
+  loadGatewayModelCatalogSnapshot,
+  loadPreparedGatewayModelCatalogSnapshot,
+  readPreparedGatewayModelCatalogOwnerSnapshot,
+} from "./server-model-catalog.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const mocks = getPreparedModelRuntimeMocks();
@@ -110,16 +116,16 @@ afterEach(async () => {
   }
 });
 
-async function createLifecycle() {
+async function createLifecycle(getConfig: () => OpenClawConfig = () => config) {
   return await createGatewayChatMetadataLifecycle({
-    getConfig: () => config,
+    getConfig,
     minimalTestGateway: false,
     log: { warn: vi.fn() } as never,
   });
 }
 
-async function publishOwner(): Promise<void> {
-  await refreshPreparedModelRuntimeSnapshots(config, {
+async function publishOwner(ownerConfig: OpenClawConfig = config): Promise<void> {
+  await refreshPreparedModelRuntimeSnapshots(ownerConfig, {
     gatewayLifecycle: true,
     catalogMode: "live",
     allowGatewaySubagentBinding: true,
@@ -202,6 +208,51 @@ describe("gateway chat metadata lifecycle composition", () => {
     await lifecycle.attachContext(context, sidecars);
 
     await expectAvailable(lifecycle);
+  });
+
+  it("keeps the published owner across a display-only config publication", async () => {
+    const publishedConfig = {
+      ...config,
+      ui: { prefs: { chatShowThinking: true } },
+    } satisfies OpenClawConfig;
+    const currentConfig = {
+      ...config,
+      ui: { prefs: { chatShowThinking: false } },
+    } satisfies OpenClawConfig;
+    await publishOwner(publishedConfig);
+    const lifecycle = await createLifecycle(() => currentConfig);
+    const loadCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (
+      loadParams,
+    ) => loadGatewayModelCatalogSnapshot({ ...loadParams, getConfig: () => currentConfig });
+    registerGatewayModelCatalogPrivateAccess(loadCatalogSnapshot, {
+      loadDeferred: (loadParams) =>
+        loadPreparedGatewayModelCatalogSnapshot({
+          ...loadParams,
+          getConfig: () => currentConfig,
+        }),
+      readPrepared: (loadParams) =>
+        readPreparedGatewayModelCatalogOwnerSnapshot({
+          ...loadParams,
+          getConfig: () => currentConfig,
+        }),
+    });
+    const currentContext = {
+      ...context,
+      getRuntimeConfig: () => currentConfig,
+      loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
+    } as GatewayRequestContext;
+
+    await lifecycle.attachContext(currentContext, sidecars);
+
+    await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [
+        expect.objectContaining({
+          available: true,
+          id: "gpt-5.4",
+          provider: "openai",
+        }),
+      ],
+    });
   });
 
   it("publishes a successful harness auth binding before the next metadata read", async () => {

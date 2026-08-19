@@ -267,6 +267,7 @@ describe("SystemAgentChatEngine approval", () => {
         workspace: "/tmp/researcher",
         agentDir: "/tmp/agent-researcher",
         bootstrapPending: true,
+        config: {},
       }));
       const engine = new SystemAgentChatEngine({
         runAgentTurn: async () => null,

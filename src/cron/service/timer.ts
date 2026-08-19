@@ -4,7 +4,7 @@ import { onTimer } from "./timer-scheduler.js";
 export type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 export type { IsolatedAgentSetupTimeoutSignal } from "./timer-execution-timeout.js";
 export { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
-export { executeJobCoreWithTimeout } from "./timer-job-runner.js";
+export { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 export { applyJobResult } from "./timer-outcomes.js";
 export { applyTriggerRunResult } from "./timer-trigger.js";
 export { applyScriptRunResult } from "./timer-outcomes.js";

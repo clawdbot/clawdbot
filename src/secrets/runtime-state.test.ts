@@ -16,6 +16,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
@@ -278,6 +279,8 @@ describe("secrets runtime state", () => {
   it("restores source-only ownership through a scoped descendant", () => {
     const initialSource = { logging: { level: "info" as const } };
     const nextSource = { logging: { level: "debug" as const } };
+    setConfigResolutionFacts(initialSource, new Set(["gateway.auth.token"]));
+    setConfigResolutionFacts(nextSource, new Set());
     const runtimeConfig = {
       models: {
         providers: {
@@ -305,6 +308,7 @@ describe("secrets runtime state", () => {
         secretsSourceConfig: nextSource,
       }),
     ).toBe(true);
+    expect(getConfigResolutionFacts(getActiveSecretsRuntimeConfigSnapshot()?.config)?.size).toBe(0);
     const committedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const active = getActiveSecretsRuntimeSnapshotState()!;
     const descendant = structuredClone(active);
@@ -325,6 +329,11 @@ describe("secrets runtime state", () => {
       }),
     ).toBe(true);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(initialSource);
+    expect(
+      getConfigResolutionFacts(getActiveSecretsRuntimeConfigSnapshot()?.config)?.has(
+        "gateway.auth.token",
+      ),
+    ).toBe(true);
     expect(getActiveSecretsRuntimeSnapshotState()?.sourceConfig).toEqual(initialSource);
     expect(getActiveSecretsRuntimeSnapshotState()?.config.models?.providers?.openai?.baseUrl).toBe(
       "https://refreshed.example.invalid/v1",

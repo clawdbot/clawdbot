@@ -94,6 +94,7 @@ export function prepareEmbeddedAttemptStream(input: {
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
   sandboxSessionKey: string;
   builtinToolNames: ReadonlySet<string>;
+  coreBuiltinToolNames?: ReadonlySet<string>;
   replaySafeToolNames: ReadonlySet<string>;
   sideEffectToolOwners?: ReadonlyMap<string, string>;
   diagnosticOwner: DiagnosticEmbeddedRunOwner;
@@ -324,6 +325,7 @@ export function prepareEmbeddedAttemptStream(input: {
     sessionId: attempt.sessionId,
     agentId: input.hookAgentId,
     builtinToolNames: input.builtinToolNames,
+    coreBuiltinToolNames: input.coreBuiltinToolNames,
     replaySafeToolNames: input.replaySafeToolNames,
     ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
     internalEvents: attempt.internalEvents,

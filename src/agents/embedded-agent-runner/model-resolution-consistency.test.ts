@@ -153,6 +153,30 @@ const { resolveEmbeddedRunModelSetup } = await import("./run/model-setup.js");
 const { prepareDirectCompactionAttempt } = await import("./direct-compaction-preparation.js");
 
 describe("embedded model resolution consistency", () => {
+  it("resolves an explicit alias configured only on the selected agent", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: { "openai/gpt-5.6-luna": { alias: "global-luna" } },
+        },
+        entries: {
+          worker: {
+            models: { "anthropic/claude-haiku-4-5": { alias: "worker-haiku" } },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveInitialEmbeddedRunModel({
+        config,
+        agentId: "worker",
+        model: "worker-haiku",
+      }),
+    ).toEqual({ provider: "anthropic", modelId: "claude-haiku-4-5" });
+  });
+
   it("resolves the same undated configured model for chat and manual compaction", async () => {
     const config = {
       agents: {

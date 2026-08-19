@@ -1,5 +1,5 @@
 // Commander registration for foreground node host and node service lifecycle commands.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
@@ -60,6 +60,7 @@ export function registerNodeCli(program: Command) {
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
+    .addOption(new Option("--ephemeral").hideHelp())
     .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .action(async (opts) => {
@@ -96,6 +97,7 @@ export function registerNodeCli(program: Command) {
         gatewayCandidates,
         gatewayBootstrapToken: pair?.bootstrapToken,
         preferGatewayBootstrapToken: pair !== undefined,
+        ...(opts.ephemeral === true ? { forceWorkerRuns: true } : {}),
         nodeId: opts.nodeId,
         displayName: opts.displayName,
         installedAppsSharing: opts.shareInstalledApps,

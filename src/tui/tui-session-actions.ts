@@ -3,6 +3,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -427,7 +428,8 @@ export function createSessionActions(context: SessionActionContext) {
       const record = history as {
         messages?: unknown[];
         sessionId?: string;
-        sessionInfo?: SessionInfoEntry;
+        sessionInfo?: SessionInfoEntry &
+          Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">>;
         defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
         fastMode?: FastMode;
@@ -557,20 +559,12 @@ export function createSessionActions(context: SessionActionContext) {
             : [],
         ),
       );
-      // Restore a run still streaming for this session+agent that the gateway
-      // reports as in-flight. Its live deltas were delivered to a per-agent key
-      // we stopped watching after switching away, so the persisted history above
-      // does not contain it; render the partial and re-adopt the run so further
-      // deltas (now that this session is active again) continue it.
       const inFlightRunId = formatPrimitiveString(record.inFlightRun?.runId, "");
       const inFlightText = formatPrimitiveString(record.inFlightRun?.text, "");
       if (inFlightRunId) {
-        // Render any buffered partial (embedded runtimes); Codex has none mid-run.
         if (inFlightText) {
           chatLog.updateAssistant(inFlightText, inFlightRunId);
         }
-        // Adopt the run regardless so its status shows `streaming` (not idle) and
-        // its completion is handled here instead of an unowned error path.
         state.activeChatRunId = inFlightRunId;
         setActivityStatus("streaming");
       }
@@ -582,7 +576,18 @@ export function createSessionActions(context: SessionActionContext) {
       }
       void rememberSessionKey?.(state.currentSessionKey);
       tui.requestRender(true);
-      return { loaded: true, inFlightRunId: inFlightRunId || null };
+      const status = sessionInfo?.status;
+      const runOutcome = inFlightRunId
+        ? ({ state: "active", runId: inFlightRunId } as const)
+        : status === "failed" || status === "timeout"
+          ? ({
+              state: "failed",
+              errorMessage: sessionInfo?.lastRunError ?? `session run ${status}`,
+            } as const)
+          : status === "killed" || sessionInfo?.abortedLastRun === true
+            ? ({ state: "interrupted" } as const)
+            : ({ state: "completed" } as const);
+      return { loaded: true, runOutcome };
     } catch (err) {
       if (!isCurrentLoad()) {
         return { loaded: false };

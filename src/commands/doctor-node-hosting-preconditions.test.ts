@@ -8,10 +8,26 @@ function findingsFor(cfg: OpenClawConfig) {
 }
 
 describe("node-hosting preconditions", () => {
+  const healthyBase = {
+    gateway: {
+      bind: "lan",
+      auth: { mode: "token", token: "configured-token" },
+    },
+    agents: {
+      defaults: {
+        model: "anthropic/claude-sonnet-4-6",
+        models: {
+          "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+
   it.each([
     {
       name: "identity-header auth alone",
       cfg: {
+        ...healthyBase,
         gateway: {
           bind: "lan",
           auth: { mode: "trusted-proxy" },
@@ -22,6 +38,7 @@ describe("node-hosting preconditions", () => {
     {
       name: "loopback onboarding alone",
       cfg: {
+        ...healthyBase,
         gateway: {
           bind: "loopback",
           auth: { mode: "token", token: "configured-token" },
@@ -32,6 +49,7 @@ describe("node-hosting preconditions", () => {
     {
       name: "both unavailable",
       cfg: {
+        ...healthyBase,
         gateway: {
           bind: "loopback",
           auth: { mode: "trusted-proxy" },
@@ -42,6 +60,7 @@ describe("node-hosting preconditions", () => {
     {
       name: "Tailscale identity without a shared secret",
       cfg: {
+        ...healthyBase,
         gateway: {
           bind: "loopback",
           tailscale: { mode: "serve" },
@@ -59,21 +78,95 @@ describe("node-hosting preconditions", () => {
   });
 
   it("does not warn for token auth with a reachable bind", () => {
+    expect(findingsFor(healthyBase)).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "device-pair is explicitly disabled",
+      cfg: {
+        ...healthyBase,
+        plugins: { entries: { "device-pair": { enabled: false } } },
+      },
+      requirement: "node-onboarding-plugin",
+    },
+    {
+      name: "every configured agent resolves to an external runtime",
+      cfg: {
+        ...healthyBase,
+        agents: {
+          ownership: "explicit",
+          entries: {
+            writer: {
+              model: "openai/gpt-5.6-sol",
+              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+            },
+            reviewer: {
+              model: "anthropic/claude-sonnet-4-6",
+              models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "acpx" } } },
+            },
+          },
+        },
+      },
+      requirement: "device-session-runtime",
+    },
+  ] satisfies Array<{ name: string; cfg: OpenClawConfig; requirement: string }>)(
+    "warns when $name",
+    ({ cfg, requirement }) => {
+      expect(findingsFor(cfg).map((finding) => finding.requirement)).toContain(requirement);
+    },
+  );
+
+  it("keeps a mixed explicit roster healthy when one agent uses the embedded runtime", () => {
     expect(
       findingsFor({
-        gateway: {
-          bind: "lan",
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN" },
+        ...healthyBase,
+        agents: {
+          ownership: "explicit",
+          entries: {
+            cloud: {
+              model: "openai/gpt-5.6-sol",
+              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+            },
+            device: {
+              model: "anthropic/claude-sonnet-4-6",
+              models: {
+                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
+              },
+            },
           },
         },
       }),
     ).toEqual([]);
   });
 
+  it("gives verbatim onboarding and device-runtime remediation", () => {
+    const findings = findingsFor({
+      ...healthyBase,
+      plugins: { entries: { "device-pair": { enabled: false } } },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.6-sol",
+          models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+        },
+      },
+    });
+
+    expect(
+      findings.find((finding) => finding.requirement === "node-onboarding-plugin")?.fixHint,
+    ).toBe(
+      "Set plugins.entries.device-pair.enabled: true, ensure device-pair is not denied or excluded by plugins.allow, then restart the Gateway.",
+    );
+    expect(
+      findings.find((finding) => finding.requirement === "device-session-runtime")?.fixHint,
+    ).toBe(
+      'Set agentRuntime.id: "openclaw" on at least one provider/model route (models.providers.<provider>.agentRuntime, agents.defaults.models["provider/model"].agentRuntime, or agents.entries.<id>.models["provider/model"].agentRuntime), then select that agent/model for paired-device sessions. Runtime policy is model/provider-scoped; whole-agent runtime keys are ignored. For a multi-agent roster, set agents.ownership: "explicit".',
+    );
+  });
+
   it("gives accurate machine-auth and edge-routing remediation", () => {
     const findings = findingsFor({
+      ...healthyBase,
       gateway: {
         bind: "loopback",
         auth: { mode: "trusted-proxy" },
@@ -96,6 +189,7 @@ describe("node-hosting preconditions", () => {
   it("accepts a configured public URL for loopback onboarding", () => {
     expect(
       findingsFor({
+        ...healthyBase,
         gateway: {
           bind: "loopback",
           auth: { mode: "token", token: "configured-token" },

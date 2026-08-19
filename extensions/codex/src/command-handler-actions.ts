@@ -349,7 +349,7 @@ export async function setConversationModel(
         : undefined;
     const selectedModel =
       currentSession && currentSession.sessionId === ctx.sessionId
-        ? currentSession.modelOverride
+        ? (currentSession.modelOverride ?? currentSession.model)
         : undefined;
     const binding = await deps.bindingStore.read(target.identity);
     const activeModel = selectedModel ?? binding?.model;

@@ -33,6 +33,12 @@ import type { BoardStore } from "../../boards/board-store.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
 import {
+  resolveBoardWidgetContentKind,
+  resolveBoardWidgetContentKindByPluginKind,
+  resolveBoardWidgetContentKindResourceUrls,
+} from "../../plugins/board-widget-content-kinds.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import {
   readBoardDataBinding,
   runBoardActionVerb,
   triggerBoardCronJob,
@@ -153,7 +159,7 @@ export function createBoardHandlers(
   const runActionVerb = dependencies.runActionVerb ?? runBoardActionVerb;
   const triggerCronJob = dependencies.triggerCronJob ?? triggerBoardCronJob;
   return {
-    "board.get": async ({ params, respond, context }) => {
+    "board.get": async ({ params, respond, context, client }) => {
       if (!validateBoardGetParams(params)) {
         invalidParams("board.get", validateBoardGetParams.errors, respond);
         return;
@@ -175,6 +181,22 @@ export function createBoardHandlers(
         if (!viewMetadata || viewMetadata.revision !== widget.revision) {
           continue;
         }
+        const registration = widget.pluginKind
+          ? resolveBoardWidgetContentKindByPluginKind(getActivePluginRegistry(), widget.pluginKind)
+          : undefined;
+        const scopedHostUrl = registration
+          ? client?.pluginSurfaceUrls?.[registration.definition.resources.surface]
+          : undefined;
+        const resourceUrls =
+          registration && scopedHostUrl
+            ? resolveBoardWidgetContentKindResourceUrls(registration, scopedHostUrl)
+            : undefined;
+        if (widget.contentKind === "plugin" && (!registration || !resourceUrls || !scopedHostUrl)) {
+          continue;
+        }
+        const resourceOrigins = resourceUrls
+          ? [...new Set(Object.values(resourceUrls).map((url) => new URL(url).origin))]
+          : undefined;
         if (sandboxPort === undefined && context.ensureSandboxHostPort) {
           try {
             sandboxPort = await context.ensureSandboxHostPort();
@@ -188,7 +210,18 @@ export function createBoardHandlers(
           name: widget.name,
           revision: widget.revision,
           viewGeneration: viewMetadata.viewGeneration,
+          ...(registration && scopedHostUrl
+            ? {
+                pluginFrame: {
+                  pluginKind: registration.pluginKind,
+                  scopedHostUrl,
+                },
+              }
+            : {}),
         });
+        if (registration) {
+          widget.kindLabel = registration.definition.label;
+        }
         widget.frameUrl = buildBoardWidgetFrameUrl({
           sessionKey: snapshot.sessionKey,
           name: widget.name,
@@ -198,7 +231,10 @@ export function createBoardHandlers(
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
         widget.viewGeneration = viewMetadata.viewGeneration;
         if (sandboxPort !== undefined) {
-          widget.sandboxUrl = buildBoardWidgetSandboxPath(viewMetadata);
+          widget.sandboxUrl = buildBoardWidgetSandboxPath({
+            ...viewMetadata,
+            ...(resourceOrigins ? { resourceOrigins } : {}),
+          });
           widget.sandboxPort = sandboxPort;
           if (!sandboxOriginResolved) {
             const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
@@ -295,13 +331,42 @@ export function createBoardHandlers(
             interactive,
           };
           declared = allowedTools.length > 0 ? { tools: allowedTools } : undefined;
+        } else if (requestParams.content.kind === "registered") {
+          const registration = resolveBoardWidgetContentKind(
+            getActivePluginRegistry(),
+            requestParams.content.contentKind,
+          );
+          if (!registration) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              `widget kind ${JSON.stringify(requestParams.content.contentKind)} is unavailable; enable the plugin that provides it and retry`,
+            );
+          }
+          try {
+            registration.definition.validateSource(requestParams.content.source);
+          } catch (error) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              `invalid ${requestParams.content.contentKind} widget source: ${String(error)}`,
+            );
+          }
+          content = {
+            ...requestParams.content,
+            pluginKind: registration.pluginKind,
+          };
         } else {
           content = requestParams.content;
         }
         const persistedContent =
           content.kind === "mcp-app"
             ? { kind: content.kind, descriptor: content.descriptor }
-            : content;
+            : content.kind === "registered"
+              ? {
+                  kind: content.kind,
+                  contentKind: content.contentKind,
+                  source: content.source,
+                }
+              : content;
         if (!validateBoardWidgetContent(persistedContent)) {
           invalidParams("board.widget.put content", validateBoardWidgetContent.errors, respond);
           return;

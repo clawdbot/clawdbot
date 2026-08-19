@@ -11,6 +11,7 @@ import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "./github-identity-profile-id.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -714,6 +715,20 @@ const MessageToolConfigSchema = z
   .strict()
   .optional();
 
+const GitHubToolIdentitySchema = z
+  .object({
+    profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
+    gitAuthor: z
+      .object({
+        name: z.string().trim().min(1).optional(),
+        email: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
@@ -727,6 +742,7 @@ const AgentToolsSchema = z
       .strict()
       .optional(),
     exec: ToolExecSchema,
+    github: GitHubToolIdentitySchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
     message: MessageToolConfigSchema,
@@ -948,6 +964,7 @@ export const ToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
     web: ToolsWebSchema,
+    github: GitHubToolIdentitySchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
     sessions: z

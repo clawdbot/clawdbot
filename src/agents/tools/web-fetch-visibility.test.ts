@@ -1,7 +1,8 @@
 // web_fetch visibility tests cover hidden HTML and invisible Unicode stripping
 // before extracted content reaches the model.
 import { describe, expect, it, vi } from "vitest";
-import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
+import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
+import { sanitizeHtml } from "./web-fetch-visibility.js";
 
 describe("sanitizeHtml", () => {
   it("reuses compiled CSS property matchers across styled elements", async () => {

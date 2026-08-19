@@ -66,6 +66,7 @@ describe("worker placement dispatch", () => {
       { profileId: REQUEST.profileId, ...inheritedProfile },
       expect.stringMatching(/^session-dispatch:/u),
       "beast",
+      REQUEST.executionMode,
     );
   });
 
@@ -653,7 +654,7 @@ describe("worker placement dispatch", () => {
 
   it("rejects and tears down a freshly provisioned bundle without execution context", async () => {
     const harness = createTestHarness();
-    harness.markEnvironmentProtocolFeatures([WORKER_LAUNCH_V2_PROTOCOL_FEATURE]);
+    harness.markEnvironmentProtocolFeatures(["worker-execution-context-v1"]);
 
     await expect(harness.service.dispatch(REQUEST)).rejects.toThrow(
       "current execution-context contract",
@@ -819,7 +820,7 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
-  it("resumes a synced starting placement after restart", async () => {
+  it("fails closed instead of activating a synced placement after restart", async () => {
     const harness = createTestHarness();
     harness.placements.seedStarting();
     harness.log.length = 0;
@@ -827,22 +828,16 @@ describe("worker placement dispatch", () => {
     await harness.service.reconcile();
 
     expect(harness.placements.current()).toMatchObject({
-      state: "active",
+      state: "failed",
       environmentId: harness.ready.environmentId,
-      activeOwnerEpoch: harness.attached.ownerEpoch,
+      recoveryError: "Worker dispatch interrupted in starting",
     });
-    expect(harness.log).toEqual([
-      "environment:reconcile",
-      "workspace",
-      "attach",
-      "tunnel:attached",
-      "activation",
-      "placement:active",
-    ]);
-    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it("resumes a synced starting placement with its existing attached owner", async () => {
+  it("tears down an attached starting placement after restart loses request authority", async () => {
     const harness = createTestHarness();
     harness.placements.seedStarting();
     harness.markEnvironmentOwnerEpoch(harness.attached.ownerEpoch);
@@ -851,22 +846,13 @@ describe("worker placement dispatch", () => {
     await harness.service.reconcile();
 
     expect(harness.placements.current()).toMatchObject({
-      state: "active",
+      state: "failed",
       environmentId: harness.attached.environmentId,
-      activeOwnerEpoch: harness.attached.ownerEpoch,
+      recoveryError: "Worker dispatch interrupted in starting",
     });
-    expect(harness.log).toEqual([
-      "environment:reconcile",
-      "workspace",
-      "tunnel:attached",
-      "activation",
-      "placement:active",
-    ]);
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.environments.startTunnel).toHaveBeenCalledWith({
-      environmentId: harness.attached.environmentId,
-      ownerEpoch: harness.attached.ownerEpoch,
-    });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
   it("tears down a starting worker missing execution context instead of resuming it", async () => {
@@ -878,7 +864,7 @@ describe("worker placement dispatch", () => {
 
     expect(harness.placements.current()).toMatchObject({
       state: "failed",
-      recoveryError: "Interrupted worker dispatch cannot safely resume",
+      recoveryError: "Worker dispatch interrupted in starting",
     });
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();

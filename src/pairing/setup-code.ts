@@ -67,12 +67,18 @@ type ResolvePairingSetupOptions = {
   preferRemoteUrl?: boolean;
   forceSecure?: boolean;
   bootstrapProfile?: DeviceBootstrapProfileInput;
+  issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
   pairingBaseDir?: string;
   runCommandWithTimeout?: PairingSetupCommandRunner;
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
   localTlsFingerprint?: string;
   loadLocalTlsFingerprint?: () => Promise<string | undefined>;
 };
+
+export function resolveConfiguredPairingPublicUrl(config: OpenClawConfig): string | undefined {
+  const value = config.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
 
 type PairingSetupResolution =
   | {
@@ -541,10 +547,12 @@ export async function resolvePairingSetupFromConfig(
   if (directGatewayTlsFingerprintRaw !== undefined && !directGatewayTlsFingerprint) {
     return { ok: false, error: "Gateway TLS fingerprint is invalid." };
   }
-  const issued = await issueDevicePairSetupBootstrapToken({
-    baseDir: options.pairingBaseDir,
-    profile: issuedBootstrapProfile,
-  });
+  const issued =
+    options.issuedBootstrap ??
+    (await issueDevicePairSetupBootstrapToken({
+      baseDir: options.pairingBaseDir,
+      profile: issuedBootstrapProfile,
+    }));
 
   return {
     ok: true,

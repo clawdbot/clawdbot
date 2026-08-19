@@ -63,6 +63,11 @@ describe("msteamsPlugin", () => {
     );
   });
 
+  it("declares its implemented group and reaction capabilities", () => {
+    expect(msteamsSetupPlugin.capabilities.chatTypes).toContain("group");
+    expect(msteamsSetupPlugin.capabilities.reactions).toBe(true);
+  });
+
   it("preserves the default account and allowlist across runtime and setup", () => {
     const cfg: OpenClawConfig = {
       channels: {

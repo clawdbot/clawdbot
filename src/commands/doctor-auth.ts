@@ -384,7 +384,8 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
     const remaining = formatRemainingShort(until - now);
     const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
     const reason = disabledActive ? stats?.disabledReason : stats?.cooldownReason;
-    const kind = `${disabledActive ? "disabled" : "cooldown"}${reason ? `:${reason}` : ""}`;
+    const displayReason = disabledActive ? reason : (stats?.cooldownClassification ?? reason);
+    const kind = `${disabledActive ? "disabled" : "cooldown"}${displayReason ? `:${displayReason}` : ""}`;
     const hint = buildAuthProfileUnusableHint({
       kind: disabledActive ? "disabled" : "cooldown",
       reason,
@@ -490,7 +491,8 @@ async function noteAuthProfileHealthForTarget(params: {
       const remaining = formatRemainingShort(until - now);
       const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
       const reason = disabledActive ? stats?.disabledReason : stats?.cooldownReason;
-      const kind = `${disabledActive ? "disabled" : "cooldown"}${reason ? `:${reason}` : ""}`;
+      const displayReason = disabledActive ? reason : (stats?.cooldownClassification ?? reason);
+      const kind = `${disabledActive ? "disabled" : "cooldown"}${displayReason ? `:${displayReason}` : ""}`;
       const hint = buildAuthProfileUnusableHint({
         kind: disabledActive ? "disabled" : "cooldown",
         reason,

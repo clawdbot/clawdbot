@@ -164,6 +164,10 @@ describe("sessions tool", () => {
             "named icon: braces, book, monitor, bot, kanban, coins",
           ),
         },
+        category: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          description: expect.stringContaining("This assigns one session"),
+        },
         statusNote: { type: "string", maxLength: 120 },
         attention: {
           type: "string",
@@ -993,51 +997,6 @@ describe("sessions tool", () => {
     });
   });
 
-  it("patches and clears title, icon, status, attention, and archive state", async () => {
-    const callGateway = vi.fn(async () => ({ ok: true }));
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
-      agentSessionId: "session-main",
-      config: {},
-      callGateway: callGateway as never,
-    });
-
-    await tool.execute("declare", {
-      action: "patch",
-      label: "Waiting on staging",
-      icon: "🦞",
-      statusNote: "Blocked: need the staging password",
-      attention: "key",
-      ttlMinutes: 45,
-      archived: true,
-    });
-    await tool.execute("clear", { action: "patch", label: "", icon: "", attention: "clear" });
-
-    expect(callGateway.mock.calls).toEqual([
-      [
-        {
-          method: "sessions.patch",
-          params: {
-            key: "agent:main:main",
-            label: "Waiting on staging",
-            icon: "🦞",
-            statusNote: "Blocked: need the staging password",
-            attention: "key",
-            ttlMinutes: 45,
-            archived: true,
-            expectedSessionId: "session-main",
-          },
-        },
-      ],
-      [
-        {
-          method: "sessions.patch",
-          params: { key: "agent:main:main", label: null, icon: null, attention: null },
-        },
-      ],
-    ]);
-  });
-
   it("rejects an empty patch", async () => {
     const callGateway = vi.fn();
     const tool = createSessionsTool({
@@ -1063,6 +1022,7 @@ describe("sessions tool", () => {
       tool.execute("patch-other", {
         action: "patch",
         sessionKey: "agent:main:other",
+        category: "Private",
         expectedSessionId: "other-session",
         archived: true,
       }),

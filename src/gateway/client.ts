@@ -139,9 +139,8 @@ export class GatewayClient {
     const suppressOriginDeviceAuth = Boolean(
       deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim()),
     );
-    if (baseOptions.cloudflareAccess) {
-      registerSecretValueForRedaction(baseOptions.cloudflareAccess.clientId);
-      registerSecretValueForRedaction(baseOptions.cloudflareAccess.clientSecret);
+    for (const value of Object.values(baseOptions.edgeAuthHeaders ?? {})) {
+      registerSecretValueForRedaction(value);
     }
     this.#client = new BaseGatewayClient({
       ...baseOptions,

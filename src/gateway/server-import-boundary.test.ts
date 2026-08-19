@@ -148,9 +148,6 @@ describe("gateway startup import boundaries", () => {
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toContain(
       'from "./config-reload.js"',
     );
-    expect(readSource("src/gateway/server-runtime-state.ts")).not.toContain(
-      'createCanvasHostHandler } from "../../extensions/canvas/runtime-api.js"',
-    );
     expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
     expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
     expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');

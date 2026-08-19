@@ -1403,6 +1403,18 @@ ${actionRun}`;
 }
 
 describe("ci workflow guards", () => {
+  it("retains pending same-SHA QA calls in the shared concurrency group", () => {
+    const workflowPath = ".github/workflows/qa-live-transports-convex.yml";
+    const workflowSource = readFileSync(workflowPath, "utf8");
+    const workflow = parse(workflowSource);
+
+    expect(workflow.concurrency).toEqual({
+      group: "qa-lab-all-lanes-${{ github.event_name != 'schedule' && inputs.ref || github.sha }}",
+      "cancel-in-progress": false,
+      queue: "max",
+    });
+  });
+
   it("extracts module heredocs only at exact closing marker lines", () => {
     const run = runWorkflowShellScript(
       `node --input-type=module <<'NODE'

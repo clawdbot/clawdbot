@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/llama-cpp-provider",
   "version": "2026.8.1",
-  "description": "OpenClaw managed llama.cpp server provider plugin",
+  "description": "OpenClaw provider for managed and external llama.cpp servers",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

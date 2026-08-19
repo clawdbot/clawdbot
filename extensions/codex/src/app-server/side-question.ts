@@ -171,6 +171,8 @@ export async function runCodexAppServerSideQuestion(
   options: {
     bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
+    /** Private app-server request identity; public side-run identity remains params.model. */
+    runtimeModelId?: string;
     nativeHookRelay?: {
       enabled?: boolean;
       events?: readonly NativeHookRelayEvent[];
@@ -245,7 +247,7 @@ export async function runCodexAppServerSideQuestion(
         bindingModelProvider: binding.modelProvider,
       }));
   const modelSelection = resolveCodexAppServerRequestModelSelection({
-    model: supervisionModelSelection?.model ?? params.model,
+    model: supervisionModelSelection?.model ?? options.runtimeModelId ?? params.model,
     modelProvider,
     authProfileId,
     authProfileStore: preparedRuntimeAuth.authProfileStore,
@@ -1017,6 +1019,7 @@ async function createCodexSideToolBridge(input: {
     ({ id: input.params.model, provider: input.params.provider } as never);
   const messageToolProvider = resolveCodexMessageToolProvider(input.params);
   let tools: AnyAgentTool[] = [];
+  const webFetchHostnameAllowlistRef: { value?: string[] } = {};
   if (supportsModelTools(runtimeModel)) {
     const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
       .createOpenClawCodingTools;
@@ -1064,6 +1067,7 @@ async function createCodexSideToolBridge(input: {
         workspaceDir: input.cwd,
       }),
       suppressManagedWebSearch: false,
+      webFetchHostnameAllowlistRef,
       ...(input.params.messageProvider || input.params.messageChannel
         ? {
             messageProvider: messageToolProvider,
@@ -1120,6 +1124,7 @@ async function createCodexSideToolBridge(input: {
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
     webSearchAllowed: tools.some((tool) => tool.name === "web_search"),
   });
+  webFetchHostnameAllowlistRef.value = requestedWebSearchPlan.webFetchHostnameAllowlist;
   // Codex forks do not accept dynamicTools, so managed web_search cannot be
   // registered on a side thread. Keep it only as the native-search policy signal.
   const webSearchPlan =

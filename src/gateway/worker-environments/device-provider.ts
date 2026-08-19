@@ -24,7 +24,7 @@ type DeviceWorkerRuntimeOptions = {
   now?: () => number;
 };
 
-type DeviceWorkerAvailability = {
+export type DeviceWorkerAvailability = {
   available: boolean;
   issue?: NodeRunnerInventoryIssue;
   unavailableReason?: "unpaired" | "disconnected" | "at-capacity";
@@ -89,7 +89,7 @@ function requireDeviceId(profile: WorkerProfile): string {
 }
 
 function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
-  return node.workerHost.capacity === "available";
+  return node.workerHost.capacity.available > 0;
 }
 
 function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice {
@@ -138,6 +138,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
   };
   const provider: WorkerProvider = {
     id: DEVICE_WORKER_PROVIDER_ID,
+    supportedExecutionModes: ["worker-turn"],
     provisionBeforeInstallation: true,
     provision: async (profile, operationId) => {
       const deviceId = requireDeviceId(profile);

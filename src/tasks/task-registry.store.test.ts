@@ -44,6 +44,7 @@ import {
 import {
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryStateFromSqliteReadOnly,
+  loadTaskRegistryStateFromSqliteReadOnlyResult,
   saveTaskRegistryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
 import type { TaskDeliveryState, TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
@@ -145,6 +146,25 @@ describe("task-registry store runtime", () => {
         expect(snapshot.tasks.size).toBe(0);
         expect(snapshot.deliveryStates.size).toBe(0);
         expect(() => statSync(statePath)).toThrow();
+      },
+    );
+  });
+
+  it("reports an additive schema migration without querying newer task columns", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-old-schema-" },
+      async () => {
+        const database = openOpenClawStateDatabase();
+        database.db.exec("ALTER TABLE task_runs DROP COLUMN tool_use_count");
+        closeOpenClawStateDatabase();
+
+        expect(loadTaskRegistryStateFromSqliteReadOnlyResult()).toEqual({
+          state: "migration-required",
+          snapshot: {
+            tasks: new Map(),
+            deliveryStates: new Map(),
+          },
+        });
       },
     );
   });

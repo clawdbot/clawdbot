@@ -350,8 +350,7 @@ openclaw [--dev] [--profile <name>] <command>
     invoke
     notify
     push
-    canvas snapshot|present|hide|navigate|eval
-    canvas a2ui push|reset
+    canvas present|hide|navigate
     camera list|snap|clip
     screen record
     location get

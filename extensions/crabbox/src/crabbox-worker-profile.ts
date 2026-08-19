@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { WorkerProviderError, type WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  WorkerProviderError,
+  type WorkerMachineOption,
+  type WorkerProfile,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export { nonEmptyString };
@@ -41,14 +45,19 @@ type CrabboxProfile = {
   setup?: string;
 };
 
-const CRABBOX_MACHINE_OPTIONS = [
-  { id: "standard", label: "Standard", description: "Cheap smoke checks and small repos" },
-  { id: "fast", label: "Fast", description: "General maintainer testing" },
-  { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
-  { id: "beast", label: "Beast", description: "High-core changed-test runs" },
-] as const;
+const CRABBOX_FALLBACK_MACHINE_CLASSES = ["standard", "fast", "large", "beast"] as const;
+const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
+const MAX_CRABBOX_MACHINE_OPTIONS = 32;
+
+export type CrabboxMachineShape = Readonly<{
+  class: string;
+  cpu?: number;
+  memoryGb?: number;
+}>;
 
 type IsExecutable = (candidate: string) => boolean;
+
+export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 
 function requirePositiveDuration(value: unknown, key: string): string {
   const duration = nonEmptyString(value);
@@ -146,18 +155,48 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   };
 }
 
-export function listCrabboxMachineOptions(profile: WorkerProfile) {
-  const configuredClass = parseCrabboxProfile(profile).class;
-  const options = CRABBOX_MACHINE_OPTIONS.map((option) =>
-    option.id === configuredClass
-      ? {
-          id: option.id,
-          label: option.label,
-          description: option.description,
-          default: true,
-        }
-      : option,
-  );
+export function listCrabboxMachineOptions(
+  configuredClass: string,
+  shapes: readonly CrabboxMachineShape[] | undefined,
+): readonly WorkerMachineOption[] {
+  const seen = new Set<string>();
+  const reportedShapes = shapes?.filter((shape) => {
+    if (shape.class.length > MAX_CRABBOX_MACHINE_CLASS_LENGTH || seen.has(shape.class)) {
+      return false;
+    }
+    seen.add(shape.class);
+    return true;
+  });
+  const candidates: readonly CrabboxMachineShape[] = reportedShapes?.length
+    ? reportedShapes
+    : CRABBOX_FALLBACK_MACHINE_CLASSES.map((machineClass) => ({ class: machineClass }));
+  const catalogLimit = candidates
+    .slice(0, MAX_CRABBOX_MACHINE_OPTIONS)
+    .some((shape) => shape.class === configuredClass)
+    ? MAX_CRABBOX_MACHINE_OPTIONS
+    : MAX_CRABBOX_MACHINE_OPTIONS - 1;
+  // Built by assignment rather than conditional spread: oxlint's no-map-spread
+  // rejects spreading to shape objects inside a map callback.
+  const options = candidates.slice(0, catalogLimit).map((shape) => {
+    const id = shape.class;
+    const result: {
+      id: string;
+      label: string;
+      cpu?: number;
+      memoryGb?: number;
+      default?: boolean;
+    } = { id, label: id.replace(/^./u, (initial) => initial.toUpperCase()) };
+    if (shape?.cpu !== undefined) {
+      result.cpu = shape.cpu;
+    }
+    if (shape?.memoryGb !== undefined) {
+      result.memoryGb = shape.memoryGb;
+    }
+    if (id === configuredClass) {
+      result.default = true;
+    }
+    return result;
+  });
   if (options.some((option) => option.id === configuredClass)) {
     return options;
   }
@@ -166,7 +205,6 @@ export function listCrabboxMachineOptions(profile: WorkerProfile) {
     {
       id: configuredClass,
       label: configuredClass,
-      description: "Configured instance type",
       default: true,
     },
   ];
@@ -230,9 +268,22 @@ export function resolveCrabboxBinary(params: {
   if (params.explicit) {
     return params.explicit;
   }
+  return findCrabboxBinary(params) ?? "crabbox";
+}
+
+export function findCrabboxBinary(params: {
+  explicit?: string;
+  isExecutable?: IsExecutable;
+  openclawRoot: string;
+  pathEnv?: string;
+  platform?: NodeJS.Platform;
+}): string | undefined {
   const platform = params.platform ?? process.platform;
   const isExecutable =
     params.isExecutable ?? ((candidate) => defaultIsExecutable(candidate, platform));
+  if (params.explicit) {
+    return isExecutable(params.explicit) ? params.explicit : undefined;
+  }
   const siblingBase = path.resolve(params.openclawRoot, "../crabbox/bin/crabbox");
   for (const candidate of binaryCandidates(siblingBase, platform)) {
     if (isExecutable(candidate)) {
@@ -252,7 +303,7 @@ export function resolveCrabboxBinary(params: {
       }
     }
   }
-  return "crabbox";
+  return undefined;
 }
 
 export function resolveOpenClawRoot(pluginRoot: string | undefined): string {
@@ -280,8 +331,4 @@ export function operationLeaseId(operationId: string): string {
     .update(operationId)
     .digest("hex")
     .slice(0, 12)}`;
-}
-
-export function identityRefId(leaseId: string): string {
-  return `/leases/${leaseId}/identity`;
 }
