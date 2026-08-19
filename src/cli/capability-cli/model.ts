@@ -178,7 +178,7 @@ async function runModelRun(params: {
           targetIds: getModelsCommandSecretTargetIds(),
         })
       : getRuntimeConfig();
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer model run");
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent);
   const modelRef = await canonicalizeModelRunRef({
     raw: params.model,
     cfg,
@@ -405,7 +405,7 @@ async function runModelAuthStatus() {
 
 async function runModelAuthLogout(provider: string, agent?: string) {
   const cfg = getRuntimeConfig();
-  const agentId = resolveCapabilityProviderAgentId(cfg, agent, "infer model auth logout");
+  const agentId = resolveCapabilityProviderAgentId(cfg, agent);
   const agentDir = resolveAgentDir(cfg, agentId);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
