@@ -382,7 +382,7 @@ describe("tasks commands", () => {
         expect.objectContaining({
           method: "tasks.cancel",
           params: { taskId: task.taskId },
-          timeoutMs: 5_000,
+          timeoutMs: 15_000,
         }),
       );
       expect(runtime.log).toHaveBeenCalledWith(
@@ -405,17 +405,15 @@ describe("tasks commands", () => {
           scopeKind: gatewayOwned ? "system" : "session",
           runId: `run${unsafe}`,
         });
-        if (gatewayOwned) {
-          mocks.callGateway.mockResolvedValueOnce({
-            found: true,
-            cancelled: true,
-            task: {
-              taskId: `${task.taskId}${unsafe}`,
-              runtime: `cron${unsafe}`,
-              runId: task.runId,
-            },
-          });
-        }
+        mocks.callGateway.mockResolvedValueOnce({
+          found: true,
+          cancelled: true,
+          task: {
+            taskId: `${task.taskId}${unsafe}`,
+            runtime: `${task.runtime}${unsafe}`,
+            runId: task.runId,
+          },
+        });
         const runtime = createRuntime();
         await tasksCancelCommand({ lookup: task.taskId }, runtime);
         expect(runtime.log).toHaveBeenCalledWith(
@@ -424,7 +422,7 @@ describe("tasks commands", () => {
         expectSafeTaskOutput(runtime);
         if (!gatewayOwned) {
           expect(getTaskById(task.taskId)).toMatchObject({
-            status: "cancelled",
+            status: "running",
             runId: `run${unsafe}`,
           });
           return;
@@ -478,7 +476,7 @@ describe("tasks commands", () => {
           expect.objectContaining({
             method: "tasks.cancel",
             params: { taskId: task.taskId },
-            timeoutMs: 5_000,
+            timeoutMs: 15_000,
           }),
         );
         expect(runtime.error).toHaveBeenCalledWith(

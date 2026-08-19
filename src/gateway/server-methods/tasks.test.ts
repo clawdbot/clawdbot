@@ -83,9 +83,14 @@ function captureRespond() {
   return { calls, respond };
 }
 
-function createContext(config: Record<string, unknown> = {}) {
+function createContext(
+  config: Record<string, unknown> = {},
+  overrides: Record<string, unknown> = {},
+) {
   return {
     getRuntimeConfig: () => config,
+    chatAbortControllers: new Map(),
+    ...overrides,
   } as never;
 }
 
@@ -112,6 +117,7 @@ async function runTaskHandler(
   method: "tasks.list" | "tasks.get" | "tasks.cancel" | "tasks.retry" | "tasks.dismiss",
   params: Record<string, unknown>,
   config: Record<string, unknown> = {},
+  contextOverrides: Record<string, unknown> = {},
 ) {
   const { calls, respond } = captureRespond();
   await expectDefined(
@@ -121,7 +127,7 @@ async function runTaskHandler(
     req: { type: "req", id: `req-${method}`, method },
     params,
     respond,
-    context: createContext(config),
+    context: createContext(config, contextOverrides),
     client: null,
     isWebchatConnect: () => false,
   });
@@ -712,7 +718,7 @@ describe("tasks gateway handlers", () => {
     expect(terminal.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
   });
 
-  it("cancels running task records and returns the updated task", async () => {
+  it("refuses a running CLI task without a live Gateway run handle", async () => {
     const task = createTaskRecord({
       runtime: "cli",
       requesterSessionKey: "agent:main:main",
@@ -731,10 +737,80 @@ describe("tasks gateway handlers", () => {
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.found).toBe(true);
-    expect(payload?.cancelled).toBe(true);
+    expect(payload?.cancelled).toBe(false);
     expect(payload?.task?.id).toBe(task.taskId);
+    expect(payload?.task?.status).toBe("running");
+    expect(payload?.reason).toBe("CLI task has no active gateway cancellation handle.");
+  });
+
+  it("cancels a live CLI task through canonical exact-run cleanup before acknowledging", async () => {
+    const runId = "run-cancel-live-cli";
+    const sessionKey = "agent:main:main";
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      runId,
+      task: "Cancelable live task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    const controller = new AbortController();
+    const cancelRunBoundApprovals = vi.fn();
+    const chatAbortControllers = new Map([
+      [
+        runId,
+        {
+          kind: "agent",
+          controller,
+          sessionKey,
+          sessionId: "session-id",
+          agentId: "main",
+          controlUiVisible: false,
+        },
+      ],
+    ]);
+    controller.signal.addEventListener("abort", () => {
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "cancelled",
+        error: "user stopped task",
+        endedAt: Date.now(),
+      });
+    });
+    const chatRunState = {
+      resolveBuffer: () => ({ text: "" }),
+      getOrCreate: () => ({}),
+      clearRun: vi.fn(),
+    };
+    const removeChatRun = vi.fn(() => {
+      chatAbortControllers.delete(runId);
+      return { sessionKey };
+    });
+
+    const { calls, payload } = await runTaskHandler(
+      "tasks.cancel",
+      { taskId: task.taskId, reason: "user stopped task" },
+      {},
+      {
+        chatAbortControllers,
+        chatRunState,
+        removeChatRun,
+        agentRunSeq: new Map(),
+        cancelRunBoundApprovals,
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+      },
+    );
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(payload).toMatchObject({ found: true, cancelled: true });
     expect(payload?.task?.status).toBe("cancelled");
-    expect(payload?.task?.error).toBe("user stopped task");
+    expect(controller.signal.aborted).toBe(true);
+    expect(cancelRunBoundApprovals).toHaveBeenCalledOnce();
+    expect(cancelRunBoundApprovals).toHaveBeenCalledWith(runId);
+    expect(removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
   });
 
   it("cancels ACP tasks through the live Gateway handler and control runtime", async () => {

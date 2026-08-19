@@ -32,6 +32,8 @@ export type PluginHealthSummary = Omit<ProtocolPlugin, "unavailable"> & {
   >;
 };
 
+export type SessionLaneHealthSummary = NonNullable<ProtocolHealth["sessionLanes"]>;
+
 /** Full gateway health payload consumed by `openclaw health`. */
 export type HealthSummary = ProtocolHealth & {
   ok: true;

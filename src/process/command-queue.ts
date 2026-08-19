@@ -101,6 +101,8 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
 
 export type CommandLaneSnapshot = {
   lane: string;
+  createdAtMs?: number;
+  oldestQueuedAtMs?: number;
   queuedCount: number;
   activeCount: number;
   maxConcurrent: number;
@@ -143,6 +145,10 @@ function getLaneDepth(state: LaneState): number {
 function createCommandLaneSnapshot(state: LaneState): CommandLaneSnapshot {
   const snapshot: CommandLaneSnapshot = {
     lane: state.lane,
+    ...(state.createdAtMs === undefined ? {} : { createdAtMs: state.createdAtMs }),
+    ...(state.queue.length === 0
+      ? {}
+      : { oldestQueuedAtMs: Math.min(...state.queue.map((entry) => entry.enqueuedAt)) }),
     queuedCount: state.queue.length,
     activeCount: state.activeTaskIds.size,
     maxConcurrent: state.maxConcurrent,
@@ -172,6 +178,7 @@ function getLaneState(lane: string): LaneState {
   }
   const created: LaneState = {
     lane,
+    createdAtMs: Date.now(),
     queue: [],
     activeTaskIds: new Set(),
     maxConcurrent: 1,
@@ -657,6 +664,11 @@ export function listCommandLaneTotals(): Array<{
     activeCount: state.activeTaskIds.size,
     queuedCount: state.queue.length,
   }));
+}
+
+/** Snapshot every currently resident lane without creating missing lanes. */
+export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {
+  return [...getQueueState().lanes.values()].map(createCommandLaneSnapshot);
 }
 
 /**

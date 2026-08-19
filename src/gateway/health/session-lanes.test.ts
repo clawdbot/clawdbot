@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { getQueueState } from "../../process/command-queue.state.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import {
   buildSessionLaneHealthSummary,
   SESSION_LANE_DEGRADED_AFTER_MS,
@@ -62,5 +63,28 @@ describe("session lane health", () => {
       oldestAgeMs: null,
       oldestQueuedAgeMs: null,
     });
+  });
+
+  it("keeps resident lane age unknown when inherited hot-reload state has no timestamp", async () => {
+    const gate = createDeferred();
+    const lane = "session:agent:main:legacy-hot-reload";
+    const active = enqueueCommandInLane(lane, async () => {
+      await gate.promise;
+    });
+    const state = getQueueState().lanes.get(lane);
+    expect(state).toBeDefined();
+    delete state?.createdAtMs;
+
+    vi.advanceTimersByTime(SESSION_LANE_UNHEALTHY_AFTER_MS);
+    expect(buildSessionLaneHealthSummary()).toMatchObject({
+      status: "healthy",
+      count: 1,
+      activeCount: 1,
+      oldestAgeMs: null,
+      oldestQueuedAgeMs: null,
+    });
+
+    gate.resolve();
+    await active;
   });
 });

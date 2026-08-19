@@ -17,14 +17,19 @@ import {
 } from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
-import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import { isTerminalTaskStatus } from "../../tasks/task-executor-policy.js";
+import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { abortChatRunById } from "../chat-abort.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { createChatAbortOps } from "./chat-abort-runtime.js";
 import { mapTaskSummary } from "./task-summary.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
+const CLI_TASK_CANCEL_SETTLE_TIMEOUT_MS = 10_000;
+const CLI_TASK_CANCEL_POLL_MS = 20;
 
 type TaskLedgerStatus = TaskSummary["status"];
 
@@ -56,6 +61,68 @@ function parseCursor(cursor: string | undefined): number | null {
   }
   const parsed = Number(cursor);
   return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+async function waitForCliTaskCancellationSettlement(taskId: string): Promise<TaskRecord | null> {
+  const deadline = Date.now() + CLI_TASK_CANCEL_SETTLE_TIMEOUT_MS;
+  while (true) {
+    const current = getTaskById(taskId);
+    if (current && isTerminalTaskStatus(current.status)) {
+      return current;
+    }
+    if (Date.now() >= deadline) {
+      return null;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, CLI_TASK_CANCEL_POLL_MS));
+  }
+}
+
+async function cancelGatewayCliTask(params: {
+  task: TaskRecord;
+  reason?: string;
+  context: GatewayRequestContext;
+}): Promise<{ found: true; cancelled: boolean; reason?: string; task: TaskRecord }> {
+  const runId = params.task.runId?.trim();
+  const active = runId ? params.context.chatAbortControllers.get(runId) : undefined;
+  if (!runId || !active || active.kind !== "agent") {
+    return {
+      found: true,
+      cancelled: false,
+      reason: "CLI task has no active gateway cancellation handle.",
+      task: params.task,
+    };
+  }
+  const result = abortChatRunById(createChatAbortOps(params.context), {
+    runId,
+    sessionKey: active.sessionKey,
+    stopReason: "rpc",
+  });
+  if (!result.aborted) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: "CLI task runtime rejected cancellation.",
+      task: getTaskById(params.task.taskId) ?? params.task,
+    };
+  }
+  const settled = await waitForCliTaskCancellationSettlement(params.task.taskId);
+  if (!settled) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: `CLI task received cancellation but did not terminate within ${CLI_TASK_CANCEL_SETTLE_TIMEOUT_MS}ms.`,
+      task: getTaskById(params.task.taskId) ?? params.task,
+    };
+  }
+  if (settled.status !== "cancelled") {
+    return {
+      found: true,
+      cancelled: false,
+      reason: `CLI task became ${settled.status} while cancellation was in progress.`,
+      task: settled,
+    };
+  }
+  return { found: true, cancelled: true, task: settled };
 }
 
 // Control UI task methods expose the stable gateway protocol shape; helpers
@@ -139,6 +206,17 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
+    const task = getTaskById(taskId);
+    if (task?.runtime === "cli" && !isTerminalTaskStatus(task.status)) {
+      const result = await cancelGatewayCliTask({ task, reason, context });
+      respond(true, {
+        found: result.found,
+        cancelled: result.cancelled,
+        ...(result.reason ? { reason: result.reason } : {}),
+        task: mapTaskSummary(result.task),
+      });
+      return;
+    }
     const { cancelDetachedTaskRunByIdCore } =
       await import("../../tasks/task-executor-cancel.runtime.js");
     const result = await cancelDetachedTaskRunByIdCore({

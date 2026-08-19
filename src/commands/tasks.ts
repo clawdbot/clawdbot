@@ -99,15 +99,13 @@ type GatewayTaskCancelResult = {
 async function tryCancelGatewayOwnedTaskViaGateway(
   task: TaskRecord,
 ): Promise<GatewayTaskCancelResult | null> {
-  if (task.runtime === "cli") {
-    return null;
-  }
   try {
     const { callGateway } = await import("../gateway/call.js");
     return await callGateway<GatewayTaskCancelResult>({
       method: "tasks.cancel",
       params: { taskId: task.taskId },
-      timeoutMs: 5_000,
+      // Gateway CLI cancellation waits up to 10s for durable settlement.
+      timeoutMs: 15_000,
     });
   } catch (error) {
     if (task.runtime === "cron") {

@@ -180,6 +180,21 @@ const HealthSnapshotSchema = closedObject({
       hotReloadStatus: Type.Union([Type.Literal("active"), Type.Literal("disabled")]),
     }),
   ),
+  sessionLanes: Type.Optional(
+    closedObject({
+      status: Type.Union([
+        Type.Literal("healthy"),
+        Type.Literal("degraded"),
+        Type.Literal("unhealthy"),
+      ]),
+      count: Type.Integer({ minimum: 0 }),
+      activeCount: Type.Integer({ minimum: 0 }),
+      queuedCount: Type.Integer({ minimum: 0 }),
+      idleCount: Type.Integer({ minimum: 0 }),
+      oldestAgeMs: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+      oldestQueuedAgeMs: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    }),
+  ),
   // Channel plugins own their nested account/probe summaries, so this is the
   // one provider-contributed bag that deliberately remains unknown.
   channels: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
