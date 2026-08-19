@@ -1081,7 +1081,6 @@ export function buildGatewayCronService(params: {
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
           ssrfPolicy: webhookSsrfPolicy,
-          globalFailureDestination: params.cfg.cron?.failureAlert,
         });
       }
     },
