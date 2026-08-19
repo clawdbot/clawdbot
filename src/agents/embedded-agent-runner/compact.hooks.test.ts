@@ -1175,8 +1175,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect(
       wrappedCompactionArgs({
         workspaceDir: "/tmp/workspace",
-        permissionMode: "full",
-        sessionRoot: "/tmp/workspace",
+        sessionEntry: {
+          sessionId: "session-1",
+          permissionMode: "full",
+          sessionRoot: "/tmp/workspace",
+        },
       }),
     );
 
