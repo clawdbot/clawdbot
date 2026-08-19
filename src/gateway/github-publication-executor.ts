@@ -19,6 +19,7 @@ import {
   githubPublicationBaseFetchArgs,
   githubPublicationBaseLineageArgs,
   githubPublicationBaseLookupArgs,
+  githubPublicationBranchCreationArgs,
   parseGitHubPublicationBaseBranch,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
@@ -414,37 +415,30 @@ export async function executeGitHubPublication(params: {
     if (baseFetched.code !== 0) {
       throw new Error("GitHub publication workspace base could not be materialized.");
     }
-    const baseCandidates = [worktree.baseRef, `refs/remotes/origin/${baseBranch}`];
-    let baseCommit: string | undefined;
-    for (const candidate of baseCandidates) {
-      const resolved = await step(
-        async () =>
-          await runCommand(
-            ["git", "rev-parse", "--verify", "--end-of-options", `${candidate}^{commit}`],
-            { cwd: worktree.path },
-          ),
-      );
-      if (resolved.code === 0) {
-        baseCommit = resolved.stdout.toString("utf8").trim();
-        break;
-      }
-    }
-    if (!baseCommit) {
-      throw new Error("GitHub publication workspace base could not be verified.");
-    }
-    const localBaseOwnsRemote = await step(
+    const creation = await step(
       async () =>
-        await runCommand(githubPublicationBaseLineageArgs(baseCommit, remoteBaseSha), {
+        await runCommand(githubPublicationBranchCreationArgs(branch), {
           cwd: worktree.path,
         }),
     );
-    const localBaseOwnsSource = await step(
+    const creationEntries = creation.stdout.toString("utf8").trim().split(/\r?\n/u);
+    const creationBase = creationEntries.at(-1) ?? "";
+    if (creation.code !== 0 || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(creationBase)) {
+      throw new Error("GitHub publication workspace creation base could not be verified.");
+    }
+    const creationOwnsRemote = await step(
       async () =>
-        await runCommand(githubPublicationBaseLineageArgs(baseCommit, sourceHeadCommit), {
+        await runCommand(githubPublicationBaseLineageArgs(creationBase, remoteBaseSha), {
           cwd: worktree.path,
         }),
     );
-    if (localBaseOwnsRemote.code !== 0 || localBaseOwnsSource.code !== 0) {
+    const creationOwnsSource = await step(
+      async () =>
+        await runCommand(githubPublicationBaseLineageArgs(creationBase, sourceHeadCommit), {
+          cwd: worktree.path,
+        }),
+    );
+    if (creationOwnsRemote.code !== 0 || creationOwnsSource.code !== 0) {
       throw new Error("GitHub publication workspace base lineage could not be verified.");
     }
     const baseTree = await step(

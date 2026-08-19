@@ -882,11 +882,11 @@ describe("Gateway GitHub publication", () => {
         if (command === "git rev-parse HEAD^") {
           return commandResult(`${OLD_HEAD}\n`);
         }
+        if (command === `git reflog show --format=%H --end-of-options refs/heads/${BRANCH}`) {
+          return commandResult(`${NEW_HEAD}\n${OLD_HEAD}\n`);
+        }
         if (argv.includes("--includes") && argv.includes("--get-regexp")) {
           return commandResult("", 1);
-        }
-        if (command === "git rev-parse --verify --end-of-options origin/main^{commit}") {
-          return commandResult(`${BASE_HEAD}\n`);
         }
         if (command === `git rev-parse ${BASE_HEAD}^{tree}`) {
           return commandResult(`${"e".repeat(40)}\n`);

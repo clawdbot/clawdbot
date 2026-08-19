@@ -40,6 +40,10 @@ export function githubPublicationBaseFetchArgs(repository: string, sha: string):
   ];
 }
 
+export function githubPublicationBranchCreationArgs(branch: string): string[] {
+  return ["git", "reflog", "show", "--format=%H", "--end-of-options", `refs/heads/${branch}`];
+}
+
 export function githubPublicationBaseLineageArgs(ancestor: string, descendant: string): string[] {
   return ["git", "merge-base", "--is-ancestor", ancestor, descendant];
 }

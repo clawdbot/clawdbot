@@ -66,6 +66,33 @@ describe("Gateway GitHub publication boundaries", () => {
     );
   });
 
+  it("publishes a feature worktree whose base metadata is HEAD", async () => {
+    mocks.findWorktree.mockImplementation((_ownerKind, ownerId: string) => ({
+      id: "worktree-1",
+      repoRoot: "/repo",
+      repoFingerprint: "fingerprint-1",
+      path: "/repo/worktree",
+      branch: BRANCH,
+      baseRef: "HEAD",
+      ownerKind: "session",
+      ownerId,
+    }));
+    const coordinator = createTestGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+      }),
+    });
+
+    await expect(
+      coordinator.requestForSession({
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        idempotencyKey: "head-base-metadata",
+      }),
+    ).resolves.toMatchObject({ status: "published", branch: BRANCH });
+    expect(commands.some((argv) => argv.join(" ").includes("git/ref/heads/main"))).toBe(true);
+  });
+
   it("rejects an accepted tree identical to the base before creating a marker commit", async () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
@@ -95,8 +122,8 @@ describe("Gateway GitHub publication boundaries", () => {
   it("fails closed when no local base commit can be verified", async () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-      if (argv.includes("--end-of-options")) {
-        return commandResult("", 1);
+      if (argv[0] === "git" && argv[1] === "reflog") {
+        return commandResult();
       }
       return await fallback(argv, options);
     });
