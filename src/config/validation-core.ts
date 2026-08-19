@@ -8,8 +8,7 @@ import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveAmbientOwnerAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-  tryResolveSystemAgentTargetAgentId,
+  tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -51,13 +50,12 @@ import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.r
 
 export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
   const agentEntries = listAgentEntries(config);
-  // Keep this equivalent to isHeartbeatOwnerUnresolved in heartbeat-runner-config.ts.
+  // Match heartbeat enrollment so validation never warns for an owner the runner can use.
   const unresolved =
     listAgentIds(config).length > 1 &&
     !agentEntries.some((entry) => Boolean(entry.heartbeat)) &&
     !config.agents?.defaults?.heartbeat &&
-    tryResolveLegacyCompatibilityAgentId(config) === undefined &&
-    tryResolveSystemAgentTargetAgentId(config) === undefined;
+    tryResolveAmbientOwnerAgentId(config) === undefined;
   return unresolved
     ? [
         {

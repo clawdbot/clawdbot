@@ -219,48 +219,27 @@ export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): strin
     : tryResolveDefaultAgentId(cfg);
 }
 
-/** Resolves the configured owner for ambient system work and explicit consults. */
-export function tryResolveSystemAgentTargetAgentId(
+/** Resolves the owner for ambient system work and explicit requests. */
+export function tryResolveAmbientOwnerAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
 ): string | undefined {
-  const configuredAgentId =
+  const explicitAgentId =
     normalizeOptionalString(requestedAgentId) ??
     normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId);
-  return configuredAgentId ? normalizeAgentId(configuredAgentId) : tryResolveSoleAgentId(cfg);
-}
-
-export function resolveSystemAgentTargetAgentId(
-  cfg: OpenClawConfig,
-  requestedAgentId?: string,
-  context?: AgentSelectionContext,
-): string {
-  const resolvedAgentId = tryResolveSystemAgentTargetAgentId(cfg, requestedAgentId);
-  if (resolvedAgentId) {
-    return resolvedAgentId;
-  }
-  return normalizeAgentId(
-    resolveSoleAgentId(
-      cfg,
-      context ?? {
-        surface: "system-agent consult routing",
-        hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
-      },
-    ),
-  );
-}
-
-/** Resolves the ambient system owner: shipped legacy default first, then the system-agent target. */
-export function tryResolveAmbientOwnerAgentId(cfg: OpenClawConfig): string | undefined {
-  return tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveSystemAgentTargetAgentId(cfg);
+  // The documented system-agent owner is explicit config, so it precedes a stripped legacy marker.
+  return explicitAgentId
+    ? normalizeAgentId(explicitAgentId)
+    : tryResolveLegacyCompatibilityAgentId(cfg);
 }
 
 /** Ambient owner for surfaces that must fail loudly rather than act on the wrong agent. */
 export function resolveAmbientOwnerAgentId(
   cfg: OpenClawConfig,
+  requestedAgentId?: string,
   context?: AgentSelectionContext,
 ): string {
-  return tryResolveAmbientOwnerAgentId(cfg) ?? resolveSoleAgentId(cfg, context);
+  return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
 /**
