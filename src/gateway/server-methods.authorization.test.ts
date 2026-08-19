@@ -380,6 +380,88 @@ describe("gateway method authorization", () => {
       expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("label");
     });
   });
+
+  it("authorizes lifecycle targets from each method's protocol shape", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:lifecycle-authorization-target";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-lifecycle-authorization-target",
+          updatedAt: 1,
+          visibility: "read-only",
+          createdActor: { type: "human", id: "owner" },
+        },
+      );
+
+      const dispatchRequest = async (
+        method: "sessions.create" | "sessions.fork" | "sessions.recover",
+        requestParams: Record<string, unknown>,
+        profileId: string,
+      ) => {
+        const handler = vi.fn<GatewayRequestHandler>(({ respond, sessionMutationAuthorization }) =>
+          respond(true, { authorized: sessionMutationAuthorization !== undefined }),
+        );
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          req: { type: "req", id: `${method}-${profileId}`, method, params: requestParams },
+          respond,
+          client: {
+            connId: `${method}-${profileId}`,
+            authenticatedUserId: `${profileId}@example.com`,
+            authenticatedUserProfile: {
+              profileId,
+              displayName: profileId,
+              hasAvatar: false,
+              updatedAt: 1,
+            },
+            connect: {
+              role: "operator",
+              scopes: ["operator.write"],
+              client: { id: "test", version: "1", platform: "test", mode: "test" },
+              minProtocol: 1,
+              maxProtocol: 1,
+            },
+          } as Parameters<typeof handleGatewayRequest>[0]["client"],
+          isWebchatConnect: () => false,
+          context: {
+            chatAbortControllers: new Map(),
+            getRuntimeConfig: () => ({}),
+            logGateway: { warn: vi.fn() },
+          } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+          extraHandlers: { [method]: handler },
+        });
+        return { handler, respond };
+      };
+
+      const cases = [
+        {
+          method: "sessions.create" as const,
+          params: { parentSessionKey: sessionKey, fork: true },
+        },
+        {
+          method: "sessions.fork" as const,
+          params: { sessionKey, entryId: "user-entry" },
+        },
+        { method: "sessions.recover" as const, params: { key: sessionKey } },
+      ];
+      for (const testCase of cases) {
+        const owner = await dispatchRequest(testCase.method, testCase.params, "owner");
+        expect(owner.handler, testCase.method).toHaveBeenCalledOnce();
+        expect(owner.respond, testCase.method).toHaveBeenCalledWith(true, { authorized: true });
+
+        const outsider = await dispatchRequest(testCase.method, testCase.params, "outsider");
+        expect(outsider.handler, testCase.method).not.toHaveBeenCalled();
+        expect(outsider.respond, testCase.method).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+          }),
+        );
+      }
+    });
+  });
 });
 
 describe("sessions.patchMany orchestration", () => {

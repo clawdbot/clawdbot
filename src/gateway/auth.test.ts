@@ -527,6 +527,25 @@ describe("gateway auth", () => {
     expect(res).toEqual({ ok: false, reason: "proxy_attribution_required" });
   });
 
+  it("keeps externally managed Tailscale ingress on ordinary trusted-proxy auth semantics", async () => {
+    const tailscaleWhois = vi.fn(createTailscaleWhois());
+    const authorize = (connectAuth: { token: string } | null) =>
+      authorizeWsControlUiGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: true },
+        connectAuth,
+        tailscaleWhois,
+        req: createTailscaleForwardedReq(false),
+        trustedProxies: ["127.0.0.1"],
+      });
+
+    await expect(authorize({ token: "secret" })).resolves.toMatchObject({
+      ok: true,
+      method: "token",
+    });
+    await expect(authorize(null)).resolves.toEqual({ ok: false, reason: "token_missing" });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+  });
+
   it("keeps managed Serve shared-secret auth independent of WhoIs availability", async () => {
     const limiter = createAuthRateLimiter({
       maxAttempts: 1,

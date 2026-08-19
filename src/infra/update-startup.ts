@@ -65,6 +65,7 @@ import {
 } from "./update-dev-target.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
+import { runGatewayUpdatePreflight } from "./update-runner.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -499,6 +500,16 @@ async function runAutoUpdateCommand(params: AutoUpdateRunParams): Promise<AutoUp
   const supervisor = detectRespawnSupervisor(process.env, process.platform, {
     includeLinuxOpenClawGatewayServiceMarker: true,
   });
+  if (supervisor && params.devTarget) {
+    const failure = await runGatewayUpdatePreflight(
+      params.root,
+      params.timeoutMs,
+      params.devTarget,
+    );
+    if (failure) {
+      return { ok: false, code: 1, reason: failure.reason ?? "preflight-failed" };
+    }
+  }
   if (supervisor) {
     return await startManagedServiceAutoUpdateHandoff({
       channel: params.channel,
@@ -578,7 +589,7 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
-async function resolveStartupInstallStatus(checkDevGit: boolean) {
+async function resolveStartupInstallStatus(fetchRemoteGit: boolean) {
   const [root, installReceipt] = await Promise.all([
     resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
@@ -593,16 +604,16 @@ async function resolveStartupInstallStatus(checkDevGit: boolean) {
       : undefined;
   const status = await checkUpdateStatus({
     root,
-    timeoutMs: 2500,
-    fetchGit: checkDevGit,
+    ...(fetchRemoteGit ? {} : { timeoutMs: 2500 }),
+    fetchGit: fetchRemoteGit,
     includeRegistry: false,
-    ...(checkDevGit ? { useDetachedDevUpstream: true } : {}),
+    ...(fetchRemoteGit ? { useDetachedDevUpstream: true } : {}),
     ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
   });
   return { root, status, installReceipt };
 }
 
-/** Starts the process-stable local install inspection owned by the update lifecycle. */
+/** Caches only the fast local install probe; remote Git refresh remains post-ready. */
 export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartupInstallStatus> {
   if (installStatusInitialization) {
     return installStatusInitialization;

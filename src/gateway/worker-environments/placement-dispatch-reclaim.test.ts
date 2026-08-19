@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -16,6 +16,7 @@ import {
   REQUEST,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -34,6 +35,25 @@ describe("worker placement dispatch reclaim", () => {
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("rechecks session authorization at the activation lifecycle fence", async () => {
+    const harness = createHarness(placementStore);
+    let authorizationChecks = 0;
+    const authorize = vi.fn(() => {
+      authorizationChecks += 1;
+      if (authorizationChecks === 2) {
+        throw new Error("session access revoked");
+      }
+    });
+
+    await expect(harness.service.dispatch(REQUEST, undefined, authorize)).rejects.toThrow(
+      "session access revoked",
+    );
+
+    expect(authorize).toHaveBeenCalledTimes(2);
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+    expect(harness.log).not.toContain("placement:active");
   });
 
   it("attaches before opening one tunnel for workspace sync and activation", async () => {
@@ -150,6 +170,105 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.log).toContain("placement:reconciling");
     expect(harness.log).not.toContain("placement:reclaimed");
     expect(placementStore.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+  });
+
+  it("carries session authorization from move source teardown into destination dispatch", async () => {
+    const harness = createHarness(placementStore, {
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    const active = await harness.service.dispatch(REQUEST);
+    database.db
+      .prepare(
+        `INSERT INTO worker_environments (
+          environment_id, provider_id, profile_id, profile_snapshot_json,
+          provision_operation_id, lease_id, state, owner_epoch,
+          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
+        ) VALUES (?, 'test', ?, '{}', ?, 'lease-move-auth', 'attached', ?, ?, 1000, 1000, 1000)`,
+      )
+      .run(
+        active.environmentId,
+        REQUEST.profileId,
+        `provision:${active.environmentId}`,
+        active.activeOwnerEpoch,
+        JSON.stringify([active.sessionId]),
+      );
+    let authorizationChecks = 0;
+    const authorize = vi.fn(() => {
+      authorizationChecks += 1;
+      if (authorizationChecks === 3) {
+        throw new Error("session access revoked");
+      }
+    });
+    const destinationDispatch = vi.fn(
+      async (
+        _request: Parameters<ReturnType<typeof createHarness>["service"]["dispatch"]>[0],
+        _onTransition: Parameters<ReturnType<typeof createHarness>["service"]["dispatch"]>[1],
+        destinationAuthorize: Parameters<
+          ReturnType<typeof createHarness>["service"]["dispatch"]
+        >[2],
+      ) => {
+        destinationAuthorize?.();
+        throw new Error("destination dispatch lost authorization");
+      },
+    );
+    const service = createWorkerPlacementMoveService({
+      placements: placementStore,
+      environments: { get: () => undefined },
+      runMoveBarrier: async ({ authorize: sourceAuthorize, begin }) => {
+        sourceAuthorize?.();
+        return begin();
+      },
+      dispatch: destinationDispatch,
+      reclaimSource: async (_request, intent, sourceAuthorize) => {
+        sourceAuthorize?.();
+        const draining = placementStore.get(intent.sessionId);
+        if (draining?.state !== "draining") {
+          throw new Error("move source did not enter draining state");
+        }
+        const reconciling = placementStore.startReconcile({
+          sessionId: draining.sessionId,
+          environmentId: draining.environmentId,
+          ownerEpoch: draining.activeOwnerEpoch,
+          expectedGeneration: draining.generation,
+        });
+        const local = placementStore.completePlacementMoveSourceToLocal({
+          operationId: intent.operationId,
+          sessionId: intent.sessionId,
+          expectedGeneration: reconciling.generation,
+        });
+        if (local.state !== "local") {
+          throw new Error("move source did not return to local state");
+        }
+        return local;
+      },
+      resolveDestination: async () => ({
+        profileId: "destination-profile",
+        executionMode: REQUEST.executionMode,
+      }),
+    });
+
+    await expect(
+      service.move(
+        {
+          sessionId: active.sessionId,
+          sessionKey: active.sessionKey,
+          agentId: active.agentId,
+          source: {
+            generation: active.generation,
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+          },
+          target: { kind: "profile", profileId: "destination-profile" },
+        },
+        undefined,
+        authorize,
+      ),
+    ).rejects.toThrow("session access revoked");
+
+    expect(authorize).toHaveBeenCalledTimes(3);
+    expect(destinationDispatch).toHaveBeenCalledOnce();
+    expect(placementStore.get(active.sessionId)).toMatchObject({ state: "local" });
   });
 
   it("recovers a durable Gateway move intent before generic draining recovery", async () => {
@@ -286,6 +405,67 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
+
+  it("retries pending failed-environment teardown before clearing the placement", async () => {
+    const harness = createHarness(placementStore, { failAt: "sync", destroyFails: true });
+    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow("sync failed");
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("environment destroy: destroy pending"),
+    });
+
+    vi.mocked(harness.environments.destroy).mockImplementationOnce(async () => {
+      harness.markEnvironmentDestroyed();
+      const destroyed = harness.environments.get(harness.attached.environmentId);
+      if (!destroyed) {
+        throw new Error("expected destroyed environment");
+      }
+      return destroyed;
+    });
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({ state: "local" });
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["active", "failed"] as const)(
+    "rejects %s reclaim before its first durable cleanup action when authorization changes",
+    async (state) => {
+      const harness = createHarness(placementStore);
+      if (state === "active") {
+        await harness.service.dispatch(REQUEST);
+      } else {
+        const requested = placementStore.startDispatch(REQUEST);
+        placementStore.fail({
+          sessionId: REQUEST.sessionId,
+          expectedGeneration: requested.generation,
+          recoveryError: "dispatch failed",
+        });
+      }
+      const destroyCalls = vi.mocked(harness.environments.destroy).mock.calls.length;
+      const authorizationError = new Error("session participation changed");
+
+      await expect(
+        harness.service.reclaim(
+          {
+            sessionId: REQUEST.sessionId,
+            sessionKey: REQUEST.sessionKey,
+            agentId: REQUEST.agentId,
+          },
+          () => {
+            throw authorizationError;
+          },
+        ),
+      ).rejects.toBe(authorizationError);
+
+      expect(harness.placements.current()).toMatchObject({ state });
+      expect(harness.environments.destroy).toHaveBeenCalledTimes(destroyCalls);
+    },
+  );
 
   it("retains and reports cloud versions that conflict during an idle reclaim", async () => {
     const harness = createHarness(placementStore, {

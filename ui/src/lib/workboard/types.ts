@@ -15,6 +15,7 @@ type WorkboardLifecycleState =
   | "unlinked"
   | "missing"
   | "idle"
+  | "queued"
   | "running"
   | "stale"
   | "succeeded"
@@ -112,6 +113,7 @@ export type WorkboardUiState = {
   draftOpen: boolean;
   draftSaving: boolean;
   editingCardId: string | null;
+  editingCardBase: WorkboardCard | null;
   draftTitle: string;
   draftNotes: string;
   draftStatus: WorkboardStatus;

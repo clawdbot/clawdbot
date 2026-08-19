@@ -93,6 +93,43 @@ describe("qa confidence report", () => {
     expect(renderQaConfidenceMarkdownReport(report)).toContain("Global pass: no");
   });
 
+  it("uses suite lifecycle status before terminal outcome counts", async () => {
+    const manifest: QaConfidenceManifest = {
+      version: 1,
+      profile: "codex-100",
+      lanes: [
+        {
+          id: "suite",
+          title: "Suite",
+          kind: "qa-suite-summary",
+          artifact: "suite/qa-suite-summary.json",
+          required: true,
+        },
+      ],
+    };
+    for (const [runStatus, expectedPass, expectedLaneStatus, expectedDetails] of [
+      ["running", false, "unknown", "still running"],
+      ["completed", true, "pass", "counts.failed=0"],
+      ["paused", false, "unknown", "unsupported run.status=paused"],
+    ] as const) {
+      await writeJson("suite/qa-suite-summary.json", {
+        run: { status: runStatus },
+        counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
+        scenarios: [{ name: "completed prefix", status: "pass" }],
+      });
+
+      const report = await buildQaConfidenceReport({
+        manifest,
+        artifactRoot: tempRoot,
+        strictGlobalPass: true,
+      });
+
+      expect(report.pass).toBe(expectedPass);
+      expect(report.lanes[0]).toMatchObject({ status: expectedLaneStatus });
+      expect(report.lanes[0]?.details).toContain(expectedDetails);
+    }
+  });
+
   it("does not let optional lanes block strict gates", async () => {
     await writeJson("required/qa-suite-summary.json", {
       counts: { total: 1, passed: 1, skipped: 0, failed: 0 },

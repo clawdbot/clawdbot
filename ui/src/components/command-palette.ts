@@ -18,7 +18,10 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
 import { icons, type IconName } from "./icons.ts";
 import "./modal-dialog.ts";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import {
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
+  DESKTOP_PANEL_TOGGLE_EVENT,
+} from "./panel-toggle-contract.ts";
 
 type PaletteItem = {
   id: string;
@@ -35,7 +38,10 @@ const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
 
-function getPaletteBaseItems(desktopAvailable: boolean): PaletteItem[] {
+function getPaletteBaseItems(
+  desktopAvailable: boolean,
+  custodianAvailable: boolean,
+): PaletteItem[] {
   return [
     {
       id: "nav-new-session",
@@ -112,11 +118,25 @@ function getPaletteBaseItems(desktopAvailable: boolean): PaletteItem[] {
           },
         ]
       : []),
+    ...(custodianAvailable
+      ? [
+          {
+            id: "panel-custodian",
+            label: t("nav.askOpenClaw"),
+            icon: "lobster" as const,
+            category: "navigation" as const,
+            action: "panel:custodian",
+          },
+        ]
+      : []),
   ];
 }
 
-function getPaletteItemsInternal(desktopAvailable: boolean): PaletteItem[] {
-  return getPaletteBaseItems(desktopAvailable);
+function getPaletteItemsInternal(
+  desktopAvailable: boolean,
+  custodianAvailable: boolean,
+): PaletteItem[] {
+  return getPaletteBaseItems(desktopAvailable, custodianAvailable);
 }
 
 type CommandPaletteProps = {
@@ -132,6 +152,7 @@ type CommandPaletteProps = {
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
   desktopAvailable: boolean;
+  custodianAvailable: boolean;
   onInputRef: (element: Element | undefined) => void;
 };
 
@@ -140,8 +161,9 @@ function filteredItems(
   includeSlashCommands = true,
   sessionItems: readonly PaletteItem[] = [],
   desktopAvailable = false,
+  custodianAvailable = false,
 ): PaletteItem[] {
-  const items = getPaletteItemsInternal(desktopAvailable).filter(
+  const items = getPaletteItemsInternal(desktopAvailable, custodianAvailable).filter(
     (item) => includeSlashCommands || item.category !== "search",
   );
   if (!query) {
@@ -179,6 +201,8 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
   } else if (item.action === "panel:desktop") {
     window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+  } else if (item.action === "panel:custodian") {
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
   } else {
     props.onSlashCommand?.(item.action);
   }
@@ -202,6 +226,7 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
     Boolean(props.onSlashCommand),
     props.sessionItems,
     props.desktopAvailable,
+    props.custodianAvailable,
   );
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
@@ -272,6 +297,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
     Boolean(props.onSlashCommand),
     props.sessionItems,
     props.desktopAvailable,
+    props.custodianAvailable,
   );
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
@@ -368,6 +394,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
   @property({ attribute: false }) desktopAvailable = false;
+  @property({ attribute: false }) custodianAvailable = false;
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private open = false;
@@ -589,6 +616,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       sessionItems: this.sessionItems,
       sessionSearchFailed: this.sessionSearchFailed,
       desktopAvailable: this.desktopAvailable,
+      custodianAvailable: this.custodianAvailable,
       onToggle: this.togglePalette,
       onQueryChange: (query) => {
         this.query = query;

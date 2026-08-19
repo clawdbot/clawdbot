@@ -8,14 +8,16 @@ import type { NewSessionVisibility } from "./create-params.ts";
 export function renderNewSessionIncognitoControl(submission: {
   visibility: NewSessionVisibility;
   submitting: boolean;
-  pendingCloud: { sessionKey: string };
+  pendingPlacement: { sessionKey: string };
   incognitoDisabledReason: () => string | undefined;
   setVisibility: (visibility: NewSessionVisibility) => void;
 }) {
   const active = submission.visibility === "incognito";
   const disabledReason = submission.incognitoDisabledReason();
   const disabled =
-    submission.submitting || Boolean(submission.pendingCloud.sessionKey) || Boolean(disabledReason);
+    submission.submitting ||
+    Boolean(submission.pendingPlacement.sessionKey) ||
+    Boolean(disabledReason);
   const description = disabledReason ?? t("newSession.incognitoDescription");
   return html`
     <div class="new-session-page__incognito-rail">

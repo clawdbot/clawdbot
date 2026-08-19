@@ -63,11 +63,16 @@ function computeReplacements(
 
   for (const chunk of chunks) {
     if (chunk.changeContext) {
-      const ctxIndex = seekSequence(originalLines, [chunk.changeContext], lineIndex, false);
-      if (ctxIndex === null) {
+      const contextSearch = seekSequence(originalLines, [chunk.changeContext], lineIndex, false);
+      if (contextSearch.kind === "ambiguous") {
+        throw new Error(
+          `Found ${contextSearch.occurrences} occurrences of context '${chunk.changeContext}' in ${filePath}. The context must be unique; use a more specific @@ context line.`,
+        );
+      }
+      if (contextSearch.kind === "missing") {
         throw new Error(`Failed to find context '${chunk.changeContext}' in ${filePath}`);
       }
-      lineIndex = ctxIndex + 1;
+      lineIndex = contextSearch.index + 1;
     }
 
     if (chunk.oldLines.length === 0) {
@@ -84,23 +89,29 @@ function computeReplacements(
 
     let pattern = chunk.oldLines;
     let newSlice = chunk.newLines;
-    let found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
+    let search = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
 
-    if (found === null && pattern[pattern.length - 1] === "") {
+    if (search.kind === "missing" && pattern[pattern.length - 1] === "") {
       // Parsed hunks may carry an EOF sentinel as a blank trailing line. Retry
       // without it so equivalent file contents still match.
       pattern = pattern.slice(0, -1);
       if (newSlice.length > 0 && newSlice[newSlice.length - 1] === "") {
         newSlice = newSlice.slice(0, -1);
       }
-      found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
+      search = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
     }
 
-    if (found === null) {
+    if (search.kind === "ambiguous") {
+      throw new Error(
+        `Found ${search.occurrences} occurrences of these lines in ${filePath}. The lines must be unique; include more surrounding lines in the hunk:\n${chunk.oldLines.join("\n")}`,
+      );
+    }
+    if (search.kind === "missing") {
       throw new Error(
         `Failed to find expected lines in ${filePath}:\n${chunk.oldLines.join("\n")}`,
       );
     }
+    const found = search.index;
 
     replacements.push([
       found,
@@ -157,23 +168,28 @@ function applyReplacements(
   return result;
 }
 
+type SequenceSearch =
+  | { kind: "found"; index: number }
+  | { kind: "ambiguous"; occurrences: number }
+  | { kind: "missing" };
+
 function seekSequence(
   lines: string[],
   pattern: string[],
   start: number,
   eof: boolean,
-): number | null {
+): SequenceSearch {
   if (pattern.length === 0) {
-    return start;
+    return { kind: "found", index: start };
   }
   if (pattern.length > lines.length) {
-    return null;
+    return { kind: "missing" };
   }
 
   const maxStart = lines.length - pattern.length;
   const searchStart = eof && lines.length >= pattern.length ? maxStart : start;
   if (searchStart > maxStart) {
-    return null;
+    return { kind: "missing" };
   }
 
   // Fall back through increasingly tolerant comparisons. This preserves normal
@@ -186,14 +202,21 @@ function seekSequence(
     (value: string) => normalizePunctuation(value.trim()),
   ];
   for (const normalize of normalizers) {
+    let index: number | null = null;
+    let occurrences = 0;
     for (let i = searchStart; i <= maxStart; i += 1) {
       if (linesMatch(lines, pattern, i, normalize)) {
-        return i;
+        index ??= i;
+        occurrences += 1;
       }
+    }
+    if (index !== null) {
+      // Later tiers are broader, so only the first tier with any matches decides.
+      return occurrences === 1 ? { kind: "found", index } : { kind: "ambiguous", occurrences };
     }
   }
 
-  return null;
+  return { kind: "missing" };
 }
 
 function linesMatch(

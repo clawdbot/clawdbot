@@ -5,12 +5,12 @@ import type { JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-function modelList() {
+function modelList(model = "gpt-5.4", id = model) {
   return {
     data: [
       {
-        id: "gpt-5.4",
-        model: "gpt-5.4",
+        id,
+        model,
         displayName: "GPT-5.4",
         description: "test model",
         hidden: false,
@@ -106,13 +106,15 @@ function createClientFactory(
     assistantDelta?: string;
     emptyAnswer?: boolean;
     completeTurn?: boolean;
+    model?: string;
+    modelId?: string;
   } = {},
 ) {
   const methods: string[] = [];
   const fixture = createFakeCodexAppServerClient(async (method: string, _params?: unknown) => {
     methods.push(method);
     if (method === "model/list") {
-      return modelList();
+      return modelList(options.model, options.modelId);
     }
     if (method === "config/read") {
       return {
@@ -367,6 +369,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         isolation: "private-stdio",
       }),
     ).rejects.toThrow("hosted search turn returned no text");
+
+    const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    expect(startParams).toMatchObject({ config: { project_doc_max_bytes: 131_072 } });
   });
 
   it("still fails on a terminal error notification", async () => {
@@ -458,6 +463,31 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
     expect(startParams).not.toHaveProperty("modelProvider");
+  });
+
+  it("uses the execution model for required logical model ids", async () => {
+    const fake = createClientFactory({
+      model: "codex-execution-model",
+      modelId: "gpt-5.6-sol",
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.6-sol" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "isolated completion",
+        developerInstructions: "Answer only.",
+        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "configured-transport",
+      }),
+    ).resolves.toMatchObject({ model: "gpt-5.6-sol" });
+
+    const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(threadStart).toMatchObject({ model: "codex-execution-model" });
+    expect(turnStart).toMatchObject({ model: "codex-execution-model" });
   });
 
   it("attests ring-zero and injects frozen history before starting the final turn", async () => {

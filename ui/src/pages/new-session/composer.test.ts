@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -35,37 +36,48 @@ function renderComposer(
   } = {},
 ) {
   const container = document.createElement("div");
-  const attachmentDraft = new NewSessionAttachmentDraft(() => undefined);
+  const attachmentDraft = new NewSessionAttachmentDraft(
+    () => undefined,
+    () => undefined,
+  );
   attachmentDrafts.push(attachmentDraft);
   const textareaController =
     overrides.textareaController ?? new NewSessionComposerTextareaController();
   if (!textareaControllers.includes(textareaController)) {
     textareaControllers.push(textareaController);
   }
-  render(
-    renderNewSessionDraftComposer({
-      agentId: "main",
-      attachmentDraft,
-      canSubmit: overrides.canSubmit ?? true,
-      context: undefined,
-      isCatalogTarget: true,
-      message: overrides.message ?? "",
-      visibility: overrides.visibility,
-      draftAvailable: overrides.draftAvailable,
-      modelControl: new NewSessionModelControl(() => undefined),
-      requiresModifier: overrides.requiresModifier ?? false,
-      submitDisabledReason: overrides.submitDisabledReason,
-      blockedSubmitNotice: overrides.blockedSubmitNotice,
-      terminalAction: overrides.terminalAction,
-      submitting: overrides.submitting ?? false,
-      textareaController,
-      messageLocked: overrides.messageLocked,
-      onInput: overrides.onInput ?? (() => undefined),
-      onVisibilityChange: overrides.onVisibilityChange,
-      onSubmit: overrides.onSubmit ?? (() => undefined),
-    }),
-    container,
-  );
+  let message = overrides.message ?? "";
+  const renderCurrent = () =>
+    render(
+      renderNewSessionDraftComposer({
+        agentId: "main",
+        attachmentDraft,
+        canSubmit: overrides.canSubmit ?? true,
+        context: undefined,
+        isCatalogTarget: true,
+        message,
+        visibility: overrides.visibility,
+        draftAvailable: overrides.draftAvailable,
+        modelControl: new NewSessionModelControl(() => undefined),
+        requiresModifier: overrides.requiresModifier ?? false,
+        requestUpdate: renderCurrent,
+        submitDisabledReason: overrides.submitDisabledReason,
+        blockedSubmitNotice: overrides.blockedSubmitNotice,
+        terminalAction: overrides.terminalAction,
+        submitting: overrides.submitting ?? false,
+        textareaController,
+        messageLocked: overrides.messageLocked,
+        onInput: (next) => {
+          message = next;
+          overrides.onInput?.(next);
+          renderCurrent();
+        },
+        onVisibilityChange: overrides.onVisibilityChange,
+        onSubmit: overrides.onSubmit ?? (() => undefined),
+      }),
+      container,
+    );
+  renderCurrent();
   const composer = container.querySelector<HTMLElement>(".new-session-page__composer");
   if (!composer) {
     throw new Error("Expected new-session composer");
@@ -92,9 +104,42 @@ afterEach(() => {
   textareaControllers.length = 0;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  replaceSlashCommands(buildFallbackSlashCommands());
 });
 
 describe("new-session composer keyboard submission", () => {
+  it("opens skill mentions and inserts the selected skill with Enter", () => {
+    replaceSlashCommands([
+      {
+        key: "release_notes",
+        name: "release_notes",
+        description: "Draft release notes.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let message = "";
+    const { composer } = renderComposer({
+      onInput: (next) => {
+        message = next;
+      },
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+
+    textarea.value = "$";
+    textarea.setSelectionRange(1, 1);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(composer.querySelector(".skill-menu")?.textContent).toContain("release_notes");
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+    );
+    expect(message).toBe("$release_notes ");
+  });
+
   it.each([
     { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
     { label: "Ctrl+Enter", requiresModifier: true, ctrlKey: true, metaKey: false },
@@ -300,6 +345,7 @@ describe("new-session composer sizing lifecycle", () => {
         message: "typed",
         modelControl: new NewSessionModelControl(() => undefined),
         requiresModifier: false,
+        requestUpdate: () => undefined,
         submitting: false,
         textareaController,
         onInput,
@@ -324,6 +370,7 @@ describe("new-session composer sizing lifecycle", () => {
         message: "restored programmatically",
         modelControl: new NewSessionModelControl(() => undefined),
         requiresModifier: false,
+        requestUpdate: () => undefined,
         submitting: false,
         textareaController,
         onInput,

@@ -477,8 +477,8 @@ export function reconcileSessionChanged(
   }
   const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
   const timestamped = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
-  const previousOwner = existing?.owner?.actor ?? existing?.createdActor;
-  const nextOwner = row.owner?.actor ?? row.createdActor;
+  const previousOwner = existing?.owner?.actor;
+  const nextOwner = row.owner?.actor;
   const ownershipChanged =
     (Object.hasOwn(rowFields, "owner") || Object.hasOwn(rowFields, "createdActor")) &&
     (previousOwner?.type !== nextOwner?.type ||
@@ -487,7 +487,7 @@ export function reconcileSessionChanged(
       existing?.owner?.assignedAt !== row.owner?.assignedAt);
   // The facet covers unloaded pages, so an ownership event invalidates it until
   // the session capability's canonical list refresh supplies a complete replacement.
-  const reconciledResult = ownershipChanged ? { ...timestamped, creators: undefined } : timestamped;
+  const reconciledResult = ownershipChanged ? { ...timestamped, owners: undefined } : timestamped;
   const reconciledRow = reconciledResult.sessions.find((candidate) =>
     matchesExistingSession(
       candidate,

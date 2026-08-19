@@ -518,7 +518,7 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "models.authStatus",
-      params: { refresh: true },
+      params: { refresh: true, agentId: "main" },
       timeoutMs: 3000,
     });
   });
@@ -532,7 +532,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "models.authStatus",
-      params: { refresh: true },
+      params: { refresh: true, agentId: "main" },
       timeoutMs: 3000,
     });
   });
@@ -857,6 +857,11 @@ describe("modelsAuthLoginCommand", () => {
     expect(
       (readMockCallArg(mocks.upsertAuthProfileWithLock) as UpsertAuthProfileCall).agentDir,
     ).toBe("/tmp/openclaw/agents/coder");
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true, agentId: "coder" },
+      timeoutMs: 3000,
+    });
   });
 
   it("forwards an app-owned cancellation signal to provider auth", async () => {
@@ -1420,7 +1425,7 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "models.authStatus",
-      params: { refresh: true },
+      params: { refresh: true, agentId: "main" },
       timeoutMs: 3000,
     });
   });
@@ -1467,6 +1472,11 @@ describe("modelsAuthLoginCommand", () => {
         token: "openai-token",
       },
       agentDir: "/tmp/openclaw/agents/coder",
+    });
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true, agentId: "coder" },
+      timeoutMs: 3000,
     });
   });
 
@@ -1578,7 +1588,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "models.authStatus",
-      params: { refresh: true },
+      params: { refresh: true, agentId: "coder" },
       timeoutMs: 3000,
     });
   });

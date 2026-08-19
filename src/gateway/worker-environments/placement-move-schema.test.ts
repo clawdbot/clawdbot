@@ -7,6 +7,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { getOpenClawStateRuntimeSchema } from "../../state/openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -24,8 +25,14 @@ describe("worker placement move schema", () => {
     const metadataBefore = database.db
       .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
       .get();
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace("  target_machine_class TEXT,\n", "");
+    const moveSchemaStart = previousSchema.indexOf(
+      "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
+    );
+    const moveSchemaEnd = previousSchema.indexOf(") STRICT;", moveSchemaStart);
     database.db.exec(`
       DROP TABLE worker_session_placement_moves;
+      ${previousSchema.slice(moveSchemaStart, moveSchemaEnd + ") STRICT;".length)}
       INSERT INTO worker_environments (
         environment_id, provider_id, profile_id, profile_snapshot_json,
         provision_operation_id, lease_id, state, owner_epoch,
@@ -50,8 +57,11 @@ describe("worker placement move schema", () => {
     const begun = store.beginPlacementMove({
       sessionId: "session-move",
       source: { generation: 4, environmentId: "environment-source", ownerEpoch: 7 },
-      target: { kind: "profile", profileId: "profile-destination" },
+      target: { kind: "profile", profileId: "profile-destination", machineClass: "beast" },
     });
+    expect(database.db.prepare("PRAGMA table_info(worker_session_placement_moves)").all()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "target_machine_class" })]),
+    );
     const databasePath = database.path;
     closeOpenClawStateDatabaseForTest();
 

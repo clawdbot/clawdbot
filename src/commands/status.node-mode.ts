@@ -2,11 +2,12 @@
 // On these machines the local gateway daemon is absent by design, but the node service may point at a remote gateway.
 
 import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
+import type { GatewayServiceLoadState } from "../daemon/service-types.js";
 import { loadNodeHostConfigReadOnly } from "../node-host/config.js";
 
 type NodeOnlyServiceLike = {
   installed: boolean | null;
-  loaded?: boolean | null;
+  loadState?: GatewayServiceLoadState;
   externallyManaged?: boolean;
   runtime?:
     | {
@@ -47,7 +48,7 @@ function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
     // Externally managed node services can be healthy even without local launchd/systemd loaded state.
     return true;
   }
-  if (node.loaded === true) {
+  if (node.loadState?.status === "loaded") {
     return true;
   }
   return hasRunningRuntime(node.runtime);

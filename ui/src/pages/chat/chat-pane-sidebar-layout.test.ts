@@ -12,6 +12,7 @@ function board(dock: ResolvedBoardView["dock"], face: ResolvedBoardView["face"] 
 }
 
 const containers: HTMLElement[] = [];
+const requestUpdate = vi.fn();
 
 function callbacks() {
   return {
@@ -37,6 +38,7 @@ async function renderLayout(container: HTMLElement, layout: SidebarLayout, narro
       panelActions: {},
       panelTemplates: { detail: html`<aside data-detail>Details</aside>` },
       primary: html`<main data-primary>Primary</main>`,
+      requestUpdate,
     }),
     container,
   );
@@ -83,6 +85,7 @@ describe("chat pane sidebar layout", () => {
         panelActions: {},
         panelTemplates: { detail: html`<aside>Details</aside>` },
         primary: html`<main>Primary</main>`,
+        requestUpdate,
       }),
       container,
     );

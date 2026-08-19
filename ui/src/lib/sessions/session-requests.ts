@@ -22,7 +22,6 @@ import type {
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
-  SessionSteerResult,
 } from "./session-capability.ts";
 
 /** Gateway rosters omit recency so Chat and Settings agree; the cap bounds list work. */
@@ -99,7 +98,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   const agentId = options.agentId?.trim();
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
-  const creatorId = options.creatorId?.trim();
+  const ownerId = options.ownerId?.trim();
   if (options.involvingMe === true) {
     params.involvingMe = true;
   }
@@ -115,8 +114,8 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   if (search) {
     params.search = search;
   }
-  if (creatorId) {
-    params.creatorId = creatorId;
+  if (ownerId) {
+    params.ownerId = ownerId;
   }
   if (typeof options.offset === "number" && options.offset > 0) {
     params.offset = Math.floor(options.offset);
@@ -193,18 +192,6 @@ export function requestSessionCompact(
     "sessions.compact",
     buildSessionRequestParams(key, options.agentId),
   );
-}
-
-export function requestSessionSteer(
-  client: SessionRequestClient,
-  key: string,
-  message: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionSteerResult> {
-  return client.request<SessionSteerResult>("sessions.steer", {
-    ...buildSessionRequestParams(key, options.agentId),
-    message,
-  });
 }
 
 export function requestSessionFilesList(

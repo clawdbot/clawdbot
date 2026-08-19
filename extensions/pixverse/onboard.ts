@@ -144,6 +144,7 @@ async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerse
         : ctx.secretInputMode,
     config: ctx.config,
     env: ctx.env,
+    workspaceDir: ctx.workspaceDir,
     expectedProviders: [PIXVERSE_PROVIDER_ID],
     provider: PIXVERSE_PROVIDER_ID,
     envLabel: "PIXVERSE_API_KEY",

@@ -12,6 +12,8 @@ Run one agent turn through the Gateway. The explicit `--local` flag is the only 
 
 Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`.
 
+A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
+
 Related: [Agent send tool](/tools/agent-send)
 
 ## `agent exec`

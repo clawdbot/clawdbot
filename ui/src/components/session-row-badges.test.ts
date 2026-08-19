@@ -106,8 +106,8 @@ describe("session row placement badges", () => {
 
     const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
     expect(badge?.dataset.placementState).toBe(placementState);
-    expect(badge?.getAttribute("aria-label")).toBe(`Cloud worker: ${placementState}`);
-    expectTooltipText(badge, `Cloud worker: ${placementState}`);
+    expect(badge?.getAttribute("aria-label")).toBe(`Runner: ${placementState}`);
+    expectTooltipText(badge, `Runner: ${placementState}`);
     expect(badge?.querySelector("circle")).not.toBeNull();
     expect(badge?.querySelector("rect")).toBeNull();
   });
@@ -218,13 +218,13 @@ describe("session row placement badges", () => {
 
     const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
     expect(badge?.dataset.workspaceConflicts).toBe("3");
-    expectTooltipText(badge, "Cloud worker: active · 3 workspace conflicts");
+    expectTooltipText(badge, "Runner: active · 3 workspace conflicts");
     expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
 
     renderBadges("active", 1);
     expectTooltipText(
       container.querySelector(".session-row-badge--cloud"),
-      "Cloud worker: active · 1 workspace conflict",
+      "Runner: active · 1 workspace conflict",
     );
   });
 
@@ -236,7 +236,7 @@ describe("session row placement badges", () => {
 
     const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
     expect(badge?.dataset.diskSpaceStatus).toBe(status);
-    expectTooltipText(badge, `Cloud worker: active · ${label}`);
+    expectTooltipText(badge, `Runner: active · ${label}`);
     expect(container.querySelectorAll(".session-row-badge--cloud")).toHaveLength(1);
   });
 
@@ -246,7 +246,7 @@ describe("session row placement badges", () => {
     const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
     expect(badge?.dataset.placementState).toBe("reclaimed");
     expect(badge?.dataset.workspaceConflicts).toBe("2");
-    expectTooltipText(badge, "Cloud worker: reclaimed · 2 workspace conflicts");
+    expectTooltipText(badge, "Runner: reclaimed · 2 workspace conflicts");
   });
 
   it("renders descendant conflict attention without claiming a parent placement state", () => {

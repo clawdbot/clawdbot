@@ -36,6 +36,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import {
   isKnownFromMeIMessageMessageId,
@@ -984,13 +985,15 @@ export async function buildIMessageInboundContext(params: {
     });
   }
 
+  const directService =
+    resolveIMessageDirectChatService(
+      resolveIMessageAccount({ cfg: params.cfg, accountId: decision.route.accountId }).config
+        .service,
+      decision.chatGuid,
+    ) ?? "auto";
   const imessageTo = decision.isGroup
     ? chatTarget || `imessage:${decision.sender}`
-    : buildDirectIMessageReplyTarget({
-        cfg: params.cfg,
-        accountId: decision.route.accountId,
-        sender: decision.sender,
-      });
+    : `${directService}:${decision.sender}`;
   // Async follow-ups can resume from the stored origin instead of the immediate
   // reply target. Keep direct SMS origins service-qualified the same way as To,
   // or the final resumed message can fall back to imessage:<phone>.
@@ -1107,19 +1110,6 @@ function buildIMessageEchoScope(params: {
     scopes.push(`${params.accountId}:chat_identifier:${params.chatIdentifier}`);
   }
   return scopes;
-}
-
-export function buildDirectIMessageReplyTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  sender: string;
-}): string {
-  const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
-  const configuredService = account.config.service;
-  if (configuredService === "sms") {
-    return `sms:${params.sender}`;
-  }
-  return `imessage:${params.sender}`;
 }
 
 function describeIMessageEchoDropLog(params: { messageText: string; messageId?: string }): string {

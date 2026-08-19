@@ -177,6 +177,7 @@ async function runWithModelFallbackInternal<T>(
 ): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveModelCandidateChain({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,

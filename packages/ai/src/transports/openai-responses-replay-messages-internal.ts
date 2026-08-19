@@ -289,12 +289,17 @@ function convertResponsesMessagesWithStyle(
     authProfileId: options?.authProfileId,
     mode: options?.replayMode,
   });
-  const transformedMessages = providerStyle
-    ? transformProviderMessages(replayPlan.messages, model, normalizeToolCallId)
-    : transformTransportMessages(replayPlan.messages, model, normalizeToolCallId, {
-        normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
-        preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
-      });
+  const transformMessages = (source: Context["messages"]) =>
+    providerStyle
+      ? transformProviderMessages(source, model, normalizeToolCallId)
+      : transformTransportMessages(source, model, normalizeToolCallId, {
+          normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
+          preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
+        });
+  const transformedMessages = transformMessages(replayPlan.messages);
+  const transformedRetainedMessages = replayPlan.retainedMessages
+    ? transformMessages(replayPlan.retainedMessages)
+    : [];
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
@@ -317,11 +322,15 @@ function convertResponsesMessagesWithStyle(
       ),
     );
   }
-  if (replayPlan.compaction) {
-    messages.push(replayPlan.compaction);
-  }
+  const replayMessages = replayPlan.compaction
+    ? [...transformedRetainedMessages, replayPlan.compaction, ...transformedMessages]
+    : transformedMessages;
   let msgIndex = 0;
-  for (const msg of transformedMessages) {
+  for (const msg of replayMessages) {
+    if (!("role" in msg)) {
+      messages.push(msg);
+      continue;
+    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push(
@@ -362,13 +371,19 @@ function convertResponsesMessagesWithStyle(
             block.thinkingSignature &&
             (providerStyle || block.thinkingSignature.startsWith("{"))
           ) {
-            // Transport conversion skips openai-completions provenance tags; the provider
-            // conversion retains its shipped parse behavior for every non-empty signature.
-            const reasoningItem = JSON.parse(
-              block.thinkingSignature,
-            ) as ReplayableResponseReasoningItem;
+            // Persisted signatures are provider-owned data. Skip malformed or unrelated
+            // shapes so one corrupt history item cannot prevent the next request.
+            let reasoningItem: unknown;
+            try {
+              reasoningItem = JSON.parse(block.thinkingSignature);
+            } catch {
+              continue;
+            }
+            if (!isRecord(reasoningItem) || reasoningItem.type !== "reasoning") {
+              continue;
+            }
             const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
-              reasoningItem,
+              reasoningItem as ReplayableResponseReasoningItem,
               replayContext,
               readOpenAIResponsesReasoningReplayBlockMetadata(isRecord(block) ? block : {}),
               providerStyle ? { preserveUnattributedEncryptedContent: true } : undefined,

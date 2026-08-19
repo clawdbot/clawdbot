@@ -512,11 +512,15 @@ async function resolveReachableGateway(
     }
     const probeOptions: {
       url: string;
+      config?: OpenClawConfig;
       token?: string;
       password?: string;
       tlsFingerprint?: string;
       preauthHandshakeTimeoutMs?: number;
     } = { url: target.url };
+    if (config.gateway?.remote?.edgeAuth) {
+      probeOptions.config = config;
+    }
     if (auth.token) {
       probeOptions.token = auth.token;
     }
@@ -1009,7 +1013,7 @@ async function resolveUnownedCliPrimaryError(params: {
     resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
   });
   if (pluginPolicyMessage) {
-    return new Error(pluginPolicyMessage);
+    return await createExpectedPluginPolicyError(pluginPolicyMessage);
   }
   const sanitizedPrimary = sanitizeTerminalText(params.primary);
   const displayPrimary =
@@ -1021,6 +1025,11 @@ async function resolveUnownedCliPrimaryError(params: {
     argv: params.argv,
     ...(displayPrimary === params.primary ? {} : { commandNames: [] }),
   });
+}
+
+async function createExpectedPluginPolicyError(message: string): Promise<Error> {
+  const { ExpectedCliError } = await import("./failure-output.js");
+  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
@@ -1644,7 +1653,7 @@ async function runCliWithPreparedOutputMode(
               },
             );
             if (missingPluginCommandMessage) {
-              throw new Error(missingPluginCommandMessage);
+              throw await createExpectedPluginPolicyError(missingPluginCommandMessage);
             }
           }
         }
