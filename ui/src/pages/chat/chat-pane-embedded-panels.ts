@@ -18,6 +18,7 @@ import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
 type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
+  themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: boolean;
   desktopPresented: boolean;
@@ -93,7 +94,7 @@ export function sidebarPanelDefinitions(
           .available=${state.terminalAvailable}
           .agentId=${params?.agentId ?? null}
           .sessionKey=${state.sessionKey}
-          .themeMode=${document.documentElement.dataset.theme === "light" ? "light" : "dark"}
+          .themeMode=${params?.themeMode ?? "dark"}
           .basePath=${state.basePath}
         ></openclaw-terminal-panel>`
       : null;

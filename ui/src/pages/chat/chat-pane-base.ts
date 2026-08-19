@@ -456,6 +456,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
           }),
       )
       .watch(
+        () => this.context?.theme,
+        (theme, notify) => theme.subscribe(notify),
+      )
+      .watch(
         () => this.resolveBoardProvider(),
         (provider, notify) => provider.snapshot$.subscribe(notify),
       )

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -12,6 +14,9 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
+
+const themeProofDir = process.env.OPENCLAW_TERMINAL_THEME_PROOF_DIR?.trim();
+const themeVideoDir = process.env.OPENCLAW_TERMINAL_THEME_VIDEO_DIR?.trim();
 
 async function openTerminalSidePanel(page: Page): Promise<Locator> {
   await page.goto(`${suite.server.baseUrl}chat`);
@@ -32,6 +37,27 @@ async function settleTerminalPaint(page: Page): Promise<void> {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       }),
   );
+}
+
+async function captureThemeProof(page: Page, name: string): Promise<void> {
+  if (!themeProofDir) {
+    return;
+  }
+  await fs.mkdir(themeProofDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    caret: "hide",
+    path: path.join(themeProofDir, `${name}.png`),
+  });
+}
+
+async function cycleThemeMode(page: Page, currentMode: "Dark" | "Light" | "System") {
+  const sidebar = page.locator("openclaw-app-sidebar");
+  const toggle = sidebar.getByRole("button", { name: `Color mode: ${currentMode}` });
+  if (!(await toggle.isVisible())) {
+    await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
+  }
+  await toggle.click();
 }
 
 suite.define(() => {
@@ -62,6 +88,60 @@ suite.define(() => {
         .toContain(sentinel);
       await expect.poll(() => canvasDigest(canvas)).not.toBe(bannerDigest);
     });
+  });
+
+  it("keeps an open side-panel terminal synchronized with light and dark mode", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "light",
+        serviceWorkers: "block",
+        viewport: { height: 800, width: 1280 },
+        ...(themeVideoDir
+          ? { recordVideo: { dir: themeVideoDir, size: { height: 800, width: 1280 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.startup", "terminal.open"],
+          terminalEnabled: true,
+        });
+
+        const panel = await openTerminalSidePanel(page);
+        await gateway.waitForRequest("terminal.open");
+        const canvas = panel.locator(".tp-host canvas");
+        await canvas.waitFor({ state: "visible" });
+        await canvas.evaluate((element) => {
+          element.dataset.themeSyncIdentity = "original";
+        });
+        await captureThemeProof(page, "light-initial");
+
+        await cycleThemeMode(page, "System");
+        await cycleThemeMode(page, "Light");
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+        await captureThemeProof(page, "dark-after-toggle");
+        await expect
+          .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
+          .toBe("dark");
+
+        await cycleThemeMode(page, "Dark");
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
+        await captureThemeProof(page, "light-after-toggle");
+        await expect
+          .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
+          .toBe("light");
+        expect(await canvas.getAttribute("data-theme-sync-identity")).toBe("original");
+
+        await page.locator(".chat-side-panel-toggle").click();
+        await expect.poll(() => canvas.isVisible()).toBe(false);
+        await page.locator(".chat-side-panel-toggle").click();
+        await canvas.waitFor({ state: "visible" });
+        await expect
+          .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
+          .toBe("light");
+        await captureThemeProof(page, "light-after-reopen");
+        expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
+      },
+    );
   });
 
   it("names a missing field and retries the open successfully", async () => {

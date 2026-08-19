@@ -31,10 +31,6 @@ import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { isTerminalOnlyView } from "./terminal-document-mode.ts";
 
-export function resolveTerminalThemeMode(): "dark" | "light" {
-  return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
-}
-
 function renderConnectingSplash(status?: string) {
   return html`
     <main
@@ -259,7 +255,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${terminalAvailable}
           .agentId=${terminalAgentId}
-          .themeMode=${resolveTerminalThemeMode()}
+          .themeMode=${context.theme.resolvedMode}
           fullscreen
         ></openclaw-terminal-panel>
         ${!gatewayConnected && gatewaySnapshot.lastError === null
