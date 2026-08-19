@@ -521,6 +521,37 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
   });
 
+  it("delivers long legacy interactive text losslessly across delivered section blocks", () => {
+    // Channel-boundary proof: a portable interactive text block longer than one
+    // Slack section must reach the send adapter as multiple ordered section
+    // blocks, not one truncated section. resolveSlackReplyBlockResolution is the
+    // compile step that turns portable interactive blocks into the native Block
+    // Kit payload Slack posts via chat.postMessage.
+    const text = "y".repeat(3100);
+    const { segments } = resolveSlackReplyBlockResolution({
+      interactive: {
+        blocks: [{ type: "text" as const, text }],
+      },
+    });
+    const sections = segments
+      .flatMap((segment) => (segment.kind === "blocks" ? segment.blocks : []))
+      .filter(
+        (block): block is { type: "section"; text: { type: string; text: string } } =>
+          typeof block === "object" &&
+          block !== null &&
+          (block as { type?: string }).type === "section",
+      );
+
+    // The full authored text is preserved in order across the delivered blocks.
+    expect(sections.map((section) => section.text.text).join("")).toBe(text);
+    // No delivered section exceeds the Slack Block Kit limit.
+    for (const section of sections) {
+      expect(section.text.text.length).toBeLessThanOrEqual(3000);
+    }
+    // Overflow was chunked into continuation sections, not collapsed into one.
+    expect(sections.length).toBeGreaterThan(1);
+  });
+
   it("subtracts exact legacy mirrors for every typed action family", () => {
     const presentation = {
       blocks: [
