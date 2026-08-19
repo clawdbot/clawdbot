@@ -805,15 +805,27 @@ export function resolveConfiguredModelRef(
     const trimmed = rawModel.trim();
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
     const manifestPluginContext = createModelManifestPluginContext(params);
-    const { aliases: aliasCandidates } = buildEffectiveModelAliases({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      defaultProvider: params.defaultProvider,
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
-      manifestPluginContext,
-    });
     const profileStripped = Boolean(modelWithoutProfile && modelWithoutProfile !== trimmed);
+    const aliasKeys = new Set(
+      [trimmed, ...(profileStripped ? [modelWithoutProfile] : [])].map(
+        normalizeLowercaseStringOrEmpty,
+      ),
+    );
+    const hasPossibleAlias = listModelAliasCandidates(params.cfg, params.agentId).some(
+      (candidate) => aliasKeys.has(normalizeLowercaseStringOrEmpty(candidate.alias)),
+    );
+    // Resolving alias targets can require workspace manifests. Keep ordinary
+    // primary selection on the static path when it cannot match an alias.
+    const aliasCandidates = hasPossibleAlias
+      ? buildEffectiveModelAliases({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          defaultProvider: params.defaultProvider,
+          allowManifestNormalization: params.allowManifestNormalization,
+          allowPluginNormalization: params.allowPluginNormalization,
+          manifestPluginContext,
+        }).aliases
+      : [];
     const exactAliasCandidate = findModelAliasCandidate(aliasCandidates, trimmed);
     const strippedAliasCandidate = profileStripped
       ? findModelAliasCandidate(aliasCandidates, modelWithoutProfile)
