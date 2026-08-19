@@ -137,6 +137,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     cfg: OpenClawConfig;
     agentId: string;
     purpose?: MemoryIndexManagerPurpose;
+    inspectSources?: boolean;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
     const agentId = normalizeAgentId(params.agentId);
@@ -178,12 +179,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                 purpose: params.purpose,
                 acquireLocalService: params.acquireLocalService,
               });
-              if (purpose === "status" && manager.sources.has("sessions")) {
-                try {
-                  await manager.markSessionStartupCatchupDirtyFiles();
-                } catch (err) {
-                  log.warn("memory status session dirty detection failed: " + String(err));
-                }
+              if (params.inspectSources) {
+                await manager.inspectDiagnosticSourceState();
               }
               return manager;
             },
@@ -497,7 +494,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
-      sourceCounts: aggregateState.sourceCounts,
+      sourceCounts: aggregateState.sourceCounts.map((entry) =>
+        Object.assign(entry, this.sourceInspections.get(entry.source) ?? {}),
+      ),
       cache: this.cache.enabled
         ? {
             enabled: true,

@@ -138,7 +138,13 @@ export type MemoryProviderStatus = {
   dbPath?: string;
   extraPaths?: MemoryExtraPath[];
   sources?: MemorySource[];
-  sourceCounts?: Array<{ source: MemorySource; files: number; chunks: number }>;
+  sourceCounts?: Array<{
+    source: MemorySource;
+    files: number;
+    chunks: number;
+    eligible?: number | null;
+    issues?: string[];
+  }>;
   cache?: { enabled: boolean; entries?: number; maxEntries?: number };
   fts?: { enabled: boolean; available: boolean; error?: string };
   fallback?: { from: string; reason?: string };
