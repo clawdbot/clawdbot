@@ -2,6 +2,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 
+function createDeferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("runTasksWithConcurrency", () => {
   it("preserves task order with bounded worker count", async () => {
     let running = 0;
@@ -110,8 +118,8 @@ describe("runTasksWithConcurrency", () => {
 
   it("rejects early and stops scheduling new work in stop mode", async () => {
     const err = new Error("boom");
-    const releaseInFlight = Promise.withResolvers<void>();
-    const inFlightSettled = Promise.withResolvers<void>();
+    const releaseInFlight = createDeferred();
+    const inFlightSettled = createDeferred();
     const started: number[] = [];
     const run = runTasksWithConcurrency({
       tasks: [
@@ -146,7 +154,7 @@ describe("runTasksWithConcurrency", () => {
 
   it("keeps scheduling after an early rejection in continue mode", async () => {
     const err = new Error("boom");
-    const completed = Promise.withResolvers<void>();
+    const completed = createDeferred();
     const started: number[] = [];
     const run = runTasksWithConcurrency({
       tasks: [
