@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
 import {
-  GitHubPublicationRefCasRejectedError,
   assertGitHubPublicationRefCasCompleted,
   updateGitHubPublicationBranchAndIndex,
 } from "./github-publication-git-index.js";
@@ -139,7 +138,7 @@ describe("GitHub publication index update", () => {
           assertGitHubPublicationRefCasCompleted(result);
         },
       }),
-    ).rejects.toBeInstanceOf(GitHubPublicationRefCasRejectedError);
+    ).rejects.toThrow("workspace branch changed before commit");
 
     await expect(fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).rejects.toThrow();
     expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.previousHead);

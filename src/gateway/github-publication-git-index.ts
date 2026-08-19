@@ -5,7 +5,7 @@ import path from "node:path";
 
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
 
-export class GitHubPublicationRefCasRejectedError extends Error {}
+class GitHubPublicationRefCasRejectedError extends Error {}
 
 export function assertGitHubPublicationRefCasCompleted(result: {
   code: number | null;
