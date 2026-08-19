@@ -139,6 +139,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
@@ -218,6 +219,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       void emitCodexAppServerEvent(params, event);
     },
     computerContextEpoch,
+    registerRunCleanup: (cleanup: (reason: string) => Promise<void>) => runCleanups.push(cleanup),
     ...(canResolveAnyScheduledCreatorAuthority
       ? {
           resolveCronCreatorToolAuthority: (options?: { signal?: AbortSignal }) => {
@@ -553,6 +555,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       dynamicToolParams,
       compactionPlanState,
       computerContextEpoch,
+      runCleanups,
       toolBridge,
       toolState,
       toolOutcomeOrdinals,
