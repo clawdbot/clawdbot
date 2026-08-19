@@ -655,11 +655,10 @@ openclaw-workboard-board-widget {
     }
   }
 
-  /* Below 184px the 96px reservation and the 88px pill cannot coexist, so the
-     pill sheds its display-only pieces and keeps just move + menu — the two
-     controls without which a widget cannot be managed. The card's aria-label
-     and the drag handle tooltip still carry the title. */
-  @container (max-width: 184px) {
+  /* Until centered chrome has room for its display fields, keep only move +
+     menu — the controls required to manage a widget. The card's aria-label and
+     drag handle tooltip still carry the title. */
+  @container (max-width: 376px) {
     .board-widget__bar > .board-widget__title,
     .board-widget__bar > .board-widget__kind,
     .board-widget__bar > .board-widget__capabilities {
