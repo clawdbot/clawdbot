@@ -1,12 +1,12 @@
+import {
+  hasSensitiveUrlHintTag,
+  SENSITIVE_URL_HINT_TAG,
+} from "@openclaw/net-policy/redact-sensitive-url";
 /**
  * Converts plugin manifest metadata into deterministic config UI metadata for docs, validation, and runtime schema.
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  hasSensitiveUrlHintTag,
-  SENSITIVE_URL_HINT_TAG,
-} from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -135,11 +135,16 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
 /** How a caller judges channel claimants; both decisions mirror what plugin activation does. */
 export type ChannelOwnershipPolicy = {
   /**
-   * Whether the plugin is active enough to own a channel's surfaced schema. Auto-enable ignores a
-   * denied or disabled plugin and activates another claimant, so an inactive plugin must never
+   * Whether the plugin is active enough to own this channel's surfaced schema. Auto-enable ignores
+   * a denied or disabled plugin and activates another claimant, so an inactive plugin must never
    * supply the schema an active one is validated against.
+   *
+   * Scoped to a channel because activation is: auto-enable materializes a per-channel candidate
+   * set, and once any claimant declares `preferOver` that set narrows to the declaring pair. A
+   * third claimant of the same channel is then never activated there, however close its origin
+   * sits, while remaining perfectly active on channels where it is a candidate.
    */
-  isPluginActive: (pluginId: string) => boolean;
+  isPluginActive: (pluginId: string, channelId: string) => boolean;
   /**
    * Whether the operator selected this plugin by hand. Auto-enable leaves such a plugin enabled
    * even when another claimant declares it in `preferOver`, so both stay active and the runtime
@@ -231,7 +236,9 @@ function collectDisplacedChannelOwners(
 
   const displaced: DisplacedChannelOwners = new Map();
   for (const [claimedId, claimants] of claimantsByChannel) {
-    const activeClaimants = claimants.filter((record) => policy.isPluginActive(record.id));
+    const activeClaimants = claimants.filter((record) =>
+      policy.isPluginActive(record.id, claimedId),
+    );
     const declarants = activeClaimants.length > 0 ? activeClaimants : claimants;
     for (const record of declarants) {
       for (const replacedId of policy.resolveChannelPreferOverIds(record, claimedId)) {
@@ -337,7 +344,6 @@ export function collectChannelSchemaMetadataWithOwnership(
 
   for (const record of registry.plugins) {
     const originRank = resolveOriginRank(record.origin);
-    const recordActive = policy.isPluginActive(record.id);
     const rootLabel = record.channelCatalogMeta?.label;
     const rootDescription = record.channelCatalogMeta?.blurb;
 
@@ -353,13 +359,14 @@ export function collectChannelSchemaMetadataWithOwnership(
         // however close its origin sits. The winner re-sets both below.
         const ownerId = current?.schemaPluginId;
         const claimedId = normalizeClaimedChannelId(channelId);
+        const recordActive = policy.isPluginActive(record.id, claimedId);
         // Ranks tie by the time the schema pass reaches this record, since the entry adopts this
         // record's rank right here, so only policy and the declaration separate the two.
         const keepOwnerPresentation =
           ownerId !== undefined &&
           ownerId !== record.id &&
           decideChannelSchemaOwnership({
-            currentActive: policy.isPluginActive(ownerId),
+            currentActive: policy.isPluginActive(ownerId, claimedId),
             incomingActive: recordActive,
             currentDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, ownerId),
             incomingDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, record.id),
@@ -392,7 +399,8 @@ export function collectChannelSchemaMetadataWithOwnership(
         if (!sensitive && !urlSecret) {
           continue;
         }
-        const carried = redactionByChannel.get(channelId) ?? new Map<string, ChannelRedactionHint>();
+        const carried =
+          redactionByChannel.get(channelId) ?? new Map<string, ChannelRedactionHint>();
         const seen = carried.get(relPath);
         carried.set(relPath, {
           sensitive: sensitive || seen?.sensitive === true,
@@ -408,8 +416,8 @@ export function collectChannelSchemaMetadataWithOwnership(
         const claimedId = normalizeClaimedChannelId(channelId);
         const ownerId = current.schemaPluginId;
         const decision = decideChannelSchemaOwnership({
-          currentActive: ownerId === undefined || policy.isPluginActive(ownerId),
-          incomingActive: recordActive,
+          currentActive: ownerId === undefined || policy.isPluginActive(ownerId, claimedId),
+          incomingActive: policy.isPluginActive(record.id, claimedId),
           currentDisplaced:
             ownerId !== undefined && isDisplacedChannelOwner(displacedOwners, claimedId, ownerId),
           incomingDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, record.id),

@@ -791,3 +791,77 @@ describe("url-secret tags survive schema displacement", () => {
     expect(hint?.tags).toEqual(expect.arrayContaining(["advanced", "url-secret"]));
   });
 });
+
+describe("channel ownership excludes claimants activation never selects", () => {
+  // Candidate discovery only returns plugins involved in a preferOver relationship. A third
+  // claimant is therefore never enabled by auto-enable, but "not disabled" reads as active, and a
+  // closer install origin then hands it the strict schema. The operator's real configuration is
+  // validated against a plugin the runtime never activates, which can block Gateway startup.
+  it("does not give the schema to an unrelated claimant with a closer origin", () => {
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      // A genuinely configured channel: an empty block is no presence signal at all, so
+      // activation materializes no candidates and there is correctly nothing to narrow with.
+      channels: { clickclack: { enabled: true, token: "x" } },
+    });
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "clickclack-plus",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              preferOver: ["clickclack-core"],
+              schema: {
+                type: "object",
+                properties: { plusToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+        {
+          id: "clickclack-core",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { coreToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+        {
+          // Closest origin, but no preferOver edge, so auto-enable never makes it a candidate.
+          id: "clickclack-other",
+          origin: "config",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { otherToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = loadGatewayRuntimeConfigSchema().schema as {
+      properties?: Record<string, unknown>;
+    };
+    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+    const clickclack = channels?.properties?.clickclack as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(clickclack?.properties).not.toHaveProperty("otherToken");
+  });
+});
