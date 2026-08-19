@@ -316,7 +316,20 @@ try {
                     { ...stoppedSentinel, ppid: root.pid, state: "t" },
                   ],
                 ]
-          : [
+              : mode === "uninterruptible"
+                ? [
+                    [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                    [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
+                    [
+                      stoppedRoot,
+                      { ...sentinelIdentity, ppid: root.pid, state: "U" },
+                    ],
+                    [
+                      stoppedRoot,
+                      { ...sentinelIdentity, ppid: root.pid, state: "U" },
+                    ],
+                  ]
+              : [
               [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
               [rootIdentity, { ...sentinelIdentity, ppid: root.pid }],
               ...Array.from({ length: 8 }, () => [
@@ -352,6 +365,7 @@ process.stdout.write(JSON.stringify(result));
         ["reparented", false],
         ["root-resumed", false],
         ["traced", false],
+        ["uninterruptible", false],
         ["extended", false],
       ] as const) {
         const output = execFileSync(

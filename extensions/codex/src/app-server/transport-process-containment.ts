@@ -15,6 +15,7 @@ type PosixProcess = {
 };
 
 const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
+const MAX_PROCESS_QUIESCE_PASSES = 16;
 
 export function terminateCodexAppServerDescendants(
   child: ContainableTransport,
@@ -77,7 +78,7 @@ function quiesceDescendants(
 ): PosixProcess[] | undefined {
   const provenByPid = new Map(initialDescendants.map((descendant) => [descendant.pid, descendant]));
   const stopFailures = new Map<string, number>();
-  for (;;) {
+  for (let pass = 0; pass < MAX_PROCESS_QUIESCE_PASSES; pass += 1) {
     const snapshot = readProcessSnapshot();
     if (!snapshot) {
       return undefined;
@@ -137,7 +138,7 @@ function quiesceDescendants(
         }
         stopFailures.set(key, failures);
       }
-      if (!descendant.state.startsWith("D") || !stopQueued) {
+      if (!isUninterruptibleState(descendant.state) || !stopQueued) {
         allStopped = false;
       }
     }
@@ -145,6 +146,7 @@ function quiesceDescendants(
       return [...provenByPid.values()];
     }
   }
+  return undefined;
 }
 
 function readProcessSnapshot(): PosixProcess[] | undefined {
@@ -220,7 +222,11 @@ function isStoppedState(state: string): boolean {
 }
 
 function isQuiescedState(state: string): boolean {
-  return isStoppedState(state) || state.startsWith("D");
+  return isStoppedState(state) || isUninterruptibleState(state);
+}
+
+function isUninterruptibleState(state: string): boolean {
+  return state.startsWith("D") || state.startsWith("U");
 }
 
 function isSameLiveProcess(current: PosixProcess, expected: PosixProcess): boolean {
