@@ -724,6 +724,7 @@ describe("session menu", () => {
 
     const openPr = menuItem(menu, "Open PR");
     expect(openPr.disabled).toBe(false);
+    expect(openPr.hasAttribute("data-new-tab-action")).toBe(true);
     expect(openPr.querySelector(".session-menu__shortcut")?.textContent).toBe("G");
     expect(menuItem(menu, "Open in").disabled).toBe(true);
 
