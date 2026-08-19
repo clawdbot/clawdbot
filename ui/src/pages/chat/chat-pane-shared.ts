@@ -1,4 +1,3 @@
-import { stableStringify } from "@openclaw/normalization-core";
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
@@ -13,7 +12,6 @@ import { clampText } from "../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 
 export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
@@ -207,36 +205,23 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
   const seq = metadata?.seq;
   const id = metadata?.id ?? record?.messageId;
   const sourceIdentity =
-    typeof id === "string" && id.trim()
-      ? `id:${id}`
-      : typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
-        ? `seq:${seq}`
+    typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
+      ? `seq:${seq}`
+      : typeof id === "string" && id.trim()
+        ? `id:${id}`
         : null;
   if (!sourceIdentity) {
     return null;
   }
-  const normalized = safeNormalizeMessage(message);
-  const normalizedProjection = normalized
-    ? (() => {
-        const { id: _id, sender, timestamp: _timestamp, ...visible } = normalized;
-        const { profileAvatarUrl: _profileAvatarUrl, ...stableSender } = sender ?? {};
-        return {
-          ...visible,
-          ...(Object.keys(stableSender).length > 0 ? { sender: stableSender } : {}),
-        };
-      })()
-    : { role: record?.role, content: record?.content ?? record?.text };
-  // One transcript record can project to multiple visible siblings. Pair its
-  // source with stable display facts, excluding delivery-only timing/run metadata.
-  return `${sourceIdentity}:${stableStringify({
-    message: normalizedProjection,
-    kind: metadata?.kind ?? record?.customType ?? record?.type,
-    toolCallId: record?.toolCallId ?? record?.tool_call_id ?? record?.callId ?? record?.call_id,
-    toolName: record?.toolName ?? record?.tool_name ?? record?.name ?? record?.tool,
-    mirror: record?.openclawMessageToolMirror,
-    details: record?.details,
-    provenance: record?.provenance,
-  })}`;
+  const { recordTimestampMs: _recordTimestampMs, ...projectionMetadata } = metadata ?? {};
+  const projection = metadata ? { ...record, __openclaw: projectionMetadata } : record;
+  try {
+    // History alone adds recordTimestampMs; delivery metadata is not projection identity.
+    // Keep every other projection byte so siblings from one transcript row stay distinct.
+    return `${sourceIdentity}:${JSON.stringify(projection)}`;
+  } catch {
+    return sourceIdentity;
+  }
 }
 
 export type ChatPaneConnectionScope = {
